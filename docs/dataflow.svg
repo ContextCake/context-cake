@@ -1,0 +1,92 @@
+<svg width="100%" viewBox="0 0 680 525" role="img" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+<title>Team Context Radar data flow</title>
+<desc>Write path: a signal event is classified, routed, and stored to a target layer bundle. Read path: an agent query gathers contributing concepts from the layers the viewer can read, orders them by level then recency, merges them per section and field, and returns an effective concept with provenance to the agent. A shadow-staleness detector flags when an overridden base concept has changed.</desc>
+<defs>
+<marker id="bw" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#C77D2A"/></marker>
+<marker id="br" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2C8A82"/></marker>
+<marker id="bg" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3D9A5E"/></marker>
+<marker id="bs" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#C9603F"/></marker>
+</defs>
+
+<text x="40" y="42" font-size="11" font-weight="700" fill="#7A5A28">WRITE PATH — capture a fact</text>
+
+<rect x="36" y="54" width="116" height="54" rx="7" fill="#F4F3EF" stroke="#C3C1B8"/>
+<text x="46" y="76" font-size="12" font-weight="700" fill="#1A1915">Signal event</text>
+<text x="46" y="93" font-size="9.5" fill="#57564F">repo·title·labels</text>
+
+<line x1="152" y1="81" x2="176" y2="81" stroke="#C77D2A" stroke-width="2" marker-end="url(#bw)"/>
+
+<rect x="178" y="54" width="100" height="54" rx="7" fill="#FBF0DD" stroke="#D69A3F"/>
+<text x="228" y="78" text-anchor="middle" font-size="12" font-weight="700" fill="#5A3D12">Classify</text>
+<text x="228" y="94" text-anchor="middle" font-size="9.5" fill="#7A5A28">policy route</text>
+
+<line x1="278" y1="81" x2="302" y2="81" stroke="#C77D2A" stroke-width="2" marker-end="url(#bw)"/>
+
+<rect x="304" y="54" width="84" height="54" rx="7" fill="#FBF0DD" stroke="#D69A3F"/>
+<text x="346" y="85" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5A3D12">Route?</text>
+
+<line x1="388" y1="81" x2="412" y2="81" stroke="#C77D2A" stroke-width="2" marker-end="url(#bw)"/>
+
+<rect x="414" y="54" width="130" height="54" rx="7" fill="#DFF2E7" stroke="#3D9A5E"/>
+<text x="479" y="76" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0B3D1E">Store to layer</text>
+<text x="479" y="93" text-anchor="middle" font-size="9" fill="#2C7A4B">auto · or after review</text>
+
+<line x1="544" y1="81" x2="566" y2="81" stroke="#3D9A5E" stroke-width="2" marker-end="url(#bg)"/>
+
+<rect x="568" y="54" width="72" height="54" rx="7" fill="#E1EFFB" stroke="#3D7AB8"/>
+<text x="604" y="76" text-anchor="middle" font-size="10.5" font-weight="700" fill="#042C53">Layer</text>
+<text x="604" y="91" text-anchor="middle" font-size="9" fill="#0C447C">bundle (git)</text>
+
+<text x="304" y="128" font-size="9.5" fill="#57564F">outcomes:  team_candidate → auto-store   ·   review_required → approve   ·   ignore → drop</text>
+
+<line x1="40" y1="236" x2="640" y2="236" stroke="#DAD9D3" stroke-width="1"/>
+
+<text x="40" y="262" font-size="11" font-weight="700" fill="#1E6B64">READ PATH — resolve a concept</text>
+
+<rect x="36" y="276" width="112" height="52" rx="7" fill="#F4F3EF" stroke="#C3C1B8"/>
+<text x="46" y="298" font-size="12" font-weight="700" fill="#1A1915">Agent query</text>
+<text x="46" y="315" font-size="9.5" fill="#57564F">concept id + viewer</text>
+
+<line x1="148" y1="302" x2="170" y2="302" stroke="#2C8A82" stroke-width="2" marker-end="url(#br)"/>
+
+<rect x="172" y="276" width="132" height="52" rx="7" fill="#DCEFEC" stroke="#2C8A82"/>
+<text x="182" y="298" font-size="11.5" font-weight="700" fill="#0B3D3A">Gather contributors</text>
+<text x="182" y="315" font-size="9" fill="#1E6B64">layers viewer can read</text>
+
+<line x1="304" y1="302" x2="326" y2="302" stroke="#2C8A82" stroke-width="2" marker-end="url(#br)"/>
+
+<rect x="328" y="276" width="118" height="52" rx="7" fill="#DCEFEC" stroke="#2C8A82"/>
+<text x="387" y="298" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0B3D3A">Order</text>
+<text x="387" y="315" text-anchor="middle" font-size="9" fill="#1E6B64">level → recency</text>
+
+<polyline points="387,328 387,350 230,350 230,364" fill="none" stroke="#2C8A82" stroke-width="2" marker-end="url(#br)"/>
+
+<rect x="160" y="366" width="140" height="56" rx="7" fill="#CDEBD8" stroke="#2C7A4B" stroke-width="2"/>
+<text x="230" y="389" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0B3D1E">Section/field merge</text>
+<text x="230" y="406" text-anchor="middle" font-size="9" fill="#2C7A4B">higher wins per section</text>
+
+<line x1="300" y1="394" x2="322" y2="394" stroke="#2C8A82" stroke-width="2" marker-end="url(#br)"/>
+
+<rect x="324" y="366" width="146" height="56" rx="7" fill="#DCEFEC" stroke="#2C8A82"/>
+<text x="397" y="389" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0B3D3A">Effective concept</text>
+<text x="397" y="406" text-anchor="middle" font-size="9" fill="#1E6B64">+ per-field provenance</text>
+
+<line x1="470" y1="394" x2="492" y2="394" stroke="#2C8A82" stroke-width="2" marker-end="url(#br)"/>
+
+<rect x="494" y="366" width="140" height="56" rx="7" fill="#F4F3EF" stroke="#C3C1B8"/>
+<text x="564" y="389" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1A1915">Agent reads</text>
+<text x="564" y="406" text-anchor="middle" font-size="9" fill="#57564F">trust = source layer</text>
+
+<line x1="230" y1="422" x2="230" y2="450" stroke="#C9603F" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#bs)"/>
+
+<rect x="160" y="452" width="320" height="40" rx="7" fill="#FBE9E3" stroke="#C9603F"/>
+<text x="170" y="470" font-size="10" font-weight="700" fill="#7A2E18">Shadow-staleness detector</text>
+<text x="170" y="485" font-size="9.5" fill="#7A2E18">stored base-hash ≠ live base  ⇒  Radar alert</text>
+
+<rect x="40" y="503" width="13" height="13" rx="2" fill="#FBF0DD" stroke="#C77D2A"/>
+<text x="60" y="513" font-size="10" fill="#57564F">write path</text>
+<rect x="170" y="503" width="13" height="13" rx="2" fill="#DCEFEC" stroke="#2C8A82"/>
+<text x="190" y="513" font-size="10" fill="#57564F">read path</text>
+<rect x="300" y="503" width="13" height="13" rx="2" fill="#CDEBD8" stroke="#2C7A4B"/>
+<text x="320" y="513" font-size="10" fill="#57564F">the merge (heart of the cascade)</text>
+</svg>

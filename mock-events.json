@@ -1,0 +1,48 @@
+[
+  {
+    "repo": "billing-api",
+    "source": "pull_request",
+    "type": "pr_merged",
+    "title": "Payment webhook retry runbook after incident",
+    "body": "Documents the operational procedure after the payment incident follow-up.",
+    "labels": ["runbook", "incident"],
+    "paths": ["runbooks/payment-webhooks.md"]
+  },
+  {
+    "repo": "identity-service",
+    "source": "changed_files",
+    "type": "pr_merged",
+    "title": "JWT audience contract changed for internal clients",
+    "body": "Updates auth behavior across service boundaries; affects the public API contract.",
+    "labels": ["api-contract"],
+    "paths": ["auth/jwt.ts"]
+  },
+  {
+    "repo": "web-app",
+    "source": "repeated_question",
+    "type": "agent_question",
+    "title": "Where are feature flags evaluated?",
+    "body": "Recurring onboarding question about flag evaluation order.",
+    "labels": [],
+    "paths": [],
+    "repeatedQuestionCount": 5
+  },
+  {
+    "repo": "data-pipeline",
+    "source": "pull_request",
+    "type": "pr_merged",
+    "title": "Deprecate legacy export job after migration",
+    "body": "Removes the legacy export path now that the migration is complete. Architecture decision.",
+    "labels": ["decision"],
+    "paths": ["adr/0007-deprecate-legacy-export.md"]
+  },
+  {
+    "repo": "mobile-api",
+    "source": "pull_request",
+    "type": "pr_merged",
+    "title": "Bump test fixture snapshots",
+    "body": "Routine snapshot update from a dependency bump.",
+    "labels": ["test-only", "dependencies"],
+    "paths": ["__snapshots__/api.test.ts.snap"]
+  }
+]

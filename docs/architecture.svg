@@ -1,0 +1,69 @@
+<svg width="100%" viewBox="0 0 680 320" role="img" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+<title>Team Context Radar system architecture</title>
+<desc>Capture side: team repos feed a classifier/radar that writes facts to a target layer. Storage: four layer bundles as git repos (Personal, Team, Group, Company) with access by repo membership. Serve side: an MCP resolver reads the layers a viewer can access, merges them into an effective graph with provenance, and serves AI agents and the control surface.</desc>
+<defs>
+<marker id="aw" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#C77D2A"/></marker>
+<marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2C8A82"/></marker>
+<marker id="ag" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8A8A82"/></marker>
+</defs>
+
+<text x="110" y="42" text-anchor="middle" font-size="11" font-weight="700" fill="#7A5A28">CAPTURE</text>
+<text x="344" y="42" text-anchor="middle" font-size="11" font-weight="700" fill="#0C447C">STORAGE (git bundles)</text>
+<text x="574" y="42" text-anchor="middle" font-size="11" font-weight="700" fill="#1E6B64">SERVE</text>
+
+<rect x="40" y="56" width="140" height="56" rx="8" fill="#F4F3EF" stroke="#C3C1B8"/>
+<text x="52" y="80" font-size="13" font-weight="700" fill="#1A1915">Team repos</text>
+<text x="52" y="99" font-size="10" fill="#57564F">PRs · incidents · questions</text>
+
+<line x1="110" y1="112" x2="110" y2="146" stroke="#8A8A82" stroke-width="1.5" marker-end="url(#ag)"/>
+
+<rect x="40" y="148" width="140" height="66" rx="8" fill="#FBF0DD" stroke="#D69A3F"/>
+<text x="52" y="171" font-size="12.5" font-weight="700" fill="#5A3D12">Classifier · Radar</text>
+<text x="52" y="189" font-size="10" fill="#7A5A28">route → target layer</text>
+<text x="52" y="205" font-size="10" fill="#7A5A28">review gate</text>
+
+<rect x="250" y="56" width="188" height="42" rx="6" fill="#D6E8FA" stroke="#2F6DA8" stroke-width="2"/>
+<text x="260" y="75" font-size="12" font-weight="700" fill="#042C53">Personal</text>
+<text x="260" y="90" font-size="9.5" fill="#0C447C">only you</text>
+
+<rect x="250" y="104" width="188" height="42" rx="6" fill="#E1EFFB" stroke="#3D7AB8"/>
+<text x="260" y="123" font-size="12" font-weight="700" fill="#042C53">Data Platform Team</text>
+<text x="260" y="138" font-size="9.5" fill="#0C447C">your team</text>
+
+<rect x="250" y="152" width="188" height="42" rx="6" fill="#EAF3FC" stroke="#5E97CC"/>
+<text x="260" y="171" font-size="12" font-weight="700" fill="#042C53">Data Group</text>
+<text x="260" y="186" font-size="9.5" fill="#0C447C">all data teams</text>
+
+<rect x="250" y="200" width="188" height="42" rx="6" fill="#F2F7FC" stroke="#86ABD0"/>
+<text x="260" y="219" font-size="12" font-weight="700" fill="#042C53">Company</text>
+<text x="260" y="234" font-size="9.5" fill="#0C447C">all employees · base</text>
+
+<text x="344" y="258" text-anchor="middle" font-size="10" fill="#57564F">access = repo membership</text>
+
+<line x1="182" y1="170" x2="248" y2="126" stroke="#C77D2A" stroke-width="2" marker-end="url(#aw)"/>
+<text x="208" y="152" font-size="9.5" fill="#C77D2A">writes</text>
+
+<line x1="440" y1="126" x2="506" y2="94" stroke="#2C8A82" stroke-width="2" marker-end="url(#ar)"/>
+<text x="470" y="103" font-size="9.5" fill="#2C8A82">reads</text>
+
+<rect x="508" y="60" width="132" height="64" rx="8" fill="#DCEFEC" stroke="#2C8A82"/>
+<text x="518" y="83" font-size="12" font-weight="700" fill="#0B3D3A">Resolver (MCP)</text>
+<text x="518" y="100" font-size="9.5" fill="#1E6B64">ordered merge →</text>
+<text x="518" y="114" font-size="9.5" fill="#1E6B64">effective graph + provenance</text>
+
+<line x1="574" y1="124" x2="574" y2="150" stroke="#2C8A82" stroke-width="1.5" marker-end="url(#ar)"/>
+
+<rect x="508" y="152" width="132" height="42" rx="8" fill="#F4F3EF" stroke="#C3C1B8"/>
+<text x="574" y="177" text-anchor="middle" font-size="11.5" font-weight="600" fill="#1A1915">AI coding agents</text>
+
+<line x1="574" y1="194" x2="574" y2="212" stroke="#2C8A82" stroke-width="1.5" marker-end="url(#ar)"/>
+
+<rect x="508" y="214" width="132" height="44" rx="8" fill="#F4F3EF" stroke="#C3C1B8"/>
+<text x="574" y="233" text-anchor="middle" font-size="11" font-weight="600" fill="#1A1915">Control Surface</text>
+<text x="574" y="248" text-anchor="middle" font-size="9.5" fill="#57564F">· OKF browser</text>
+
+<rect x="40" y="294" width="13" height="13" rx="2" fill="#FBF0DD" stroke="#C77D2A"/>
+<text x="60" y="304" font-size="10" fill="#57564F">write / capture path</text>
+<rect x="220" y="294" width="13" height="13" rx="2" fill="#DCEFEC" stroke="#2C8A82"/>
+<text x="240" y="304" font-size="10" fill="#57564F">read / serve path</text>
+</svg>

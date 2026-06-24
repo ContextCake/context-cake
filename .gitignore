@@ -1,0 +1,13 @@
+node_modules/
+.DS_Store
+*.log
+
+# Generated dashboard data — produced by ingest.mjs + write.mjs, not authored
+control-surface/signals.json
+
+# Local layer manifests may contain absolute paths — don't commit
+layers.json
+
+# Plans are never committed
+docs/plans/
+.claude/plans/

@@ -1,0 +1,16 @@
+{
+  "name": "context-cake",
+  "version": "0.1.0",
+  "description": "Federated team knowledge with cascading layer precedence — OKF-compatible, MCP-ready.",
+  "type": "module",
+  "scripts": {
+    "test": "bash smoke-test.sh && bash resolver-test.sh",
+    "mcp": "node mcp-server.mjs",
+    "ingest": "node ingest.mjs",
+    "write": "node write.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

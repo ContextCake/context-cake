@@ -1,0 +1,40 @@
+{
+  "_note": "Template repo registry for Team Context Radar. Replace with your team's real repos. 'owner' is the GitHub org/owner; 'reviewOwners' are the humans/teams who decide on review_required items; 'areas' are coverage facets used by the dashboard.",
+  "repos": [
+    {
+      "name": "billing-api",
+      "owner": "your-org",
+      "repo": "billing-api",
+      "areas": ["payments", "runbooks"],
+      "reviewOwners": ["Platform"]
+    },
+    {
+      "name": "identity-service",
+      "owner": "your-org",
+      "repo": "identity-service",
+      "areas": ["auth", "interfaces"],
+      "reviewOwners": ["Identity"]
+    },
+    {
+      "name": "web-app",
+      "owner": "your-org",
+      "repo": "web-app",
+      "areas": ["onboarding", "frontend"],
+      "reviewOwners": ["Frontend"]
+    },
+    {
+      "name": "data-pipeline",
+      "owner": "your-org",
+      "repo": "data-pipeline",
+      "areas": ["migrations", "decisions"],
+      "reviewOwners": ["Data"]
+    },
+    {
+      "name": "mobile-api",
+      "owner": "your-org",
+      "repo": "mobile-api",
+      "areas": ["mobile"],
+      "reviewOwners": ["API"]
+    }
+  ]
+}

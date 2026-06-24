@@ -1,0 +1,124 @@
+{
+  "version": "0.1.0",
+  "routes": {
+    "ignore": {
+      "description": "Routine work that should not become durable team context."
+    },
+    "local": {
+      "description": "Useful session or author context, but not shared team knowledge."
+    },
+    "team_candidate": {
+      "description": "Durable team context that can be drafted or stored automatically when confidence is high."
+    },
+    "review_required": {
+      "description": "Risky, ambiguous, sensitive, or cross-team consequential context requiring human review."
+    }
+  },
+  "reviewRequired": {
+    "keywords": [
+      "auth",
+      "authentication",
+      "authorization",
+      "credential",
+      "secret",
+      "token",
+      "api key",
+      "password",
+      "pii",
+      "privacy",
+      "customer data",
+      "payment",
+      "billing",
+      "soc2",
+      "hipaa",
+      "gdpr",
+      "incident",
+      "outage",
+      "postmortem",
+      "public api",
+      "breaking change",
+      "contract"
+    ],
+    "labels": [
+      "security",
+      "privacy",
+      "incident",
+      "breaking-change",
+      "api-contract",
+      "external-commitment"
+    ],
+    "paths": [
+      "auth/",
+      "security/",
+      "infra/secrets",
+      ".github/workflows",
+      "payments/",
+      "billing/"
+    ]
+  },
+  "teamCandidate": {
+    "keywords": [
+      "architecture",
+      "decision",
+      "adr",
+      "runbook",
+      "onboarding",
+      "playbook",
+      "service boundary",
+      "dependency",
+      "migration",
+      "deprecation",
+      "operational procedure",
+      "release process"
+    ],
+    "labels": [
+      "architecture",
+      "decision",
+      "runbook",
+      "context",
+      "docs",
+      "onboarding",
+      "platform"
+    ],
+    "paths": [
+      "docs/",
+      "runbooks/",
+      "adr/",
+      "adrs/",
+      "architecture/",
+      "ops/"
+    ]
+  },
+  "ignore": {
+    "keywords": [
+      "typo",
+      "format",
+      "lint",
+      "prettier",
+      "renovate",
+      "dependabot",
+      "bump",
+      "snapshot update",
+      "test-only"
+    ],
+    "labels": [
+      "dependencies",
+      "chore",
+      "test-only",
+      "no-context"
+    ],
+    "paths": [
+      "package-lock.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "go.sum",
+      "dist/",
+      "coverage/"
+    ]
+  },
+  "thresholds": {
+    "repeatedQuestionCount": 3,
+    "highConfidence": 0.75,
+    "mediumConfidence": 0.5
+  }
+}

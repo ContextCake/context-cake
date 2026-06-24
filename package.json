@@ -7,7 +7,8 @@
     "test": "bash smoke-test.sh && bash resolver-test.sh",
     "mcp": "node mcp-server.mjs",
     "ingest": "node ingest.mjs",
-    "write": "node write.mjs"
+    "write": "node write.mjs",
+    "demo:verify": "bash demo/setup.sh && bash demo/verify.sh"
   },
   "engines": {
     "node": ">=18"

@@ -28,6 +28,9 @@ node resolver.mjs --manifest layers.json --shadow
 
 # Serve the control surface dashboard
 python3 -m http.server 8788 --directory control-surface
+
+# Seed + verify the team demo (then see demo/RUNBOOK.md for the live script)
+npm run demo:verify
 ```
 
 ## Architecture

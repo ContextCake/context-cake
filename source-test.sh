@@ -46,6 +46,12 @@ grep -q '2026-06-01' <<<"$res" || fail "MCP dissent should carry its lastTouched
 grep -q 'Nightly snapshots' <<<"$res" || fail "MCP-only Backups section should be inherited" "$res"
 grep -q '"sourceLayer": "org-default"' <<<"$res" || fail "inherited Backups should carry MCP provenance" "$res"
 
+# Cross-references (see_also) translate into ONE Related section, not duplicated
+# onto every section — and must not leak into the Engine content or its conflict.
+grep -q '"key": "related"' <<<"$res" || fail "see_also should translate to a single Related section" "$res"
+engine_block="$(python3 -c "import sys,json; s=[x for x in json.load(open('/dev/stdin'))['sections'] if x['key']=='engine'][0]; print(s['content']); print(s.get('conflicts',[{}])[0].get('content',''))" <<<"$res")"
+if grep -q 'scaling-policy' <<<"$engine_block"; then fail "see_also leaked into the Engine section/conflict content" "$engine_block"; fi
+
 # Pure inheritance from MCP: a concept the team is silent on resolves from MCP alone.
 obs="$(node "$resolver" --manifest "$tmpdir/m.json" --concept decisions/observability)"
 grep -q 'OpenTelemetry' <<<"$obs" || fail "MCP-only concept should resolve from the MCP source" "$obs"

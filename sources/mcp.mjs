@@ -9,6 +9,8 @@ export function createMcpSource({ name, level, command, args = [] }) {
   let child = null;
   let rl = null;
   let nextId = 1;
+  let ready = null; // resolves once the MCP init handshake is complete
+  let closed = false;
   const pending = new Map();
   let startError = null;
 
@@ -21,7 +23,7 @@ export function createMcpSource({ name, level, command, args = [] }) {
   }
 
   function ensureStarted() {
-    if (child || startError) return;
+    if (closed || child || startError) return;
     try {
       child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"] });
     } catch (e) {
@@ -29,10 +31,12 @@ export function createMcpSource({ name, level, command, args = [] }) {
       return;
     }
     // spawn() defers failures to async events: a missing binary fires "error";
-    // a process that starts then dies (e.g. node with a missing script) fires
-    // "exit" with a non-zero code. Either way, fail fast — don't wait for timeout.
+    // a process that starts then dies (missing script, crash, clean exit) fires
+    // "exit". Either way the child can no longer answer, so fail every pending
+    // request now instead of waiting for timeouts. (On an intentional close()
+    // pending is already empty, so this is a harmless no-op.)
     child.on("error", (e) => failAll(e));
-    child.on("exit", (code) => { if (code) failAll(new Error(`MCP source "${name}" exited with code ${code}`)); });
+    child.on("exit", () => failAll(new Error(`MCP source "${name}" exited`)));
     child.stdin.on("error", () => {}); // swallow EPIPE if the child is already gone
     rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     rl.on("line", (line) => {
@@ -45,8 +49,21 @@ export function createMcpSource({ name, level, command, args = [] }) {
       if (msg.error) p.reject(new Error(msg.error.message));
       else p.resolve(msg.result);
     });
-    // fire-and-forget initialize handshake
-    send("initialize", {}).catch(() => {});
+    // MCP handshake: await the initialize response, then send the required
+    // notifications/initialized, before any tools/call is issued. Spec-compliant
+    // foreign servers gate tool calls on this ordering. Failures are swallowed —
+    // the in-flight tool call then rejects via startError and degrades.
+    ready = send("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "contextcake", version: "0.3.0" },
+    })
+      .then(() => notify("notifications/initialized"))
+      .catch(() => {});
+  }
+
+  function notify(method, params) {
+    try { child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`); } catch {}
   }
 
   function send(method, params) {
@@ -63,6 +80,8 @@ export function createMcpSource({ name, level, command, args = [] }) {
   }
 
   async function callTool(toolName, toolArgs) {
+    ensureStarted();
+    await ready; // wait for the init handshake (resolved/swallowed; never rejects)
     const result = await send("tools/call", { name: toolName, arguments: toolArgs });
     const text = result?.content?.[0]?.text;
     return text == null ? null : JSON.parse(text);
@@ -74,38 +93,52 @@ export function createMcpSource({ name, level, command, args = [] }) {
     name,
     level,
     async loadConcept(id) {
-      ensureStarted();
       try {
         const node = await callTool("get_node", { id });
         return node ? translateToOkf(node) : null;
       } catch (e) { warn(e); return null; }
     },
     async listConceptIds() {
-      ensureStarted();
       try {
         const res = await callTool("list_nodes", {});
         return res?.nodes ?? [];
       } catch (e) { warn(e); return []; }
     },
-    close() { if (child) { try { child.kill(); } catch {} child = null; } },
+    close() {
+      closed = true;
+      if (rl) { try { rl.close(); } catch {} rl = null; }
+      if (child) { try { child.kill(); } catch {} child = null; }
+    },
   };
 }
 
 // The translation: arbitrary foreign shape -> OKF { frontmatter, sections }.
 // foreign: { title, kind, facts:[{topic,text,lastTouched}], see_also:[] }
 function translateToOkf(node) {
-  const newest = node.facts?.reduce((m, f) => (f.lastTouched > m ? f.lastTouched : m), "") || null;
+  const facts = node.facts ?? [];
+  const newest = facts.reduce((m, f) => (f.lastTouched > m ? f.lastTouched : m), "") || null;
   const frontmatter = { type: node.kind ?? "concept", title: node.title ?? node.node, updated: newest };
-  const sections = (node.facts ?? []).map((f) => {
+  const sections = facts.map((f) => {
     const key = String(f.topic).toLowerCase();
-    const seeAlso = (node.see_also ?? []).length ? `\n\nSee also: ${node.see_also.map((s) => `[[${s}]]`).join(", ")}` : "";
     return {
       key,
       heading: `## ${f.topic} {#${key}}`,
-      lines: `${f.text}${seeAlso}`.split("\n"),
+      lines: String(f.text).split("\n"),
       updated: f.lastTouched ?? null,
       override: null,
     };
   });
+  // Cross-references become a single Related section once per concept (not
+  // duplicated onto every fact). The [[links]] stay discoverable by get_links.
+  const related = node.see_also ?? [];
+  if (related.length) {
+    sections.push({
+      key: "related",
+      heading: "## Related {#related}",
+      lines: [related.map((s) => `[[${s}]]`).join(", ")],
+      updated: null,
+      override: null,
+    });
+  }
   return { frontmatter, sections };
 }

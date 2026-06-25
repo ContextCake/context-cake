@@ -121,7 +121,7 @@ async function handleMessage(message) {
 }
 
 async function callTool(name, toolArgs) {
-  if (name === "search") return search(toolArgs);
+  if (name === "search") return await search(toolArgs);
   if (name === "read_file") return await readFileTool(toolArgs);
   if (name === "list_concepts") return await listConcepts(toolArgs);
   if (name === "get_links") return await getLinks(toolArgs);
@@ -406,11 +406,12 @@ function write(message) {
 
 function printHelp() {
   console.log(`Usage:
-  node tools/team-knowledge/mcp-server.mjs --manifest layers.json
-  node tools/team-knowledge/mcp-server.mjs --personal <dir> --shared <dir>
+  node mcp-server.mjs --manifest layers.json
+  node mcp-server.mjs --personal <dir> --shared <dir>
 
-Stdio MCP server exposing an OKF layer cascade as one effective read-time graph.
-read_file resolves the effective concept (section/field merge + provenance);
-pass a layer name to read a single layer's raw concept.
+Stdio MCP server exposing a cascade of knowledge sources (OKF-local bundles +
+foreign graphs over MCP) as one effective read-time OKF graph. read_file
+resolves the effective concept (section/field merge + provenance + per-section
+conflicts); pass a layer name to read a single layer's raw concept.
 `);
 }

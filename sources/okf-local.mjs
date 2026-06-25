@@ -101,10 +101,20 @@ function parseYamlScalar(value) {
 
 export function normalizeConceptId(value) {
   const normalized = path.posix.normalize(String(value).replace(/\\/g, "/").replace(/\.md$/i, ""));
-  if (normalized === "." || normalized.startsWith("../") || normalized.includes("/../")) {
-    throw new Error(`Invalid concept ID: ${value}`);
-  }
+  if (isTraversal(normalized)) throw new Error(`Invalid concept ID: ${value}`);
   return normalized;
+}
+
+// A concept id must stay within its layer root — reject any path-traversal form,
+// including a bare ".." (no trailing slash) and a trailing "/..".
+export function isTraversal(normalized) {
+  return (
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../") ||
+    normalized.endsWith("/..")
+  );
 }
 
 function walkMarkdown(root) {

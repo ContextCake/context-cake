@@ -40,6 +40,7 @@ export function createMcpSource({ name, level, command, args = [] }) {
     child.stdin.on("error", () => {}); // swallow EPIPE if the child is already gone
     rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     rl.on("line", (line) => {
+      if (line.length > 10_000_000) return; // ignore an oversized line from an untrusted foreign source
       let msg;
       try { msg = JSON.parse(line); } catch { return; }
       const p = pending.get(msg.id);

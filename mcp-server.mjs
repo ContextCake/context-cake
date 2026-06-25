@@ -13,6 +13,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { resolveConcept } from "./resolver.mjs";
 import { buildSources } from "./sources/index.mjs";
+import { isTraversal } from "./sources/okf-local.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -300,9 +301,7 @@ function safeId(value) {
 function normalizeId(value) {
   if (!value || typeof value !== "string") throw new Error("concept_id is required");
   const normalized = path.posix.normalize(stripDecoration(value).replace(/\\/g, "/").replace(/\.md$/i, ""));
-  if (normalized === "." || normalized.startsWith("../") || normalized.includes("/../")) {
-    throw new Error(`Invalid concept ID: ${value}`);
-  }
+  if (isTraversal(normalized)) throw new Error(`Invalid concept ID: ${value}`);
   return normalized;
 }
 

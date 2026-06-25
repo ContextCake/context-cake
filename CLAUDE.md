@@ -6,13 +6,16 @@
 # Run all tests
 npm test
 # or directly:
-bash smoke-test.sh && bash resolver-test.sh
+bash smoke-test.sh && bash resolver-test.sh && bash source-test.sh
 
 # Run the MCP server (cascade mode)
 node mcp-server.mjs --manifest layers.json
 
 # Run the MCP server (legacy 2-layer)
 node mcp-server.mjs --personal ~/kb-personal --shared ~/kb-shared
+
+# Run the MCP server with a foreign MCP source (layer may declare "source": "mcp" with "command"/"args")
+# See examples/mock-context-source.mjs for a runnable foreign source usable in tests.
 
 # Ingest repo signals → signals.json
 node ingest.mjs --events mock-events.json --out control-surface/signals.json
@@ -23,21 +26,23 @@ node write.mjs --signals control-surface/signals.json --manifest layers.json --t
 # Resolve a concept across layers (CLI)
 node resolver.mjs --manifest layers.json --concept decisions/primary-db
 
-# Detect stale overrides
-node resolver.mjs --manifest layers.json --shadow
-
 # Serve the control surface dashboard
 python3 -m http.server 8788 --directory control-surface
+
+# Seed + verify the team demo (then see demo/RUNBOOK.md for the live script)
+# NOTE: currently BROKEN — demo/setup.sh + verify.sh use the removed --hash/--shadow
+# flags. Pending reconciliation with the core re-arch (see specs/contextcake-core/design.md §10).
+npm run demo:verify
 ```
 
 ## Architecture
 
 See `docs/architecture.md` for the full design. Short version:
 
-- **Storage is federated** — one OKF markdown bundle (git repo) per organizational layer.
-- **Reading is unified** — `resolver.mjs` merges layers into one effective concept at read time.
-- **Layer precedence** — Personal (3) > Team (2) > Group (1) > Company (0). Higher wins per section.
-- **Section/field merge** — not whole-document replacement. A higher layer speaks to what it knows; the rest is inherited.
+- **Storage is federated** — each layer is a `source` behind a uniform adapter: an `okf-local` bundle (git repo of OKF markdown) or an `mcp` foreign graph translated into OKF at read time.
+- **Reading is unified** — `resolver.mjs` stitches the sources into one effective OKF concept at read time.
+- **Layer precedence** — Personal (3) > Team (2) > Company (0). Higher wins per section. Levels are configurable per layer in the manifest.
+- **Section/field merge** — not whole-document replacement. A higher layer speaks to what it knows; the rest is inherited. Where layers disagree, the primary value carries per-section `conflicts[]` (dissenting layer + date) — surfaced, not hidden.
 - **MCP server** — `mcp-server.mjs` exposes the resolved graph to AI agents (search, read_file, list_concepts, get_links).
 - **Write path** — `ingest.mjs` classifies repo signals; `write.mjs` writes captures to the target layer.
 
@@ -45,8 +50,12 @@ Key files:
 
 | File | Role |
 |------|------|
-| `resolver.mjs` | Core cascade engine: section merge, precedence, provenance, shadow detection |
-| `mcp-server.mjs` | stdio MCP server; resolves via resolver.mjs |
+| `resolver.mjs` | Core cascade engine: section merge, precedence, provenance, conflict surfacing |
+| `mcp-server.mjs` | stdio MCP server; resolves via resolver.mjs; renders conflicts in markdown |
+| `sources/okf-local.mjs` | OKF-local source adapter: reads OKF markdown bundles from disk |
+| `sources/mcp.mjs` | MCP source adapter: spawns a foreign stdio MCP server, translates to OKF |
+| `sources/index.mjs` | Source factory: builds adapters from a manifest (`okf-local` default, or `mcp`) |
+| `examples/mock-context-source.mjs` | Runnable non-OKF foreign MCP server for integration tests |
 | `classify-context.mjs` | Classifies repo events into ignore / local / team_candidate / review_required |
 | `ingest.mjs` | Batch classifier: events → signals.json |
 | `write.mjs` | Writes signals to OKF layer bundles |
@@ -54,12 +63,13 @@ Key files:
 | `context-policy.json` | Classification rules (keywords, labels, paths) |
 | `control-surface/` | Dashboard: review queue, captured feed, repo coverage |
 | `okf-browser/` | OKF graph browser |
-| `docs/architecture.md` | Full design spec with decisions log |
+| `docs/architecture.md` | Historical design spec (partially superseded — see note at top) |
 
 ## Gotchas
 
 - `layers.json` contains absolute paths — gitignored, each developer has their own.
 - `control-surface/signals.json` is generated — gitignored, produced by `ingest.mjs`.
-- Shadow detection uses flat `overrides_layer` / `overrides_ref` frontmatter keys (not nested YAML) — a real YAML parser is future work.
-- The resolver is dependency-free (plain Node.js). Do not add npm dependencies without discussion.
+- Staleness is surfaced via per-section `conflicts[]` + last-updated dates (the shadow/hash subsystem was removed in the core re-arch; see `specs/contextcake-core/design.md`).
+- **The manifest is a trust boundary.** An `mcp` layer spawns `command` with `args` from the manifest — a manifest you did not author can run arbitrary commands as your user. Only point `--manifest` at configs you trust (same model as any MCP client config).
+- The engine (`resolver.mjs`, `sources/`) is dependency-free — plain Node.js built-ins only. Do not add npm dependencies without discussion.
 - Tests create temp directories and clean up with `trap`. Run from the repo root.

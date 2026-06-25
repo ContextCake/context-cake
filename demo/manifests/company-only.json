@@ -1,0 +1,5 @@
+{
+  "layers": [
+    { "name": "company", "level": 0, "path": "../layers/company" }
+  ]
+}

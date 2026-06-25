@@ -11,3 +11,5 @@ layers.json
 # Plans are never committed
 docs/plans/
 .claude/plans/
+demo/layers/
+demo/mcp/

@@ -13,8 +13,6 @@ Personal  (level 3)  ← your drafts, notes, overrides
 ────────────────────
 Team      (level 2)  ← runbooks, decisions, system docs
 ────────────────────
-Group     (level 1)  ← cross-team standards, shared interfaces
-────────────────────
 Company   (level 0)  ← org-wide canonical knowledge
 ```
 
@@ -72,14 +70,13 @@ npm test
 
 ```json
 { "layers": [
-  { "name": "personal", "level": 3, "path": "~/kb-personal" },
-  { "name": "team",     "level": 2, "path": "~/kb-team" },
-  { "name": "group",    "level": 1, "path": "~/kb-data-group" },
-  { "name": "company",  "level": 0, "path": "~/kb-company" }
+  { "name": "personal", "level": 3, "source": "okf-local", "path": "~/kb-personal" },
+  { "name": "team",     "level": 2, "source": "okf-local", "path": "~/kb-team" },
+  { "name": "company",  "level": 0, "source": "mcp", "command": "node", "args": ["./company-graph-server.mjs"] }
 ] }
 ```
 
-Each layer is an [OKF](https://cloud.google.com/blog/products/ai-machine-learning/google-cloud-launches-open-knowledge-format) bundle: a directory of markdown files with YAML frontmatter. The only required frontmatter field is `type`.
+A layer declares a `source`. An **`okf-local`** layer is an [OKF](https://cloud.google.com/blog/products/ai-machine-learning/google-cloud-launches-open-knowledge-format) bundle — a directory of markdown files with YAML frontmatter (the only required field is `type`). An **`mcp`** layer is a foreign knowledge graph reached over a stdio MCP server (`command` + `args`); its responses are translated into OKF at read time, so it stitches in alongside the local bundles. `source` defaults to `okf-local` when omitted. See `examples/mock-context-source.mjs` for a runnable foreign source.
 
 ## MCP tools
 
@@ -88,11 +85,11 @@ The MCP server exposes the resolved cascade to AI agents:
 | Tool | What it does |
 |------|-------------|
 | `search` | Full-text search across all layers; returns one entry per concept with contributing layers |
-| `read_file` | Returns the resolved effective concept — section merge + provenance. Pass `layer` for raw single-layer read. |
+| `read_file` | Returns the resolved effective concept — section merge + provenance + per-section conflicts. Pass `layer` for raw single-layer read. |
 | `list_concepts` | All effective concept IDs with their contributing layers |
 | `get_links` | Outgoing and incoming links, resolved against the effective graph |
 
-Every `read_file` response includes `contributors`, `frontmatterProvenance`, and per-section `sourceLayer` so agents can weight facts by trust level.
+Every `read_file` response includes `contributors`, `frontmatterProvenance`, and per-section `sourceLayer` so agents can weight facts by trust level. Where layers disagree on a section, the higher layer's value is primary and the dissenting layers ride along as `conflicts: [{ layer, updated, content }]` — the contradiction is surfaced, not hidden.
 
 ## Override semantics
 
@@ -101,8 +98,6 @@ Every `read_file` response includes `contributors`, `frontmatterProvenance`, and
 | *(default)* | Section/field merge — higher layer wins per key |
 | `override: full` in frontmatter | Whole-concept replacement; everything below is dropped |
 | `{#anchor override=none}` | Null/tombstone — suppresses the inherited section. Retained as `suppressed: true` for audit. |
-| `override: exception` in frontmatter | Same as merge, but flags the concept as `exception: true` — a scoped deviation from lower-layer policy |
-| `{#anchor override=exception}` | Same at the section level |
 
 ## Write path
 

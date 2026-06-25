@@ -102,4 +102,46 @@ grep -q 'Retain all logs' <<<"$sup" || fail "suppression — Policy should be in
 if grep -q 'PII may be purged' <<<"$sup"; then fail "suppression — Exceptions should be suppressed" "$sup"; fi
 grep -q '"suppressed": true' <<<"$sup" || fail "suppression — suppressed section needs suppressed=true for audit" "$sup"
 
-echo "resolver test passed (section merge + provenance + vertical precedence + suppression)"
+# --- Conflict surfacing: dissent attached per section with layer + date ---
+conf_company="$tmpdir/conf-company"; conf_team="$tmpdir/conf-team"
+mkdir -p "$conf_company/decisions" "$conf_team/decisions"
+
+cat > "$conf_company/decisions/database-engine.md" <<'EOF'
+---
+type: decision
+title: Database engine
+updated: 2026-06-01
+---
+
+## Engine {#engine}
+
+Postgres (org standard).
+EOF
+
+cat > "$conf_team/decisions/database-engine.md" <<'EOF'
+---
+type: decision
+title: Database engine
+updated: 2026-05-12
+---
+
+## Engine {#engine}
+
+SingleStore (HTAP / reporting).
+EOF
+
+cat > "$tmpdir/conf-layers.json" <<'EOF'
+{ "layers": [
+  { "name": "team", "level": 2, "path": "conf-team" },
+  { "name": "company", "level": 0, "path": "conf-company" }
+] }
+EOF
+
+conf="$(node "$resolver" --manifest "$tmpdir/conf-layers.json" --concept decisions/database-engine)"
+grep -q 'SingleStore' <<<"$conf" || fail "conflict — team primary should win the Engine section" "$conf"
+grep -q '"conflicts"' <<<"$conf" || fail "conflict — resolved section should carry a conflicts array" "$conf"
+grep -q 'Postgres' <<<"$conf" || fail "conflict — company dissent value should be surfaced" "$conf"
+grep -q '"layer": "company"' <<<"$conf" || fail "conflict — dissent should name the company layer" "$conf"
+grep -q '2026-06-01' <<<"$conf" || fail "conflict — dissent should carry the company updated date" "$conf"
+
+echo "resolver test passed (section merge + provenance + vertical precedence + suppression + conflicts)"

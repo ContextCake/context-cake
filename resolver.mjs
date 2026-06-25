@@ -92,12 +92,15 @@ export function mergeConcepts(contributors) {
 
   // Per-section winner: highest level wins (vertical precedence). Display order
   // follows first appearance in precedence order, so a higher layer's section
-  // ordering leads.
+  // ordering leads. Dissenters are collected per section for honest-conflict output.
   const order = [];
   const winners = new Map();
+  const contenders = new Map(); // key -> [{ c, section }]
   for (const c of active) {
     for (const section of c.sections) {
       if (!winners.has(section.key)) order.push(section.key);
+      if (!contenders.has(section.key)) contenders.set(section.key, []);
+      contenders.get(section.key).push({ c, section });
       const challenger = { c, section };
       const current = winners.get(section.key);
       if (!current || sectionBeats(challenger, current)) {
@@ -109,13 +112,27 @@ export function mergeConcepts(contributors) {
   const sections = order.map((key) => {
     const { c, section } = winners.get(key);
     const suppressed = section.override === "none";
+    const winnerContent = suppressed ? "" : section.lines.join("\n").trim();
+
+    // Dissent: any OTHER contributor that defines this section with different content.
+    // Suppressed sections are tombstones — no conflicts emitted (suppression IS the answer).
+    const conflicts = suppressed ? [] : contenders.get(key)
+      .filter((x) => x.c !== c)
+      .map((x) => ({
+        layer: x.c.layer,
+        updated: x.section.updated ?? x.c.updated ?? null,
+        content: x.section.override === "none" ? "" : x.section.lines.join("\n").trim(),
+      }))
+      .filter((d) => d.content !== winnerContent);
+
     return {
       key,
       heading: section.heading,
-      content: suppressed ? "" : section.lines.join("\n").trim(),
+      content: winnerContent,
       sourceLayer: c.layer,
       sourceUpdated: section.updated ?? c.updated ?? null,
       ...(suppressed ? { suppressed: true } : {}),
+      ...(conflicts.length ? { conflicts } : {}),
     };
   });
 

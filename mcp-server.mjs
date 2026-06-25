@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-// Dependency-free stdio MCP server exposing a cascade of OKF layer bundles as one
-// effective, read-time knowledge graph. Reads resolve through the section/field
-// merge in resolver.mjs (level precedence, section-level recency, provenance).
+// Dependency-free stdio MCP server exposing a cascade of knowledge sources as one
+// effective, read-time OKF graph. Reads resolve through the section/field merge in
+// resolver.mjs (level precedence, provenance, per-section conflicts) over the
+// source adapters in sources/ (OKF-local bundles + foreign graphs over MCP).
 //
 //   node mcp-server.mjs --manifest layers.json
 //   node mcp-server.mjs --personal <dir> --shared <dir>   # legacy 2-layer stack

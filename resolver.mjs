@@ -1,25 +1,23 @@
 #!/usr/bin/env node
 
 // Cascade read-path engine. Resolves one OKF concept across an ordered stack of
-// layer bundles (Personal > Team > Group > Company) into an effective concept,
-// merging per section and per frontmatter field, with provenance. Dependency-free.
+// layer bundles into an effective concept, merging per section and per frontmatter
+// field, with provenance. Dependency-free.
 //
-// Resolution rules (see docs/team-knowledge-system-cascade-architecture.md):
-//   - Order contributors by level (desc), tie-break by `updated` recency (desc).
+// Resolution rules:
+//   - Order contributors by level (desc). Higher level wins per section.
 //   - `override: full` on a contributor drops everything below it.
 //   - Otherwise: each section (by heading) and each frontmatter key is won by the
 //     highest-precedence contributor that defines it; the rest are inherited.
+//   - Per-section suppression: `{#anchor override=none}` tombstone hides a section.
 //
 // Usage:
 //   node resolver.mjs --manifest layers.json --concept decisions/primary-db
-//   node resolver.mjs --manifest layers.json --shadow
-//   node resolver.mjs --hash path/to/concept.md
 //
 // manifest.json: { "layers": [ {"name":"company","level":0,"path":"..."}, ... ] }
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 if (isMainModule(import.meta.url)) {
@@ -34,11 +32,6 @@ function main() {
     return;
   }
 
-  if (args.hash) {
-    console.log(hashConcept(fs.readFileSync(args.hash, "utf8")));
-    return;
-  }
-
   const manifest = JSON.parse(fs.readFileSync(args.manifest, "utf8"));
   const layers = (manifest.layers ?? []).map((layer) => ({
     name: layer.name,
@@ -46,13 +39,8 @@ function main() {
     root: path.resolve(path.dirname(args.manifest), layer.path),
   }));
 
-  if (args.shadow) {
-    console.log(JSON.stringify({ alerts: detectShadow(layers) }, null, 2));
-    return;
-  }
-
   if (!args.concept) {
-    throw new Error("Provide --concept <id>, --shadow, or --hash <file>.");
+    throw new Error("Provide --concept <id> and --manifest <file>.");
   }
 
   const resolved = resolveConcept(args.concept, layers);
@@ -108,16 +96,15 @@ export function mergeConcepts(contributors) {
     }
   }
 
-  // Per-section winner: highest level wins (vertical precedence dominates); ties
-  // within a level break by section-level `updated`, falling back to the
-  // contributor's document `updated`. Display order follows first appearance in
-  // precedence order, so a higher layer's section ordering leads.
+  // Per-section winner: highest level wins (vertical precedence). Display order
+  // follows first appearance in precedence order, so a higher layer's section
+  // ordering leads.
   const order = [];
   const winners = new Map();
   for (const c of active) {
     for (const section of c.sections) {
       if (!winners.has(section.key)) order.push(section.key);
-      const challenger = { c, section, time: sectionTime(c, section) };
+      const challenger = { c, section };
       const current = winners.get(section.key);
       if (!current || sectionBeats(challenger, current)) {
         winners.set(section.key, challenger);
@@ -128,7 +115,6 @@ export function mergeConcepts(contributors) {
   const sections = order.map((key) => {
     const { c, section } = winners.get(key);
     const suppressed = section.override === "none";
-    const exception = section.override === "exception";
     return {
       key,
       heading: section.heading,
@@ -136,60 +122,16 @@ export function mergeConcepts(contributors) {
       sourceLayer: c.layer,
       sourceUpdated: section.updated ?? c.updated ?? null,
       ...(suppressed ? { suppressed: true } : {}),
-      ...(exception ? { exception: true } : {}),
     };
   });
 
-  // Concept-level exception: highest contributor explicitly marks this as a
-  // scoped deviation from lower-layer guidance (override: exception in frontmatter).
-  // Behaviorally identical to merge — exception is a governance signal only.
-  const conceptException = active[0]?.frontmatter.override === "exception";
-
-  return { frontmatter, frontmatterProvenance, sections, ...(conceptException ? { exception: true } : {}) };
+  return { frontmatter, frontmatterProvenance, sections };
 }
 
+// Higher level wins; equal level keeps the first contributor seen
+// (contributors are pre-ordered by precedence). No recency tiebreak.
 function sectionBeats(a, b) {
-  if (a.c.level !== b.c.level) return a.c.level > b.c.level;
-  return a.time > b.time;
-}
-
-function sectionTime(contributor, section) {
-  return updatedTime(section.updated ?? contributor.updated);
-}
-
-// ---- Shadow-staleness detection --------------------------------------------
-
-export function detectShadow(layers) {
-  const byName = new Map(layers.map((layer) => [layer.name, layer]));
-  const alerts = [];
-
-  for (const layer of layers) {
-    for (const filePath of walkMarkdown(layer.root)) {
-      const content = fs.readFileSync(filePath, "utf8");
-      const { frontmatter } = parseFrontmatter(content);
-      const baseName = frontmatter.overrides_layer;
-      const storedRef = frontmatter.overrides_ref;
-      if (!baseName || !storedRef) continue;
-
-      const baseLayer = byName.get(baseName);
-      if (!baseLayer) continue;
-
-      const id = toPosix(path.relative(layer.root, filePath)).replace(/\.md$/i, "");
-      const baseFile = path.join(baseLayer.root, `${id}.md`);
-      if (!fs.existsSync(baseFile)) continue;
-
-      const currentRef = hashConcept(fs.readFileSync(baseFile, "utf8"));
-      if (currentRef !== storedRef) {
-        alerts.push({ concept: id, layer: layer.name, baseLayer: baseName, storedRef, currentRef });
-      }
-    }
-  }
-
-  return alerts;
-}
-
-export function hashConcept(content) {
-  return `sha256:${crypto.createHash("sha256").update(content.trim()).digest("hex")}`;
+  return a.c.level > b.c.level;
 }
 
 // ---- OKF parsing -----------------------------------------------------------
@@ -330,7 +272,6 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") parsed.help = true;
-    else if (arg === "--shadow") parsed.shadow = true;
     else if (arg.startsWith("--")) {
       parsed[arg.slice(2)] = argv[index + 1];
       index += 1;
@@ -341,12 +282,12 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log(`Usage:
-  node tools/team-knowledge/resolver.mjs --manifest layers.json --concept <id>
-  node tools/team-knowledge/resolver.mjs --manifest layers.json --shadow
-  node tools/team-knowledge/resolver.mjs --hash <concept.md>
+  node resolver.mjs --manifest layers.json --concept <id>
 
-Resolves an OKF concept across an ordered layer stack (level desc, recency tie-break),
-merging per section and per frontmatter field with provenance. --shadow reports
-overrides whose base layer has changed. --hash prints a concept's base-hash ref.
+Resolves an OKF concept across an ordered layer stack (level desc), merging per
+section and per frontmatter field with provenance. Higher level wins per section;
+per-section suppression via {#anchor override=none}.
+
+manifest.json: { "layers": [ {"name":"company","level":0,"path":"..."}, ... ] }
 `);
 }

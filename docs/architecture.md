@@ -1,3 +1,10 @@
+> **⚠ Superseded in part (2026-06-24).** The current resolution model is the stitching-layer
+> re-architecture in [`specs/contextcake-core/design.md`](../specs/contextcake-core/design.md):
+> three layers, two rules + per-section suppression, conflicts surfaced with dates, and a
+> source-adapter seam (OKF-local + MCP). The shadow/hash subsystem, `override:exception`, the
+> Group layer, and same-level DAG recency described below are **removed**. This document is kept
+> for historical design rationale; do not treat §3–§4 mechanics as current.
+
 # Team Context Radar — Cascading Knowledge Layers Architecture
 
 **Date:** 2026-06-18

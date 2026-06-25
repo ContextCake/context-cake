@@ -334,7 +334,14 @@ function assembleMarkdown(resolved) {
   const front = `---\n${fmLines.join("\n")}\n---\n\n`;
   const bodyParts = resolved.sections
     .filter((s) => !s.suppressed)
-    .map((s) => (s.heading ? `${s.heading}\n\n${s.content}` : s.content));
+    .map((s) => {
+      const head = s.heading ? `${s.heading}\n\n${s.content}` : s.content;
+      if (!s.conflicts || s.conflicts.length === 0) return head;
+      const notes = s.conflicts
+        .map((c) => `> ⚠ ${c.layer} disagrees (updated ${c.updated ?? "?"}): ${c.content.replace(/\n+/g, " ")}`)
+        .join("\n");
+      return `${head}\n\n${notes}`;
+    });
   return front + bodyParts.join("\n\n");
 }
 

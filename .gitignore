@@ -13,3 +13,5 @@ docs/plans/
 .claude/plans/
 demo/layers/
 demo/mcp/
+/mcp-local.json
+layers/personal/

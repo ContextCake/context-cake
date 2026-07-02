@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>ContextCake · Cascade Playground</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a0d12'/%3E%3Cpath d='M2.5 6.5h11M2.5 9.5h11' stroke='%2334d399' stroke-width='1.4' stroke-linecap='round'/%3E%3Cpath d='M2.5 12.5h11' stroke='%23a78bfa' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+
+    <!-- Vendored, offline: CodeMirror (edit + highlight), marked (md), pdf.js -->
+    <link rel="stylesheet" href="./vendor/codemirror.min.css" />
+    <script src="./vendor/codemirror.min.js"></script>
+    <script src="./vendor/cm-mode/xml.min.js"></script>
+    <script src="./vendor/cm-mode/javascript.min.js"></script>
+    <script src="./vendor/cm-mode/css.min.js"></script>
+    <script src="./vendor/cm-mode/htmlmixed.min.js"></script>
+    <script src="./vendor/cm-mode/markdown.min.js"></script>
+    <script src="./vendor/cm-mode/yaml.min.js"></script>
+    <script src="./vendor/marked.min.js"></script>
+    <script src="./vendor/pdf.min.js"></script>
+  </head>
+  <body>
+    <div class="app" data-mode="canvas">
+      <!-- Top command bar -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 20 20" width="20" height="20">
+              <path d="M3 7h14M3 10.5h14" stroke="var(--c-company)" stroke-width="1.6" stroke-linecap="round" />
+              <path d="M3 14h14" stroke="var(--c-personal)" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </span>
+          <div class="brand__text">
+            <strong>ContextCake</strong>
+            <span>Cascade Playground</span>
+          </div>
+        </div>
+
+        <div class="mode-toggle" role="tablist" aria-label="View">
+          <button class="mode-btn is-active" data-mode="canvas" role="tab" aria-selected="true" type="button">
+            <svg viewBox="0 0 18 18" width="15" height="15" aria-hidden="true"><rect x="2.5" y="3" width="6" height="4.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2.5" y="10.5" width="6" height="4.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8.5 5.2h4a1 1 0 0 1 1 1V12" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+            Canvas
+          </button>
+          <button class="mode-btn" data-mode="files" role="tab" aria-selected="false" type="button">
+            <svg viewBox="0 0 18 18" width="15" height="15" aria-hidden="true"><path d="M2.5 5.5a1 1 0 0 1 1-1h3l1.4 1.6H14a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+            Files
+          </button>
+          <button class="mode-btn" data-mode="sources" role="tab" aria-selected="false" type="button">
+            <svg viewBox="0 0 18 18" width="15" height="15" aria-hidden="true"><path d="M3 4.5h12M3 9h12M3 13.5h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="6" cy="4.5" r="1.4" fill="var(--bg)" stroke="currentColor" stroke-width="1.3"/><circle cx="11" cy="9" r="1.4" fill="var(--bg)" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="13.5" r="1.4" fill="var(--bg)" stroke="currentColor" stroke-width="1.3"/></svg>
+            Sources
+          </button>
+        </div>
+
+        <label class="omni" aria-label="Search concepts">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+            <circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.6" />
+            <path d="m14 14 3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          </svg>
+          <input id="omni" type="search" placeholder="Search concepts, layers, tags…" autocomplete="off" />
+        </label>
+
+        <div class="topbar__actions">
+          <span id="manifestChip" class="chip chip--ghost" title="Active manifest"></span>
+          <button id="syncBtn" class="btn btn--ghost" type="button" title="Re-read sources from disk">
+            <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+              <path d="M15.5 8A6 6 0 1 0 16 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              <path d="M15.8 4.2V8h-3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>Sync</span>
+          </button>
+          <button id="fitBtn" class="btn btn--ghost" type="button" title="Fit canvas to view">
+            <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+              <path d="M4 7V4h3M16 7V4h-3M4 13v3h3M16 13v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>Fit</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Left rail: concept index -->
+      <aside class="rail">
+        <div class="rail__head">
+          <p class="eyebrow">Concepts</p>
+          <span id="conceptCount" class="count">0</span>
+        </div>
+        <div class="rail__legend" id="railLegend"></div>
+        <div id="conceptList" class="concept-list" role="listbox" aria-label="Concepts"></div>
+      </aside>
+
+      <!-- Center: the canvas -->
+      <main class="stage">
+        <div id="viewport" class="viewport">
+          <div id="world" class="world">
+            <svg id="edges" class="edges" aria-hidden="true"></svg>
+            <div id="nodes" class="nodes"></div>
+          </div>
+        </div>
+
+        <div class="stage__status" id="stageStatus" role="alert">
+          <svg viewBox="0 0 48 48" width="44" height="44" aria-hidden="true">
+            <path d="M24 6 44 40H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+            <path d="M24 19v9" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            <circle cx="24" cy="33.5" r="1.4" fill="currentColor" />
+          </svg>
+          <h3 id="stageStatusTitle">Couldn't reach the engine</h3>
+          <p id="stageStatusBody"></p>
+          <button class="action action--primary" id="stageRetry" type="button">Retry</button>
+        </div>
+
+        <div class="stage__hint" id="stageHint">
+          <span>Drag to pan · scroll to zoom · drag a card to move it · Esc to clear</span>
+        </div>
+
+        <div class="zoombar" role="group" aria-label="Zoom">
+          <button id="zoomOut" class="zoombar__btn" type="button" aria-label="Zoom out">–</button>
+          <span id="zoomLevel" class="zoombar__level">100%</span>
+          <button id="zoomIn" class="zoombar__btn" type="button" aria-label="Zoom in">+</button>
+        </div>
+      </main>
+
+      <!-- Right: inspector drawer -->
+      <aside class="inspector" id="inspector" data-open="false" aria-live="polite">
+        <div class="inspector__empty" id="inspectorEmpty">
+          <div class="inspector__empty-art" aria-hidden="true">
+            <svg viewBox="0 0 64 64" width="52" height="52">
+              <rect x="8" y="14" width="48" height="9" rx="3" fill="none" stroke="var(--c-company)" stroke-width="2" />
+              <rect x="8" y="28" width="48" height="9" rx="3" fill="none" stroke="var(--c-team)" stroke-width="2" />
+              <rect x="8" y="42" width="48" height="9" rx="3" fill="none" stroke="var(--c-personal)" stroke-width="2" />
+            </svg>
+          </div>
+          <p>Select a concept to see how the layers stitch together — which layer won each section, and where they disagree.</p>
+        </div>
+        <div class="inspector__body" id="inspectorBody" hidden></div>
+      </aside>
+
+      <!-- Files mode: explorer + editor + rich preview -->
+      <section class="files-view" id="filesView" aria-label="File explorer">
+        <aside class="ftree" id="ftree"></aside>
+
+        <div class="fmain">
+          <header class="fmain__head" id="fmainHead" hidden>
+            <span class="fkind" id="fkind"></span>
+            <span class="fpath mono" id="fpath"></span>
+            <a class="fconcept" id="fconcept" hidden></a>
+            <div class="fmain__spacer"></div>
+            <div class="fview-seg" id="fviewSeg" hidden role="group" aria-label="Preview mode">
+              <button data-fview="split" class="is-active" type="button">Split</button>
+              <button data-fview="editor" type="button">Source</button>
+              <button data-fview="preview" type="button">Preview</button>
+            </div>
+            <span class="fdirty" id="fdirty" hidden>● unsaved</span>
+            <button class="btn btn--save" id="fsave" type="button" hidden disabled>Save</button>
+          </header>
+
+          <div class="fmain__body" id="fmainBody" data-fview="split">
+            <div class="feditor" id="feditor" hidden></div>
+            <div class="fpreview" id="fpreview" hidden></div>
+            <div class="fmain__empty" id="fmainEmpty">
+              <svg viewBox="0 0 48 48" width="42" height="42" aria-hidden="true"><path d="M9 10a2 2 0 0 1 2-2h9l4 5h13a2 2 0 0 1 2 2v21a2 2 0 0 1-2 2H11a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+              <p>Pick a file to edit its source and see it rendered. Editing a layer's OKF markdown re-resolves the cascade on save.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Sources mode: configure sources + context-budget accounting -->
+      <section class="sources-view" id="sourcesView" aria-label="Sources">
+        <div class="sview">
+          <header class="sview__head">
+            <div>
+              <h1 class="sview__title">Sources</h1>
+              <p class="sview__sub">Federated context, stitched by precedence — higher level wins per section.</p>
+            </div>
+            <button class="btn btn--primary" id="addSourceBtn" type="button">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+              Add source
+            </button>
+          </header>
+
+          <form class="addform" id="addForm" hidden>
+            <div class="addform__row addform__row--type">
+              <div class="seg" id="addKind" role="group" aria-label="Source type">
+                <button type="button" data-kind="local" class="is-active">Local path</button>
+                <button type="button" data-kind="github">GitHub repo</button>
+                <button type="button" data-kind="mcp">MCP server</button>
+              </div>
+            </div>
+            <div class="addform__grid" id="addFields"></div>
+            <div class="addform__foot">
+              <p class="addform__hint" id="addHint"></p>
+              <div class="addform__actions">
+                <button type="button" class="action" id="addCancel">Cancel</button>
+                <button type="submit" class="action action--primary" id="addSubmit">Add source</button>
+              </div>
+            </div>
+          </form>
+
+          <section class="budget" id="budget" aria-label="Context budget"></section>
+
+          <div class="stable-wrap">
+            <table class="stable" id="stable">
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Location</th>
+                  <th class="num">Level</th>
+                  <th class="num">Concepts</th>
+                  <th class="tokcol">Context tokens</th>
+                  <th>Status</th>
+                  <th class="actcol"></th>
+                </tr>
+              </thead>
+              <tbody id="stableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Merge conflict resolver -->
+      <div class="merge" id="merge" hidden>
+        <div class="merge__scrim" id="mergeScrim"></div>
+        <div class="merge__panel" role="dialog" aria-modal="true" aria-labelledby="mergeTitle">
+          <header class="merge__head">
+            <div class="merge__heading">
+              <p class="eyebrow">Resolve conflict</p>
+              <h2 class="merge__title" id="mergeTitle"></h2>
+              <p class="merge__sub mono" id="mergeSub"></p>
+            </div>
+            <button class="merge__close" id="mergeClose" type="button" aria-label="Close resolver">
+              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            </button>
+          </header>
+
+          <div class="merge__body">
+            <div class="merge__col">
+              <p class="merge__label">Competing versions <span class="merge__labelhint">click one to load it below</span></p>
+              <div class="merge__versions" id="mergeVersions"></div>
+            </div>
+            <div class="merge__col">
+              <label class="merge__label" for="mergeText">Resolved value</label>
+              <textarea class="merge__editor mono" id="mergeText" spellcheck="false" aria-describedby="mergeTarget"></textarea>
+              <p class="merge__target" id="mergeTarget"></p>
+            </div>
+          </div>
+
+          <footer class="merge__foot">
+            <p class="merge__note">This writes your resolved value into each defining layer so they agree — the conflict clears on the next resolve.</p>
+            <div class="merge__actions">
+              <button class="action" id="mergeCancel" type="button">Cancel</button>
+              <button class="action action--primary" id="mergeApply" type="button">Apply resolution</button>
+            </div>
+          </footer>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

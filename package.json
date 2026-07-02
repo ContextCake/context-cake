@@ -6,6 +6,7 @@
   "scripts": {
     "test": "bash smoke-test.sh && bash resolver-test.sh && bash source-test.sh",
     "mcp": "node mcp-server.mjs",
+    "playground": "node playground/server.mjs",
     "ingest": "node ingest.mjs",
     "write": "node write.mjs",
     "demo:verify": "bash demo/setup.sh && bash demo/verify.sh"

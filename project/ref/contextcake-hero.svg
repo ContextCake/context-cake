@@ -1,0 +1,201 @@
+<svg width="100%" viewBox="0 0 1160 1420" role="img" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, &#39;Segoe UI&#39;, Roboto, Helvetica, Arial, sans-serif">
+<title>ContextCake: federated team knowledge with cascading layer precedence</title>
+<desc>Infographic in four parts. One: the layer cake — Personal (level 3, only you), Team (level 2, team members), and Company (level 0, all employees) stacked with Personal on top, since higher layers win. Two: a cascade resolution example — Company sets Engine=Postgres and Backups=nightly snapshots; Team overrides only Engine to SingleStore; the effective view agents see merges both, per section, with the losing value retained as a surfaced conflict. Three: the serve path — resolver.mjs merges the layer bundles and mcp-server.mjs exposes four tools (search, read_file, list_concepts, get_links) to AI agents. Four: the write path — repo activity is classified, ingested to signals.json, and written into a layer bundle as a draft concept.</desc>
+
+<defs>
+<marker id="aw" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#C77D2A"></path></marker>
+<marker id="at" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2C8A82"></path></marker>
+<marker id="ag" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8A8A82"></path></marker>
+<marker id="ad" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#57564F"></path></marker>
+</defs>
+
+<rect x="0" y="0" width="1160" height="1420" fill="#FBFAF6"></rect>
+
+
+<text x="580" y="56" text-anchor="middle" font-size="42" font-weight="800"><tspan fill="#1A1915">Context</tspan><tspan fill="#C77D2A">Cake</tspan></text>
+<text x="580" y="86" text-anchor="middle" font-size="16" fill="#57564F">Federated team knowledge with cascading layer precedence</text>
+<line x1="60" y1="108" x2="1100" y2="108" stroke="#D8D6CC" stroke-width="1.5"></line>
+
+
+<text x="60" y="140" font-size="13" font-weight="700" letter-spacing="1" fill="#0C447C">① THE LAYER CAKE</text>
+<text x="60" y="160" font-size="12.5" fill="#57564F">Storage is federated — one git repo per layer. Higher level = higher precedence.</text>
+
+
+<rect x="60" y="360" width="340" height="70" rx="12" fill="#EAF3FC" stroke="#8FB8DE" stroke-width="2"></rect>
+<circle cx="92" cy="395" r="17" fill="#FFFFFF" stroke="#2F6DA8" stroke-width="2"></circle>
+<text x="92" y="400" text-anchor="middle" font-size="14" font-weight="700" fill="#0C447C">0</text>
+<text x="122" y="391" font-size="16" font-weight="700" fill="#0C447C">Company</text>
+<text x="122" y="409" font-size="11" fill="#3D6E9E">org-wide canonical knowledge · all employees</text>
+
+
+<rect x="100" y="285" width="260" height="70" rx="12" fill="#D9EAFB" stroke="#3D7AB8" stroke-width="2"></rect>
+<circle cx="132" cy="320" r="17" fill="#FFFFFF" stroke="#2F6DA8" stroke-width="2"></circle>
+<text x="132" y="325" text-anchor="middle" font-size="14" font-weight="700" fill="#0C447C">2</text>
+<text x="162" y="316" font-size="16" font-weight="700" fill="#0C447C">Team</text>
+<text x="162" y="334" font-size="11" fill="#3D6E9E">runbooks, decisions, system docs · team members</text>
+
+
+<rect x="140" y="210" width="180" height="70" rx="12" fill="#C6DEF6" stroke="#2F6DA8" stroke-width="2.5"></rect>
+<circle cx="172" cy="245" r="17" fill="#FFFFFF" stroke="#2F6DA8" stroke-width="2.5"></circle>
+<text x="172" y="250" text-anchor="middle" font-size="14" font-weight="700" fill="#0C447C">3</text>
+<text x="202" y="241" font-size="16" font-weight="700" fill="#0C447C">Personal</text>
+<text x="202" y="259" font-size="11" fill="#3D6E9E">drafts, overrides · only you</text>
+
+<circle cx="230" cy="192" r="9" fill="#C77D2A"></circle>
+<text x="246" y="197" font-size="11.5" font-weight="700" fill="#7A5A28">↑ highest level wins</text>
+
+<text x="230" y="452" text-anchor="middle" font-size="12" font-style="italic" fill="#57564F">Access control is free: repo membership = read access.</text>
+
+
+<rect x="460" y="200" width="580" height="240" rx="14" fill="#FFFFFF" stroke="#D8D6CC" stroke-width="1.5"></rect>
+<text x="486" y="232" font-size="14" font-weight="700" fill="#1A1915">The rule</text>
+<text x="486" y="260" font-size="13.5" fill="#3A3934">When a concept exists in multiple layers, the</text>
+<text x="486" y="282" font-size="13.5" fill="#3A3934">higher layer wins — <tspan font-weight="700" fill="#0C447C">but only per section.</tspan></text>
+<text x="486" y="310" font-size="13.5" fill="#3A3934">A team override replaces only what it speaks to;</text>
+<text x="486" y="332" font-size="13.5" fill="#3A3934">everything else is inherited from below.</text>
+<text x="486" y="354" font-size="13.5" font-weight="700" fill="#1A1915">No knowledge lost.</text>
+<line x1="486" y1="372" x2="1014" y2="372" stroke="#EDEBE1" stroke-width="1"></line>
+<text x="486" y="393" font-size="11.5" font-weight="700" fill="#7A5A28">ESCAPE HATCHES</text>
+<rect x="486" y="402" width="120" height="22" rx="5" fill="#F4F3EF" stroke="#C3C1B8"></rect>
+<text x="496" y="417" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#5A3D12">override: full</text>
+<text x="616" y="417" font-size="11.5" fill="#57564F">→ replace the whole concept</text>
+<rect x="486" y="430" width="200" height="22" rx="5" fill="#F4F3EF" stroke="#C3C1B8"></rect>
+<text x="496" y="445" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#5A3D12">{#anchor override=none}</text>
+<text x="696" y="445" font-size="11.5" fill="#57564F">→ tombstone: suppress a section</text>
+
+
+<text x="60" y="490" font-size="13" font-weight="700" letter-spacing="1" fill="#0C447C">② CASCADE RESOLUTION</text>
+<text x="60" y="510" font-size="12.5" fill="#57564F">Example: decisions/primary-db — Company sets the default, Team overrides one section.</text>
+
+
+<rect x="60" y="530" width="330" height="150" rx="12" fill="#EAF3FC" stroke="#8FB8DE" stroke-width="2"></rect>
+<text x="80" y="556" font-size="11.5" font-weight="700" letter-spacing="0.5" fill="#0C447C">COMPANY · decisions/primary-db</text>
+<text x="80" y="583" font-size="12" font-weight="700" fill="#1A1915">## Engine</text>
+<text x="80" y="600" font-size="12" fill="#3A3934">Postgres.</text>
+<text x="80" y="628" font-size="12" font-weight="700" fill="#1A1915">## Backups</text>
+<text x="80" y="645" font-size="12" fill="#3A3934">Nightly snapshots to cold storage.</text>
+
+
+<rect x="60" y="710" width="330" height="110" rx="12" fill="#D9EAFB" stroke="#3D7AB8" stroke-width="2"></rect>
+<text x="80" y="736" font-size="11.5" font-weight="700" letter-spacing="0.5" fill="#0C447C">TEAM · decisions/primary-db</text>
+<text x="80" y="763" font-size="12" font-weight="700" fill="#1A1915">## Engine</text>
+<text x="80" y="780" font-size="12" fill="#3A3934">SingleStore (chosen for HTAP workloads).</text>
+<text x="80" y="802" font-size="10.5" font-style="italic" fill="#3D6E9E">— silent on Backups, so it inherits</text>
+
+
+<path d="M390,605 L432,680" fill="none" stroke="#57564F" stroke-width="1.5"></path>
+<path d="M390,765 L432,680" fill="none" stroke="#57564F" stroke-width="1.5"></path>
+<circle cx="432" cy="680" r="5" fill="#57564F"></circle>
+<path d="M432,680 L466,680" fill="none" stroke="#57564F" stroke-width="1.5" marker-end="url(#ad)"></path>
+
+
+<rect x="490" y="530" width="430" height="290" rx="14" fill="#FFFFFF" stroke="#1A1915" stroke-width="2.5"></rect>
+<text x="514" y="560" font-size="13" font-weight="800" letter-spacing="0.5" fill="#1A1915">EFFECTIVE (what agents see)</text>
+<text x="514" y="597" font-size="14" font-weight="700" fill="#1A1915">Engine</text>
+<rect x="580" y="580" width="58" height="20" rx="10" fill="#D9EAFB" stroke="#3D7AB8"></rect>
+<text x="609" y="594" text-anchor="middle" font-size="9" font-weight="700" fill="#0C447C">TEAM</text>
+<text x="514" y="618" font-size="12.5" fill="#3A3934">SingleStore (chosen for HTAP workloads).</text>
+<line x1="514" y1="634" x2="896" y2="634" stroke="#EDEBE1" stroke-width="1"></line>
+<text x="514" y="660" font-size="14" font-weight="700" fill="#1A1915">Backups</text>
+<rect x="608" y="643" width="150" height="20" rx="10" fill="#EAF3FC" stroke="#8FB8DE"></rect>
+<text x="683" y="657" text-anchor="middle" font-size="9" font-weight="700" fill="#0C447C">COMPANY · INHERITED</text>
+<text x="514" y="681" font-size="12.5" fill="#3A3934">Nightly snapshots to cold storage.</text>
+<line x1="514" y1="697" x2="896" y2="697" stroke="#EDEBE1" stroke-width="1"></line>
+<text x="514" y="719" font-size="11.5" fill="#7A5A28">Disagreements aren&#39;t hidden — the losing layer&#39;s</text>
+<text x="514" y="737" font-size="11.5" fill="#7A5A28">value rides along as <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace">conflicts[]</tspan>, tagged</text>
+<text x="514" y="755" font-size="11.5" fill="#7A5A28">with layer + date.</text>
+<text x="514" y="799" font-size="10.5" fill="#8A8A82">Section/field merge — not whole-document replacement.</text>
+
+<text x="490" y="836" font-size="12" font-style="italic" fill="#57564F">Per-concept override: <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-style="normal">override: full</tspan> drops every layer below it.</text>
+
+
+<text x="60" y="880" font-size="13" font-weight="700" letter-spacing="1" fill="#1E6B64">③ SERVE — AI AGENTS READ THE RESOLVED GRAPH</text>
+<text x="60" y="900" font-size="12.5" fill="#57564F">mcp-server.mjs resolves the cascade and exposes it over stdio.</text>
+
+<rect x="60" y="925" width="130" height="95" rx="10" fill="#F4F3EF" stroke="#C3C1B8"></rect>
+<text x="78" y="944" font-size="10" font-weight="700" letter-spacing="0.5" fill="#57564F">LAYER BUNDLES</text>
+<circle cx="86" cy="961" r="5" fill="#C6DEF6" stroke="#2F6DA8"></circle><text x="98" y="965" font-size="10" fill="#3A3934">Personal</text>
+<circle cx="86" cy="980" r="5" fill="#D9EAFB" stroke="#3D7AB8"></circle><text x="98" y="984" font-size="10" fill="#3A3934">Team</text>
+<circle cx="86" cy="999" r="5" fill="#EAF3FC" stroke="#8FB8DE"></circle><text x="98" y="1003" font-size="10" fill="#3A3934">Company</text>
+
+<path d="M190,972 L226,972" fill="none" stroke="#8A8A82" stroke-width="1.5" marker-end="url(#ag)"></path>
+
+<rect x="228" y="932" width="172" height="80" rx="10" fill="#D7F0EC" stroke="#2C8A82" stroke-width="2"></rect>
+<text x="314" y="966" text-anchor="middle" font-size="13" font-weight="700" fill="#134F49">resolver.mjs</text>
+<text x="314" y="984" text-anchor="middle" font-size="10" fill="#1E6B64">cascade + merge engine</text>
+
+<path d="M400,972 L436,972" fill="none" stroke="#2C8A82" stroke-width="1.5" marker-end="url(#at)"></path>
+
+<rect x="438" y="932" width="172" height="80" rx="10" fill="#BEE7E1" stroke="#1E6B64" stroke-width="2.5"></rect>
+<text x="524" y="966" text-anchor="middle" font-size="13" font-weight="700" fill="#0D3B37">mcp-server.mjs</text>
+<text x="524" y="984" text-anchor="middle" font-size="10" fill="#134F49">stdio · agent-facing</text>
+
+<path d="M610,972 L646,972" fill="none" stroke="#2C8A82" stroke-width="1.5" marker-end="url(#at)"></path>
+
+
+<rect x="648" y="925" width="220" height="46" rx="8" fill="#EAF7F5" stroke="#2C8A82" stroke-width="1.5"></rect>
+<text x="666" y="945" font-size="12" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#134F49">search</text>
+<text x="666" y="961" font-size="9.5" fill="#3A3934">full-text, all layers</text>
+
+<rect x="880" y="925" width="220" height="46" rx="8" fill="#EAF7F5" stroke="#2C8A82" stroke-width="1.5"></rect>
+<text x="898" y="945" font-size="12" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#134F49">read_file</text>
+<text x="898" y="961" font-size="9.5" fill="#3A3934">merged + provenance</text>
+
+<rect x="648" y="981" width="220" height="46" rx="8" fill="#EAF7F5" stroke="#2C8A82" stroke-width="1.5"></rect>
+<text x="666" y="1001" font-size="12" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#134F49">list_concepts</text>
+<text x="666" y="1017" font-size="9.5" fill="#3A3934">all effective concept IDs</text>
+
+<rect x="880" y="981" width="220" height="46" rx="8" fill="#EAF7F5" stroke="#2C8A82" stroke-width="1.5"></rect>
+<text x="898" y="1001" font-size="12" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#134F49">get_links</text>
+<text x="898" y="1017" font-size="9.5" fill="#3A3934">resolved link graph</text>
+
+<text x="228" y="1055" font-size="11.5" font-style="italic" fill="#57564F">Every response carries contributors + per-section source, so agents can weight facts by trust level.</text>
+<text x="228" y="1078" font-size="12" fill="#1A1915">→ read by AI agents and the control-surface dashboard</text>
+
+
+<text x="60" y="1130" font-size="13" font-weight="700" letter-spacing="1" fill="#7A5A28">④ WRITE PATH — CAPTURE REPO SIGNALS</text>
+<text x="60" y="1150" font-size="12.5" fill="#57564F">classify-context.mjs routes signals; write.mjs commits them to a layer.</text>
+
+<rect x="60" y="1172" width="150" height="60" rx="8" fill="#FBF0DD" stroke="#D69A3F" stroke-width="1.5"></rect>
+<text x="135" y="1197" text-anchor="middle" font-size="11.5" font-weight="700" fill="#5A3D12">repo activity</text>
+<text x="135" y="1213" text-anchor="middle" font-size="9" fill="#7A5A28">PRs · incidents · Q&amp;A</text>
+<path d="M210,1202 L282,1202" fill="none" stroke="#C77D2A" stroke-width="1.5" marker-end="url(#aw)"></path>
+
+<rect x="282.5" y="1172" width="150" height="60" rx="8" fill="#FBF0DD" stroke="#D69A3F" stroke-width="1.5"></rect>
+<text x="357.5" y="1197" text-anchor="middle" font-size="11.5" font-weight="700" fill="#5A3D12">classify-context.mjs</text>
+<text x="357.5" y="1213" text-anchor="middle" font-size="9" fill="#7A5A28">ignore·local·team·review</text>
+<path d="M432.5,1202 L504.5,1202" fill="none" stroke="#C77D2A" stroke-width="1.5" marker-end="url(#aw)"></path>
+
+<rect x="505" y="1172" width="150" height="60" rx="8" fill="#FBF0DD" stroke="#D69A3F" stroke-width="1.5"></rect>
+<text x="580" y="1197" text-anchor="middle" font-size="11.5" font-weight="700" fill="#5A3D12">ingest.mjs</text>
+<text x="580" y="1213" text-anchor="middle" font-size="9" fill="#7A5A28">→ signals.json</text>
+<path d="M655,1202 L727,1202" fill="none" stroke="#C77D2A" stroke-width="1.5" marker-end="url(#aw)"></path>
+
+<rect x="727.5" y="1172" width="150" height="60" rx="8" fill="#FBF0DD" stroke="#D69A3F" stroke-width="1.5"></rect>
+<text x="802.5" y="1197" text-anchor="middle" font-size="11.5" font-weight="700" fill="#5A3D12">write.mjs</text>
+<text x="802.5" y="1213" text-anchor="middle" font-size="9" fill="#7A5A28">→ OKF layer bundle</text>
+<path d="M877.5,1202 L949.5,1202" fill="none" stroke="#C77D2A" stroke-width="1.5" marker-end="url(#aw)"></path>
+
+<rect x="950" y="1172" width="150" height="60" rx="8" fill="#F3E3C4" stroke="#C77D2A" stroke-width="2"></rect>
+<text x="1025" y="1197" text-anchor="middle" font-size="11.5" font-weight="700" fill="#5A3D12">layer bundle</text>
+<text x="1025" y="1213" text-anchor="middle" font-size="9" fill="#7A5A28">git repo · draft: true</text>
+
+<text x="580" y="1258" text-anchor="middle" font-size="11.5" font-style="italic" fill="#7A5A28">review_required signals stage under _review/ for human approval.</text>
+
+
+<line x1="60" y1="1290" x2="1100" y2="1290" stroke="#D8D6CC" stroke-width="1.5"></line>
+
+<rect x="230" y="1312" width="150" height="32" rx="16" fill="#FBF0DD" stroke="#D69A3F"></rect>
+<text x="305" y="1333" text-anchor="middle" font-size="12" font-weight="700" fill="#5A3D12">No dependencies</text>
+
+<rect x="400" y="1312" width="160" height="32" rx="16" fill="#EAF7F5" stroke="#2C8A82"></rect>
+<text x="480" y="1333" text-anchor="middle" font-size="12" font-weight="700" fill="#134F49">OKF-compatible</text>
+
+<rect x="580" y="1312" width="140" height="32" rx="16" fill="#FBF0DD" stroke="#D69A3F"></rect>
+<text x="650" y="1333" text-anchor="middle" font-size="12" font-weight="700" fill="#5A3D12">MCP-ready</text>
+
+<rect x="740" y="1312" width="190" height="32" rx="16" fill="#EAF7F5" stroke="#2C8A82"></rect>
+<text x="835" y="1333" text-anchor="middle" font-size="12" font-weight="700" fill="#134F49">Section-level merge</text>
+
+<text x="580" y="1375" text-anchor="middle" font-size="11" fill="#8A8A82">resolver.mjs · mcp-server.mjs · ingest.mjs · write.mjs — plain Node.js ≥ 18</text>
+</svg>

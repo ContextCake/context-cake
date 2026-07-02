@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: #F1F0EA; }
+  @keyframes ccPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes ccSlide { from { transform: translateX(20px); } to { transform: translateX(0); } }
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-thumb { background: #D0CDBF; border-radius: 8px; border: 3px solid #F1F0EA; }
+  ::-webkit-scrollbar-thumb:hover { background: #C3C1B8; }
+  ::selection { background: #F3E3C4; }
+</style>
+</helmet>
+
+<div style="display:flex; min-height:100vh; background:#F1F0EA; color:#1A1915; font-family:'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif; font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside style="position:sticky; top:0; height:100vh; width:242px; flex:0 0 242px; display:flex; flex-direction:column; background:#FBFAF6; border-right:1px solid #D8D6CC;">
+    <div style="display:flex; align-items:center; gap:11px; padding:20px 18px 18px;">
+      <svg width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
+        <rect x="4" y="18.5" width="22" height="6.5" rx="2.2" fill="#EAF3FC" stroke="#3D7AB8" stroke-width="1.6"/>
+        <rect x="6" y="11.5" width="18" height="6.2" rx="2.2" fill="#D9EAFB" stroke="#2F6DA8" stroke-width="1.6"/>
+        <rect x="8.5" y="4.8" width="13" height="6" rx="2.2" fill="#FBF0DD" stroke="#C77D2A" stroke-width="1.6"/>
+      </svg>
+      <div style="line-height:1.15;">
+        <div style="font-weight:600; font-size:15px; letter-spacing:-0.01em;">ContextCake</div>
+        <div style="font-size:10.5px; font-weight:500; letter-spacing:0.08em; text-transform:uppercase; color:#8A8A82;">Context Console</div>
+      </div>
+    </div>
+
+    <nav style="display:flex; flex-direction:column; gap:3px; padding:6px 12px; flex:1;">
+      <button onClick="{{ handlers.overview }}" style="{{ nav.overview }}" style-hover="background:#F1EFE7;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        <span>Overview</span>
+      </button>
+      <button onClick="{{ handlers.triage }}" style="{{ nav.triage }}" style-hover="background:#F1EFE7;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M3 12h18M3 19h10"/></svg>
+        <span>Triage</span>
+        <span style="{{ nav.triageBadge }}">{{ counts.triage }}</span>
+      </button>
+      <button onClick="{{ handlers.conflicts }}" style="{{ nav.conflicts }}" style-hover="background:#F1EFE7;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M6 8.4v7.2M8.2 6h4.2a3 3 0 0 1 3 3v.6M8.2 18h4.2a3 3 0 0 0 3-3v-.6"/></svg>
+        <span>Conflicts</span>
+        <span style="{{ nav.conflictBadge }}">{{ counts.conflicts }}</span>
+      </button>
+      <button onClick="{{ handlers.concepts }}" style="{{ nav.concepts }}" style-hover="background:#F1EFE7;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="12" cy="17" r="2.2"/><path d="M7.6 8.6 10.6 15M16.4 7.7 13 15.4M8 7h7.8"/></svg>
+        <span>Concepts</span>
+      </button>
+    </nav>
+
+    <div style="padding:12px; border-top:1px solid #D8D6CC; display:flex; flex-direction:column; gap:12px;">
+      <button onClick="{{ handlers.openChat }}" style="display:flex; align-items:center; gap:9px; width:100%; border:none; border-radius:9px; background:#1E6B64; color:#EAF7F5; padding:11px 13px; font:inherit; font-weight:500; font-size:13.5px; cursor:pointer;" style-hover="background:#134F49;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8z"/><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+        <span>Ask ContextCake</span>
+      </button>
+      <div style="display:flex; align-items:center; gap:9px; padding:2px 4px;">
+        <span style="width:8px; height:8px; border-radius:999px; background:#2C8A82; box-shadow:0 0 0 3px #D7F0EC; animation:ccPulse 2.4s ease-in-out infinite; flex:0 0 auto;"></span>
+        <div style="line-height:1.25;">
+          <div style="font-size:11.5px; font-weight:500; color:#134F49;">Serving cascade</div>
+          <div style="font-size:10.5px; color:#8A8A82; font-family:'IBM Plex Mono', monospace;">3 layers · 178 concepts</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div style="flex:1; min-width:0; display:flex; flex-direction:column;">
+    <header style="position:sticky; top:0; z-index:6; display:flex; align-items:center; gap:16px; height:66px; padding:0 26px; background:rgba(241,240,234,0.82); backdrop-filter:blur(10px); border-bottom:1px solid #D8D6CC;">
+      <div style="line-height:1.2;">
+        <div style="font-size:17px; font-weight:600; letter-spacing:-0.01em;">{{ viewTitle }}</div>
+        <div style="font-size:12px; color:#57564F;">{{ viewSub }}</div>
+      </div>
+      <div style="margin-left:auto; display:flex; align-items:center; gap:10px;">
+        <sc-if value="{{ showSearch }}" hint-placeholder-val="{{ true }}">
+          <label style="display:flex; align-items:center; gap:8px; height:38px; padding:0 12px; background:#FBFAF6; border:1px solid #C3C1B8; border-radius:9px;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8A8A82" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input value="{{ query }}" onInput="{{ onQuery }}" placeholder="{{ searchPlaceholder }}" style="border:none; background:transparent; outline:none; font:inherit; font-size:13px; width:200px; color:#1A1915;">
+          </label>
+        </sc-if>
+      </div>
+    </header>
+
+    <main style="padding:24px 26px 60px;">
+
+      <!-- ===== OVERVIEW ===== -->
+      <sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex; flex-direction:column; gap:20px;">
+        <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px;">
+          <sc-for list="{{ statTiles }}" as="s" hint-placeholder-count="4">
+            <div style="padding:16px 18px; background:#FBFAF6; border:1px solid #D8D6CC; border-radius:11px; border-left:3px solid {{ s.accent }};">
+              <div style="font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8A8A82;">{{ s.label }}</div>
+              <div style="display:flex; align-items:baseline; gap:8px; margin-top:6px;">
+                <div style="font-family:'IBM Plex Mono', monospace; font-size:30px; font-weight:500; letter-spacing:-0.02em; color:{{ s.numColor }};">{{ s.value }}</div>
+                <div style="font-size:12px; color:#57564F;">{{ s.unit }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1.55fr 1fr; gap:20px; align-items:start;">
+          <div style="display:flex; flex-direction:column; gap:20px; min-width:0;">
+            <!-- Cascade -->
+            <section style="background:#FBFAF6; border:1px solid #D8D6CC; border-radius:13px; padding:20px;">
+              <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:4px;">
+                <h2 style="margin:0; font-size:15px; font-weight:600;">The cascade</h2>
+                <span style="font-size:11.5px; color:#57564F;">Higher layers win — <em style="font-style:normal; color:#1A1915; font-weight:500;">per section</em></span>
+              </div>
+              <p style="margin:0 0 16px; font-size:12.5px; color:#57564F;">Knowledge resolves top-down. A layer overrides only the sections it speaks to; everything else is inherited from below.</p>
+              <div style="display:flex; flex-direction:column; gap:9px;">
+                <sc-for list="{{ cakeBands }}" as="b" hint-placeholder-count="3">
+                  <div style="{{ b.bandStyle }}">
+                    <div style="{{ b.badgeStyle }}">{{ b.level }}</div>
+                    <div style="min-width:0;">
+                      <div style="display:flex; align-items:center; gap:9px;">
+                        <span style="font-weight:600; font-size:14.5px; color:{{ b.text }};">{{ b.name }}</span>
+                        <span style="font-size:10.5px; color:{{ b.textSoft }}; font-family:'IBM Plex Mono', monospace;">· {{ b.members }}</span>
+                      </div>
+                      <div style="font-size:11.5px; color:{{ b.textSoft }}; margin-top:1px;">{{ b.sub }}</div>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                      <div style="text-align:right;">
+                        <div style="font-family:'IBM Plex Mono', monospace; font-size:17px; font-weight:500; color:{{ b.text }}; line-height:1;">{{ b.concepts }}</div>
+                        <div style="font-size:9.5px; letter-spacing:0.05em; text-transform:uppercase; color:{{ b.textSoft }}; margin-top:3px;">concepts</div>
+                      </div>
+                      <sc-if value="{{ b.hasConflicts }}" hint-placeholder-val="{{ true }}">
+                        <div style="display:flex; align-items:center; gap:5px; padding:5px 9px; background:#FBF0DD; border:1px solid #D69A3F; border-radius:999px;">
+                          <span style="width:6px; height:6px; border-radius:999px; background:#C77D2A;"></span>
+                          <span style="font-size:11px; font-weight:600; color:#5A3D12; font-family:'IBM Plex Mono', monospace;">{{ b.conflicts }}</span>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+
+            <!-- Sources -->
+            <section style="background:#FBFAF6; border:1px solid #D8D6CC; border-radius:13px; padding:20px;">
+              <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:14px;">
+                <h2 style="margin:0; font-size:15px; font-weight:600;">Context sources</h2>
+                <span style="font-size:11.5px; color:#57564F;">{{ counts.sources }} feeding the graph</span>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:8px;">
+                <sc-for list="{{ sourceList }}" as="s" hint-placeholder-count="7">
+                  <div style="display:grid; grid-template-columns:22px minmax(0,1.4fr) auto 132px 70px; align-items:center; gap:13px; padding:9px 12px; background:#FFFFFF; border:1px solid #E4E1D6; border-radius:9px;">
+                    <span style="{{ s.kindStyle }}" title="{{ s.kindLabel }}">{{ s.kindGlyph }}</span>
+                    <div style="min-width:0;">
+                      <div style="font-weight:500; font-size:13px; font-family:'IBM Plex Mono', monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ s.name }}</div>
+                      <div style="font-size:11px; color:#8A8A82; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ s.focus }}</div>
+                    </div>
+                    <span style="{{ s.chipStyle }}">{{ s.layerName }}</span>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                      <div style="flex:1; height:6px; border-radius:999px; background:#ECEAE0; overflow:hidden;"><span style="display:block; height:100%; width:{{ s.coverage }}%; background:{{ s.barColor }}; border-radius:999px;"></span></div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px; justify-content:flex-end;">
+                      <span style="width:7px; height:7px; border-radius:999px; background:{{ s.statusColor }};"></span>
+                      <span style="font-size:11px; color:#57564F;">{{ s.statusLabel }}</span>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:20px; min-width:0;">
+            <!-- Needs you -->
+            <section style="background:#FBFAF6; border:1px solid #D8D6CC; border-radius:13px; padding:20px;">
+              <h2 style="margin:0 0 14px; font-size:15px; font-weight:600;">Needs you</h2>
+              <div style="display:flex; flex-direction:column; gap:10px;">
+                <button onClick="{{ handlers.triage }}" style="display:flex; align-items:center; gap:14px; width:100%; text-align:left; padding:14px 15px; background:#FBF0DD; border:1px solid #E8C88C; border-radius:11px; cursor:pointer; font:inherit;" style-hover="border-color:#D69A3F;">
+                  <div style="font-family:'IBM Plex Mono', monospace; font-size:26px; font-weight:500; color:#5A3D12; line-height:1;">{{ counts.triage }}</div>
+                  <div style="flex:1;">
+                    <div style="font-weight:600; font-size:13.5px; color:#5A3D12;">Signals to triage</div>
+                    <div style="font-size:11.5px; color:#7A5A28;">Store, review, or discard</div>
+                  </div>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                </button>
+                <button onClick="{{ handlers.conflicts }}" style="display:flex; align-items:center; gap:14px; width:100%; text-align:left; padding:14px 15px; background:#FFFFFF; border:1px solid #E8C88C; border-radius:11px; cursor:pointer; font:inherit;" style-hover="border-color:#C77D2A;">
+                  <div style="font-family:'IBM Plex Mono', monospace; font-size:26px; font-weight:500; color:#C77D2A; line-height:1;">{{ counts.conflicts }}</div>
+                  <div style="flex:1;">
+                    <div style="font-weight:600; font-size:13.5px; color:#1A1915;">Unresolved conflicts</div>
+                    <div style="font-size:11.5px; color:#57564F;">Layers disagree on a section</div>
+                  </div>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                </button>
+              </div>
+            </section>
+
+            <!-- Activity -->
+            <section style="background:#FBFAF6; border:1px solid #D8D6CC; border-radius:13px; padding:20px;">
+              <h2 style="margin:0 0 14px; font-size:15px; font-weight:600;">Recent activity</h2>
+              <div style="display:flex; flex-direction:column;">
+                <sc-for list="{{ activity }}" as="a" hint-placeholder-count="5">
+                  <div style="display:grid; grid-template-columns:14px 1fr auto; gap:12px; padding:9px 0; border-top:1px solid #EAE7DD;">
+                    <span style="width:8px; height:8px; border-radius:999px; margin-top:6px; background:{{ a.dot }};"></span>
+                    <div style="font-size:12.5px; color:#3A3934; line-height:1.4;">{{ a.pre }}<strong style="font-weight:600; color:#1A1915;">{{ a.strong }}</strong>{{ a.post }}</div>
+                    <div style="font-size:11px; color:#8A8A82; font-family:'IBM Plex Mono', monospace; white-space:nowrap;">{{ a.time }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== TRIAGE ===== -->
+      <sc-if value="{{ isTriage }}" hint-placeholder-val="{{ true }}">
+      <div>
+        <div style="display:inline-flex; gap:4px; padding:4px; background:#EAE7DD; border-radius:11px; margin-bottom:18px;">
+          <sc-for list="{{ triageTabs }}" as="t" hint-placeholder-count="3">
+            <button onClick="{{ t.onSelect }}" style="{{ t.style }}">
+              <span>{{ t.label }}</span>
+              <span style="{{ t.countStyle }}">{{ t.count }}</span>
+            </button>
+          </sc-for>
+        </div>
+
+        <div style="display:grid; grid-template-columns:minmax(0,1fr) 400px; gap:20px; align-items:start;">
+          <div style="display:flex; flex-direction:column; gap:11px; min-width:0;">
+            <sc-if value="{{ triageEmpty }}" hint-placeholder-val="{{ false }}">
+              <div style="display:grid; place-items:center; min-height:220px; border:1px dashed #C3C1B8; border-radius:12px; color:#8A8A82; font-size:13px;">Nothing here — inbox zero.</div>
+            </sc-if>
+            <sc-for list="{{ triageList }}" as="g" hint-placeholder-count="3">
+              <button onClick="{{ g.onSelect }}" style="{{ g.cardStyle }}" style-hover="border-color:#C3C1B8;">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+                  <h3 style="margin:0; font-size:14.5px; font-weight:600; line-height:1.3;">{{ g.title }}</h3>
+                  <span style="{{ g.badgeStyle }}">{{ g.routeLabel }}</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; margin-top:8px; font-size:12px; color:#57564F; font-family:'IBM Plex Mono', monospace;">
+                  <span>{{ g.repo }}</span><span style="color:#C3C1B8;">/</span><span>{{ g.source }}</span><span style="color:#C3C1B8;">/</span><span>{{ g.owner }}</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:10px; margin-top:11px; padding-top:11px; border-top:1px solid #EDEAE0;">
+                  <sc-if value="{{ g.hasLanding }}" hint-placeholder-val="{{ true }}">
+                    <span style="{{ g.landChip }}">{{ g.landLabel }}</span>
+                  </sc-if>
+                  <span style="font-size:11.5px; color:#57564F; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ g.topReason }}</span>
+                  <sc-if value="{{ g.conflict }}" hint-placeholder-val="{{ false }}">
+                    <span style="display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:600; color:#C77D2A;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>conflict</span>
+                  </sc-if>
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:12.5px; font-weight:500; color:#1A1915;">{{ g.confidence }}%</span>
+                </div>
+              </button>
+            </sc-for>
+          </div>
+
+          <!-- decision panel -->
+          <aside style="position:sticky; top:88px; display:flex; flex-direction:column; gap:0;">
+            <sc-if value="{{ hasSelectedSignal }}" hint-placeholder-val="{{ true }}">
+            <div style="{{ sel.cardStyle }}">
+              <span style="{{ sel.badgeStyle }}">{{ sel.routeLabel }}</span>
+              <h2 style="margin:12px 0 0; font-size:18px; font-weight:600; line-height:1.25;">{{ sel.title }}</h2>
+              <div style="display:flex; align-items:center; gap:8px; margin-top:9px; font-size:12px; color:#57564F; font-family:'IBM Plex Mono', monospace;">
+                <span>{{ sel.repo }}</span><span style="color:#C3C1B8;">·</span><span>{{ sel.source }}</span><span style="color:#C3C1B8;">·</span><span style="font-weight:500; color:#1A1915;">{{ sel.confidence }}% confident</span>
+              </div>
+
+              <div style="margin-top:18px;">
+                <div style="font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8A8A82; margin-bottom:9px;">Why it routed here</div>
+                <div style="display:flex; flex-direction:column; gap:7px;">
+                  <sc-for list="{{ sel.reasons }}" as="r" hint-placeholder-count="3">
+                    <div style="display:flex; align-items:flex-start; gap:9px;">
+                      <code style="flex:0 0 auto; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:2px 7px; background:{{ r.chipFill }}; color:{{ r.chipText }}; border:1px solid {{ r.chipStroke }}; border-radius:6px; white-space:nowrap;">{{ r.code }}</code>
+                      <span style="font-size:12.5px; color:#3A3934; line-height:1.4;">{{ r.text }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+
+              <sc-if value="{{ sel.hasLanding }}" hint-placeholder-val="{{ true }}">
+              <div style="margin-top:18px;">
+                <div style="font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8A8A82; margin-bottom:9px;">Where it lands</div>
+                <div style="display:flex; flex-direction:column; gap:6px;">
+                  <sc-for list="{{ sel.cake }}" as="b" hint-placeholder-count="3">
+                    <div style="{{ b.rowStyle }}">
+                      <div style="{{ b.badgeStyle }}">{{ b.level }}</div>
+                      <span style="font-weight:{{ b.weight }}; font-size:13px; color:{{ b.text }};">{{ b.name }}</span>
+                      <sc-if value="{{ b.isTarget }}" hint-placeholder-val="{{ false }}">
+                        <code style="margin-left:auto; font-family:'IBM Plex Mono', monospace; font-size:11px; color:{{ b.text }};">{{ b.path }}</code>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+                <p style="margin:10px 0 0; font-size:12px; color:#57564F; line-height:1.5;">{{ sel.previewText }}</p>
+              </div>
+              </sc-if>
+
+              <sc-if value="{{ sel.conflict }}" hint-placeholder-val="{{ false }}">
+                <button onClick="{{ handlers.conflicts }}" style="display:flex; align-items:center; gap:9px; width:100%; margin-top:16px; padding:11px 13px; background:#FBF0DD; border:1px solid #D69A3F; border-radius:9px; cursor:pointer; font:inherit; text-align:left;" style-hover="border-color:#C77D2A;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" stroke-width="2" stroke-linecap="round"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>
+                  <span style="flex:1; font-size:12.5px; color:#5A3D12; line-height:1.35;"><strong style="font-weight:600;">Conflicts with an existing value.</strong> Resolve before storing.</span>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                </button>
+              </sc-if>
+
+              <div style="display:flex; flex-direction:column; gap:8px; margin-top:20px; padding-top:18px; border-top:1px solid #E4E1D6;">
+                <button onClick="{{ sel.onStore }}" style="display:flex; align-items:center; gap:10px; padding:12px 14px; background:#EAF7F5; border:1px solid #2C8A82; border-radius:9px; cursor:pointer; font:inherit; font-weight:600; font-size:13px; color:#134F49; text-align:left;" style-hover="background:#D7F0EC;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; padding:2px 6px; background:#FFFFFF; border:1px solid #BEE7E1; border-radius:5px;">S</span>Store to shared context
+                  <svg style="margin-left:auto;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+                </button>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                  <button onClick="{{ sel.onReview }}" style="display:flex; align-items:center; gap:8px; padding:11px 12px; background:#FBFAF6; border:1px solid #C3C1B8; border-radius:9px; cursor:pointer; font:inherit; font-weight:500; font-size:12.5px; color:#3A3934;" style-hover="border-color:#8A8A82;"><span style="font-family:'IBM Plex Mono', monospace; font-size:11px; padding:2px 6px; background:#F1EFE7; border:1px solid #D8D6CC; border-radius:5px;">R</span>Keep in review</button>
+                  <button onClick="{{ sel.onDiscard }}" style="display:flex; align-items:center; gap:8px; padding:11px 12px; background:#FBFAF6; border:1px solid #C3C1B8; border-radius:9px; cursor:pointer; font:inherit; font-weight:500; font-size:12.5px; color:#3A3934;" style-hover="border-color:#8A8A82;"><span style="font-family:'IBM Plex Mono', monospace; font-size:11px; padding:2px 6px; background:#F1EFE7; border:1px solid #D8D6CC; border-radius:5px;">D</span>Discard</button>
+                </div>
+              </div>
+            </div>
+            </sc-if>
+            <sc-if value="{{ noSelectedSignal }}" hint-placeholder-val="{{ false }}">
+              <div style="display:grid; place-items:center; min-height:300px; background:#FBFAF6; border:1px solid #D8D6CC; border-radius:13px; color:#8A8A82; font-size:13px;">Select a signal to decide.</div>
+            </sc-if>
+          </aside>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== CONFLICTS ===== -->
+      <sc-if value="{{ isConflicts }}" hint-placeholder-val="{{ true }}">
+      <div style="display:grid; grid-template-columns:326px minmax(0,1fr); gap:20px; align-items:start;">
+        <div style="display:flex; flex-direction:column; gap:9px;">
+          <sc-for list="{{ conflictList }}" as="c" hint-placeholder-count="3">
+            <button onClick="{{ c.onSelect }}" style="{{ c.cardStyle }}" style-hover="border-color:#C3C1B8;">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                <code style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#57564F;">{{ c.concept }}</code>
+                <span style="{{ c.statusStyle }}">{{ c.statusLabel }}</span>
+              </div>
+              <div style="font-weight:600; font-size:13.5px; margin-top:6px; line-height:1.3;">{{ c.title }}</div>
+              <div style="display:flex; align-items:center; gap:6px; margin-top:9px;">
+                <span style="font-size:11px; color:#8A8A82;">§ {{ c.section }}</span>
+                <div style="display:flex; gap:4px; margin-left:auto;">
+                  <sc-for list="{{ c.layerChips }}" as="lc" hint-placeholder-count="2">
+                    <span style="{{ lc.style }}">{{ lc.name }}</span>
+                  </sc-for>
+                </div>
+              </div>
+            </button>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ hasSelectedConflict }}" hint-placeholder-val="{{ true }}">
+        <section style="background:#FBFAF6; border:1px solid #D8D6CC; border-radius:14px; padding:24px; min-width:0;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <code style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#3D6E9E; background:#EAF3FC; border:1px solid #C6DEF6; padding:3px 9px; border-radius:6px;">{{ conf.concept }}</code>
+            <code style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#57564F;">§ {{ conf.section }}</code>
+          </div>
+          <h2 style="margin:14px 0 4px; font-size:20px; font-weight:600; letter-spacing:-0.01em;">{{ conf.title }}</h2>
+          <p style="margin:0 0 20px; font-size:13px; color:#57564F; line-height:1.5;">Two layers define this section differently. The higher layer is served as effective; the lower rides along as provenance. Resolve to lock the intent.</p>
+
+          <div style="{{ conf.gridStyle }}">
+            <sc-for list="{{ conf.contributions }}" as="k" hint-placeholder-count="2">
+              <div style="{{ k.colStyle }}">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:11px;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="{{ k.badgeStyle }}">{{ k.level }}</span>
+                    <span style="font-weight:600; font-size:13.5px; color:{{ k.text }};">{{ k.layerName }}</span>
+                  </div>
+                  <sc-if value="{{ k.isWinner }}" hint-placeholder-val="{{ true }}">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; font-weight:600; letter-spacing:0.08em; padding:3px 8px; background:#2C8A82; color:#EAF7F5; border-radius:999px;">EFFECTIVE</span>
+                  </sc-if>
+                </div>
+                <div style="font-size:13.5px; color:#1A1915; line-height:1.5; font-weight:{{ k.valueWeight }};">{{ k.value }}</div>
+                <div style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:11px; color:#8A8A82; font-family:'IBM Plex Mono', monospace;">
+                  <span>updated {{ k.updated }}</span>
+                  <sc-if value="{{ k.hasNote }}" hint-placeholder-val="{{ false }}"><span style="color:#C3C1B8;">·</span><span>{{ k.note }}</span></sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <sc-if value="{{ conf.resolved }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; align-items:center; gap:11px; margin-top:20px; padding:14px 16px; background:#EAF7F5; border:1px solid #2C8A82; border-radius:11px;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#134F49" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>
+              <div style="font-size:13px; color:#134F49; line-height:1.4;"><strong style="font-weight:600;">Resolved.</strong> {{ conf.resolutionText }}</div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ conf.open }}" hint-placeholder-val="{{ true }}">
+          <div style="margin-top:22px;">
+            <div style="font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8A8A82; margin-bottom:11px;">Resolve</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:9px;">
+              <button onClick="{{ conf.onAccept }}" style="display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#EAF7F5; border:1px solid #2C8A82; border-radius:10px; cursor:pointer; font:inherit; text-align:left;" style-hover="background:#D7F0EC;">
+                <span style="font-weight:600; font-size:13px; color:#134F49;">Keep {{ conf.winnerName }} value</span>
+                <span style="font-size:11.5px; color:#1E6B64;">Confirm the current effective result</span>
+              </button>
+              <button onClick="{{ conf.onPromote }}" style="display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:10px; cursor:pointer; font:inherit; text-align:left;" style-hover="border-color:#8A8A82;">
+                <span style="font-weight:600; font-size:13px; color:#1A1915;">Promote {{ conf.loserName }} value</span>
+                <span style="font-size:11.5px; color:#57564F;">Override upward, replace effective</span>
+              </button>
+              <button onClick="{{ conf.onOverride }}" style="display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:10px; cursor:pointer; font:inherit; text-align:left;" style-hover="border-color:#8A8A82;">
+                <span style="font-weight:600; font-size:13px; color:#1A1915;">Write a personal override</span>
+                <span style="font-size:11.5px; color:#57564F;">Only you see it, until promoted</span>
+              </button>
+              <button onClick="{{ conf.onAnnotate }}" style="display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:10px; cursor:pointer; font:inherit; text-align:left;" style-hover="border-color:#8A8A82;">
+                <span style="font-weight:600; font-size:13px; color:#1A1915;">Annotate both</span>
+                <span style="font-size:11.5px; color:#57564F;">Keep the tension, add context</span>
+              </button>
+            </div>
+          </div>
+          </sc-if>
+        </section>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ===== CONCEPTS ===== -->
+      <sc-if value="{{ isConcepts }}" hint-placeholder-val="{{ true }}">
+      <div style="display:grid; grid-template-columns:310px minmax(0,1fr); gap:20px; align-items:start;">
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <sc-for list="{{ conceptList }}" as="c" hint-placeholder-count="6">
+            <button onClick="{{ c.onSelect }}" style="{{ c.cardStyle }}" style-hover="border-color:#C3C1B8;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="{{ c.typeStyle }}">{{ c.type }}</span>
+                <sc-if value="{{ c.conflict }}" hint-placeholder-val="{{ false }}"><span style="width:7px; height:7px; border-radius:999px; background:#C77D2A;" title="has conflict"></span></sc-if>
+                <sc-if value="{{ c.draft }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px; font-family:'IBM Plex Mono', monospace; color:#7A5A28;">draft</span></sc-if>
+              </div>
+              <div style="font-weight:600; font-size:13.5px; margin-top:7px;">{{ c.title }}</div>
+              <code style="display:block; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#8A8A82; margin-top:3px;">{{ c.id }}</code>
+              <div style="display:flex; gap:4px; margin-top:9px;">
+                <sc-for list="{{ c.layerChips }}" as="lc" hint-placeholder-count="2"><span style="{{ lc.style }}">{{ lc.name }}</span></sc-for>
+              </div>
+            </button>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ hasSelectedConcept }}" hint-placeholder-val="{{ true }}">
+        <section style="background:#FBFAF6; border:1px solid #D8D6CC; border-radius:14px; padding:24px; min-width:0;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span style="{{ cpt.typeStyle }}">{{ cpt.type }}</span>
+            <code style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#57564F;">{{ cpt.id }}</code>
+          </div>
+          <h2 style="margin:13px 0 12px; font-size:22px; font-weight:600; letter-spacing:-0.01em;">{{ cpt.title }}</h2>
+          <div style="display:flex; align-items:center; gap:10px; padding-bottom:18px; margin-bottom:4px; border-bottom:1px solid #E4E1D6;">
+            <span style="font-size:11px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; color:#8A8A82;">Resolved from</span>
+            <div style="display:flex; gap:5px;">
+              <sc-for list="{{ cpt.layerChips }}" as="lc" hint-placeholder-count="2"><span style="{{ lc.style }}">{{ lc.name }}</span></sc-for>
+            </div>
+            <span style="margin-left:auto; font-size:11.5px; color:#57564F; font-family:'IBM Plex Mono', monospace;">{{ cpt.sectionCount }} sections</span>
+          </div>
+
+          <div style="display:flex; flex-direction:column;">
+            <sc-for list="{{ cpt.sections }}" as="s" hint-placeholder-count="3">
+              <div style="padding:16px 0; border-bottom:1px solid #EDEAE0;">
+                <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                  <h3 style="margin:0; font-size:14px; font-weight:600;">{{ s.name }}</h3>
+                  <span style="{{ s.provStyle }}">{{ s.provLabel }}</span>
+                </div>
+                <div style="font-size:13.5px; color:#1A1915; line-height:1.55;">{{ s.value }}</div>
+                <sc-if value="{{ s.hasDissent }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex; align-items:flex-start; gap:9px; margin-top:10px; padding:10px 12px; background:#FBF0DD; border:1px solid #E8C88C; border-radius:9px;">
+                    <svg style="flex:0 0 auto; margin-top:1px;" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" stroke-width="2.2" stroke-linecap="round"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>
+                    <div style="font-size:12px; color:#5A3D12; line-height:1.45;"><span style="{{ s.dissentChip }}">{{ s.dissentLayer }}</span> says <span style="color:#7A5A28;">"{{ s.dissentValue }}"</span> — overridden here.</div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+        </sc-if>
+      </div>
+      </sc-if>
+
+    </main>
+  </div>
+
+  <!-- ============ CHAT SLIDE-OVER ============ -->
+  <sc-if value="{{ chat.open }}" hint-placeholder-val="{{ false }}">
+  <div>
+    <div onClick="{{ handlers.closeChat }}" style="position:fixed; inset:0; background:rgba(26,25,21,0.28); z-index:40;"></div>
+    <aside style="position:fixed; top:0; right:0; height:100vh; width:412px; z-index:41; display:flex; flex-direction:column; background:#FBFAF6; border-left:1px solid #C3C1B8; box-shadow:-24px 0 60px rgba(26,25,21,0.14); animation:ccSlide 0.26s cubic-bezier(0.16,1,0.3,1);">
+      <header style="display:flex; align-items:center; gap:11px; padding:16px 18px; border-bottom:1px solid #D8D6CC;">
+        <div style="display:grid; place-items:center; width:30px; height:30px; border-radius:8px; background:#134F49;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#EAF7F5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8z"/></svg>
+        </div>
+        <div style="flex:1; line-height:1.2;">
+          <div style="font-weight:600; font-size:14px;">Ask ContextCake</div>
+          <div style="font-size:11px; color:#8A8A82;">Answers from your resolved cascade</div>
+        </div>
+        <button onClick="{{ handlers.closeChat }}" style="display:grid; place-items:center; width:30px; height:30px; border:none; background:transparent; border-radius:7px; cursor:pointer; color:#57564F;" style-hover="background:#EAE7DD;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+
+      <div style="flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:16px;">
+        <sc-for list="{{ chat.messages }}" as="m" hint-placeholder-count="3">
+          <div style="{{ m.rowStyle }}">
+            <div style="{{ m.bubbleStyle }}">
+              <sc-if value="{{ m.intro }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:12px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; color:#8A8A82; margin-bottom:6px;">ContextCake</div>
+              </sc-if>
+              <div style="font-size:13.5px; line-height:1.55; color:{{ m.textColor }}; white-space:pre-wrap;">{{ m.text }}</div>
+              <sc-if value="{{ m.hasCites }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:11px;">
+                  <sc-for list="{{ m.cites }}" as="ci" hint-placeholder-count="1">
+                    <span style="{{ ci.style }}"><span style="{{ ci.dotStyle }}"></span>{{ ci.label }}</span>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ m.hasNote }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-top:9px; padding-top:9px; border-top:1px solid #EAE7DD; font-size:11.5px; color:#7A5A28; line-height:1.45;">{{ m.note }}</div>
+              </sc-if>
+            </div>
+          </div>
+        </sc-for>
+        <sc-if value="{{ chat.busy }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex; align-items:center; gap:7px; padding:2px 4px;">
+            <span style="width:7px; height:7px; border-radius:999px; background:#2C8A82; animation:ccPulse 1s ease-in-out infinite;"></span>
+            <span style="font-size:12px; color:#8A8A82;">resolving cascade…</span>
+          </div>
+        </sc-if>
+      </div>
+
+      <div style="padding:14px 16px; border-top:1px solid #D8D6CC;">
+        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+          <sc-for list="{{ chat.suggestions }}" as="q" hint-placeholder-count="2">
+            <button onClick="{{ q.onClick }}" style="font:inherit; font-size:11.5px; color:#3D6E9E; background:#EAF3FC; border:1px solid #C6DEF6; border-radius:999px; padding:5px 11px; cursor:pointer;" style-hover="background:#D9EAFB;">{{ q.text }}</button>
+          </sc-for>
+        </div>
+        <div style="display:flex; align-items:flex-end; gap:8px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:11px; padding:8px 8px 8px 12px;">
+          <textarea value="{{ chat.input }}" onInput="{{ chat.onInput }}" onKeyDown="{{ chat.onKey }}" rows="1" placeholder="Ask about your team's knowledge…" style="flex:1; border:none; outline:none; resize:none; font:inherit; font-size:13.5px; line-height:1.5; background:transparent; color:#1A1915; max-height:120px;"></textarea>
+          <button onClick="{{ chat.onSend }}" style="display:grid; place-items:center; width:34px; height:34px; border:none; border-radius:8px; background:#1E6B64; color:#EAF7F5; cursor:pointer; flex:0 0 auto;" style-hover="background:#134F49;">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M12 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+  </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:860}}">
+class Component extends DCLogic {
+  C = {
+    page:'#F1F0EA', surface:'#FBFAF6', line:'#D8D6CC', lineStrong:'#C3C1B8',
+    ink:'#1A1915', body:'#3A3934', caption:'#57564F', faint:'#8A8A82',
+    blueFill:'#EAF3FC', blueFill2:'#D9EAFB', blueFill3:'#C6DEF6', blueStroke:'#3D7AB8', blueStrokeE:'#2F6DA8', blueText:'#0C447C', blueText2:'#3D6E9E', blueSoft:'#8FB8DE',
+    tealFill:'#EAF7F5', tealFill2:'#D7F0EC', tealStroke:'#2C8A82', tealStrokeE:'#1E6B64', tealText:'#134F49',
+    amberFill:'#FBF0DD', amberFill2:'#F3E3C4', amberStroke:'#D69A3F', amberStrokeE:'#C77D2A', amberText:'#5A3D12', amberText2:'#7A5A28', amberSoft:'#E8C88C'
+  };
+  MONO = "'IBM Plex Mono', ui-monospace, monospace";
+
+  layers = [
+    { id:'company', name:'Company', level:0, sub:'org-wide canonical knowledge', members:'everyone', concepts:126 },
+    { id:'team', name:'Team', level:2, sub:'runbooks, decisions, system docs', members:'team members', concepts:38 },
+    { id:'personal', name:'Personal', level:3, sub:'your drafts, notes, overrides', members:'you', concepts:14 }
+  ];
+
+  sources = [
+    { name:'billing-api', kind:'repo', layer:'team', coverage:68, focus:'incident runbooks', status:'watching' },
+    { name:'identity-service', kind:'repo', layer:'team', coverage:61, focus:'interface docs', status:'watching' },
+    { name:'web-app', kind:'repo', layer:'team', coverage:74, focus:'onboarding answers', status:'watching' },
+    { name:'data-pipeline', kind:'repo', layer:'team', coverage:57, focus:'migration decisions', status:'watching' },
+    { name:'mobile-api', kind:'repo', layer:'team', coverage:82, focus:'healthy', status:'watching' },
+    { name:'company-graph', kind:'mcp', layer:'company', coverage:100, focus:'canonical org knowledge · MCP', status:'serving' },
+    { name:'kb-personal', kind:'okf-local', layer:'personal', coverage:100, focus:'local notes bundle', status:'synced' }
+  ];
+
+  signals = [
+    { id:'sig-1', route:'review_required', repo:'billing-api', source:'merged PR', owner:'Platform', confidence:0.92,
+      title:'Payment webhook retry runbook after incident', landLayer:'team', landPath:'runbooks/payment-webhook-retries',
+      preview:'Drafts a runbook under the Team layer. Inherits escalation contacts from Company.',
+      reasons:[['review:label:incident','PR carries the incident label'],['review:keyword:payment','Touches payment flows — high blast radius'],['team:label:runbook','Author tagged it as a runbook']] },
+    { id:'sig-3', route:'review_required', repo:'identity-service', source:'changed files', owner:'Identity', confidence:0.88,
+      title:'JWT audience contract changed for internal clients', landLayer:'team', landPath:'interfaces/jwt-audience-contract', conflict:'c2',
+      preview:'Would update the Team interface note — but a Company value already exists for this section.',
+      reasons:[['review:keyword:auth','Auth-critical surface'],['review:keyword:contract','Declares an interface contract'],['review:path:auth/','Lives under auth/ — owned interface']] },
+    { id:'sig-6', route:'review_required', repo:'billing-api', source:'repeated question', owner:'Platform', confidence:0.79,
+      title:'On-call escalation differs from your personal notes', landLayer:'personal', landPath:'runbooks/oncall-escalation', conflict:'c3',
+      preview:'Your Personal layer overrides the Company escalation path. Confirm to keep, or promote to Team.',
+      reasons:[['review:keyword:escalation','Escalation / on-call topic'],['personal:override','Contradicts your personal override'],['team:signal:repeated_question','Asked 4× this month']] },
+    { id:'sig-2', route:'team_candidate', repo:'web-app', source:'repeated question', owner:'Frontend', confidence:0.81,
+      title:'Where feature flags are evaluated', landLayer:'team', landPath:'systems/web-app/feature-flags',
+      preview:'Auto-drafts a system note under the Team layer. No conflicts.',
+      reasons:[['team:signal:repeated_question:5','Asked 5× — worth capturing'],['team:keyword:onboarding','Common onboarding question']] },
+    { id:'sig-4', route:'team_candidate', repo:'data-pipeline', source:'merged PR', owner:'Data', confidence:0.74,
+      title:'Deprecate legacy export job after migration', landLayer:'team', landPath:'decisions/deprecate-legacy-export-job',
+      preview:'Auto-drafts a decision entry under the Team layer.',
+      reasons:[['team:keyword:deprecation','Records a deprecation decision'],['team:keyword:migration','Follows a completed migration']] },
+    { id:'sig-5', route:'ignore', repo:'mobile-api', source:'merged PR', owner:'API', confidence:0.86,
+      title:'Bump test fixture snapshots', landLayer:null, landPath:null,
+      preview:'No shared-context write. Stays in repo history only.',
+      reasons:[['ignore:keyword:snapshot','Snapshot / fixture churn'],['ignore:label:test-only','Test-only change']] }
+  ];
+
+  conflictsData = [
+    { id:'c1', concept:'systems/primary-db', section:'Engine {#engine}', title:'Which engine backs the primary database', status:'open',
+      contributions:[ {layer:'company', value:'Postgres.', updated:'2025-11-02', note:'org default'},
+                      {layer:'team', value:'SingleStore — chosen for HTAP workloads.', updated:'2026-04-18', note:'Data team decision'} ], winner:'team' },
+    { id:'c2', concept:'interfaces/jwt-audience-contract', section:'Audience {#audience}', title:'JWT audience for internal service-to-service calls', status:'open',
+      contributions:[ {layer:'company', value:'aud = "api.acme.com" for all clients.', updated:'2025-09-10'},
+                      {layer:'team', value:'aud = "internal.acme.com" for service-to-service.', updated:'2026-06-28', note:'Identity team'} ], winner:'team' },
+    { id:'c3', concept:'runbooks/oncall-escalation', section:'Escalation {#escalation}', title:'First hop when billing pages at 3am', status:'open',
+      contributions:[ {layer:'company', value:'Page the platform on-call, then the EM.', updated:'2025-08-01'},
+                      {layer:'personal', value:'Ping @dana directly first — she owns billing.', updated:'2026-06-30', note:'your override'} ], winner:'personal' }
+  ];
+
+  concepts = [
+    { id:'systems/primary-db', title:'Primary database', type:'system', layers:['company','team'], conflict:true,
+      sections:[ {name:'Engine', winner:'team', value:'SingleStore — chosen for HTAP workloads.', dissent:{layer:'company', value:'Postgres.'}},
+                 {name:'Backups', winner:'company', value:'Nightly snapshots to cold storage, 30-day retention.'},
+                 {name:'Connection pool', winner:'team', value:'PgBouncer in transaction mode, 200 max connections.'} ] },
+    { id:'interfaces/jwt-audience-contract', title:'JWT audience contract', type:'interface', layers:['company','team'], conflict:true,
+      sections:[ {name:'Audience', winner:'team', value:'aud = "internal.acme.com" for service-to-service calls.', dissent:{layer:'company', value:'aud = "api.acme.com" for all clients.'}},
+                 {name:'Rotation', winner:'company', value:'Signing keys rotate every 90 days via the JWKS endpoint.'} ] },
+    { id:'runbooks/oncall-escalation', title:'On-call escalation', type:'runbook', layers:['company','personal'], conflict:true,
+      sections:[ {name:'Escalation', winner:'personal', value:'Ping @dana directly first — she owns billing.', dissent:{layer:'company', value:'Page the platform on-call, then the EM.'}},
+                 {name:'Severity', winner:'company', value:'SEV-1 if customer payments fail; SEV-2 for internal only.'} ] },
+    { id:'runbooks/payment-webhook-retries', title:'Payment webhook retries', type:'runbook', layers:['team'], draft:true,
+      sections:[ {name:'Symptom', winner:'team', value:'Webhooks return 5xx during provider incidents.'},
+                 {name:'Fix', winner:'team', value:'Replay from the dead-letter queue after the provider recovers.'} ] },
+    { id:'systems/web-app/feature-flags', title:'Feature flag evaluation', type:'system', layers:['team'],
+      sections:[ {name:'Where', winner:'team', value:'Flags resolve server-side in the edge middleware, not the client.'},
+                 {name:'Fallback', winner:'team', value:'Unknown flags default to off and log a warning.'} ] },
+    { id:'decisions/deprecate-legacy-export-job', title:'Deprecate legacy export job', type:'decision', layers:['team'], draft:true,
+      sections:[ {name:'Decision', winner:'team', value:'Remove the nightly CSV export after the warehouse migration lands.'},
+                 {name:'Owner', winner:'team', value:'Data team, targeting end of Q3.'} ] }
+  ];
+
+  activity = [
+    { pre:'Stored ', strong:'Feature flag evaluation', post:' to Team', layer:'team', time:'12m' },
+    { pre:'Conflict opened on ', strong:'primary-db · Engine', post:'', layer:'team', time:'1h', warn:true },
+    { pre:'', strong:'mobile-api', post:' swept — no signals', layer:'team', time:'2h' },
+    { pre:'Personal override on ', strong:'on-call escalation', post:'', layer:'personal', time:'5h' },
+    { pre:'', strong:'company-graph', post:' synced · 126 concepts', layer:'company', time:'1d' }
+  ];
+
+  state = {
+    view:'overview', triageTab:'review',
+    selSignal:'sig-1', selConflict:'c1', selConcept:'systems/primary-db',
+    chatOpen:false, chatBusy:false, chatInput:'', query:'',
+    chatMessages:[
+      { role:'assistant', intro:true, text:"Ask me anything about your team's knowledge. I read the resolved cascade — Company, Team, and your Personal layer — and tell you which layer each answer comes from." },
+      { role:'user', text:'What database do we use?' },
+      { role:'assistant', text:'Your team runs SingleStore for the primary database — chosen for its HTAP workloads.',
+        cites:[{layer:'team', label:'Team · systems/primary-db'}],
+        note:'This overrides the Company default (Postgres) for the Engine section only. Backups still inherit from Company.' }
+    ]
+  };
+
+  componentDidMount() {
+    this._key = (e) => {
+      if (this.state.view !== 'triage' || this.state.chatOpen) return;
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return;
+      const k = e.key.toLowerCase();
+      if (k === 's') { this.route('team_candidate'); }
+      else if (k === 'r') { this.route('review_required'); }
+      else if (k === 'd') { this.route('ignore'); }
+    };
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._key); }
+
+  lc(id) {
+    const C = this.C;
+    if (id === 'company') return { fill:C.blueFill, stroke:C.blueSoft, strokeE:C.blueStroke, text:C.blueText, text2:C.blueText2 };
+    if (id === 'team') return { fill:C.blueFill2, stroke:C.blueStroke, strokeE:C.blueStrokeE, text:C.blueText, text2:C.blueText2 };
+    return { fill:C.blueFill3, stroke:C.blueStrokeE, strokeE:C.blueStrokeE, text:C.blueText, text2:C.blueText2 };
+  }
+  layerName(id) { return this.layers.find(l => l.id === id).name; }
+  layerLevel(id) { return this.layers.find(l => l.id === id).level; }
+  layerChip(id) {
+    const c = this.lc(id);
+    return { name:this.layerName(id), style:`display:inline-flex; align-items:center; font-family:${this.MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 7px; border-radius:999px; background:${c.fill}; color:${c.text}; border:1px solid ${c.strokeE};` };
+  }
+  rc(route) {
+    const C = this.C;
+    if (route === 'review_required') return { fill:C.amberFill, stroke:C.amberStroke, text:C.amberText, label:'Review', accent:C.amberStroke };
+    if (route === 'team_candidate') return { fill:C.tealFill, stroke:C.tealStroke, text:C.tealText, label:'Store', accent:C.tealStroke };
+    return { fill:'#F1EFE7', stroke:C.lineStrong, text:C.faint, label:'Discard', accent:C.lineStrong };
+  }
+  badge(route) {
+    const r = this.rc(route);
+    return `display:inline-flex; align-items:center; font-family:${this.MONO}; font-size:10px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:3px 9px; border-radius:999px; background:${r.fill}; color:${r.text}; border:1px solid ${r.stroke}; flex:0 0 auto;`;
+  }
+  navStyle(active) {
+    const C = this.C;
+    const base = `display:flex; align-items:center; gap:11px; width:100%; border:1px solid ${active?C.blueFill3:'transparent'}; background:${active?C.blueFill:'transparent'}; border-radius:9px; padding:9px 12px; color:${active?C.blueText:C.body}; font:inherit; font-weight:${active?600:500}; font-size:13.5px; text-align:left; cursor:pointer;`;
+    return base;
+  }
+  route(target) {
+    const sig = this.signals.find(s => s.id === this.state.selSignal);
+    if (!sig) return;
+    sig.route = target;
+    const tab = target === 'team_candidate' ? 'captured' : target === 'ignore' ? 'ignored' : 'review';
+    const next = this.filtered(tab).filter(s => s.id !== sig.id)[0];
+    this.setState({ triageTab:tab, selSignal:(next ? next.id : sig.id) });
+  }
+  filtered(tab) {
+    const route = tab === 'captured' ? 'team_candidate' : tab === 'ignored' ? 'ignore' : 'review_required';
+    const q = this.state.query.trim().toLowerCase();
+    return this.signals.filter(s => s.route === route && (!q || (s.title + ' ' + s.repo + ' ' + s.owner).toLowerCase().includes(q)));
+  }
+
+  resolveConflict(mode) {
+    const c = this.conflictsData.find(x => x.id === this.state.selConflict);
+    if (!c) return;
+    c.status = 'resolved';
+    const win = this.layerName(c.winner);
+    const others = c.contributions.filter(k => k.layer !== c.winner).map(k => this.layerName(k.layer)).join(' & ');
+    if (mode === 'accept') c.resolutionText = `${win} value confirmed as effective; ${others} retained as provenance.`;
+    else if (mode === 'promote') c.resolutionText = `${others} value promoted over ${win}; the cascade now serves it.`;
+    else if (mode === 'override') c.resolutionText = `Personal override written — visible only to you until promoted to Team.`;
+    else c.resolutionText = `Both values annotated; the tension is documented for the next reader.`;
+    this.forceUpdate();
+  }
+
+  cannedAnswer(q) {
+    const s = q.toLowerCase();
+    if (/(jwt|audience|auth|token)/.test(s)) return { text:'For internal service-to-service calls, the JWT audience is "internal.acme.com".', cites:[{layer:'team', label:'Team · interfaces/jwt-audience-contract'}], note:'The Company contract still says "api.acme.com" for external clients — this is an open conflict on the Audience section.' };
+    if (/(on.?call|escalat|page|incident)/.test(s)) return { text:'Your personal note says to ping @dana first — she owns billing. Company policy is to page the platform on-call, then the EM.', cites:[{layer:'personal', label:'Personal · runbooks/oncall-escalation'}], note:'Personal override wins for you; the team still sees the Company path.' };
+    if (/(flag|feature)/.test(s)) return { text:'Feature flags resolve server-side in the edge middleware, not on the client. Unknown flags default to off.', cites:[{layer:'team', label:'Team · systems/web-app/feature-flags'}] };
+    if (/(database|db|postgres|store)/.test(s)) return { text:'Your team runs SingleStore for the primary database — chosen for HTAP workloads.', cites:[{layer:'team', label:'Team · systems/primary-db'}], note:'Overrides the Company default (Postgres) for the Engine section only.' };
+    return { text:'I resolved that across all three layers but found nothing specific. Try asking about the database, JWT audience, feature flags, or on-call escalation.', cites:[] };
+  }
+  buildContext() {
+    return this.concepts.map(c => `${c.id}: ` + c.sections.map(s => `${s.name} = "${s.value}" [${s.winner}]` + (s.dissent ? ` (conflicts with ${s.dissent.layer}: "${s.dissent.value}")` : '')).join('; ')).join('\n');
+  }
+  async send(text) {
+    const q = (text != null ? text : this.state.chatInput).trim();
+    if (!q || this.state.chatBusy) return;
+    this.setState(s => ({ chatMessages:[...s.chatMessages, { role:'user', text:q }], chatInput:'', chatBusy:true }));
+    try {
+      if (window.claude && window.claude.complete) {
+        const prompt = `You are ContextCake, an assistant that answers ONLY from a team's resolved knowledge cascade (Company/Team/Personal layers; higher layers override per section). Answer the question in 1-3 sentences, plainly. If layers disagree, say which layer wins.\n\nCASCADE:\n${this.buildContext()}\n\nQUESTION: ${q}`;
+        const ans = await window.claude.complete(prompt);
+        this.setState(s => ({ chatMessages:[...s.chatMessages, { role:'assistant', text:(ans||'').trim() }], chatBusy:false }));
+      } else {
+        const a = this.cannedAnswer(q);
+        setTimeout(() => this.setState(s => ({ chatMessages:[...s.chatMessages, { role:'assistant', ...a }], chatBusy:false })), 620);
+      }
+    } catch (e) {
+      const a = this.cannedAnswer(q);
+      this.setState(s => ({ chatMessages:[...s.chatMessages, { role:'assistant', ...a }], chatBusy:false }));
+    }
+  }
+
+  renderVals() {
+    const C = this.C, MONO = this.MONO, st = this.state;
+    const view = st.view;
+    const openConflicts = this.conflictsData.filter(c => c.status === 'open').length;
+    const triageCount = this.signals.filter(s => s.route === 'review_required').length;
+
+    const titles = {
+      overview:['Overview', 'How your context is resolving right now'],
+      triage:['Triage', 'Decide what becomes shared knowledge'],
+      conflicts:['Conflicts', 'Where layers disagree — and how to resolve'],
+      concepts:['Concepts', 'Browse the resolved cascade with provenance']
+    };
+
+    // ----- nav -----
+    const nav = {
+      overview:this.navStyle(view==='overview'),
+      triage:this.navStyle(view==='triage'),
+      conflicts:this.navStyle(view==='conflicts'),
+      concepts:this.navStyle(view==='concepts'),
+      triageBadge:`margin-left:auto; font-family:${MONO}; font-size:11px; font-weight:600; min-width:20px; text-align:center; padding:1px 6px; border-radius:999px; background:${C.amberFill}; color:${C.amberText}; border:1px solid ${C.amberSoft}; ${triageCount?'':'display:none;'}`,
+      conflictBadge:`margin-left:auto; font-family:${MONO}; font-size:11px; font-weight:600; min-width:20px; text-align:center; padding:1px 6px; border-radius:999px; background:${C.amberFill}; color:${C.amberText}; border:1px solid ${C.amberStroke}; ${openConflicts?'':'display:none;'}`
+    };
+
+    // ----- overview -----
+    const statTiles = [
+      { label:'Sources', value:String(this.sources.length), unit:'feeding', accent:C.tealStroke, numColor:C.ink },
+      { label:'Concepts', value:'178', unit:'resolved', accent:C.blueStroke, numColor:C.ink },
+      { label:'Open conflicts', value:String(openConflicts), unit:'to resolve', accent:C.amberStrokeE, numColor:C.amberText },
+      { label:'To triage', value:String(triageCount), unit:'signals', accent:C.amberStroke, numColor:C.amberText }
+    ];
+    const cakeBands = ['personal','team','company'].map(id => {
+      const L = this.layers.find(x => x.id === id), col = this.lc(id);
+      const nc = this.conflictsData.filter(c => c.contributions.some(k => k.layer === id)).length;
+      return { id, name:L.name, level:String(L.level), sub:L.sub, members:L.members, concepts:String(L.concepts),
+        text:col.text, textSoft:col.text2, hasConflicts:nc>0, conflicts:String(nc),
+        bandStyle:`display:grid; grid-template-columns:44px 1fr auto; align-items:center; gap:14px; padding:14px 16px; background:${col.fill}; border:1.5px solid ${col.stroke}; border-radius:11px;`,
+        badgeStyle:`display:grid; place-items:center; width:34px; height:34px; border-radius:999px; background:#FFFFFF; border:2px solid ${col.strokeE}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:15px;` };
+    });
+    const statusColor = (s) => s==='watching'?C.tealStroke : s==='serving'?C.tealStrokeE : C.blueStroke;
+    const kindMap = { repo:{g:'{ }', l:'repo'}, mcp:{g:'⇄', l:'MCP source'}, 'okf-local':{g:'▤', l:'OKF bundle'} };
+    const sourceList = this.sources.map(s => {
+      const col = this.lc(s.layer), k = kindMap[s.kind];
+      return { name:s.name, focus:s.focus, coverage:s.coverage, layerName:this.layerName(s.layer),
+        kindGlyph:k.g, kindLabel:k.l, statusLabel:s.status, statusColor:statusColor(s.status),
+        barColor: s.coverage>=75?C.tealStroke : s.coverage>=60?C.blueStroke : C.amberStroke,
+        kindStyle:`display:grid; place-items:center; font-family:${MONO}; font-size:13px; color:${C.faint};`,
+        chipStyle:`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:${col.fill}; color:${col.text}; border:1px solid ${col.strokeE}; justify-self:start;` };
+    });
+    const activity = this.activity.map(a => ({ ...a, dot:this.lc(a.layer).strokeE }));
+
+    // ----- triage -----
+    const tabDefs = [['review','Review','review_required'],['captured','Stored','team_candidate'],['ignored','Discarded','ignore']];
+    const triageTabs = tabDefs.map(([id,label,route]) => {
+      const active = st.triageTab === id;
+      const count = this.signals.filter(s => s.route === route).length;
+      return { label, count:String(count), onSelect:() => this.setState({ triageTab:id, selSignal:(this.filtered(id)[0]?this.filtered(id)[0].id:null) }),
+        style:`display:flex; align-items:center; gap:8px; border:none; border-radius:8px; padding:8px 15px; font:inherit; font-weight:${active?600:500}; font-size:13px; cursor:pointer; background:${active?'#FBFAF6':'transparent'}; color:${active?C.ink:C.caption}; box-shadow:${active?'0 1px 2px rgba(26,25,21,0.08)':'none'};`,
+        countStyle:`font-family:${MONO}; font-size:11px; color:${active?C.caption:C.faint};` };
+    });
+    const curList = this.filtered(st.triageTab);
+    const triageList = curList.map(s => {
+      const r = this.rc(s.route), selected = s.id === st.selSignal;
+      const col = s.landLayer ? this.lc(s.landLayer) : null;
+      return { id:s.id, title:s.title, repo:s.repo, source:s.source, owner:s.owner, confidence:Math.round(s.confidence*100),
+        routeLabel:r.label, badgeStyle:this.badge(s.route), conflict:!!s.conflict, hasLanding:!!s.landLayer,
+        landLabel: s.landLayer ? this.layerName(s.landLayer) : '', topReason:s.reasons[0][1],
+        onSelect:() => this.setState({ selSignal:s.id }),
+        landChip: col ? `display:inline-flex; align-items:center; font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:2px 7px; border-radius:999px; background:${col.fill}; color:${col.text}; border:1px solid ${col.strokeE}; flex:0 0 auto;` : '',
+        cardStyle:`display:block; width:100%; text-align:left; padding:15px 16px; background:${selected?'#FFFFFF':C.surface}; border:1px solid ${selected?C.lineStrong:C.line}; border-left:4px solid ${r.accent}; border-radius:11px; cursor:pointer; font:inherit; ${selected?'box-shadow:0 2px 10px rgba(26,25,21,0.06);':''}` };
+    });
+    const selSig = this.signals.find(s => s.id === st.selSignal) || null;
+    let sel = null;
+    if (selSig) {
+      const r = this.rc(selSig.route);
+      const cake = ['company','team','personal'].map(id => {
+        const L = this.layers.find(x => x.id === id), col = this.lc(id), isT = selSig.landLayer === id;
+        return { name:this.layerName(id), level:String(L.level), text:isT?col.text:C.faint, weight:isT?600:500, isTarget:isT, path:selSig.landPath || '',
+          badgeStyle:`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${isT?'#FFFFFF':C.surface}; border:2px solid ${isT?col.strokeE:C.line}; color:${isT?col.text:C.faint}; font-family:${MONO}; font-weight:600; font-size:12px; flex:0 0 auto;`,
+          rowStyle:`display:flex; align-items:center; gap:11px; padding:9px 12px; background:${isT?col.fill:'#FFFFFF'}; border:1px solid ${isT?col.stroke:C.line}; border-radius:9px;` };
+      });
+      sel = { title:selSig.title, repo:selSig.repo, source:selSig.source, confidence:Math.round(selSig.confidence*100),
+        routeLabel:r.label, badgeStyle:this.badge(selSig.route), conflict:!!selSig.conflict, hasLanding:!!selSig.landLayer,
+        previewText:selSig.preview, cake,
+        reasons:selSig.reasons.map(([code,text]) => {
+          const isR = code.startsWith('review')||code.startsWith('ignore')&&false, warn = code.startsWith('review')||code.startsWith('personal');
+          return { code, text, chipFill:warn?C.amberFill:C.blueFill, chipText:warn?C.amberText:C.blueText, chipStroke:warn?C.amberSoft:C.blueFill3 };
+        }),
+        onStore:() => this.route('team_candidate'), onReview:() => this.route('review_required'), onDiscard:() => this.route('ignore'),
+        cardStyle:`background:#FBFAF6; border:1px solid ${C.line}; border-top:4px solid ${r.accent}; border-radius:14px; padding:22px;` };
+    }
+
+    // ----- conflicts -----
+    const conflictList = this.conflictsData.map(c => {
+      const selected = c.id === st.selConflict, open = c.status === 'open';
+      return { concept:c.concept, title:c.title, section:c.section.replace(/\s*\{#.*\}/,''), status:c.status,
+        statusLabel: open ? 'open' : 'resolved',
+        statusStyle:`font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 8px; border-radius:999px; ${open?`background:${C.amberFill}; color:${C.amberText}; border:1px solid ${C.amberStroke};`:`background:${C.tealFill}; color:${C.tealText}; border:1px solid ${C.tealStroke};`}`,
+        layerChips:c.contributions.map(k => this.layerChip(k.layer)),
+        onSelect:() => this.setState({ selConflict:c.id }),
+        cardStyle:`display:block; width:100%; text-align:left; padding:14px 15px; background:${selected?'#FFFFFF':C.surface}; border:1px solid ${selected?C.lineStrong:C.line}; border-left:4px solid ${open?C.amberStrokeE:C.tealStroke}; border-radius:11px; cursor:pointer; font:inherit; ${selected?'box-shadow:0 2px 10px rgba(26,25,21,0.06);':''}` };
+    });
+    const selConf = this.conflictsData.find(c => c.id === st.selConflict) || null;
+    let conf = null;
+    if (selConf) {
+      const winnerName = this.layerName(selConf.winner);
+      const loser = selConf.contributions.find(k => k.layer !== selConf.winner);
+      conf = { concept:selConf.concept, section:selConf.section, title:selConf.title,
+        resolved:selConf.status==='resolved', open:selConf.status==='open', resolutionText:selConf.resolutionText||'',
+        winnerName, loserName:this.layerName(loser.layer),
+        gridStyle:`display:grid; grid-template-columns:repeat(${selConf.contributions.length},1fr); gap:12px;`,
+        contributions:selConf.contributions.slice().sort((a,b)=>this.layerLevel(b.layer)-this.layerLevel(a.layer)).map(k => {
+          const col = this.lc(k.layer), isW = k.layer === selConf.winner;
+          return { layerName:this.layerName(k.layer), level:String(this.layerLevel(k.layer)), value:k.value, updated:k.updated, note:k.note||'', hasNote:!!k.note, isWinner:isW,
+            text:col.text, valueWeight:isW?600:400,
+            badgeStyle:`display:grid; place-items:center; width:24px; height:24px; border-radius:999px; background:#FFFFFF; border:2px solid ${col.strokeE}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:11px;`,
+            colStyle:`padding:16px; border-radius:11px; background:${isW?col.fill:'#FFFFFF'}; border:${isW?'1.5px':'1px'} solid ${isW?C.tealStroke:C.line};` };
+        }),
+        onAccept:() => this.resolveConflict('accept'), onPromote:() => this.resolveConflict('promote'), onOverride:() => this.resolveConflict('override'), onAnnotate:() => this.resolveConflict('annotate') };
+    }
+
+    // ----- concepts -----
+    const typeStyle = (t) => {
+      const m = { system:C.blueStroke, runbook:C.tealStroke, interface:C.blueStrokeE, decision:C.amberStrokeE };
+      const col = m[t] || C.caption;
+      return `display:inline-flex; align-items:center; font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 8px; border-radius:6px; color:${col}; border:1px solid ${col}; background:#FFFFFF;`;
+    };
+    const q = st.query.trim().toLowerCase();
+    const conceptList = this.concepts.filter(c => !q || (c.title + ' ' + c.id).toLowerCase().includes(q)).map(c => {
+      const selected = c.id === st.selConcept;
+      return { id:c.id, title:c.title, type:c.type, conflict:!!c.conflict, draft:!!c.draft, typeStyle:typeStyle(c.type),
+        layerChips:c.layers.map(l => this.layerChip(l)), onSelect:() => this.setState({ selConcept:c.id }),
+        cardStyle:`display:block; width:100%; text-align:left; padding:14px 15px; background:${selected?'#FFFFFF':C.surface}; border:1px solid ${selected?C.lineStrong:C.line}; border-radius:11px; cursor:pointer; font:inherit; ${selected?'box-shadow:0 2px 10px rgba(26,25,21,0.06);':''}` };
+    });
+    const selCpt = this.concepts.find(c => c.id === st.selConcept) || null;
+    let cpt = null;
+    if (selCpt) {
+      cpt = { id:selCpt.id, title:selCpt.title, type:selCpt.type, typeStyle:typeStyle(selCpt.type),
+        layerChips:selCpt.layers.map(l => this.layerChip(l)), sectionCount:String(selCpt.sections.length),
+        sections:selCpt.sections.map(s => {
+          const col = this.lc(s.winner);
+          const out = { name:s.name, value:s.value, hasDissent:!!s.dissent,
+            provLabel:this.layerName(s.winner), provStyle:`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 7px; border-radius:999px; background:${col.fill}; color:${col.text}; border:1px solid ${col.strokeE};` };
+          if (s.dissent) { const dc = this.lc(s.dissent.layer); out.dissentLayer = this.layerName(s.dissent.layer); out.dissentValue = s.dissent.value;
+            out.dissentChip = `display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:1px 6px; border-radius:999px; background:#FFFFFF; color:${dc.text}; border:1px solid ${dc.strokeE}; margin-right:2px;`; }
+          return out;
+        }) };
+    }
+
+    // ----- chat -----
+    const dot = (layer) => `display:inline-block; width:6px; height:6px; border-radius:999px; margin-right:6px; background:${this.lc(layer).strokeE};`;
+    const chatMessages = st.chatMessages.map(m => {
+      const isUser = m.role === 'user';
+      return { intro:!!m.intro, text:m.text, textColor:isUser?'#EAF7F5':C.body,
+        hasCites:!!(m.cites && m.cites.length), hasNote:!!m.note, note:m.note||'',
+        cites:(m.cites||[]).map(ci => ({ label:ci.label, dotStyle:dot(ci.layer),
+          style:`display:inline-flex; align-items:center; font-family:${MONO}; font-size:10.5px; font-weight:500; padding:4px 9px; border-radius:999px; background:${this.lc(ci.layer).fill}; color:${this.lc(ci.layer).text}; border:1px solid ${this.lc(ci.layer).strokeE};` })),
+        rowStyle:`display:flex; ${isUser?'justify-content:flex-end;':''}`,
+        bubbleStyle:`max-width:88%; padding:12px 14px; border-radius:13px; ${isUser?`background:#1E6B64; border-bottom-right-radius:4px;`:`background:#FFFFFF; border:1px solid ${C.line}; border-bottom-left-radius:4px;`}` };
+    });
+    const suggestions = ['What database do we use?','How do we handle on-call?'].map(t => ({ text:t, onClick:() => this.send(t) }));
+
+    return {
+      // shell
+      nav, counts:{ sources:this.sources.length, concepts:178, conflicts:openConflicts, triage:triageCount },
+      viewTitle:titles[view][0], viewSub:titles[view][1],
+      showSearch: view==='triage' || view==='concepts',
+      searchPlaceholder: view==='concepts' ? 'Search concepts…' : 'Filter signals…',
+      query:st.query, onQuery:(e) => this.setState({ query:e.target.value }),
+      isOverview:view==='overview', isTriage:view==='triage', isConflicts:view==='conflicts', isConcepts:view==='concepts',
+      handlers:{
+        overview:() => this.setState({ view:'overview' }), triage:() => this.setState({ view:'triage' }),
+        conflicts:() => this.setState({ view:'conflicts' }), concepts:() => this.setState({ view:'concepts' }),
+        openChat:() => this.setState({ chatOpen:true }), closeChat:() => this.setState({ chatOpen:false })
+      },
+      // overview
+      statTiles, cakeBands, sourceList, activity,
+      // triage
+      triageTabs, triageList, triageEmpty:triageList.length===0,
+      hasSelectedSignal:!!sel, noSelectedSignal:!sel, sel:sel||{},
+      // conflicts
+      conflictList, hasSelectedConflict:!!conf, conf:conf||{},
+      // concepts
+      conceptList, hasSelectedConcept:!!cpt, cpt:cpt||{},
+      // chat
+      chat:{ open:st.chatOpen, busy:st.chatBusy, input:st.chatInput, messages:chatMessages, suggestions,
+        onInput:(e) => this.setState({ chatInput:e.target.value }),
+        onSend:() => this.send(), onKey:(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.send(); } } }
+    };
+  }
+}
+</script>
+</body>
+</html>

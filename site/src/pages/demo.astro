@@ -1,32 +1,560 @@
 ---
-// Full-page interactive cascade demo — Phase 5 (design.md §8).
-// Seed asset: the 2026-06-24 cascade-viz brainstorm prototype (banded
-// composite + persona selector, validated against the real resolver fixture).
-// TODO(agent): build the interactive demo on build-time resolver output
-// (site/scripts/build-demo-data.mjs → src/data/demo-cascade.json).
-// Constraints from the brainstorm review: provenance visible by default,
-// no collapse-to-single-node framing, personas not a linear peel.
+// Full-page interactive cascade demo — Phase 5 (design.md §8, §11.5).
+// Renders REAL resolver output (src/data/demo-cascade.json, built by the
+// prebuild seam) — every value shown is genuine merge output, never faked.
+//
+// Constraints honored (from the 2026-06-24 brainstorm review, design.md §11.5):
+//   • provenance is visible by default, never behind a click
+//   • the concept never collapses to a single unstriped node
+//   • switching is a SELECTOR (pick a concept), not a linear layer "peel"
+//   • prefers-reduced-motion → the composite renders statically, no motion
+//
+// The interactive columns are injected client-side, so their styles live in an
+// `is:global` block namespaced under `.demo` (Astro's scoped styles don't reach
+// nodes created via innerHTML). `.demo` keeps them off every other page.
 import Base from '../layouts/Base.astro';
+import demo from '../data/demo-cascade.json';
+
+// "## Choice {#choice}" → "Choice"
+const label = (heading) =>
+	heading
+		.replace(/^#+\s*/, '')
+		.replace(/\s*\{#.*?\}\s*$/, '')
+		.trim();
+
+// Slim, client-safe view of each concept (drops suppressed tombstones).
+const concepts = demo.concepts.map((c) => ({
+	id: c.id,
+	contributors: c.contributors,
+	sections: c.sections
+		.filter((s) => !s.suppressed)
+		.map((s) => ({
+			key: s.key,
+			label: label(s.heading),
+			content: s.content,
+			sourceLayer: s.sourceLayer,
+			sourceUpdated: s.sourceUpdated,
+			conflicts: (s.conflicts ?? []).map((cf) => ({
+				layer: cf.layer,
+				updated: cf.updated,
+				content: cf.content,
+			})),
+		})),
+}));
 ---
 
 <Base
-	title="ContextCake demo"
-	description="Watch a concept resolve across layers — section by section, provenance and conflicts included."
+	title="ContextCake demo — watch a concept resolve"
+	description="An interactive cascade: pick a concept and watch it resolve across layers — section by section, provenance and conflicts included. Real resolver output."
 >
-	<main>
-		<h1>Demo</h1>
-		<p>
-			The interactive cascade demo is under construction. Meanwhile, the
-			<a href="/docs/guides/playground-tour">playground</a> gives you the full
-			interactive experience locally.
+	<main class="demo">
+		<header class="demo-head">
+			<p class="kicker">Interactive</p>
+			<h1>Watch a concept resolve.</h1>
+			<p class="lede">
+				Pick a concept from the demo bundle. On the left are the layers that contribute to it;
+				on the right is the single effective concept an agent reads — assembled section by
+				section, with the winning layer and any dissent shown on every band. Every value here
+				is live output from <code>resolver.mjs</code>.
+			</p>
+		</header>
+
+		<div class="concept-picker" id="concept-picker" role="tablist" aria-label="Choose a concept">
+			{
+				concepts.map((c, i) => (
+					<button
+						type="button"
+						role="tab"
+						class:list={['seg', { on: i === 0 }]}
+						data-index={i}
+						aria-selected={i === 0 ? 'true' : 'false'}
+					>
+						{c.id}
+					</button>
+				))
+			}
+		</div>
+
+		<div class="stage">
+			<section class="col" aria-label="The contributing layers">
+				<h2 class="colhead">
+					The layers <span class="hint">higher level wins · per section</span>
+				</h2>
+				<div id="planes" class="planes"></div>
+			</section>
+
+			<div class="resolve-arrow">
+				<button id="replay" class="replay" type="button" title="Replay the resolve">
+					<span>resolve</span>
+					<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+				</button>
+			</div>
+
+			<section class="col" aria-label="The effective concept an agent reads">
+				<h2 class="colhead">
+					What an agent reads <span class="hint">one concept · assembled per section</span>
+				</h2>
+				<div id="effective" class="effective"></div>
+			</section>
+		</div>
+
+		<div class="legend" id="legend"></div>
+
+		<p class="foot">
+			Prefer to drive it yourself? The <a href="/docs/guides/playground-tour">playground</a> runs
+			the same engine locally with editable sources and an N-way conflict resolver.
 		</p>
 	</main>
 </Base>
 
-<style>
-	main {
-		max-width: 42rem;
+<script define:vars={{ concepts }}>
+	const LAYER_COLOR = {
+		personal: 'var(--cc-layer-personal)',
+		team: 'var(--cc-layer-team)',
+		company: 'var(--cc-layer-company)',
+	};
+	const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const ALERT =
+		'<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
+
+	let current = 0;
+	let timers = [];
+
+	const esc = (s) =>
+		String(s).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m]);
+	const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
+
+	// Body sections = everything with real content (skip the empty "# Title" section).
+	const bodySections = (c) => c.sections.filter((s) => s.content.trim() !== '');
+
+	function renderPlanes(c) {
+		const body = bodySections(c);
+		const el = document.getElementById('planes');
+		el.innerHTML = c.contributors
+			.map((ct) => {
+				const color = LAYER_COLOR[ct.layer] ?? 'var(--cc-text-muted)';
+				const chips = body
+					.map((s) => {
+						const win = s.sourceLayer === ct.layer;
+						const dissent = s.conflicts.some((cf) => cf.layer === ct.layer);
+						if (!win && !dissent) return '';
+						return `<span class="chip ${win ? 'win' : 'dissent'}" style="--c:${color}">${esc(s.label)}</span>`;
+					})
+					.join('');
+				const inner = chips || '<span class="silent">present — inherits below</span>';
+				return `<div class="plane" style="--c:${color}">
+					<div class="plane-head"><span class="plane-name">${esc(ct.layer)}</span><span class="plane-lvl" style="background:${color}">L${ct.level}</span></div>
+					<div class="chips">${inner}</div>
+				</div>`;
+			})
+			.join('');
+	}
+
+	function renderEffective(c, animate) {
+		const body = bodySections(c);
+		const el = document.getElementById('effective');
+		el.innerHTML = body
+			.map((s) => {
+				const color = LAYER_COLOR[s.sourceLayer] ?? 'var(--cc-text-muted)';
+				const hasConflict = s.conflicts.length > 0;
+				const conflictBtn = hasConflict
+					? `<button type="button" class="conflict" aria-expanded="false">${ALERT}${esc(s.conflicts.map((cf) => cf.layer).join(', '))} disagrees</button>`
+					: '';
+				const dissent = hasConflict
+					? `<div class="dissent-panel" hidden>${s.conflicts
+							.map(
+								(cf) =>
+									`<div class="dissent-row" style="--c:${LAYER_COLOR[cf.layer] ?? 'var(--cc-text-muted)'}"><div class="dissent-prov"><span class="layer">${esc(cf.layer)}</span> · ${esc(cf.updated ?? 'undated')}</div><p>${esc(cf.content)}</p></div>`,
+							)
+							.join('')}</div>`
+					: '';
+				return `<div class="band" style="--c:${color}">
+					<div class="band-top">
+						<span class="band-sec">${esc(s.label)}</span>
+						<span class="band-prov"><span class="layer">${esc(s.sourceLayer)}</span> · ${esc(s.sourceUpdated ?? 'undated')}</span>
+					</div>
+					<p class="band-content">${esc(s.content)}</p>
+					${conflictBtn}
+					${dissent}
+				</div>`;
+			})
+			.join('');
+
+		const bands = [...el.querySelectorAll('.band')];
+		bands.forEach((b, i) => {
+			if (animate && !reduceMotion) {
+				b.classList.add('pending');
+				timers.push(setTimeout(() => b.classList.remove('pending'), 120 + i * 130));
+			}
+		});
+
+		// Conflict expand/collapse — dissent is one click away, but the fact that a
+		// lower layer disagrees is already visible on the band.
+		el.querySelectorAll('.conflict').forEach((btn) => {
+			btn.addEventListener('click', () => {
+				const panel = btn.parentElement.querySelector('.dissent-panel');
+				const open = btn.getAttribute('aria-expanded') === 'true';
+				btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+				if (panel) panel.hidden = open;
+			});
+		});
+	}
+
+	function renderLegend(c) {
+		const el = document.getElementById('legend');
+		el.innerHTML = c.contributors
+			.map(
+				(ct) =>
+					`<span class="leg"><span class="dot" style="background:${LAYER_COLOR[ct.layer] ?? 'var(--cc-text-muted)'}"></span>${esc(ct.layer)} · level ${ct.level}</span>`,
+			)
+			.join('') + '<span class="leg conflict-leg">' + ALERT + 'a lower layer disagrees</span>';
+	}
+
+	function render(animate) {
+		clearTimers();
+		const c = concepts[current];
+		renderPlanes(c);
+		renderEffective(c, animate);
+		renderLegend(c);
+		document.querySelectorAll('#concept-picker .seg').forEach((b, i) => {
+			b.classList.toggle('on', i === current);
+			b.setAttribute('aria-selected', i === current ? 'true' : 'false');
+		});
+	}
+
+	function init() {
+		document.getElementById('concept-picker').addEventListener('click', (e) => {
+			const seg = e.target.closest('.seg');
+			if (!seg) return;
+			current = Number(seg.dataset.index);
+			render(true);
+		});
+		document.getElementById('replay').addEventListener('click', () => render(true));
+		render(true);
+	}
+
+	if (document.readyState !== 'loading') init();
+	else document.addEventListener('DOMContentLoaded', init);
+</script>
+
+<style is:global>
+	.demo {
+		max-width: 72rem;
 		margin: 0 auto;
-		padding: 3rem 1.5rem;
+		padding: 3rem 1.5rem 2rem;
+	}
+	.demo .kicker {
+		font-family: var(--cc-font-mono);
+		font-size: 0.8rem;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--cc-text-muted);
+		margin: 0 0 0.5rem;
+	}
+	.demo .demo-head h1 {
+		font-size: clamp(1.8rem, 4vw, 2.6rem);
+		margin: 0 0 1rem;
+	}
+	.demo .lede {
+		max-width: 46rem;
+		color: var(--cc-text-body);
+		margin: 0 0 2rem;
+	}
+	.demo .lede code,
+	.demo .foot code {
+		font-family: var(--cc-font-mono);
+		color: var(--cc-layer-team);
+	}
+
+	/* Concept selector */
+	.demo .concept-picker {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 10px;
+		padding: 0.4rem;
+		margin-bottom: 2rem;
+	}
+	.demo .seg {
+		border: 0;
+		background: transparent;
+		color: var(--cc-text-muted);
+		font-family: var(--cc-font-mono);
+		font-size: 0.85rem;
+		padding: 0.5rem 0.85rem;
+		border-radius: 7px;
+		cursor: pointer;
+		transition: color var(--cc-transition), background var(--cc-transition);
+	}
+	.demo .seg:hover {
+		color: var(--cc-text);
+	}
+	.demo .seg.on {
+		background: var(--cc-surface-raised);
+		color: var(--cc-text);
+	}
+
+	/* Stage */
+	.demo .stage {
+		display: grid;
+		grid-template-columns: 1fr 68px 1fr;
+		align-items: start;
+		gap: 0.5rem;
+	}
+	.demo .colhead {
+		font-family: var(--cc-font-mono);
+		font-size: 0.9rem;
+		font-weight: 700;
+		color: var(--cc-text);
+		margin: 0 0 1rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+	.demo .colhead .hint {
+		font-size: 0.72rem;
+		font-weight: 500;
+		color: var(--cc-text-muted);
+	}
+
+	/* Layer planes */
+	.demo .planes {
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+	}
+	.demo .plane {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-left: 4px solid var(--c);
+		border-radius: 9px;
+		padding: 0.75rem 0.9rem;
+	}
+	.demo .plane-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 0.6rem;
+	}
+	.demo .plane-name {
+		font-family: var(--cc-font-mono);
+		font-weight: 700;
+		color: var(--cc-text);
+		text-transform: capitalize;
+	}
+	.demo .plane-lvl {
+		font-family: var(--cc-font-mono);
+		font-size: 0.7rem;
+		font-weight: 700;
+		color: #0b1120;
+		border-radius: 5px;
+		padding: 0.1rem 0.4rem;
+	}
+	.demo .chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+	}
+	.demo .chip {
+		font-family: var(--cc-font-mono);
+		font-size: 0.75rem;
+		font-weight: 600;
+		padding: 0.25rem 0.55rem;
+		border-radius: 6px;
+		border: 1px solid var(--c);
+		color: var(--c);
+	}
+	.demo .chip.win {
+		box-shadow: inset 0 0 0 1px var(--c);
+	}
+	.demo .chip.dissent {
+		opacity: 0.62;
+		border-style: dashed;
+	}
+	.demo .silent {
+		font-size: 0.78rem;
+		color: var(--cc-text-muted);
+		font-style: italic;
+	}
+
+	/* Resolve arrow */
+	.demo .resolve-arrow {
+		display: flex;
+		justify-content: center;
+		padding-top: 3.25rem;
+	}
+	.demo .replay {
+		display: inline-flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.2rem;
+		writing-mode: vertical-rl;
+		background: var(--cc-surface-raised);
+		border: 1px solid var(--cc-border);
+		color: var(--cc-text-body);
+		font-family: var(--cc-font-mono);
+		font-size: 0.75rem;
+		letter-spacing: 0.08em;
+		padding: 0.9rem 0.5rem;
+		border-radius: 9px;
+		cursor: pointer;
+		transition: color var(--cc-transition), border-color var(--cc-transition);
+	}
+	.demo .replay svg {
+		writing-mode: horizontal-tb;
+	}
+	.demo .replay:hover {
+		color: var(--cc-text);
+		border-color: var(--cc-cta);
+	}
+
+	/* Effective composite */
+	.demo .effective {
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+	}
+	.demo .band {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-left: 4px solid var(--c);
+		border-radius: 9px;
+		padding: 0.75rem 0.9rem;
+		transition: opacity 0.4s ease, transform 0.4s ease;
+	}
+	.demo .band.pending {
+		opacity: 0;
+		transform: translateX(-14px);
+	}
+	.demo .band-top {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 0.75rem;
+		margin-bottom: 0.4rem;
+	}
+	.demo .band-sec {
+		font-family: var(--cc-font-mono);
+		font-weight: 700;
+		color: var(--cc-text);
+	}
+	.demo .band-prov {
+		font-family: var(--cc-font-mono);
+		font-size: 0.75rem;
+		color: var(--cc-text-muted);
+		white-space: nowrap;
+	}
+	.demo .layer {
+		color: var(--c);
+		font-weight: 700;
+		text-transform: capitalize;
+	}
+	.demo .band-content {
+		margin: 0;
+		color: var(--cc-text-body);
+		font-size: 0.92rem;
+		line-height: 1.55;
+	}
+	.demo .conflict {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		margin-top: 0.6rem;
+		background: transparent;
+		border: 1px solid var(--cc-conflict);
+		color: var(--cc-conflict);
+		font-family: var(--cc-font-mono);
+		font-size: 0.75rem;
+		padding: 0.25rem 0.55rem;
+		border-radius: 6px;
+		cursor: pointer;
+		text-transform: capitalize;
+	}
+	.demo .conflict:hover {
+		background: color-mix(in srgb, var(--cc-conflict) 14%, transparent);
+	}
+	.demo .dissent-panel {
+		margin-top: 0.6rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	/* The class rule above out-specifies the UA [hidden] rule, so restore it —
+	   dissent starts collapsed and the conflict button toggles it. */
+	.demo .dissent-panel[hidden] {
+		display: none;
+	}
+	.demo .dissent-row {
+		border-left: 3px solid var(--c);
+		background: var(--cc-surface-raised);
+		border-radius: 6px;
+		padding: 0.5rem 0.7rem;
+	}
+	.demo .dissent-prov {
+		font-family: var(--cc-font-mono);
+		font-size: 0.72rem;
+		color: var(--cc-text-muted);
+		margin-bottom: 0.25rem;
+	}
+	.demo .dissent-row p {
+		margin: 0;
+		color: var(--cc-text-body);
+		font-size: 0.88rem;
+		line-height: 1.5;
+	}
+
+	/* Legend */
+	.demo .legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1.1rem;
+		margin: 1.75rem 0 0;
+		padding-top: 1.25rem;
+		border-top: 1px solid var(--cc-border);
+		font-family: var(--cc-font-mono);
+		font-size: 0.78rem;
+		color: var(--cc-text-muted);
+	}
+	.demo .leg {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		text-transform: capitalize;
+	}
+	.demo .leg .dot {
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
+	}
+	.demo .conflict-leg {
+		color: var(--cc-conflict);
+	}
+	.demo .foot {
+		margin-top: 2rem;
+		color: var(--cc-text-muted);
+		font-size: 0.9rem;
+	}
+	.demo .foot a {
+		color: var(--cc-layer-team);
+	}
+
+	@media (max-width: 820px) {
+		.demo .stage {
+			grid-template-columns: 1fr;
+		}
+		.demo .resolve-arrow {
+			padding: 0.5rem 0;
+		}
+		.demo .replay {
+			writing-mode: horizontal-tb;
+			flex-direction: row;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.demo .band {
+			transition: none;
+		}
 	}
 </style>

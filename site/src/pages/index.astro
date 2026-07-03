@@ -34,6 +34,9 @@ const heroBands = bodySections.map((s) => ({
 	conflict: s.conflicts?.[0]?.layer ?? null,
 }));
 
+// The contributing layers, shown as the "stack" that resolves into the composite.
+const heroContributors = primaryDb.contributors;
+
 // A real (truncated) read_file payload for the "For agents" section. Structure
 // is untouched; only long content strings are shortened for display (§11.3).
 const flatten = (str, n = 84) => {
@@ -192,25 +195,39 @@ const mcpTools = [
 
 			<figure
 				class="composite"
-				aria-label="The concept decisions/primary-db, resolved: each section striped by the layer that won it, with provenance and conflicts."
+				aria-label="The concept decisions/primary-db, resolved: three layers stacked in precedence order, resolving into one composite where each section is striped by the layer that won it, with provenance and conflicts."
 			>
 				<figcaption><span class="dot" aria-hidden="true"></span>decisions/primary-db — resolved</figcaption>
-				{
-					heroBands.map((b) => (
-						<div class="band" style={`--band: ${layerColor[b.layer]}`}>
-							<span class="section">{b.label}</span>
-							<span class="prov">
-								<span class="layer">{b.layer}</span> · {b.updated}
-								{b.conflict && (
-									<span class="conflict">
-										<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={icons.alert} />
-										{b.conflict} disagrees
-									</span>
-								)}
+				<div class="stack" aria-hidden="true">
+					{
+						heroContributors.map((ct) => (
+							<span class="stack-chip" style={`--band: ${layerColor[ct.layer]}`}>
+								<span class="stack-dot" />
+								{ct.layer}
+								<span class="stack-lvl">L{ct.level}</span>
 							</span>
-						</div>
-					))
-				}
+						))
+					}
+					<svg class="stack-arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></svg>
+				</div>
+				<div class="bands">
+					{
+						heroBands.map((b) => (
+							<div class="band" style={`--band: ${layerColor[b.layer]}`}>
+								<span class="section">{b.label}</span>
+								<span class="prov">
+									<span class="layer">{b.layer}</span> · {b.updated}
+									{b.conflict && (
+										<span class="conflict">
+											<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={icons.alert} />
+											{b.conflict} disagrees
+										</span>
+									)}
+								</span>
+							</div>
+						))
+					}
+				</div>
 			</figure>
 		</section>
 
@@ -425,6 +442,45 @@ npm run playground</code></pre>
 		border-radius: 50%;
 		background: var(--cc-cta);
 	}
+	/* The "stack": the layers that resolve into the composite below. */
+	.stack {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.4rem 0.5rem;
+		margin-bottom: 0.85rem;
+	}
+	.stack-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.75rem;
+		color: var(--cc-text-body);
+		text-transform: capitalize;
+		border: 1px solid var(--cc-border);
+		border-radius: 999px;
+		padding: 0.15rem 0.55rem;
+	}
+	.stack-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--band);
+	}
+	.stack-lvl {
+		color: var(--band);
+		font-weight: 700;
+	}
+	.stack-arrow {
+		color: var(--cc-text-muted);
+		margin-left: 0.15rem;
+	}
+	.bands {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
 	.band {
 		display: flex;
 		justify-content: space-between;
@@ -434,12 +490,8 @@ npm run playground</code></pre>
 		background: var(--cc-surface-raised);
 		border-radius: 6px;
 		padding: 0.6rem 0.9rem;
-		margin-bottom: 0.5rem;
 		font-family: var(--cc-font-mono);
 		font-size: 0.9rem;
-	}
-	.band:last-child {
-		margin-bottom: 0;
 	}
 	.band .section {
 		color: var(--cc-text);
@@ -689,6 +741,63 @@ npm run playground</code></pre>
 		.cta,
 		.feature {
 			transition: none;
+		}
+	}
+
+	/* Hero cascade reveal: the stack appears, then the composite resolves band
+	   by band. Gated on no-preference — reduced-motion sees the static composite
+	   (spec homepage AC 4), which is the default (un-animated) state. */
+	@media (prefers-reduced-motion: no-preference) {
+		.composite .stack-chip {
+			opacity: 0;
+			animation: cc-fade 0.4s ease forwards;
+		}
+		.composite .stack-chip:nth-child(1) {
+			animation-delay: 0.05s;
+		}
+		.composite .stack-chip:nth-child(2) {
+			animation-delay: 0.18s;
+		}
+		.composite .stack-chip:nth-child(3) {
+			animation-delay: 0.31s;
+		}
+		.composite .stack-arrow {
+			opacity: 0;
+			animation: cc-fade 0.4s ease 0.44s forwards;
+		}
+		.composite .band {
+			opacity: 0;
+			transform: translateX(-10px);
+			animation: cc-band 0.5s ease forwards;
+		}
+		.composite .bands .band:nth-child(1) {
+			animation-delay: 0.58s;
+		}
+		.composite .bands .band:nth-child(2) {
+			animation-delay: 0.7s;
+		}
+		.composite .bands .band:nth-child(3) {
+			animation-delay: 0.82s;
+		}
+		.composite .bands .band:nth-child(4) {
+			animation-delay: 0.94s;
+		}
+		.composite .bands .band:nth-child(5) {
+			animation-delay: 1.06s;
+		}
+		.composite .bands .band:nth-child(6) {
+			animation-delay: 1.18s;
+		}
+	}
+	@keyframes cc-fade {
+		to {
+			opacity: 1;
+		}
+	}
+	@keyframes cc-band {
+		to {
+			opacity: 1;
+			transform: none;
 		}
 	}
 </style>

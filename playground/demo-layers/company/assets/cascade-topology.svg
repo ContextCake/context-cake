@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" font-family="'IBM Plex Sans', system-ui, sans-serif">
+  <rect width="720" height="380" rx="16" fill="#0b0f16"/>
+  <text x="36" y="46" fill="#e7edf5" font-size="20" font-weight="600">ContextCake — cascade topology</text>
+  <text x="36" y="70" fill="#828fa3" font-size="13">Higher precedence wins per section; the rest is inherited.</text>
+
+  <!-- layer nodes -->
+  <g>
+    <rect x="40" y="120" width="180" height="72" rx="12" fill="#131a24" stroke="#34d39955"/>
+    <rect x="40" y="120" width="180" height="4" rx="4" fill="#34d399"/>
+    <text x="60" y="152" fill="#e7edf5" font-size="15" font-weight="600">company</text>
+    <text x="60" y="174" fill="#828fa3" font-size="12">level 0 · org baseline</text>
+
+    <rect x="40" y="212" width="180" height="72" rx="12" fill="#131a24" stroke="#38bdf855"/>
+    <rect x="40" y="212" width="180" height="4" rx="4" fill="#38bdf8"/>
+    <text x="60" y="244" fill="#e7edf5" font-size="15" font-weight="600">team</text>
+    <text x="60" y="266" fill="#828fa3" font-size="12">level 2 · overrides + adds</text>
+
+    <rect x="40" y="304" width="180" height="72" rx="12" fill="#131a24" stroke="#a78bfa55"/>
+    <rect x="40" y="304" width="180" height="4" rx="4" fill="#a78bfa"/>
+    <text x="60" y="336" fill="#e7edf5" font-size="15" font-weight="600">personal</text>
+    <text x="60" y="358" fill="#828fa3" font-size="12">level 3 · highest precedence</text>
+  </g>
+
+  <!-- resolved node -->
+  <rect x="500" y="212" width="184" height="80" rx="12" fill="#10201b" stroke="#34d39966"/>
+  <text x="520" y="244" fill="#34d399" font-size="12" font-weight="600" font-family="'JetBrains Mono', monospace">RESOLVED</text>
+  <text x="520" y="268" fill="#e7edf5" font-size="14">effective concept</text>
+  <text x="520" y="286" fill="#828fa3" font-size="11">provenance + conflicts</text>
+
+  <!-- edges -->
+  <g fill="none" stroke-width="2">
+    <path d="M220 156 C 360 156, 380 240, 500 250" stroke="#34d399" opacity="0.7"/>
+    <path d="M220 248 C 360 248, 380 252, 500 252" stroke="#38bdf8" opacity="0.7"/>
+    <path d="M220 340 C 360 340, 380 264, 500 256" stroke="#a78bfa" opacity="0.7"/>
+  </g>
+</svg>

@@ -6,7 +6,7 @@
 # Run all tests
 npm test
 # or directly:
-bash smoke-test.sh && bash resolver-test.sh && bash source-test.sh
+bash smoke-test.sh && bash resolver-test.sh && bash source-test.sh && bash playground-test.sh
 
 # Run the MCP server (cascade mode)
 node mcp-server.mjs --manifest layers.json
@@ -28,6 +28,10 @@ node resolver.mjs --manifest layers.json --concept decisions/primary-db
 
 # Serve the control surface dashboard
 python3 -m http.server 8788 --directory control-surface
+
+# Run the interactive playground (canvas + file editor + merge resolver + source config)
+npm run playground              # serves http://127.0.0.1:8790
+# see playground/README.md for the full tour
 
 # Seed + verify the team demo (then see demo/RUNBOOK.md for the live script)
 # NOTE: currently BROKEN — demo/setup.sh + verify.sh use the removed --hash/--shadow
@@ -63,6 +67,7 @@ Key files:
 | `context-policy.json` | Classification rules (keywords, labels, paths) |
 | `control-surface/` | Dashboard: review queue, captured feed, repo coverage |
 | `okf-browser/` | OKF graph browser |
+| `playground/` | Interactive playground: dependency-free HTTP server (`server.mjs`) over the engine + canvas/files/sources UI, merge resolver, per-source token budget. See `playground/README.md`. |
 | `docs/architecture.md` | Historical design spec (partially superseded — see note at top) |
 
 ## Gotchas

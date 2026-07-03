@@ -1,0 +1,7 @@
+{
+  "layers": [
+    { "name": "personal", "level": 3, "path": "demo-layers/personal" },
+    { "name": "team",     "level": 2, "path": "demo-layers/team" },
+    { "name": "company",  "level": 0, "path": "demo-layers/company" }
+  ]
+}

@@ -4,8 +4,9 @@
   "description": "Federated team knowledge with cascading layer precedence — OKF-compatible, MCP-ready.",
   "type": "module",
   "scripts": {
-    "test": "bash smoke-test.sh && bash resolver-test.sh && bash source-test.sh",
+    "test": "bash smoke-test.sh && bash resolver-test.sh && bash source-test.sh && bash playground-test.sh",
     "mcp": "node mcp-server.mjs",
+    "playground": "node playground/server.mjs",
     "ingest": "node ingest.mjs",
     "write": "node write.mjs",
     "demo:verify": "bash demo/setup.sh && bash demo/verify.sh"

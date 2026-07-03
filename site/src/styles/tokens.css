@@ -25,9 +25,11 @@
   --cc-cta: #22c55e;
   --cc-cta-hover: #16a34a;
 
-  /* Type */
-  --cc-font-heading: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
-  --cc-font-body: 'IBM Plex Sans', system-ui, sans-serif;
+  /* Type — Bricolage Grotesque carries headings + body (a single family with
+   * committed weight contrast); JetBrains Mono is reserved for code, data, and
+   * provenance labels, where monospace is meaningful, not decorative. */
+  --cc-font-heading: 'Bricolage Grotesque', system-ui, sans-serif;
+  --cc-font-body: 'Bricolage Grotesque', system-ui, sans-serif;
   --cc-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
 
   /* Motion */

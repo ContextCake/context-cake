@@ -49,10 +49,20 @@ a minimal sediment/cake-slice mark. Renders as inline SVG. Favicon = the mark al
 
 ### Typography
 
-- **Headings / labels / code:** JetBrains Mono (weights 400–700)
-- **Body:** IBM Plex Sans (300–700)
+- **Headings / labels / body:** Bricolage Grotesque — a single humanist-grotesque
+  family carrying the type system with weight contrast (400–700).
+- **Code, data, provenance labels:** JetBrains Mono (400–700) — monospace *only*
+  where it is meaningful (resolved output, CLI, `layer · date`), never as a
+  "technical" costume.
 - Self-hosted via `@fontsource/*` packages — **no Google Fonts CDN in production**.
 - Large type (hero ≥ 48px), 1.5–1.75 body line-height, 65–75 ch measure in docs prose.
+
+> **Amended 2026-07-03 (design critique).** The type system moved off
+> JetBrains-Mono-headings + IBM Plex Sans — the saturated "developer tool = mono"
+> reflex lane — to Bricolage Grotesque. Mono is retained strictly for code/data.
+> The provenance stripes and layer colors are unchanged: they remain the brand's
+> distinctive element, and monospace now *contrasts* prose (human) against
+> resolved data (machine) instead of flattening everything into code.
 
 ### Voice
 

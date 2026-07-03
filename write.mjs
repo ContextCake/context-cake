@@ -195,9 +195,9 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log(`Usage:
-  node tools/team-knowledge/write.mjs --signals signals.json --manifest layers.json
-  node tools/team-knowledge/write.mjs --signals signals.json --manifest layers.json --target-layer team
-  node tools/team-knowledge/write.mjs --signals signals.json --manifest layers.json --dry-run
+  node write.mjs --signals signals.json --manifest layers.json
+  node write.mjs --signals signals.json --manifest layers.json --target-layer team
+  node write.mjs --signals signals.json --manifest layers.json --dry-run
 
 Writes captured OKF concepts from ingest signals into a target layer bundle.
   team_candidate  → written directly to the target layer directory

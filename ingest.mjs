@@ -4,8 +4,8 @@
 // context policy, and writes a dashboard-ready signals.json. Dependency-free.
 //
 // Usage:
-//   node tools/team-knowledge/ingest.mjs --events mock-events.json --out control-surface/signals.json
-//   node tools/team-knowledge/ingest.mjs --demo            # uses bundled mock-events.json
+//   node ingest.mjs --events mock-events.json --out control-surface/signals.json
+//   node ingest.mjs --demo            # uses bundled mock-events.json
 //
 // A future GitHub adapter can produce the --events file via `gh api` once real
 // repo names are known; this script only consumes already-normalized events.
@@ -170,8 +170,8 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log(`Usage:
-  node tools/team-knowledge/ingest.mjs --events mock-events.json --out control-surface/signals.json
-  node tools/team-knowledge/ingest.mjs --demo
+  node ingest.mjs --events mock-events.json --out control-surface/signals.json
+  node ingest.mjs --demo
 
 Classifies a list of normalized repo signal events and writes a dashboard-ready
 signals.json (signals + per-repo coverage). Defaults: --events mock-events.json,

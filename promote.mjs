@@ -149,7 +149,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage: node tools/team-knowledge/promote.mjs --personal <dir> --shared <dir> --file <concept-or-path> [--dry-run] [--print-git]
+  console.log(`Usage: node promote.mjs --personal <dir> --shared <dir> --file <concept-or-path> [--dry-run] [--print-git]
 
 Copies a markdown concept from the personal OKF bundle into the shared bundle and rebuilds shared index.md.
 `);

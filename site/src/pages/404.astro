@@ -1,0 +1,86 @@
+---
+// In-brand 404 (design.md §3). A section with no contributing layer resolves
+// to nothing — the one place ContextCake has no answer for you.
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+	title="Not found — ContextCake"
+	description="No layer contributes this page."
+>
+	<main class="notfound">
+		<p class="code">404</p>
+		<h1>No layer contributes this page.</h1>
+		<p class="lede">
+			The concept you asked for doesn't resolve — nothing at any level defines it. Try one of
+			these instead:
+		</p>
+		<div class="links">
+			<a class="cta primary" href="/">Home</a>
+			<a class="cta" href="/docs/getting-started/installation">Docs</a>
+			<a class="cta" href="/demo">Demo</a>
+		</div>
+	</main>
+</Base>
+
+<style>
+	.notfound {
+		max-width: 42rem;
+		margin: 0 auto;
+		padding: 5rem 1.5rem;
+		text-align: center;
+	}
+	.code {
+		font-family: var(--cc-font-mono);
+		font-size: clamp(3rem, 12vw, 6rem);
+		font-weight: 700;
+		line-height: 1;
+		margin: 0;
+		/* the three strata, in one number */
+		background: linear-gradient(
+			120deg,
+			var(--cc-layer-personal),
+			var(--cc-layer-team),
+			var(--cc-layer-company)
+		);
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+	}
+	h1 {
+		font-size: clamp(1.5rem, 4vw, 2rem);
+		margin: 1rem 0;
+	}
+	.lede {
+		color: var(--cc-text-body);
+		margin: 0 auto 2rem;
+		max-width: 32rem;
+	}
+	.links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem;
+		justify-content: center;
+	}
+	.cta {
+		font-family: var(--cc-font-heading);
+		text-decoration: none;
+		border: 1px solid var(--cc-border);
+		border-radius: 8px;
+		padding: 0.65rem 1.25rem;
+		transition: border-color var(--cc-transition), background var(--cc-transition);
+	}
+	.cta:hover {
+		border-color: var(--cc-text-muted);
+	}
+	.cta.primary {
+		background: var(--cc-cta);
+		border-color: var(--cc-cta);
+		color: #052e16;
+		font-weight: 700;
+	}
+	.cta.primary:hover {
+		background: var(--cc-cta-hover);
+		border-color: var(--cc-cta-hover);
+	}
+</style>

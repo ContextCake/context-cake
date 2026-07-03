@@ -74,7 +74,7 @@ write_index "$shared/index.md" "Shared Knowledge Index"
 config="$(cat <<EOF
 {
   "mcpServers": {
-    "team-knowledge": {
+    "contextcake": {
       "command": "node",
       "args": [
         "$server_path",
@@ -103,7 +103,7 @@ if [[ -n "$settings" ]]; then
 
   tmp="$(mktemp)"
   jq --arg server "$server_path" --arg personal "$personal" --arg shared "$shared" \
-    '.mcpServers["team-knowledge"] = {
+    '.mcpServers["contextcake"] = {
       "command": "node",
       "args": [$server, "--personal", $personal, "--shared", $shared]
     }' "$settings" > "$tmp"

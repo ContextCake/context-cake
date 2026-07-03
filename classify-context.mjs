@@ -222,8 +222,8 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log(`Usage:
-  node tools/team-knowledge/classify-context.mjs --event event.json
-  node tools/team-knowledge/classify-context.mjs --demo
+  node classify-context.mjs --event event.json
+  node classify-context.mjs --demo
 
 Classifies repo or team signals into ignore, local, team_candidate, or review_required.
 `);

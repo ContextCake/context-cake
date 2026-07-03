@@ -1,0 +1,823 @@
+---
+// Homepage — spec.md "Homepage (/)", section order in design.md §4.
+// Hero composite + the "For agents" payload are generated from the REAL
+// resolver at build time (src/data/demo-cascade.json, via the prebuild seam) —
+// never hand-authored merge output (spec homepage AC 5).
+import Base from '../layouts/Base.astro';
+import CopyCommand from '../components/CopyCommand.astro';
+import demo from '../data/demo-cascade.json';
+
+const primaryDb = demo.concepts.find((c) => c.id === 'decisions/primary-db');
+
+// Section label from an OKF heading: "## Choice {#choice}" → "Choice".
+const label = (heading) =>
+	heading
+		.replace(/^#+\s*/, '')
+		.replace(/\s*\{#.*?\}\s*$/, '')
+		.trim();
+
+const layerColor = {
+	personal: 'var(--cc-layer-personal)',
+	team: 'var(--cc-layer-team)',
+	company: 'var(--cc-layer-company)',
+};
+
+// Hero bands = the real resolved sections, minus the empty title section and
+// any suppressed tombstones. Each band knows the layer that won it + its date.
+const bodySections = primaryDb.sections.filter(
+	(s) => !s.suppressed && s.content.trim() !== '',
+);
+const heroBands = bodySections.map((s) => ({
+	label: label(s.heading),
+	layer: s.sourceLayer,
+	updated: s.sourceUpdated,
+	conflict: s.conflicts?.[0]?.layer ?? null,
+}));
+
+// The contributing layers, shown as the "stack" that resolves into the composite.
+const heroContributors = primaryDb.contributors;
+
+// A real (truncated) read_file payload for the "For agents" section. Structure
+// is untouched; only long content strings are shortened for display (§11.3).
+const flatten = (str, n = 84) => {
+	const one = str.replace(/\s+/g, ' ').trim();
+	return one.length > n ? one.slice(0, n).trimEnd() + ' …' : one;
+};
+const agentPayload = {
+	id: primaryDb.id,
+	contributors: primaryDb.contributors,
+	frontmatter: primaryDb.frontmatter,
+	frontmatterProvenance: primaryDb.frontmatterProvenance,
+	sections: bodySections.slice(0, 2).map((s) => ({
+		key: s.key,
+		heading: s.heading,
+		content: flatten(s.content),
+		sourceLayer: s.sourceLayer,
+		sourceUpdated: s.sourceUpdated,
+		...(s.conflicts
+			? {
+					conflicts: s.conflicts.map((c) => ({
+						layer: c.layer,
+						updated: c.updated,
+						content: flatten(c.content),
+					})),
+				}
+			: {}),
+	})),
+};
+const agentJson = JSON.stringify(agentPayload, null, 2);
+
+// Lucide icon paths (inlined SVG — no icon-font, no emoji). 24×24, stroked.
+const icons = {
+	layers:
+		'<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/>',
+	compare:
+		'<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/>',
+	tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
+	share:
+		'<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>',
+	branch:
+		'<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+	shield:
+		'<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+	dashboard:
+		'<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+	merge:
+		'<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+	send: '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
+	alert:
+		'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+};
+
+// §4.3 How it works — one stratum color each (§11.1).
+const steps = [
+	{
+		name: 'Stack',
+		icon: 'layers',
+		color: 'company',
+		body: 'Each scope is its own repo: your drafts, the team\'s runbooks, company policy. If you can read the repo, you can read the layer. There is no second permission system to keep in sync.',
+	},
+	{
+		name: 'Resolve',
+		icon: 'merge',
+		color: 'team',
+		body: 'Read a concept and the resolver assembles it a section at a time. The closest layer wins each section; whatever it doesn\'t mention falls through to the layer below.',
+	},
+	{
+		name: 'Serve',
+		icon: 'send',
+		color: 'personal',
+		body: 'Agents pull the finished concept over MCP, every section tagged with the layer it came from and the day it was written.',
+	},
+];
+
+// §4.5 Feature grid — the seven items (§11.2).
+const features = [
+	{
+		icon: 'layers',
+		title: 'Section-level merge',
+		body: 'Layers merge a section at a time, not a file at a time. An override touches only the section it speaks to; everything else falls through from below.',
+	},
+	{
+		icon: 'compare',
+		title: 'Conflicts carry dates',
+		body: 'When two layers disagree, the losing value doesn\'t disappear. It travels with its layer and its date, so nobody reopens a call that was already made.',
+	},
+	{
+		icon: 'tag',
+		title: 'Provenance on every section',
+		body: 'Every section knows the layer it came from, and every field its origin. An agent can tell company policy from your Tuesday-night override before it acts on either.',
+	},
+	{
+		icon: 'share',
+		title: 'Foreign graphs stitch in',
+		body: 'A layer doesn\'t have to be markdown. Point one at a foreign MCP graph and ContextCake translates it to OKF as it reads, then merges it with everything else.',
+	},
+	{
+		icon: 'branch',
+		title: 'Captured from real work',
+		body: 'It watches the work you\'re already doing, sorts the signal from the noise, and drafts concepts back. Safe ones land in the layer; anything sensitive waits for a human.',
+	},
+	{
+		icon: 'shield',
+		title: 'Zero dependencies',
+		body: 'Plain Node 18 and nothing else. No npm install, no lockfile, no postinstall scripts — a supply chain you can read start to finish in an afternoon.',
+	},
+	{
+		icon: 'dashboard',
+		title: 'Playground',
+		body: 'The same engine with a face on it: wire up sources, watch them merge in real time, and settle an N-way conflict by hand.',
+	},
+];
+
+// §4.6 For agents — README's four-row MCP tool table, verbatim.
+const mcpTools = [
+	{
+		name: 'search',
+		desc: 'Full-text search across all layers; one entry per concept with its contributing layers.',
+	},
+	{
+		name: 'read_file',
+		desc: 'The resolved effective concept — section merge, provenance, per-section conflicts. Pass a layer for a raw single-layer read.',
+	},
+	{
+		name: 'list_concepts',
+		desc: 'All effective concept IDs with their contributing layers.',
+	},
+	{
+		name: 'get_links',
+		desc: 'Outgoing and incoming links, resolved against the effective graph.',
+	},
+];
+---
+
+<Base
+	title="ContextCake — team knowledge, resolved"
+	description="Federated team knowledge with cascading layer precedence. One effective view for AI agents — conflicts surfaced, not hidden."
+>
+	<main>
+		<section class="hero">
+			<div class="hero-copy">
+				<h1>Every layer of what your team knows —<br />one effective view.</h1>
+				<p class="sub">
+					Your notes, your team's runbooks, and company policy rarely line up, and your agent
+					only ever reads one of them. ContextCake stitches all three into one graph: the
+					closest layer wins <em>each section</em>, the rest carries through untouched, and
+					wherever they disagree the agent sees both — with dates.
+				</p>
+				{/* Distribution decision 2026-07-02: clone-and-run, no npm (spec.md Open Questions) */}
+				<CopyCommand command="git clone https://github.com/siracusa5/context-cake.git" />
+				<div class="ctas">
+					<a class="cta primary" href="/docs/getting-started/installation">Get started</a>
+					<a class="cta" href="/demo">See it resolve</a>
+					<a class="cta" href="https://github.com/siracusa5/context-cake">GitHub</a>
+				</div>
+			</div>
+
+			<figure
+				class="composite"
+				aria-label="The concept decisions/primary-db, resolved: three layers stacked in precedence order, resolving into one composite where each section is marked with the layer that won it, with provenance and conflicts."
+			>
+				<figcaption><span class="dot" aria-hidden="true"></span>decisions/primary-db — resolved</figcaption>
+				<div class="stack" aria-hidden="true">
+					{
+						heroContributors.map((ct) => (
+							<span class="stack-chip" style={`--band: ${layerColor[ct.layer]}`}>
+								<span class="stack-dot" />
+								{ct.layer}
+								<span class="stack-lvl">L{ct.level}</span>
+							</span>
+						))
+					}
+					<svg class="stack-arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></svg>
+				</div>
+				<div class="bands">
+					{
+						heroBands.map((b) => (
+							<div class="band" style={`--band: ${layerColor[b.layer]}`}>
+								<span class="section"><span class="swatch" aria-hidden="true" />{b.label}</span>
+								<span class="prov">
+									<span class="layer">{b.layer}</span> · {b.updated}
+									{b.conflict && (
+										<span class="conflict">
+											<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={icons.alert} />
+											{b.conflict} disagrees
+										</span>
+									)}
+								</span>
+							</div>
+						))
+					}
+				</div>
+			</figure>
+		</section>
+
+		<section class="problem">
+			<h2>Team knowledge doesn't agree with itself.</h2>
+			<dl class="beats">
+				<div class="beat">
+					<dt>Scattered</dt>
+					<dd>
+						It lives in repo READMEs, a wiki nobody has opened in months, and three people's
+						heads. Ask two of those sources what's current and you'll get two answers.
+					</dd>
+				</div>
+				<div class="beat">
+					<dt>Agents read stale</dt>
+					<dd>
+						Point an agent at one document and it answers from that document alone. It has no
+						idea a newer decision, one layer up, already overruled it.
+					</dd>
+				</div>
+				<div class="beat">
+					<dt>Overwriting loses the dissent</dt>
+					<dd>
+						The usual fix is to flatten everything into a single doc. That quietly erases the
+						objection you'll go looking for the next time something breaks.
+					</dd>
+				</div>
+			</dl>
+		</section>
+
+		<section class="how">
+			<h2>Stack the layers. Resolve at read time. Serve one view.</h2>
+			<ol class="steps">
+				{
+					steps.map((s, i) => (
+						<li class="step" style={`--accent: ${layerColor[s.color]}`}>
+							<div class="step-head">
+								<span class="step-num" aria-hidden="true">{i + 1}</span>
+								<h3>{s.name}</h3>
+							</div>
+							<p>{s.body}</p>
+						</li>
+					))
+				}
+			</ol>
+			<p class="how-cta">
+				<a href="/demo">Watch a concept resolve, section by section →</a>
+			</p>
+		</section>
+
+		<section class="features">
+			<h2>A resolver, not another wiki.</h2>
+			<div class="grid">
+				{
+					features.map((f) => (
+						<div class="feature">
+							<span class="feature-ico" aria-hidden="true">
+								<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" set:html={icons[f.icon]} />
+							</span>
+							<div>
+								<h3>{f.title}</h3>
+								<p>{f.body}</p>
+							</div>
+						</div>
+					))
+				}
+			</div>
+		</section>
+
+		<section class="agents">
+			<h2>Speaks MCP. Answers with provenance.</h2>
+			<p class="agents-lede">
+				Any agent that speaks MCP can query the resolved graph. Every <code>read_file</code>{' '}
+				answer comes back with who said what, when, and where the layers disagree.
+			</p>
+			<div class="agents-body">
+				<table class="tools">
+					<thead>
+						<tr><th>Tool</th><th>What it does</th></tr>
+					</thead>
+					<tbody>
+						{
+							mcpTools.map((t) => (
+								<tr>
+									<td><code>{t.name}</code></td>
+									<td>{t.desc}</td>
+								</tr>
+							))
+						}
+					</tbody>
+				</table>
+				<figure class="payload">
+					<figcaption>read_file · decisions/primary-db <span class="muted">(real resolver output, content truncated)</span></figcaption>
+					<pre><code>{agentJson}</code></pre>
+				</figure>
+			</div>
+		</section>
+
+		<section class="quickstart">
+			<h2>Quickstart</h2>
+			<p>Plain Node.js ≥ 18. No dependencies.</p>
+			<pre><code>git clone https://github.com/siracusa5/context-cake.git && cd context-cake
+node classify-context.mjs --demo
+node ingest.mjs --demo
+node write.mjs --signals control-surface/signals.json --manifest layers.json --target-layer team
+node mcp-server.mjs --manifest layers.json
+npm run playground</code></pre>
+			<p class="quickstart-cta">
+				<a class="cta primary" href="/docs/getting-started/installation">Read the docs</a>
+				<a class="cta" href="/install">Install guide</a>
+			</p>
+		</section>
+	</main>
+</Base>
+
+<style>
+	main {
+		max-width: 72rem;
+		margin: 0 auto;
+		padding: 0 1.5rem;
+	}
+	.kicker {
+		font-family: var(--cc-font-mono);
+		font-size: 0.8rem;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--cc-text-muted);
+		margin: 0 0 0.5rem;
+	}
+	section h2 {
+		font-size: clamp(1.5rem, 3vw, 2rem);
+		line-height: 1.2;
+		margin: 0 0 2rem;
+		max-width: 30ch;
+	}
+
+	/* Hero */
+	.hero {
+		display: grid;
+		grid-template-columns: 1.1fr 0.9fr;
+		gap: 3rem;
+		align-items: center;
+		padding: 4rem 0 5rem;
+	}
+	.hero-copy {
+		min-width: 0;
+	}
+	h1 {
+		font-size: clamp(2rem, 5vw, 3.25rem);
+		line-height: 1.15;
+		margin: 0 0 1rem;
+	}
+	.sub {
+		max-width: 42rem;
+		font-size: 1.15rem;
+		margin: 0 0 2rem;
+	}
+	.ctas {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem;
+		margin: 1.5rem 0 0;
+	}
+	.cta {
+		font-family: var(--cc-font-heading);
+		text-decoration: none;
+		border: 1px solid var(--cc-border);
+		border-radius: 8px;
+		padding: 0.65rem 1.25rem;
+		transition: border-color var(--cc-transition), background var(--cc-transition);
+	}
+	.cta:hover {
+		border-color: var(--cc-text-muted);
+	}
+	.cta.primary {
+		background: var(--cc-cta);
+		border-color: var(--cc-cta);
+		color: #052e16;
+		font-weight: 700;
+	}
+	.cta.primary:hover {
+		background: var(--cc-cta-hover);
+		border-color: var(--cc-cta-hover);
+	}
+
+	/* Banded composite (hero + reused pattern) */
+	.composite {
+		margin: 0;
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 12px;
+		padding: 1rem;
+		min-width: 0;
+	}
+	.composite figcaption {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.85rem;
+		color: var(--cc-text-muted);
+		margin-bottom: 0.75rem;
+	}
+	.composite .dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--cc-cta);
+	}
+	/* The "stack": the layers that resolve into the composite below. */
+	.stack {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.4rem 0.5rem;
+		margin-bottom: 0.85rem;
+	}
+	.stack-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.75rem;
+		color: var(--cc-text-body);
+		text-transform: capitalize;
+		border: 1px solid var(--cc-border);
+		border-radius: 999px;
+		padding: 0.15rem 0.55rem;
+	}
+	.stack-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--band);
+	}
+	.stack-lvl {
+		color: var(--band);
+		font-weight: 700;
+	}
+	.stack-arrow {
+		color: var(--cc-text-muted);
+		margin-left: 0.15rem;
+	}
+	.bands {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	.band {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 1rem;
+		border: 1px solid var(--cc-border);
+		background: var(--cc-surface-raised);
+		border-radius: 6px;
+		padding: 0.6rem 0.9rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.9rem;
+	}
+	.band .section {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.55rem;
+		color: var(--cc-text);
+	}
+	/* Provenance key: a layer-colored swatch, not a side-stripe accent */
+	.band .swatch {
+		flex: none;
+		width: 10px;
+		height: 10px;
+		border-radius: 3px;
+		background: var(--band);
+	}
+	.band .prov {
+		color: var(--cc-text-body);
+		font-size: 0.8rem;
+		text-align: right;
+		white-space: nowrap;
+	}
+	.band .layer {
+		color: var(--band);
+		font-weight: 700;
+	}
+	.band .conflict {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		color: var(--cc-conflict);
+		margin-left: 0.5rem;
+	}
+
+	/* Problem */
+	.problem,
+	.how,
+	.features,
+	.agents {
+		padding: 4rem 0;
+		border-top: 1px solid var(--cc-border);
+	}
+	/* Problem — an editorial label → statement sequence, not cards */
+	.beats {
+		display: flex;
+		flex-direction: column;
+		margin: 0;
+	}
+	.beat {
+		display: grid;
+		grid-template-columns: minmax(9rem, 13rem) 1fr;
+		gap: 0.5rem 3rem;
+		padding: 1.75rem 0;
+		border-top: 1px solid var(--cc-border);
+		align-items: baseline;
+	}
+	.beat dt {
+		font-family: var(--cc-font-heading);
+		font-size: 1.1rem;
+		font-weight: 700;
+		color: var(--cc-text);
+	}
+	.beat dd {
+		margin: 0;
+		color: var(--cc-text-body);
+		max-width: 60ch;
+	}
+
+	/* How it works — a numbered 3-step flow (a real sequence earns numbers) */
+	.steps {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 1.25rem;
+	}
+	.step {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 12px;
+		padding: 1.5rem;
+	}
+	.step-head {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		margin-bottom: 0.85rem;
+	}
+	.step-num {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex: none;
+		width: 2rem;
+		height: 2rem;
+		border-radius: 999px;
+		font-family: var(--cc-font-mono);
+		font-weight: 700;
+		font-size: 0.95rem;
+		color: var(--accent);
+		border: 1.5px solid var(--accent);
+	}
+	.step h3 {
+		font-size: 1.15rem;
+		margin: 0;
+		color: var(--accent);
+	}
+	.step p {
+		margin: 0;
+		color: var(--cc-text-body);
+	}
+	.how-cta {
+		margin: 2rem 0 0;
+	}
+	.how-cta a {
+		font-family: var(--cc-font-heading);
+		font-weight: 600;
+		font-size: 1rem;
+		color: var(--cc-layer-team);
+		text-decoration: none;
+	}
+	.how-cta a:hover {
+		text-decoration: underline;
+	}
+
+	/* Features — a de-carded icon + text list, not a grid of boxes */
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+		gap: 2rem 2.5rem;
+	}
+	.feature {
+		display: flex;
+		gap: 0.85rem;
+		align-items: flex-start;
+	}
+	.feature-ico {
+		display: inline-flex;
+		flex: none;
+		color: var(--cc-layer-team);
+		margin-top: 0.15rem;
+	}
+	.feature h3 {
+		font-size: 1.05rem;
+		margin: 0 0 0.35rem;
+	}
+	.feature p {
+		margin: 0;
+		color: var(--cc-text-body);
+		font-size: 0.95rem;
+	}
+
+	/* For agents */
+	.agents-lede {
+		max-width: 44rem;
+		margin: -1rem 0 2rem;
+		color: var(--cc-text-body);
+	}
+	.agents-body {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1.5rem;
+		align-items: start;
+	}
+	.tools {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.9rem;
+	}
+	.tools th,
+	.tools td {
+		text-align: left;
+		padding: 0.7rem 0.75rem;
+		border-bottom: 1px solid var(--cc-border);
+		vertical-align: top;
+	}
+	.tools th {
+		font-family: var(--cc-font-heading);
+		font-weight: 600;
+		font-size: 0.8rem;
+		letter-spacing: 0.02em;
+		color: var(--cc-text-muted);
+	}
+	.tools td code {
+		font-family: var(--cc-font-mono);
+		color: var(--cc-layer-team);
+	}
+	.tools td:last-child {
+		color: var(--cc-text-body);
+	}
+	.payload {
+		margin: 0;
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 12px;
+		overflow: hidden;
+	}
+	.payload figcaption {
+		font-family: var(--cc-font-mono);
+		font-size: 0.8rem;
+		color: var(--cc-text);
+		padding: 0.75rem 1rem;
+		border-bottom: 1px solid var(--cc-border);
+		background: var(--cc-surface-raised);
+	}
+	.payload .muted {
+		color: var(--cc-text-muted);
+	}
+	.payload pre {
+		margin: 0;
+		padding: 1rem;
+		overflow-x: auto;
+		font-family: var(--cc-font-mono);
+		font-size: 0.78rem;
+		line-height: 1.55;
+		color: var(--cc-text-body);
+	}
+
+	/* Quickstart */
+	.quickstart {
+		padding: 4rem 0 2rem;
+		border-top: 1px solid var(--cc-border);
+	}
+	.quickstart pre {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+		overflow-x: auto;
+		font-family: var(--cc-font-mono);
+		font-size: 0.9rem;
+		line-height: 1.7;
+	}
+	.quickstart-cta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem;
+		margin-top: 1.5rem;
+	}
+
+	@media (max-width: 900px) {
+		.hero {
+			grid-template-columns: 1fr;
+			gap: 2rem;
+			padding: 3rem 0 4rem;
+		}
+		.steps {
+			grid-template-columns: 1fr;
+		}
+		.beat {
+			grid-template-columns: 1fr;
+			gap: 0.4rem;
+			padding: 1.5rem 0;
+		}
+		.agents-body {
+			grid-template-columns: 1fr;
+		}
+	}
+	@media (max-width: 480px) {
+		.band {
+			flex-direction: column;
+			gap: 0.15rem;
+		}
+		.band .prov {
+			text-align: left;
+			white-space: normal;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.cta,
+		.feature {
+			transition: none;
+		}
+	}
+
+	/* Hero cascade reveal: the stack appears, then the composite resolves band
+	   by band. Gated on no-preference — reduced-motion sees the static composite
+	   (spec homepage AC 4), which is the default (un-animated) state. */
+	@media (prefers-reduced-motion: no-preference) {
+		.composite .stack-chip {
+			opacity: 0;
+			animation: cc-fade 0.32s ease forwards;
+		}
+		.composite .stack-chip:nth-child(1) {
+			animation-delay: 0.03s;
+		}
+		.composite .stack-chip:nth-child(2) {
+			animation-delay: 0.1s;
+		}
+		.composite .stack-chip:nth-child(3) {
+			animation-delay: 0.17s;
+		}
+		.composite .stack-arrow {
+			opacity: 0;
+			animation: cc-fade 0.32s ease 0.24s forwards;
+		}
+		.composite .band {
+			opacity: 0;
+			transform: translateX(-10px);
+			animation: cc-band 0.4s ease forwards;
+		}
+		.composite .bands .band:nth-child(1) {
+			animation-delay: 0.3s;
+		}
+		.composite .bands .band:nth-child(2) {
+			animation-delay: 0.38s;
+		}
+		.composite .bands .band:nth-child(3) {
+			animation-delay: 0.46s;
+		}
+		.composite .bands .band:nth-child(4) {
+			animation-delay: 0.54s;
+		}
+		.composite .bands .band:nth-child(5) {
+			animation-delay: 0.62s;
+		}
+		.composite .bands .band:nth-child(6) {
+			animation-delay: 0.7s;
+		}
+	}
+	@keyframes cc-fade {
+		to {
+			opacity: 1;
+		}
+	}
+	@keyframes cc-band {
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+</style>

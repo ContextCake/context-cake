@@ -1,0 +1,119 @@
+---
+// Install page — spec.md "Install (/install)".
+// Distribution decision (2026-07-02): git clone only; npm publish deferred.
+// LAUNCH GATE: the repo must be public before this page ships — the clone
+// URL below 404s for anonymous users while siracusa5/context-cake is private.
+import Base from '../layouts/Base.astro';
+import CopyCommand from '../components/CopyCommand.astro';
+---
+
+<Base
+	title="Install ContextCake"
+	description="Clone and run. No npm install, no install scripts, no transitive dependencies — plain Node.js ≥ 18."
+>
+	<main>
+		<h1>Install</h1>
+
+		<p class="lede">
+			ContextCake is <strong>clone-and-run</strong>. The engine has zero dependencies —
+			there is no <code>npm install</code> step, so there are no install scripts, no
+			transitive packages, and no lockfile to trust. What you clone is what runs, and you
+			can audit all of it.
+		</p>
+
+		<h2>Prerequisites</h2>
+		<ul>
+			<li><code>git</code></li>
+			<li>Node.js ≥ 18</li>
+		</ul>
+
+		<h2>1. Clone</h2>
+		<CopyCommand command="git clone https://github.com/siracusa5/context-cake.git" />
+
+		<h2>2. Resolve your first concept</h2>
+		<p>
+			The repo ships a tiny three-layer demo bundle. Resolve a concept where the layers
+			disagree and watch the merge — provenance and conflicts included:
+		</p>
+		<pre><code>cd context-cake
+node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db</code></pre>
+		<p>
+			You'll get JSON: each section tagged with the layer that won it, and a{' '}
+			<code>conflicts</code> array where the losing layers dissent — with dates.
+		</p>
+
+		<h2>3. Serve it to an agent</h2>
+		<p>Start the MCP server against the same demo bundle:</p>
+		<pre><code>node mcp-server.mjs --manifest playground/manifest.json</code></pre>
+		<p>Or register it with an MCP client (Claude Code shown):</p>
+		<pre><code>claude mcp add contextcake -- node /path/to/context-cake/mcp-server.mjs --manifest /path/to/context-cake/playground/manifest.json</code></pre>
+		<p>
+			From here, point the manifest at your own layers — see{' '}
+			<a href="/docs/getting-started/first-cascade">Your first cascade</a> and{' '}
+			<a href="/docs/getting-started/connect-an-agent">Connect an agent</a>.
+		</p>
+
+		<h2>Optional: explore visually</h2>
+		<pre><code>npm run playground   # http://127.0.0.1:8790</code></pre>
+		<p>
+			The playground is a local canvas over the same engine — sources, live merges, and
+			an N-way conflict resolver. (It runs from the clone too: its libraries are vendored
+			in the repo, not fetched.)
+		</p>
+
+		<h2>A note on trust</h2>
+		<p>
+			The manifest is a trust boundary: a layer with <code>"source": "mcp"</code> spawns
+			the command it names, as your user. Only point ContextCake at manifests you wrote
+			or trust — the same rule as any MCP client config.{' '}
+			<a href="/docs/concepts/trust-boundary">Read the details</a>.
+		</p>
+
+		<h2>Why isn't this on npm?</h2>
+		<p>
+			Deliberately, for now. Registry supply-chain attacks have repeatedly hit AI and
+			agent tooling — compromised maintainer accounts shipping credential-stealing{' '}
+			<code>postinstall</code> payloads to thousands of downstreams. A knowledge engine
+			that your agents read from should have a supply chain you can audit in an
+			afternoon. A git clone at a commit you can review is exactly that.
+		</p>
+	</main>
+</Base>
+
+<style>
+	main {
+		max-width: 46rem;
+		margin: 0 auto;
+		padding: 3rem 1.5rem;
+	}
+	.lede {
+		font-size: 1.1rem;
+	}
+	h2 {
+		margin-top: 2.5rem;
+		font-size: 1.25rem;
+	}
+	pre {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+		overflow-x: auto;
+		font-family: var(--cc-font-mono);
+		font-size: 0.9rem;
+		line-height: 1.7;
+	}
+	code {
+		font-family: var(--cc-font-mono);
+	}
+	p code, li code {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 4px;
+		padding: 0.1rem 0.35rem;
+		font-size: 0.9em;
+	}
+	a {
+		color: var(--cc-layer-team);
+	}
+</style>

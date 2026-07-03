@@ -1,0 +1,23 @@
+{
+  "name": "contextcake-site",
+  "private": true,
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "build-demo-data": "node scripts/build-demo-data.mjs",
+    "predev": "npm run build-demo-data",
+    "dev": "astro dev",
+    "start": "astro dev",
+    "prebuild": "npm run build-demo-data",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.2",
+    "@fontsource/bricolage-grotesque": "^5.2.10",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "astro": "^7.0.2",
+    "sharp": "^0.34.5"
+  }
+}

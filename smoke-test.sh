@@ -59,7 +59,7 @@ responses="$(
     node "$repo_root/mcp-server.mjs" --personal "$personal" --shared "$shared"
 )"
 
-if ! grep -q '"name":"team-knowledge"' <<<"$responses"; then
+if ! grep -q '"name":"contextcake"' <<<"$responses"; then
   echo "Missing initialize response" >&2
   exit 1
 fi
@@ -186,4 +186,4 @@ if ! grep -q 'draft: true' "$sample_file"; then
   exit 1
 fi
 
-echo "team-knowledge smoke test passed"
+echo "contextcake smoke test passed"

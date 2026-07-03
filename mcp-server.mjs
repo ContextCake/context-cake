@@ -29,7 +29,7 @@ if (layers.length === 0) {
 }
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
-const serverInfo = { name: "team-knowledge", version: "0.2.0" };
+const serverInfo = { name: "contextcake", version: "0.1.0" };
 
 const tools = [
   {

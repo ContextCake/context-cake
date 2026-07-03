@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ContextCake — Cascade Resolution Prototype</title>
+<style>
+  body{margin:0;padding:32px 20px;background:#f5f6f8;}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0;}
+  #cc-root{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#1f2430;max-width:880px;margin:0 auto;}
+  #cc-root *{box-sizing:border-box;}
+  .cc-top{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:14px;}
+  .cc-kicker{font-size:10px;letter-spacing:.12em;font-weight:700;color:#8a8f9c;}
+  .cc-title{font-size:20px;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .cc-viewer{display:flex;align-items:center;gap:10px;}
+  .cc-vlabel{font-size:11px;font-weight:600;color:#6b7280;}
+  .cc-segs{display:flex;background:#eef0f4;border-radius:10px;padding:3px;gap:2px;}
+  .cc-seg{border:0;background:transparent;padding:7px 12px;border-radius:8px;font-size:12px;font-weight:600;color:#5b6170;cursor:pointer;transition:background .15s,color .15s;white-space:nowrap;}
+  .cc-seg:hover{color:#1f2430;}
+  .cc-seg.on{background:#fff;color:#1f2430;box-shadow:0 1px 2px rgba(0,0,0,.08);}
+  .cc-shadow{display:flex;gap:10px;align-items:flex-start;background:#fdecea;border:1px solid #f0b6ae;border-left:4px solid #c0392b;border-radius:10px;padding:11px 13px;margin-bottom:14px;font-size:12.5px;line-height:1.45;}
+  .cc-shadow b{color:#a5281b;}
+  .cc-shadow svg{flex:none;margin-top:1px;}
+  .cc-stage{display:grid;grid-template-columns:1fr 64px 1fr;align-items:center;gap:6px;}
+  .cc-col{min-width:0;}
+  .cc-colhead{font-size:12px;font-weight:700;margin-bottom:10px;display:flex;flex-direction:column;}
+  .cc-hint{font-size:10.5px;font-weight:500;color:#9aa0ac;margin-top:2px;}
+  .cc-planes{display:flex;flex-direction:column;gap:9px;perspective:900px;}
+  .cc-plane{transform:rotateX(7deg);transform-origin:center top;background:#fff;border:1px solid #e4e7ee;border-left-width:4px;border-radius:9px;padding:9px 11px;transition:opacity .25s,filter .25s;}
+  .cc-plane.silent{opacity:.55;border-left-color:#cfd3dc!important;}
+  .cc-plane.absent{display:none;}
+  .cc-phead{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;}
+  .cc-pname{font-size:12px;font-weight:700;}
+  .cc-plvl{font-size:9.5px;font-weight:700;color:#fff;border-radius:5px;padding:2px 6px;}
+  .cc-chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .cc-chip{font-size:11px;font-weight:600;padding:4px 9px;border-radius:7px;border:1px solid;background:#fff;transition:transform .2s,box-shadow .2s;}
+  .cc-chip.win{box-shadow:0 0 0 2px currentColor inset;}
+  .cc-chip.pulse{animation:ccpulse .6s ease;}
+  @keyframes ccpulse{0%{transform:scale(1);}40%{transform:scale(1.12);}100%{transform:scale(1);}}
+  .cc-silent-note{font-size:11px;color:#9aa0ac;font-style:italic;}
+  .cc-arrow{display:flex;justify-content:center;align-items:center;}
+  .cc-replay{writing-mode:vertical-rl;border:0;background:#1f2430;color:#fff;font-size:11px;font-weight:700;letter-spacing:.08em;padding:14px 7px;border-radius:9px;cursor:pointer;transition:background .15s;}
+  .cc-replay:hover{background:#3a4253;}
+  .cc-effective{background:#fff;border:2px solid #1f2430;border-radius:12px;overflow:hidden;}
+  .cc-band{display:flex;gap:10px;padding:11px 13px;border-bottom:1px solid #eef0f4;opacity:0;transform:translateX(-14px);}
+  .cc-band:last-child{border-bottom:0;}
+  .cc-band.in{opacity:1;transform:translateX(0);transition:opacity .4s ease,transform .4s ease;}
+  .cc-stripe{flex:none;width:5px;border-radius:3px;align-self:stretch;}
+  .cc-bbody{min-width:0;flex:1;}
+  .cc-bsec{font-size:10px;font-weight:700;letter-spacing:.06em;color:#8a8f9c;}
+  .cc-bval{font-size:13px;font-weight:600;margin:1px 0 4px;}
+  .cc-bprov{font-size:10.5px;font-weight:600;display:inline-flex;align-items:center;gap:5px;}
+  .cc-dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+  .cc-bdate{color:#9aa0ac;font-weight:500;}
+  .cc-bstale{color:#c0392b;font-weight:700;margin-left:6px;}
+  .cc-legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:16px;padding-top:13px;border-top:1px solid #eef0f4;font-size:11px;color:#6b7280;}
+  .cc-leg{display:flex;align-items:center;gap:6px;}
+  @media(max-width:640px){.cc-stage{grid-template-columns:1fr;}.cc-arrow{transform:rotate(90deg);margin:4px 0;}.cc-replay{writing-mode:horizontal-tb;}}
+</style>
+</head>
+<body>
+<h2 class="sr-only">Interactive prototype of ContextCake: pick a viewer, watch the layered knowledge graph resolve section-by-section into one effective concept with per-section provenance and stale-override detection.</h2>
+<div id="cc-root">
+  <div class="cc-top">
+    <div>
+      <div class="cc-kicker">CONCEPT</div>
+      <div class="cc-title">decisions/primary-db</div>
+    </div>
+    <div class="cc-viewer">
+      <span class="cc-vlabel">Viewing as</span>
+      <div class="cc-segs" id="cc-segs"></div>
+    </div>
+  </div>
+  <div id="cc-shadow" class="cc-shadow" hidden></div>
+  <div class="cc-stage">
+    <div class="cc-col">
+      <div class="cc-colhead">The layers <span class="cc-hint">higher level wins &middot; same level &rarr; newer wins</span></div>
+      <div id="cc-planes" class="cc-planes"></div>
+    </div>
+    <div class="cc-arrow">
+      <button id="cc-replay" class="cc-replay" title="Replay resolve">resolve &#9660;</button>
+    </div>
+    <div class="cc-col">
+      <div class="cc-colhead">What you read <span class="cc-hint">one concept &middot; assembled per section</span></div>
+      <div id="cc-effective" class="cc-effective"></div>
+    </div>
+  </div>
+  <div class="cc-legend" id="cc-legend"></div>
+</div>
+<script>
+(function(){
+  const root = document.getElementById('cc-root');
+  const L = {
+    company:  {name:'Company',   level:0, color:'#5b7fb5'},
+    'team-core':{name:'Team · Core', level:2, color:'#d99a17'},
+    'team-data':{name:'Team · Data', level:2, color:'#a259c4'},
+    personal: {name:'Personal',  level:3, color:'#e8743b'},
+  };
+  const SECTIONS = ['engine','backups','security'];
+  const SECLABEL = {engine:'ENGINE', backups:'BACKUPS', security:'SECURITY'};
+  const DEF = {
+    company: {
+      engine:  {val:'Postgres', updated:'2026-01-10'},
+      backups: {val:'Nightly snapshots to cold storage', updated:'2026-01-10'},
+      security:{val:'Encryption at rest is now required', updated:'2026-06-12'},
+    },
+    'team-core': {
+      engine:  {val:'SingleStore (chosen for HTAP workloads)', updated:'2026-05-01'},
+      _overrides:'company', _baseHadSecurity:false,
+    },
+    'team-data': { engine:  {val:'TiDB (chosen for global scale)', updated:'2026-06-10'} },
+    personal: {},
+  };
+  const PERSONAS = [
+    {id:'new', label:'New hire', stack:['company']},
+    {id:'ic',  label:'Backend IC', stack:['company','team-core','personal']},
+    {id:'dir', label:'Director (2 teams)', stack:['company','team-core','team-data','personal']},
+  ];
+  let current = 'ic';
+  function resolve(stack){
+    const winners = {};
+    SECTIONS.forEach(sec=>{
+      let best=null;
+      stack.forEach(ly=>{
+        const d=DEF[ly][sec]; if(!d) return;
+        const cand={layer:ly, level:L[ly].level, val:d.val, updated:d.updated};
+        if(!best) best=cand;
+        else if(cand.level>best.level) best=cand;
+        else if(cand.level===best.level && cand.updated>best.updated) best=cand;
+      });
+      if(best) winners[sec]=best;
+    });
+    const stale = stack.includes('team-core') && DEF['team-core']._baseHadSecurity===false &&
+                  stack.includes('company') && !!DEF.company.security;
+    return {winners, stale, stack};
+  }
+  function render(animate){
+    const persona = PERSONAS.find(p=>p.id===current);
+    const r = resolve(persona.stack);
+    document.getElementById('cc-segs').innerHTML = PERSONAS.map(p=>
+      '<button class="cc-seg '+(p.id===current?'on':'')+'" data-id="'+p.id+'">'+p.label+'</button>').join('');
+    const sb=document.getElementById('cc-shadow');
+    if(r.stale){
+      sb.hidden=false;
+      sb.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c0392b" stroke-width="2.2"><path d="M12 3 2 21h20L12 3z"/><line x1="12" y1="10" x2="12" y2="14"/><circle cx="12" cy="17.5" r="0.6" fill="#c0392b" stroke="none"/></svg>'
+        + '<div><b>Stale override detected.</b> Team · Core overrode <code>§Engine</code> against an older Company version — <b>before §Security existed</b>. Its override still works, but it was written without knowledge of newer base content. ContextCake flags this the moment the base hash drifts.</div>';
+    } else { sb.hidden=true; }
+    const order=['personal','team-data','team-core','company'];
+    const planesEl=document.getElementById('cc-planes');
+    planesEl.innerHTML = order.map(ly=>{
+      if(!persona.stack.includes(ly)) return '<div class="cc-plane absent"></div>';
+      const c=L[ly].color, def=DEF[ly];
+      const secKeys=SECTIONS.filter(s=>def[s]);
+      const silent=secKeys.length===0;
+      const chips = silent
+        ? '<span class="cc-silent-note">present — but no opinion here, inherits below</span>'
+        : secKeys.map(s=>{
+            const isWin = r.winners[s] && r.winners[s].layer===ly;
+            return '<span class="cc-chip '+(isWin?'win':'')+'" data-sec="'+s+'" data-ly="'+ly+'" style="color:'+c+';border-color:'+c+';">'+SECLABEL[s]+'</span>';
+          }).join('');
+      return '<div class="cc-plane '+(silent?'silent':'')+'" style="border-left-color:'+c+';">'
+        + '<div class="cc-phead"><span class="cc-pname">'+L[ly].name+'</span>'
+        + '<span class="cc-plvl" style="background:'+c+';">L'+L[ly].level+'</span></div>'
+        + '<div class="cc-chips">'+chips+'</div></div>';
+    }).join('');
+    const effEl=document.getElementById('cc-effective');
+    effEl.innerHTML = SECTIONS.filter(s=>r.winners[s]).map(s=>{
+      const w=r.winners[s], c=L[w.layer].color;
+      const staleTag = (s==='engine' && r.stale && w.layer==='team-core') ? '<span class="cc-bstale">⚠ stale base</span>' : '';
+      return '<div class="cc-band" data-sec="'+s+'"><span class="cc-stripe" style="background:'+c+';"></span>'
+        + '<div class="cc-bbody"><div class="cc-bsec">'+SECLABEL[s]+'</div>'
+        + '<div class="cc-bval">'+w.val+'</div>'
+        + '<div class="cc-bprov" style="color:'+c+';"><span class="cc-dot" style="background:'+c+';"></span>'+L[w.layer].name
+        + '<span class="cc-bdate">· updated '+w.updated+'</span>'+staleTag+'</div></div></div>';
+    }).join('');
+    document.getElementById('cc-legend').innerHTML =
+      Object.values(L).map(x=>'<span class="cc-leg"><span class="cc-dot" style="background:'+x.color+';"></span>'+x.name+' · L'+x.level+'</span>').join('')
+      + '<span class="cc-leg" style="color:#c0392b;">⚠ stale shadow</span>';
+    const bands=[].slice.call(effEl.querySelectorAll('.cc-band'));
+    bands.forEach((b,i)=>{
+      const delay = animate ? 120+i*160 : 0;
+      setTimeout(function(){
+        b.classList.add('in');
+        const sec=b.dataset.sec, w=r.winners[sec];
+        const chip=planesEl.querySelector('.cc-chip[data-sec="'+sec+'"][data-ly="'+w.layer+'"]');
+        if(chip && animate){chip.classList.add('pulse'); setTimeout(function(){chip.classList.remove('pulse');},600);}
+      }, delay);
+    });
+  }
+  root.addEventListener('click',function(e){
+    const seg=e.target.closest('.cc-seg');
+    if(seg){current=seg.dataset.id; render(true); return;}
+    if(e.target.id==='cc-replay'){render(true);}
+  });
+  render(true);
+})();
+</script>
+</body>
+</html>

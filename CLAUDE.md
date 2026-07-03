@@ -33,6 +33,10 @@ python3 -m http.server 8788 --directory control-surface
 npm run playground              # serves http://127.0.0.1:8790
 # see playground/README.md for the full tour
 
+# Product site (marketing + docs) — Astro/Starlight; spec: specs/contextcake-site/
+cd site && npm install && npm run dev    # http://localhost:4321
+cd site && npm run build                 # site CI gate — must exit 0
+
 # Seed + verify the team demo (then see demo/RUNBOOK.md for the live script)
 # NOTE: currently BROKEN — demo/setup.sh + verify.sh use the removed --hash/--shadow
 # flags. Pending reconciliation with the core re-arch (see specs/contextcake-core/design.md §10).
@@ -68,7 +72,8 @@ Key files:
 | `control-surface/` | Dashboard: review queue, captured feed, repo coverage |
 | `okf-browser/` | OKF graph browser |
 | `playground/` | Interactive playground: dependency-free HTTP server (`server.mjs`) over the engine + canvas/files/sources UI, merge resolver, per-source token budget. See `playground/README.md`. |
-| `console/` | React + Vite + TS web UI (ContextCake Console) — its own npm package with a build step, deployed to Cloudflare Pages. The **only** part of the repo with npm dependencies. See `console/README.md` + `console/CLAUDE.md`. |
+| `console/` | React + Vite + TS web UI (ContextCake Console) — its own npm package with a build step, deployed to Cloudflare Pages. See `console/README.md` + `console/CLAUDE.md`. |
+| `site/` | Public product site (Astro + Starlight). Spec + boundaries: `specs/contextcake-site/`. Site deps live in `site/package.json` only — the engine stays dependency-free. |
 | `docs/architecture.md` | Historical design spec (partially superseded — see note at top) |
 
 ## Gotchas
@@ -77,6 +82,6 @@ Key files:
 - `control-surface/signals.json` is generated — gitignored, produced by `ingest.mjs`.
 - Staleness is surfaced via per-section `conflicts[]` + last-updated dates (the shadow/hash subsystem was removed in the core re-arch; see `specs/contextcake-core/design.md`).
 - **The manifest is a trust boundary.** An `mcp` layer spawns `command` with `args` from the manifest — a manifest you did not author can run arbitrary commands as your user. Only point `--manifest` at configs you trust (same model as any MCP client config).
-- The engine (`resolver.mjs`, `sources/`) is dependency-free — plain Node.js built-ins only. Do not add npm dependencies without discussion. The one exception is `console/`, a self-contained npm package (React/Vite) that never imports from the engine — keep that boundary.
-- `console/` has its own `package.json`, build, and tests; run its commands from `console/`, not the repo root. Its CI lives at `.github/workflows/console-*.yml`, path-filtered to `console/**` (production deploys on `console-v*` tags).
+- The engine (`resolver.mjs`, `sources/`) is dependency-free — plain Node.js built-ins only. Do not add npm dependencies without discussion. The exceptions are `console/` and `site/`, self-contained npm packages that never import from the engine — keep that boundary.
+- `console/` and `site/` each have their own `package.json`, build, and tests; run their commands from that subdirectory, not the repo root. `console/` CI lives at `.github/workflows/console-*.yml`, path-filtered to `console/**` (production deploys on `console-v*` tags).
 - Tests create temp directories and clean up with `trap`. Run from the repo root.

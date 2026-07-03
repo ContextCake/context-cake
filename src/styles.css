@@ -1,0 +1,142 @@
+:root {
+  /* ---------- light "paper" theme (default variable values) ---------- */
+  --cc-page: #F1F0EA;
+  --cc-surface: #FBFAF6;
+  --cc-raised: #FFFFFF;
+  --cc-line: #D8D6CC;
+  --cc-line-strong: #C3C1B8;
+  --cc-line-soft: #E7E4DA;
+  --cc-track: #ECEAE0;
+  --cc-neutral-fill: #F1EFE7;
+  --cc-ink: #1A1915;
+  --cc-body: #3A3934;
+  --cc-caption: #57564F;
+  --cc-faint: #8A8A82;
+  --cc-scrollbar: #D0CDBF;
+
+  --cc-blue-fill: #EAF3FC; --cc-blue-fill2: #D9EAFB; --cc-blue-fill3: #C6DEF6;
+  --cc-blue-stroke: #3D7AB8; --cc-blue-stroke-e: #2F6DA8;
+  --cc-blue-text: #0C447C; --cc-blue-text2: #3D6E9E; --cc-blue-soft: #8FB8DE;
+
+  --cc-teal-fill: #EAF7F5; --cc-teal-fill2: #D7F0EC; --cc-teal-stroke: #2C8A82;
+  --cc-teal-stroke-e: #1E6B64; --cc-teal-text: #134F49; --cc-teal-badge-bd: #BEE7E1;
+  --cc-on-teal: #EAF7F5; --cc-teal-btn-hover: #134F49;
+
+  --cc-amber-fill: #FBF0DD; --cc-amber-fill2: #F3E3C4; --cc-amber-stroke: #D69A3F;
+  --cc-amber-stroke-e: #C77D2A; --cc-amber-text: #5A3D12; --cc-amber-text2: #7A5A28; --cc-amber-soft: #E8C88C;
+
+  --cc-scrim: rgba(26,25,21,0.28);
+  --cc-header-bg: rgba(241,240,234,0.82);
+  --cc-shadow: rgba(26,25,21,0.10);
+
+  --cc-canvas-bg: #ECEBE3;
+  --cc-canvas-dot: rgba(26,25,21,0.10);
+  --cc-lane-bg: rgba(26,25,21,0.020);
+  --cc-lane-line: #D8D6CC;
+  --cc-edge-inherit: #C3C1B8;
+  --cc-edge-conflict: #C77D2A;
+  --cc-node-glow: rgba(61,122,184,0.30);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  /* ---------- Railway-inspired dark "canvas" theme ---------- */
+  --cc-page: #0C0C10;
+  --cc-surface: #141419;
+  --cc-raised: #1C1C22;
+  --cc-line: #2A2A32;
+  --cc-line-strong: #3A3A44;
+  --cc-line-soft: #242430;
+  --cc-track: #22222A;
+  --cc-neutral-fill: #22222A;
+  --cc-ink: #ECECF1;
+  --cc-body: #C6C6CE;
+  --cc-caption: #9A9AA4;
+  --cc-faint: #6C6C77;
+  --cc-scrollbar: #2E2E38;
+
+  --cc-blue-fill: #152232; --cc-blue-fill2: #1B2C40; --cc-blue-fill3: #26405C;
+  --cc-blue-stroke: #3E74AB; --cc-blue-stroke-e: #5A8FC4;
+  --cc-blue-text: #9FC7EF; --cc-blue-text2: #7EA6CE; --cc-blue-soft: #2E4A66;
+
+  --cc-teal-fill: #0F2723; --cc-teal-fill2: #143630; --cc-teal-stroke: #2E9A8F;
+  --cc-teal-stroke-e: #248A7E; --cc-teal-text: #7FDDCF; --cc-teal-badge-bd: #1E5049;
+  --cc-on-teal: #EAFBF8; --cc-teal-btn-hover: #2CA091;
+
+  --cc-amber-fill: #2C2113; --cc-amber-fill2: #3A2C16; --cc-amber-stroke: #C8912F;
+  --cc-amber-stroke-e: #DB8E36; --cc-amber-text: #EBBB79; --cc-amber-text2: #C99C61; --cc-amber-soft: #574627;
+
+  --cc-scrim: rgba(0,0,0,0.58);
+  --cc-header-bg: rgba(12,12,16,0.82);
+  --cc-shadow: rgba(0,0,0,0.45);
+
+  --cc-canvas-bg: #08080B;
+  --cc-canvas-dot: rgba(255,255,255,0.055);
+  --cc-lane-bg: rgba(255,255,255,0.018);
+  --cc-lane-line: #22222A;
+  --cc-edge-inherit: #3A3A44;
+  --cc-edge-conflict: #DB8E36;
+  --cc-node-glow: rgba(90,143,196,0.35);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--cc-page);
+  color: var(--cc-ink);
+  font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+@keyframes ccPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes ccSlide { from { transform: translateX(20px); } to { transform: translateX(0); } }
+@keyframes ccFade { from { opacity: 0; } to { opacity: 1; } }
+
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-thumb { background: var(--cc-scrollbar); border-radius: 8px; border: 3px solid var(--cc-page); }
+::-webkit-scrollbar-thumb:hover { background: var(--cc-line-strong); }
+::selection { background: var(--cc-amber-fill2); }
+
+button { font-family: inherit; }
+
+/* Keyboard focus ring. `!important` so it beats the inline `outline:none` on
+   the search + chat fields; pointer focus stays quiet via :focus-visible. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--cc-blue-stroke) !important;
+  outline-offset: 2px;
+}
+
+/* Respect reduced-motion: neutralize the pulse/slide/fade + theme transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- hover behaviors ported from the design's style-hover attributes --- */
+.cc-h-navbg:hover      { background: var(--cc-neutral-fill) !important; }
+.cc-h-tealdark:hover   { background: var(--cc-teal-btn-hover) !important; }
+.cc-h-bd-amber:hover   { border-color: var(--cc-amber-stroke) !important; }
+.cc-h-bd-amber2:hover  { border-color: var(--cc-amber-stroke-e) !important; }
+.cc-h-bd-strong:hover  { border-color: var(--cc-line-strong) !important; }
+.cc-h-bd-faint:hover   { border-color: var(--cc-faint) !important; }
+.cc-h-tealfill2:hover  { background: var(--cc-teal-fill2) !important; }
+.cc-h-eae:hover        { background: var(--cc-neutral-fill) !important; }
+.cc-h-bluefill2:hover  { background: var(--cc-blue-fill2) !important; }
+
+/* canvas dotted backdrop */
+.cc-canvas-dots {
+  background-image: radial-gradient(var(--cc-canvas-dot) 1.4px, transparent 1.4px);
+  background-size: 26px 26px;
+}

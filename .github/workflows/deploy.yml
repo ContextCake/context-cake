@@ -1,0 +1,71 @@
+name: Production Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  CLOUDFLARE_PROJECT_NAME: contextcake-console
+  NODE_VERSION: '22'
+  # Exposed so the deploy step can skip cleanly until the secret is configured.
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+jobs:
+  deploy:
+    name: Build and deploy production
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy Cloudflare Pages production
+        id: deploy
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ env.CLOUDFLARE_PROJECT_NAME }} --branch=main --commit-hash=${{ github.sha }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish deploy summary
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          {
+            echo "### Cloudflare Pages production deploy"
+            echo ""
+            if [ -z "${{ env.CLOUDFLARE_API_TOKEN }}" ]; then
+              echo "- Skipped: set the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repo secrets to enable Pages deploys."
+            else
+              echo "- Tag: $TAG_NAME"
+              echo "- Deployment URL: $DEPLOYMENT_URL"
+              echo "- Live: https://${{ env.CLOUDFLARE_PROJECT_NAME }}.pages.dev"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

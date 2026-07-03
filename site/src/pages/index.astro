@@ -232,59 +232,53 @@ const mcpTools = [
 		</section>
 
 		<section class="problem">
-			<p class="kicker">The problem</p>
 			<h2>Team knowledge doesn't agree with itself.</h2>
-			<div class="beats">
+			<dl class="beats">
 				<div class="beat">
-					<span class="num">01</span>
-					<h3>Scattered</h3>
-					<p>
+					<dt>Scattered</dt>
+					<dd>
 						Your team's knowledge lives in repo docs, wikis, and heads. No two sources agree on
 						what's current, and nobody knows which one to trust.
-					</p>
+					</dd>
 				</div>
 				<div class="beat">
-					<span class="num">02</span>
-					<h3>Agents read stale</h3>
-					<p>
+					<dt>Agents read stale</dt>
+					<dd>
 						An AI agent reading one source gets one layer's truth — dated, unattributed, and
 						blind to the policy or decision that supersedes it.
-					</p>
+					</dd>
 				</div>
 				<div class="beat">
-					<span class="num">03</span>
-					<h3>Overwriting loses the dissent</h3>
-					<p>
+					<dt>Overwriting loses the dissent</dt>
+					<dd>
 						Merging docs by replacement destroys the minority position — the objection you'll
 						need to find again at the next incident.
-					</p>
+					</dd>
 				</div>
-			</div>
+			</dl>
 		</section>
 
 		<section class="how">
-			<p class="kicker">How it works</p>
 			<h2>Stack the layers. Resolve at read time. Serve one view.</h2>
-			<div class="steps">
+			<ol class="steps">
 				{
-					steps.map((s) => (
-						<div class="step" style={`--accent: ${layerColor[s.color]}`}>
-							<span class="step-ico" aria-hidden="true">
-								<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" set:html={icons[s.icon]} />
-							</span>
-							<h3>{s.name}</h3>
+					steps.map((s, i) => (
+						<li class="step" style={`--accent: ${layerColor[s.color]}`}>
+							<div class="step-head">
+								<span class="step-num" aria-hidden="true">{i + 1}</span>
+								<h3>{s.name}</h3>
+							</div>
 							<p>{s.body}</p>
-						</div>
+						</li>
 					))
 				}
-			</div>
+			</ol>
 			<p class="how-cta">
 				<a href="/demo">Watch a concept resolve, section by section →</a>
 			</p>
 		</section>
 
 		<section class="features">
-			<p class="kicker">What you get</p>
 			<h2>A resolver, not another wiki.</h2>
 			<div class="grid">
 				{
@@ -293,8 +287,10 @@ const mcpTools = [
 							<span class="feature-ico" aria-hidden="true">
 								<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" set:html={icons[f.icon]} />
 							</span>
-							<h3>{f.title}</h3>
-							<p>{f.body}</p>
+							<div>
+								<h3>{f.title}</h3>
+								<p>{f.body}</p>
+							</div>
 						</div>
 					))
 				}
@@ -302,7 +298,6 @@ const mcpTools = [
 		</section>
 
 		<section class="agents">
-			<p class="kicker">For agents</p>
 			<h2>Speaks MCP. Answers with provenance.</h2>
 			<p class="agents-lede">
 				The MCP server exposes the resolved cascade to any agent. Every <code>read_file</code>{' '}
@@ -522,58 +517,70 @@ npm run playground</code></pre>
 		padding: 4rem 0;
 		border-top: 1px solid var(--cc-border);
 	}
+	/* Problem — an editorial label → statement sequence, not cards */
 	.beats {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		gap: 1.5rem;
+		display: flex;
+		flex-direction: column;
+		margin: 0;
 	}
 	.beat {
-		background: var(--cc-surface);
-		border: 1px solid var(--cc-border);
-		border-radius: 12px;
-		padding: 1.5rem;
+		display: grid;
+		grid-template-columns: minmax(9rem, 13rem) 1fr;
+		gap: 0.5rem 3rem;
+		padding: 1.75rem 0;
+		border-top: 1px solid var(--cc-border);
+		align-items: baseline;
 	}
-	.beat .num {
+	.beat dt {
 		font-family: var(--cc-font-mono);
-		font-size: 0.9rem;
-		color: var(--cc-conflict);
+		font-size: 1.05rem;
+		font-weight: 700;
+		color: var(--cc-text);
 	}
-	.beat h3 {
-		font-size: 1.15rem;
-		margin: 0.5rem 0 0.75rem;
-	}
-	.beat p {
+	.beat dd {
 		margin: 0;
 		color: var(--cc-text-body);
+		max-width: 60ch;
 	}
 
-	/* How it works */
+	/* How it works — a numbered 3-step flow (a real sequence earns numbers) */
 	.steps {
+		list-style: none;
+		margin: 0;
+		padding: 0;
 		display: grid;
 		grid-template-columns: repeat(3, 1fr);
-		gap: 1.5rem;
+		gap: 1.25rem;
 	}
 	.step {
 		background: var(--cc-surface);
 		border: 1px solid var(--cc-border);
-		border-top: 3px solid var(--accent);
 		border-radius: 12px;
 		padding: 1.5rem;
 	}
-	.step-ico {
+	.step-head {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		margin-bottom: 0.85rem;
+	}
+	.step-num {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 40px;
-		height: 40px;
-		border-radius: 10px;
+		flex: none;
+		width: 2rem;
+		height: 2rem;
+		border-radius: 999px;
+		font-family: var(--cc-font-mono);
+		font-weight: 700;
+		font-size: 0.95rem;
 		color: var(--accent);
-		background: color-mix(in srgb, var(--accent) 14%, transparent);
-		margin-bottom: 1rem;
+		border: 1.5px solid var(--accent);
 	}
 	.step h3 {
 		font-size: 1.15rem;
-		margin: 0 0 0.5rem;
+		margin: 0;
 		color: var(--accent);
 	}
 	.step p {
@@ -593,30 +600,26 @@ npm run playground</code></pre>
 		text-decoration: underline;
 	}
 
-	/* Feature grid */
+	/* Features — a de-carded icon + text list, not a grid of boxes */
 	.grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-		gap: 1.25rem;
+		grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+		gap: 2rem 2.5rem;
 	}
 	.feature {
-		background: var(--cc-surface);
-		border: 1px solid var(--cc-border);
-		border-radius: 12px;
-		padding: 1.5rem;
-		transition: border-color var(--cc-transition);
-	}
-	.feature:hover {
-		border-color: var(--cc-text-muted);
+		display: flex;
+		gap: 0.85rem;
+		align-items: flex-start;
 	}
 	.feature-ico {
 		display: inline-flex;
+		flex: none;
 		color: var(--cc-layer-team);
-		margin-bottom: 0.75rem;
+		margin-top: 0.15rem;
 	}
 	.feature h3 {
 		font-size: 1.05rem;
-		margin: 0 0 0.5rem;
+		margin: 0 0 0.35rem;
 	}
 	.feature p {
 		margin: 0;
@@ -718,9 +721,13 @@ npm run playground</code></pre>
 			gap: 2rem;
 			padding: 3rem 0 4rem;
 		}
-		.beats,
 		.steps {
 			grid-template-columns: 1fr;
+		}
+		.beat {
+			grid-template-columns: 1fr;
+			gap: 0.4rem;
+			padding: 1.5rem 0;
 		}
 		.agents-body {
 			grid-template-columns: 1fr;

@@ -66,6 +66,22 @@ python3 -m http.server 8788 --directory control-surface
 npm test
 ```
 
+## Console (web UI)
+
+A React + Vite front-end for reading and resolving the cascade — Canvas,
+Overview, Triage, Conflicts, Concepts, and an "Ask ContextCake" assistant —
+lives in [`console/`](console/) and deploys to Cloudflare Pages
+(`https://contextcake-console.pages.dev`). It's a self-contained npm package; the
+engine at the repo root stays dependency-free.
+
+```bash
+cd console
+npm install
+npm run dev        # http://localhost:5173
+```
+
+See [`console/README.md`](console/README.md) for the full tour.
+
 ## `layers.json` shape
 
 ```json

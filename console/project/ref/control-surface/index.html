@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Team Context Radar</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231f2f2a'/%3E%3Cpath d='M3 11h10M3 8h10M3 5h10' stroke='%23d7f5c8' stroke-width='1.2'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="shell-header">
+      <div class="brand-block">
+        <p class="eyebrow">Team Context Radar</p>
+        <h1>Mission Control</h1>
+      </div>
+      <div class="command-strip" aria-label="System status">
+        <div class="command-strip__item">
+          <span class="pulse"></span>
+          <span>Watching</span>
+          <strong>5 repos</strong>
+        </div>
+        <div class="command-strip__item">
+          <span>Queued</span>
+          <strong id="statusQueued">0</strong>
+        </div>
+        <div class="command-strip__item">
+          <span>Auto-captured</span>
+          <strong id="statusCaptured">0</strong>
+        </div>
+        <div class="command-strip__item">
+          <span>Ignored</span>
+          <strong id="statusIgnored">0</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="surface-nav" aria-label="Surface navigation">
+      <a class="surface-link surface-link--active" href="./index.html">Mission control</a>
+      <a class="surface-link" href="../okf-browser/index.html">Browse shared graph</a>
+    </section>
+
+    <main class="mission-grid">
+      <section class="watch-panel" aria-labelledby="watchTitle">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Coverage</p>
+            <h2 id="watchTitle">Repo Watch</h2>
+          </div>
+          <span class="timestamp">Last sweep 03:49</span>
+        </div>
+        <div id="coverage" class="repo-map"></div>
+      </section>
+
+      <section class="queue-panel" aria-labelledby="queueTitle">
+        <div class="panel-head panel-head--queue">
+          <div>
+            <p class="eyebrow" id="queueEyebrow">Review queue</p>
+            <h2 id="queueTitle">Signals Needing Judgment</h2>
+          </div>
+          <label class="search">
+            <span>Filter</span>
+            <input id="searchInput" type="search" placeholder="repo, owner, reason">
+          </label>
+        </div>
+
+        <nav class="route-tabs" aria-label="Signal routes">
+          <button class="route-tab is-active" data-filter="attention">
+            <span>Review</span>
+            <strong id="attentionCount">0</strong>
+          </button>
+          <button class="route-tab" data-filter="captured">
+            <span>Captured</span>
+            <strong id="capturedCount">0</strong>
+          </button>
+          <button class="route-tab" data-filter="ignored">
+            <span>Ignored</span>
+            <strong id="ignoredCount">0</strong>
+          </button>
+        </nav>
+
+        <div id="queue" class="signal-list" aria-live="polite"></div>
+      </section>
+
+      <aside class="decision-panel" aria-label="Decision detail">
+        <article class="panel detail-card">
+          <p class="eyebrow">Decision Surface</p>
+          <div id="detail"></div>
+        </article>
+
+        <article class="panel policy-card">
+          <p class="eyebrow">Routing Doctrine</p>
+          <dl>
+            <div>
+              <dt>Auto-store</dt>
+              <dd>Runbooks, decisions, repeated questions, stable interfaces.</dd>
+            </div>
+            <div>
+              <dt>Review</dt>
+              <dd>Auth, incidents, contracts, customer data, ambiguous ownership.</dd>
+            </div>
+            <div>
+              <dt>Discard</dt>
+              <dd>Dependency churn, formatting, test-only changes, local refactors.</dd>
+            </div>
+          </dl>
+        </article>
+      </aside>
+    </main>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

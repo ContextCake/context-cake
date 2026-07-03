@@ -1,0 +1,94 @@
+name: Console Preview Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'console/**'
+      - '.github/workflows/console-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: console-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CLOUDFLARE_PROJECT_NAME: contextcake-console
+  NODE_VERSION: '22'
+  # Exposed so the deploy step can skip cleanly until the secret is configured.
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+defaults:
+  run:
+    working-directory: console
+
+jobs:
+  preview:
+    name: Build and deploy console preview
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compute preview alias
+        id: preview
+        shell: bash
+        run: |
+          safe_branch="$(printf '%s' "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
+
+          if [ -z "$safe_branch" ]; then
+            safe_branch="branch-${GITHUB_SHA:0:7}"
+          fi
+
+          preview_branch="preview-${safe_branch}"
+          preview_url="https://${preview_branch}.${CLOUDFLARE_PROJECT_NAME}.pages.dev"
+
+          echo "branch=${preview_branch}" >> "$GITHUB_OUTPUT"
+          echo "url=${preview_url}" >> "$GITHUB_OUTPUT"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy Cloudflare Pages preview
+        id: deploy
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: console
+          command: pages deploy dist --project-name=${{ env.CLOUDFLARE_PROJECT_NAME }} --branch=${{ steps.preview.outputs.branch }} --commit-hash=${{ github.sha }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish preview summary
+        run: |
+          {
+            echo "### Cloudflare Pages preview (console)"
+            echo ""
+            if [ -z "${{ env.CLOUDFLARE_API_TOKEN }}" ]; then
+              echo "- Skipped: set the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repo secrets to enable Pages deploys."
+            else
+              echo "- Expected URL: ${{ steps.preview.outputs.url }}"
+              echo "- Deployment URL: ${{ steps.deploy.outputs.deployment-url }}"
+              echo "- Cloudflare alias: ${{ steps.deploy.outputs.pages-deployment-alias-url }}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

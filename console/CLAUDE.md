@@ -5,6 +5,10 @@ single-page console: a pan/zoom Canvas home, four structured views (Overview,
 Triage, Conflicts, Concepts), and an "Ask ContextCake" chat slide-over. No
 runtime dependencies beyond React; all sample data is in `src/data.ts`.
 
+This is the `console/` package of the ContextCake monorepo — the cascade engine
+lives at the repo root and is deliberately dependency-free. This package is the
+only place npm dependencies live. Run every command below from `console/`.
+
 ## Commands
 
 ```bash

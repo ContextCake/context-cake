@@ -5,6 +5,10 @@ A React + TypeScript implementation of the **ContextCake Console** design
 with one cohesive tool for understanding and resolving a team's knowledge
 cascade — Company → Team → Personal, where higher layers override per section.
 
+This is the web front-end package of the ContextCake monorepo; it lives at
+`console/` alongside the dependency-free cascade engine at the repo root. Run all
+commands below from `console/`.
+
 ## Stack
 
 - **React 18** + **TypeScript**, bundled with **Vite**
@@ -38,11 +42,13 @@ npm run build
 npx wrangler pages deploy dist --project-name=contextcake-console --branch=main
 ```
 
-CI mirrors this: pushing to `main` publishes a Pages preview
-(`.github/workflows/preview.yml`); tagging `v*` deploys production
-(`.github/workflows/deploy.yml`). Both need the `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` repository secrets — until those are set, the workflows
-still run typecheck + build and simply skip the deploy step.
+CI mirrors this (workflows live at the repo root, path-filtered to `console/**`):
+pushing to `main` publishes a Pages preview
+(`.github/workflows/console-preview.yml`); tagging `console-v*` deploys
+production (`.github/workflows/console-deploy.yml`). Both need the
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets — until
+those are set, the workflows still run typecheck + build and simply skip the
+deploy step.
 
 ## What's inside
 

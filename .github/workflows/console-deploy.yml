@@ -1,16 +1,16 @@
-name: Production Deploy
+name: Console Production Deploy
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'console-v*'
 
 permissions:
   contents: read
   deployments: write
 
 concurrency:
-  group: deploy-production
+  group: console-deploy-production
   cancel-in-progress: false
 
 env:
@@ -19,9 +19,13 @@ env:
   # Exposed so the deploy step can skip cleanly until the secret is configured.
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
+defaults:
+  run:
+    working-directory: console
+
 jobs:
   deploy:
-    name: Build and deploy production
+    name: Build and deploy console production
     runs-on: ubuntu-latest
 
     steps:
@@ -33,6 +37,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+          cache-dependency-path: console/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -50,6 +55,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: console
           command: pages deploy dist --project-name=${{ env.CLOUDFLARE_PROJECT_NAME }} --branch=main --commit-hash=${{ github.sha }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
@@ -59,7 +65,7 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
         run: |
           {
-            echo "### Cloudflare Pages production deploy"
+            echo "### Cloudflare Pages production deploy (console)"
             echo ""
             if [ -z "${{ env.CLOUDFLARE_API_TOKEN }}" ]; then
               echo "- Skipped: set the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repo secrets to enable Pages deploys."

@@ -1,0 +1,32 @@
+---
+// Full-page interactive cascade demo — Phase 5 (design.md §8).
+// Seed asset: the 2026-06-24 cascade-viz brainstorm prototype (banded
+// composite + persona selector, validated against the real resolver fixture).
+// TODO(agent): build the interactive demo on build-time resolver output
+// (site/scripts/build-demo-data.mjs → src/data/demo-cascade.json).
+// Constraints from the brainstorm review: provenance visible by default,
+// no collapse-to-single-node framing, personas not a linear peel.
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+	title="ContextCake demo"
+	description="Watch a concept resolve across layers — section by section, provenance and conflicts included."
+>
+	<main>
+		<h1>Demo</h1>
+		<p>
+			The interactive cascade demo is under construction. Meanwhile, the
+			<a href="/docs/guides/playground-tour">playground</a> gives you the full
+			interactive experience locally.
+		</p>
+	</main>
+</Base>
+
+<style>
+	main {
+		max-width: 42rem;
+		margin: 0 auto;
+		padding: 3rem 1.5rem;
+	}
+</style>

@@ -1,0 +1,166 @@
+---
+// Homepage — spec.md "Homepage (/)", section order in design.md §4.
+// SCAFFOLD STATE: hero + quickstart are real; sections 2–6 are stubs.
+// TODO(agent): build out Problem / How it works / Feature grid / For agents
+// sections per design.md §4, and replace the hero composite's hand-written
+// band data with build-time resolver output (design.md §6, demo-data seam).
+import Base from '../layouts/Base.astro';
+import CopyCommand from '../components/CopyCommand.astro';
+---
+
+<Base
+	title="ContextCake — team knowledge, resolved"
+	description="Federated team knowledge with cascading layer precedence. One effective view for AI agents — conflicts surfaced, not hidden."
+>
+	<main>
+		<section class="hero">
+			<h1>Every layer of what your team knows —<br />one effective view.</h1>
+			<p class="sub">
+				ContextCake stitches personal, team, and company knowledge into one graph your AI
+				agents can read. Higher layer wins <em>per section</em>, nothing is lost, and where
+				layers disagree the conflict is surfaced — not hidden.
+			</p>
+			{/* Distribution decision 2026-07-02: clone-and-run, no npm (spec.md Open Questions) */}
+			<CopyCommand command="git clone https://github.com/siracusa5/context-cake.git" />
+			<div class="ctas">
+				<a class="cta primary" href="/docs/getting-started/installation">Get started</a>
+				<a class="cta" href="https://github.com/siracusa5/context-cake">GitHub</a>
+			</div>
+
+			<figure class="composite" aria-label="A resolved concept: each section striped by the layer that won it">
+				{/* Static banded composite — the launch-state hero visual (spec homepage AC 3).
+				    Band data mirrors the playground's decisions/primary-db fixture.
+				    TODO(agent): generate from resolver output; then Phase 5 animates it. */}
+				<figcaption>decisions/primary-db — resolved</figcaption>
+				<div class="band" style="--band: var(--cc-layer-personal)">
+					<span class="section">## Choice</span>
+					<span class="prov">personal · 2026-06-20</span>
+				</div>
+				<div class="band" style="--band: var(--cc-layer-team)">
+					<span class="section">## Rationale</span>
+					<span class="prov">team · 2026-06-14 <span class="conflict">⚠ company disagrees</span></span>
+				</div>
+				<div class="band" style="--band: var(--cc-layer-company)">
+					<span class="section">## Ownership</span>
+					<span class="prov">company · inherited</span>
+				</div>
+			</figure>
+		</section>
+
+		{/* TODO(agent): §4.2 Problem — three beats */}
+		{/* TODO(agent): §4.3 How it works — Stack / Resolve / Serve */}
+		{/* TODO(agent): §4.5 Feature grid — seven features from spec AC */}
+		{/* TODO(agent): §4.6 For agents — MCP tool table + real read_file JSON */}
+
+		<section class="quickstart">
+			<h2>Quickstart</h2>
+			<p>Plain Node.js ≥ 18. No dependencies.</p>
+			<pre><code>git clone https://github.com/siracusa5/context-cake.git && cd context-cake
+node classify-context.mjs --demo
+node ingest.mjs --demo
+node write.mjs --signals control-surface/signals.json --manifest layers.json --target-layer team
+node mcp-server.mjs --manifest layers.json
+npm run playground</code></pre>
+		</section>
+	</main>
+</Base>
+
+<style>
+	main {
+		max-width: 72rem;
+		margin: 0 auto;
+		padding: 0 1.5rem;
+	}
+	.hero {
+		padding: 4rem 0 2rem;
+	}
+	h1 {
+		font-size: clamp(2rem, 5vw, 3.25rem);
+		line-height: 1.15;
+		margin: 0 0 1rem;
+	}
+	.sub {
+		max-width: 42rem;
+		font-size: 1.15rem;
+		margin: 0 0 2rem;
+	}
+	.ctas {
+		display: flex;
+		gap: 1rem;
+		margin: 1.5rem 0 3rem;
+	}
+	.cta {
+		font-family: var(--cc-font-heading);
+		text-decoration: none;
+		border: 1px solid var(--cc-border);
+		border-radius: 8px;
+		padding: 0.65rem 1.25rem;
+		transition: border-color var(--cc-transition), background var(--cc-transition);
+	}
+	.cta:hover {
+		border-color: var(--cc-text-muted);
+	}
+	.cta.primary {
+		background: var(--cc-cta);
+		border-color: var(--cc-cta);
+		color: #052e16;
+		font-weight: 700;
+	}
+	.cta.primary:hover {
+		background: var(--cc-cta-hover);
+		border-color: var(--cc-cta-hover);
+	}
+	.composite {
+		margin: 0;
+		max-width: 34rem;
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 12px;
+		padding: 1rem;
+	}
+	.composite figcaption {
+		font-family: var(--cc-font-mono);
+		font-size: 0.85rem;
+		color: var(--cc-text-muted);
+		margin-bottom: 0.75rem;
+	}
+	.band {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 1rem;
+		border-left: 4px solid var(--band);
+		background: var(--cc-surface-raised);
+		border-radius: 6px;
+		padding: 0.6rem 0.9rem;
+		margin-bottom: 0.5rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.9rem;
+	}
+	.band .section {
+		color: var(--cc-text);
+	}
+	.band .prov {
+		color: var(--cc-text-muted);
+		font-size: 0.8rem;
+	}
+	.band .conflict {
+		color: var(--cc-conflict);
+	}
+	.quickstart pre {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+		overflow-x: auto;
+		font-family: var(--cc-font-mono);
+		font-size: 0.9rem;
+		line-height: 1.7;
+	}
+	@media (max-width: 480px) {
+		.band {
+			flex-direction: column;
+			gap: 0.15rem;
+		}
+	}
+</style>

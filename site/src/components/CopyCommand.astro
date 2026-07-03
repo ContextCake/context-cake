@@ -1,0 +1,76 @@
+---
+// Copy-to-clipboard command box (spec.md: homepage AC 1–2).
+interface Props {
+	command: string;
+}
+const { command } = Astro.props;
+---
+
+<div class="copy-command">
+	<code>{command}</code>
+	<button type="button" data-command={command} aria-label="Copy command to clipboard">
+		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<rect x="9" y="9" width="13" height="13" rx="2"></rect>
+			<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+		</svg>
+		<span class="label">Copy</span>
+	</button>
+</div>
+
+<style>
+	.copy-command {
+		display: inline-flex;
+		align-items: center;
+		gap: 1rem;
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 8px;
+		padding: 0.75rem 1rem;
+		font-family: var(--cc-font-mono);
+	}
+	code {
+		color: var(--cc-text);
+		font-size: 1rem;
+	}
+	code::before {
+		content: '$ ';
+		color: var(--cc-text-muted);
+	}
+	button {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		background: transparent;
+		border: 1px solid var(--cc-border);
+		border-radius: 6px;
+		color: var(--cc-text-body);
+		font-family: var(--cc-font-mono);
+		font-size: 0.85rem;
+		padding: 0.35rem 0.7rem;
+		cursor: pointer;
+		transition: color var(--cc-transition), border-color var(--cc-transition);
+	}
+	button:hover {
+		color: var(--cc-text);
+		border-color: var(--cc-cta);
+	}
+	button.copied {
+		color: var(--cc-cta);
+		border-color: var(--cc-cta);
+	}
+</style>
+
+<script>
+	for (const button of document.querySelectorAll<HTMLButtonElement>('.copy-command button')) {
+		button.addEventListener('click', async () => {
+			await navigator.clipboard.writeText(button.dataset.command ?? '');
+			button.classList.add('copied');
+			const label = button.querySelector('.label');
+			if (label) label.textContent = 'Copied';
+			setTimeout(() => {
+				button.classList.remove('copied');
+				if (label) label.textContent = 'Copy';
+			}, 2000);
+		});
+	}
+</script>

@@ -1,0 +1,30 @@
+/* Map Starlight's theme variables onto the ContextCake tokens.
+ * Docs keep Starlight's light/dark toggle; these tune both modes to brand. */
+
+@import './tokens.css';
+
+:root {
+  --sl-font: var(--cc-font-body);
+  --sl-font-mono: var(--cc-font-mono);
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #312e81;
+  --sl-color-accent: var(--cc-layer-company);
+  --sl-color-accent-high: #c7d2fe;
+  --sl-color-bg: var(--cc-canvas);
+  --sl-color-bg-nav: var(--cc-canvas);
+  --sl-color-bg-sidebar: var(--cc-canvas);
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e0e7ff;
+  --sl-color-accent: #4f46e5;
+  --sl-color-accent-high: #312e81;
+}
+
+/* Headings in the brand mono, matching the marketing pages */
+.sl-markdown-content :is(h1, h2, h3, h4),
+.site-title {
+  font-family: var(--cc-font-heading);
+}

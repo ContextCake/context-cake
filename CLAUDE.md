@@ -33,6 +33,10 @@ python3 -m http.server 8788 --directory control-surface
 npm run playground              # serves http://127.0.0.1:8790
 # see playground/README.md for the full tour
 
+# Product site (marketing + docs) — Astro/Starlight; spec: specs/contextcake-site/
+cd site && npm install && npm run dev    # http://localhost:4321
+cd site && npm run build                 # site CI gate — must exit 0
+
 # Seed + verify the team demo (then see demo/RUNBOOK.md for the live script)
 # NOTE: currently BROKEN — demo/setup.sh + verify.sh use the removed --hash/--shadow
 # flags. Pending reconciliation with the core re-arch (see specs/contextcake-core/design.md §10).
@@ -68,6 +72,7 @@ Key files:
 | `control-surface/` | Dashboard: review queue, captured feed, repo coverage |
 | `okf-browser/` | OKF graph browser |
 | `playground/` | Interactive playground: dependency-free HTTP server (`server.mjs`) over the engine + canvas/files/sources UI, merge resolver, per-source token budget. See `playground/README.md`. |
+| `site/` | Public product site (Astro + Starlight). Spec + boundaries: `specs/contextcake-site/`. Site deps live in `site/package.json` only — the engine stays dependency-free. |
 | `docs/architecture.md` | Historical design spec (partially superseded — see note at top) |
 
 ## Gotchas

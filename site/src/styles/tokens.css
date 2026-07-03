@@ -1,0 +1,35 @@
+/* ContextCake brand tokens — the single source of truth.
+ * Every color and font on the site comes from here (design.md §2).
+ * The layer colors carry product semantics: they must mean the same
+ * thing everywhere (hero bands, docs samples, diagrams, OG images). */
+
+:root {
+  /* Surfaces */
+  --cc-canvas: #0f172a;
+  --cc-surface: #1e293b;
+  --cc-surface-raised: #273449;
+  --cc-border: #334155;
+
+  /* Text */
+  --cc-text: #f8fafc;
+  --cc-text-body: #cbd5e1;
+  --cc-text-muted: #94a3b8; /* large sizes / labels only — fails 4.5:1 at body size on surface */
+
+  /* Provenance stripes — layer semantics */
+  --cc-layer-personal: #f59e0b; /* level 3, top stratum */
+  --cc-layer-team: #14b8a6;     /* level 2 */
+  --cc-layer-company: #6366f1;  /* level 0, base stratum */
+
+  /* Accents */
+  --cc-conflict: #f87171; /* dissent — use sparingly */
+  --cc-cta: #22c55e;
+  --cc-cta-hover: #16a34a;
+
+  /* Type */
+  --cc-font-heading: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+  --cc-font-body: 'IBM Plex Sans', system-ui, sans-serif;
+  --cc-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+
+  /* Motion */
+  --cc-transition: 200ms ease;
+}

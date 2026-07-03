@@ -59,8 +59,9 @@ surfaces we control — so users don't drift onto stale versions.
 - [ ] WHEN a non-technical user on a modern Mac obtains ContextCake THE SYSTEM SHALL offer at least
   one install path completable with **zero terminal use** (download → open → guided setup).
 - [ ] WHEN a developer installs ContextCake THE SYSTEM SHALL be available via **npm** (`npx` and
-  global, published as `context-cake`), **Homebrew**, and a **one-click MCP bundle (`.mcpb`)** for
-  MCP-capable clients.
+  global, published as `contextcake`, with `context-cake` reserved as a pointer package to
+  block typosquatting), **Homebrew**, and a **one-click MCP bundle (`.mcpb`)** for
+  MCP-capable clients. *(npm publication is additionally gated — see §8 amendment.)*
 - [ ] WHEN ContextCake is installed through any channel THE SYSTEM SHALL expose the **same core
   capabilities** (MCP server, CLI, GUI) backed by one engine.
 - [ ] WHEN installed on Apple Silicon THE SYSTEM SHALL run natively as arm64 without Rosetta.
@@ -156,7 +157,9 @@ Resolved during spec sign-off (2026-07-02):
   rotation/recovery (§5, §7); the GUI updater's signing key is distinct from the Apple Developer ID.
 - **`.mcpb` updates:** rely on the host (Claude Desktop) update mechanism **and also publish** to the
   public MCP registry/directory (§5).
-- **npm name:** **`context-cake`**.
+- **npm name:** ~~`context-cake`~~ **amended 2026-07-02 (spec-merge session): `contextcake`**,
+  matching contextcake.com, the MCP `serverInfo` name, and the brand; `context-cake` is
+  **also reserved** as a pointer package (anti-typosquat).
 
 **Prerequisite & sequencing risk — no Apple Developer Program account exists yet.**
 Notarization gates the two "owned" macOS channels (standalone binary and GUI app), which are also the
@@ -164,9 +167,18 @@ channels that deliver the flagship **zero-terminal** experience. Therefore:
 
 - Acquiring an **Apple Developer Program** account + Developer ID certificate is a **hard prerequisite**
   before the standalone-binary and GUI channels ship to end users.
-- Channels that do **not** require our own notarization — **npm/npx**, the **Homebrew** formula
-  (built from source on the user's machine), and the **`.mcpb`** bundle (runs under Claude Desktop's
-  already-notarized runtime) — can be built and shipped **first**, in parallel with obtaining the account.
+- Channels that do **not** require our own notarization — the **`.mcpb`** bundle (runs under Claude
+  Desktop's already-notarized runtime) and the **Homebrew** formula (built from source on the user's
+  machine) — can be built and shipped **first**, in parallel with obtaining the account.
+
+**Amendment (2026-07-02, on merge with the site branch):** the **npm channel is gated behind a
+supply-chain-hardening review** and no longer ships first. Context: John deferred npm publication
+after the 2026 registry compromises of AI/agent tooling (Mastra 144-package backdoor, TrapDoor);
+the public site currently presents clone-and-run as a deliberate security property
+(`specs/contextcake-site/spec.md`, Open Questions). Before the npm channel ships: provenance /
+trusted publishing, **no lifecycle scripts**, 2FA on the publishing account, minimal `files`
+allowlist — and update the site's `/install` "Why isn't this on npm?" section in the same release.
+`.mcpb` and Homebrew lead; npm follows the review.
 - The GUI app and its self-updater can be **built and tested locally with ad-hoc/development signing**
   in the meantime, but MUST NOT be distributed to end users until notarized.
 

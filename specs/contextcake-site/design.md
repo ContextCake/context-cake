@@ -144,15 +144,16 @@ removed in the core re-arch.
 ## 7. Deployment
 
 Cloudflare Pages, build root `site/`, `npm run build` → `site/dist`.
-Preview: push to main (`/deploy-preview`). Production: GitHub release (`/go-live`) → custom
-domain (pending domain decision). No secrets in the build; the GitHub-releases fetch is
+Preview: push to main (`/deploy-preview`). Production: GitHub release (`/go-live`) →
+**contextcake.com** (registered 2026-07-02; the only TLD owned — .dev/.ai were available
+but not purchased). No secrets in the build; the GitHub-releases fetch is
 unauthenticated (private repo → skipped/empty until visibility resolves).
 
 ## 8. Build phases
 
 | Phase | Deliverable | Status |
 |---|---|---|
-| 1 | Decisions (visibility, distribution, domain) | **open — gates /install content + launch** |
+| 1 | Decisions (visibility, distribution, domain) | domain: **contextcake.com** · distribution: **clone-and-run at launch; roadmap owned by `specs/contextcake-distribution/`** · visibility: **open — the last launch gate** |
 | 2 | Brand kit: logo SVG, tokens.css, OG template | scaffold has tokens; logo TODO |
 | 3 | Scaffold + homepage (static hero) | scaffold committed; homepage = agent task |
 | 4 | Docs port (all §5 pages) + `/doc-reviewer` pass | agent task |

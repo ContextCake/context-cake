@@ -305,7 +305,7 @@ const mcpTools = [
 			<p class="kicker">For agents</p>
 			<h2>Speaks MCP. Answers with provenance.</h2>
 			<p class="agents-lede">
-				The MCP server exposes the resolved cascade to any agent. Every <code>read_file</code>
+				The MCP server exposes the resolved cascade to any agent. Every <code>read_file</code>{' '}
 				response carries who said what, when — and where they disagree.
 			</p>
 			<div class="agents-body">
@@ -497,7 +497,7 @@ npm run playground</code></pre>
 		color: var(--cc-text);
 	}
 	.band .prov {
-		color: var(--cc-text-muted);
+		color: var(--cc-text-body);
 		font-size: 0.8rem;
 		text-align: right;
 		white-space: nowrap;
@@ -750,43 +750,43 @@ npm run playground</code></pre>
 	@media (prefers-reduced-motion: no-preference) {
 		.composite .stack-chip {
 			opacity: 0;
-			animation: cc-fade 0.4s ease forwards;
+			animation: cc-fade 0.32s ease forwards;
 		}
 		.composite .stack-chip:nth-child(1) {
-			animation-delay: 0.05s;
+			animation-delay: 0.03s;
 		}
 		.composite .stack-chip:nth-child(2) {
-			animation-delay: 0.18s;
+			animation-delay: 0.1s;
 		}
 		.composite .stack-chip:nth-child(3) {
-			animation-delay: 0.31s;
+			animation-delay: 0.17s;
 		}
 		.composite .stack-arrow {
 			opacity: 0;
-			animation: cc-fade 0.4s ease 0.44s forwards;
+			animation: cc-fade 0.32s ease 0.24s forwards;
 		}
 		.composite .band {
 			opacity: 0;
 			transform: translateX(-10px);
-			animation: cc-band 0.5s ease forwards;
+			animation: cc-band 0.4s ease forwards;
 		}
 		.composite .bands .band:nth-child(1) {
-			animation-delay: 0.58s;
+			animation-delay: 0.3s;
 		}
 		.composite .bands .band:nth-child(2) {
-			animation-delay: 0.7s;
+			animation-delay: 0.38s;
 		}
 		.composite .bands .band:nth-child(3) {
-			animation-delay: 0.82s;
+			animation-delay: 0.46s;
 		}
 		.composite .bands .band:nth-child(4) {
-			animation-delay: 0.94s;
+			animation-delay: 0.54s;
 		}
 		.composite .bands .band:nth-child(5) {
-			animation-delay: 1.06s;
+			animation-delay: 0.62s;
 		}
 		.composite .bands .band:nth-child(6) {
-			animation-delay: 1.18s;
+			animation-delay: 0.7s;
 		}
 	}
 	@keyframes cc-fade {

@@ -38,7 +38,7 @@ import CopyCommand from '../components/CopyCommand.astro';
 		<pre><code>cd context-cake
 node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db</code></pre>
 		<p>
-			You'll get JSON: each section tagged with the layer that won it, and a
+			You'll get JSON: each section tagged with the layer that won it, and a{' '}
 			<code>conflicts</code> array where the losing layers dissent — with dates.
 		</p>
 
@@ -48,8 +48,8 @@ node resolver.mjs --manifest playground/manifest.json --concept decisions/primar
 		<p>Or register it with an MCP client (Claude Code shown):</p>
 		<pre><code>claude mcp add contextcake -- node /path/to/context-cake/mcp-server.mjs --manifest /path/to/context-cake/playground/manifest.json</code></pre>
 		<p>
-			From here, point the manifest at your own layers — see
-			<a href="/docs/getting-started/first-cascade">Your first cascade</a> and
+			From here, point the manifest at your own layers — see{' '}
+			<a href="/docs/getting-started/first-cascade">Your first cascade</a> and{' '}
 			<a href="/docs/getting-started/connect-an-agent">Connect an agent</a>.
 		</p>
 
@@ -65,14 +65,14 @@ node resolver.mjs --manifest playground/manifest.json --concept decisions/primar
 		<p>
 			The manifest is a trust boundary: a layer with <code>"source": "mcp"</code> spawns
 			the command it names, as your user. Only point ContextCake at manifests you wrote
-			or trust — the same rule as any MCP client config.
+			or trust — the same rule as any MCP client config.{' '}
 			<a href="/docs/concepts/trust-boundary">Read the details</a>.
 		</p>
 
 		<h2>Why isn't this on npm?</h2>
 		<p>
 			Deliberately, for now. Registry supply-chain attacks have repeatedly hit AI and
-			agent tooling — compromised maintainer accounts shipping credential-stealing
+			agent tooling — compromised maintainer accounts shipping credential-stealing{' '}
 			<code>postinstall</code> payloads to thousands of downstreams. A knowledge engine
 			that your agents read from should have a supply chain you can audit in an
 			afternoon. A git clone at a commit you can review is exactly that.

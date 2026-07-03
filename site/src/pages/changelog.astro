@@ -126,11 +126,14 @@ const releases = await loadReleases();
 		padding: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 2rem;
 	}
 	.release {
-		border-left: 3px solid var(--cc-layer-team);
-		padding-left: 1.25rem;
+		padding: 2rem 0;
+		border-top: 1px solid var(--cc-border);
+	}
+	.release:first-child {
+		padding-top: 0;
+		border-top: 0;
 	}
 	.release-head {
 		display: flex;
@@ -151,13 +154,16 @@ const releases = await loadReleases();
 	.tag {
 		display: inline-block;
 		font-family: var(--cc-font-mono);
-		font-size: 0.8rem;
+		font-size: 0.75rem;
 		color: var(--cc-layer-team);
-		margin: 0.35rem 0 0.75rem;
+		border: 1px solid var(--cc-border);
+		border-radius: 999px;
+		padding: 0.15rem 0.6rem;
+		margin: 0.5rem 0 0.85rem;
 		text-decoration: none;
 	}
 	.tag:hover {
-		text-decoration: underline;
+		border-color: var(--cc-layer-team);
 	}
 	.body {
 		color: var(--cc-text-body);

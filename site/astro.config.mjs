@@ -10,6 +10,8 @@ export default defineConfig({
 			title: 'ContextCake',
 			description:
 				'Federated team knowledge with cascading layer precedence. Conflicts surfaced, not hidden.',
+			// The marketing 404 (src/pages/404.astro) owns /404 — don't inject Starlight's.
+			disable404Route: true,
 			social: [
 				{
 					icon: 'github',

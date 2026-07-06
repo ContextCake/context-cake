@@ -5,7 +5,7 @@ import { App } from './App'
 import { StoreProvider } from './store'
 import { ThemeModeProvider, applyMode, initialMode } from './theme-mode'
 
-// Apply the persisted (dark-first) theme before the first paint.
+// Apply the persisted theme before the first paint.
 applyMode(initialMode())
 
 createRoot(document.getElementById('root')!).render(

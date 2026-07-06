@@ -1,4 +1,3 @@
-import { css, C } from '../theme'
 import { useThemeMode } from '../theme-mode'
 
 export function ThemeToggle() {
@@ -7,10 +6,9 @@ export function ThemeToggle() {
   return (
     <button
       onClick={toggle}
-      className="cc-h-navbg"
+      className="round-icon"
       aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}
       title={dark ? 'Light theme' : 'Dark theme'}
-      style={css(`display:grid; place-items:center; width:38px; height:38px; background:${C.surface}; border:1px solid ${C.lineStrong}; border-radius:9px; cursor:pointer; color:${C.caption};`)}
     >
       {dark ? (
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">

@@ -12,15 +12,14 @@ commands below from `console/`.
 ## Stack
 
 - **React 18** + **TypeScript**, bundled with **Vite**
-- No CSS framework — the flat visual system (IBM Plex Sans/Mono, the
-  Blue/Teal/Amber/Neutral semantic ramps, hairline borders) is reproduced with
-  design tokens and per-element inline styles.
+- No CSS framework — the console mixes token-driven CSS in `src/styles.css`
+  with existing inline `css()` helpers from `src/theme.ts`.
 - **Theming** — every color is a CSS variable (`src/styles.css`) with a light
-  "paper" set and a Railway-inspired dark "canvas" set. `C` in `src/theme.ts`
+  soft control plane set and a dark primary surface. `C` in `src/theme.ts`
   holds the variable references, and `css()` remaps any literal hex written
   inline onto the same variables, so the whole app themes by flipping
   `data-theme` on `<html>`. Dark-first, persisted in `localStorage`, toggled
-  from the header (`src/theme-mode.tsx`, `src/components/ThemeToggle.tsx`).
+  from the shell chrome (`src/theme-mode.tsx`, `src/components/ThemeToggle.tsx`).
 
 ## Run
 
@@ -55,7 +54,8 @@ deploy step.
 A canvas home, four structured views, and an "Ask ContextCake" slide-over, all
 driven by real state:
 
-- **Canvas** (home) — a Railway-style dark, dotted, pan/zoom canvas. The three
+- **Canvas** (home) — a dark, dotted, pan/zoom canvas framed by the soft
+  control-plane shell. The three
   layers are precedence lanes (Personal → Team → Company, highest on top);
   concepts are node-cards auto-laid-out into their effective lane. Where a lower
   layer disagrees, an amber dashed edge drops to a "ghost" card showing the
@@ -87,9 +87,9 @@ src/
   data.ts               sample cascade: layers, sources, signals, conflicts, concepts
   store.tsx             app state + actions (route, resolveConflict, chat send)
   App.tsx               shell + view routing + S/R/D keyboard handler
-  components/           Sidebar, Header, ChatPanel, ConceptDetail, LayerChip, ThemeToggle
+  components/           topbar/subbar chrome, ChatPanel, ConceptDetail, LayerChip, ThemeToggle
   views/                Canvas, Overview, Triage, Conflicts, Concepts
-  styles.css            light + dark variable sets, keyframes, scrollbar, hover, canvas dots
+  styles.css            shell tokens, light/dark surfaces, hover/focus, canvas dots
 ```
 
 ## Notes

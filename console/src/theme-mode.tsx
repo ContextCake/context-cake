@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 type Mode = 'dark' | 'light'
 const KEY = 'cc-theme'
 
-/** Read the persisted choice, defaulting to dark-first. */
+/** Read the persisted choice, defaulting to the dark control plane. */
 export function initialMode(): Mode {
   try {
     const saved = localStorage.getItem(KEY)
@@ -12,7 +12,7 @@ export function initialMode(): Mode {
   return 'dark'
 }
 
-/** Apply before React mounts so there's no light-mode flash. */
+/** Apply before React mounts so there's no theme flash. */
 export function applyMode(mode: Mode) {
   document.documentElement.dataset.theme = mode
 }

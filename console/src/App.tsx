@@ -1,5 +1,4 @@
 import { useEffect } from 'react'
-import { css } from './theme'
 import { useStore } from './store'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
@@ -30,16 +29,16 @@ export function App() {
   }, [view, chatOpen, route])
 
   return (
-    <div style={css("display:flex; min-height:100vh; background:#F1F0EA; color:#1A1915; font-size:14px; line-height:1.5;")}>
-      <Sidebar />
-      <div style={css('flex:1; min-width:0; display:flex; flex-direction:column;')}>
+    <div className="cc-app-shell">
+      <div className="cc-shell-inner">
+        <Sidebar />
         <Header />
         {view === 'canvas' ? (
-          <main style={css('height:calc(100vh - 66px);')}>
+          <main className="cc-main cc-main-canvas">
             <Canvas />
           </main>
         ) : (
-          <main style={css('padding:24px 26px 60px;')}>
+          <main className="cc-main">
             {view === 'overview' && <Overview />}
             {view === 'triage' && <Triage />}
             {view === 'conflicts' && <Conflicts />}

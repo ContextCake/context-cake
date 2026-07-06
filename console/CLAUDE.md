@@ -34,11 +34,11 @@ There is no test runner or linter configured — `npm run typecheck` (strict mod
   read the freshest values through refs so they don't re-subscribe. State is
   in-memory only — reloads reset it.
 - **Views** — `src/views/` (Canvas, Overview, Triage, Conflicts, Concepts).
-  `App.tsx` is the shell: sidebar + header + routed view, plus the Triage
-  S/R/D keyboard handler.
+  `App.tsx` is the shell: topbar + subbar + routed view, plus the Triage
+  S/R/D keyboard handler. The canvas view stays full-height inside the chrome.
 - **Theming** — every color is a CSS variable in `src/styles.css` (light
-  "paper" default, dark "canvas" under `:root[data-theme="dark"]`). `C` in
-  `src/theme.ts` holds the variable references; `css()` parses inline
+  soft-control-plane default, dark primary surface under
+  `:root[data-theme="dark"]`). `C` in `src/theme.ts` holds the variable references; `css()` parses inline
   `"prop:val; …"` strings into style objects **and** remaps literal hex
   colors to their variables via `HEX_VARS`.
 - **Data** — `src/data.ts`: layers, sources, signals, conflicts, concepts.
@@ -47,7 +47,7 @@ There is no test runner or linter configured — `npm run typecheck` (strict mod
   `window.claude.complete` when present and fall back to canned answers.
 
 Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
-`src/styles.css` (theme variables), `src/views/Canvas.tsx` (pan/zoom layout).
+`src/styles.css` (shell/theme variables), `src/views/Canvas.tsx` (pan/zoom layout).
 
 ## Gotchas
 

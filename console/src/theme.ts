@@ -91,13 +91,6 @@ export function css(decl: string): React.CSSProperties {
     const key = rawKey.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
     out[key] = val
   }
-  if (out.borderRadius && !out.borderRadius.includes('999')) {
-    const m = out.borderRadius.match(/^(\d+(?:\.\d+)?)px$/)
-    if (m) {
-      const n = Number(m[1])
-      if (n >= 8 && n <= 16) out.borderRadius = `${Math.min(24, n + 10)}px`
-    }
-  }
   // Several cards set the `border` shorthand *and* a side-specific accent
   // (e.g. borderLeft). React warns that mixing shorthand + longhand on one
   // element has undefined apply-order across re-renders, which can drop the

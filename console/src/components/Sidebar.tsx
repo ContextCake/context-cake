@@ -54,7 +54,7 @@ export function Sidebar() {
               key={item.id}
               className="cc-nav-button"
               onClick={() => setView(item.id)}
-              aria-current={view === item.id ? 'page' : undefined}
+              aria-current={view === item.id ? 'true' : undefined}
               data-view={item.id}
             >
               {item.icon}

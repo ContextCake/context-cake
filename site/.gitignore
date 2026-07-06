@@ -4,6 +4,7 @@ dist/
 .astro/
 # generated demo data (built from the resolver — never hand-edit or commit)
 src/data/
+public/demo-app/
 
 # dependencies
 node_modules/

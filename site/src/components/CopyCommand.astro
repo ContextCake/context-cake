@@ -1,13 +1,19 @@
 ---
 // Copy-to-clipboard command box (spec.md: homepage AC 1–2).
+import { codeToHtml } from 'shiki';
+
 interface Props {
 	command: string;
 }
 const { command } = Astro.props;
+const html = await codeToHtml(`$ ${command}`, {
+	lang: 'bash',
+	theme: 'github-dark-default',
+});
 ---
 
 <div class="copy-command">
-	<code>{command}</code>
+	<div class="command-view" set:html={html} />
 	<button type="button" data-command={command} aria-label="Copy command to clipboard">
 		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 			<rect x="9" y="9" width="13" height="13" rx="2"></rect>
@@ -31,21 +37,26 @@ const { command } = Astro.props;
 		font-family: var(--cc-font-mono);
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
 	}
-	code {
+	.command-view {
 		flex: 1 1 auto;
 		min-width: 0;
-		color: var(--cc-text);
-		font-size: 1rem;
-		/* Long clone URLs must wrap rather than force horizontal scroll (spec: no
-		   horizontal scroll at 375px). */
-		overflow-wrap: anywhere;
 	}
 	button {
 		flex: 0 0 auto;
 	}
-	code::before {
-		content: '$ ';
-		color: var(--cc-text-muted);
+	.command-view :global(.shiki) {
+		margin: 0;
+		padding: 0;
+		background: transparent !important;
+		font-family: var(--cc-font-mono);
+		font-size: 0.96rem;
+		line-height: 1.55;
+		overflow-wrap: anywhere;
+		white-space: pre-wrap;
+	}
+	.command-view :global(.shiki code) {
+		white-space: pre-wrap;
+		word-break: break-word;
 	}
 	button {
 		display: inline-flex;

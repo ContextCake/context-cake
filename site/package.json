@@ -5,10 +5,11 @@
   "version": "0.0.1",
   "scripts": {
     "build-demo-data": "node scripts/build-demo-data.mjs",
-    "predev": "npm run build-demo-data",
+    "build-console-demo": "node scripts/build-console-demo.mjs",
+    "predev": "npm run build-demo-data && npm run build-console-demo",
     "dev": "astro dev",
     "start": "astro dev",
-    "prebuild": "npm run build-demo-data",
+    "prebuild": "npm run build-demo-data && npm run build-console-demo",
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro"

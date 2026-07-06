@@ -1,25 +1,28 @@
 ---
 title: Installation
-description: Clone and run — no npm install, no install scripts, plain Node.js ≥ 18.
+description: Install from a versioned release archive — no npm install, no install scripts, plain Node.js ≥ 18.
 ---
 
-ContextCake is **clone-and-run**. The engine is dependency-free: there is no
-`npm install` step, no install scripts execute, and nothing is fetched beyond the
-clone itself. What you clone is what runs.
+ContextCake installs from a **versioned release archive**. The engine is
+dependency-free: there is no `npm install` step, no install scripts execute, and
+nothing is fetched after you unpack the archive.
 
 ## Prerequisites
 
-- `git`
+- `gh` for the terminal path, or a browser for manual download
 - Node.js ≥ 18
 
-## Clone
+## Download
 
 ```bash
-git clone https://github.com/siracusa5/context-cake.git
-cd context-cake
+gh release download --repo siracusa5/context-cake --archive=tar.gz --output contextcake.tar.gz
+mkdir contextcake
+tar -xzf contextcake.tar.gz -C contextcake --strip-components=1
+cd contextcake
 ```
 
-That's the whole installation.
+You can also download the source archive from the
+[latest ContextCake release](https://github.com/siracusa5/context-cake/releases/latest).
 
 ## Verify
 
@@ -50,14 +53,22 @@ npm test
 | Interactive playground | `npm run playground` → http://127.0.0.1:8790 |
 | Capture write path | `node ingest.mjs` / `node write.mjs` |
 
-## Why there's no npm package
+## Source checkout
 
-Deliberate, for now. Package registries have repeatedly shipped compromised
-AI/agent tooling through hijacked maintainer accounts and `postinstall` payloads.
-A knowledge engine your agents read from should have a supply chain you can audit
-in an afternoon — a git clone at a commit you can review is exactly that. If a
-package is published later, it will be announced in the
-[changelog](/changelog) with provenance attestation.
+Use a git checkout when you want to inspect history, contribute changes, or pin
+your own fork:
+
+```bash
+git clone https://github.com/siracusa5/context-cake.git
+cd context-cake
+```
+
+## Why a release archive?
+
+Package registries have repeatedly shipped compromised AI/agent tooling through
+hijacked maintainer accounts and `postinstall` payloads. A knowledge engine your
+agents read from should have a supply chain you can audit: a tagged archive is
+small, inspectable, and runnable as plain Node.js.
 
 ## Next
 

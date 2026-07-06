@@ -49,6 +49,9 @@ production (`.github/workflows/console-deploy.yml`). Both need the
 those are set, the workflows still run typecheck + build and simply skip the
 deploy step.
 
+Merging to `main` does not make the console production-live by itself. For the
+surface-level release contract, see [`../docs/go-live.md`](../docs/go-live.md).
+
 ## What's inside
 
 A canvas home, four structured views, and an "Ask ContextCake" slide-over, all

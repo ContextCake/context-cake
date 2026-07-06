@@ -3,6 +3,10 @@
 The public marketing + docs site. Astro + Starlight, static output, deployed to
 Cloudflare Pages (build root `site/`, output `site/dist/`).
 
+For release-state definitions across the repo, see
+[`../docs/go-live.md`](../docs/go-live.md). The site and the console do not use
+the same release trigger.
+
 **Read first:** [`specs/contextcake-site/spec.md`](../specs/contextcake-site/spec.md)
 (what/why, EARS acceptance criteria) and
 [`specs/contextcake-site/design.md`](../specs/contextcake-site/design.md)

@@ -82,6 +82,18 @@ npm run dev        # http://localhost:5173
 
 See [`console/README.md`](console/README.md) for the full tour.
 
+## Release surfaces
+
+This repo has more than one public-facing surface, and "live" is not a single
+state across all of them.
+
+- `site/` = marketing site, docs, and future demo surface
+- `console/` = application UI on its own Cloudflare Pages project
+- repo root = engine / MCP / CLI, which is not a hosted app by default
+
+See [`docs/go-live.md`](docs/go-live.md) for the release contract and the exact
+meaning of `merged`, `preview`, and `live` for each surface.
+
 ## `layers.json` shape
 
 ```json

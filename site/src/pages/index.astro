@@ -182,26 +182,27 @@ const mcpTools = [
 ---
 
 <Base
-	title="ContextCake — team knowledge, resolved"
-	description="Federated team knowledge with cascading layer precedence. One effective view for AI agents — conflicts surfaced, not hidden."
+	title="ContextCake — working context for AI teams"
+	description="Keep policy, team practice, and local judgment in the same answer. ContextCake resolves layered team context with visible sources and disagreements."
 >
-	<main>
-		<section class="hero">
-			<div class="hero-copy">
-				<h1>Every layer of what your team knows —<br />one effective view.</h1>
-				<p class="sub">
-					Your notes, your team's runbooks, and company policy rarely line up, and your agent
-					only ever reads one of them. ContextCake stitches all three into one graph: the
-					closest layer wins <em>each section</em>, the rest carries through untouched, and
-					wherever they disagree the agent sees both — with dates.
-				</p>
-				<CopyCommand command="gh release download --repo siracusa5/context-cake --archive=tar.gz --output contextcake.tar.gz" />
-				<div class="ctas">
-					<a class="cta primary" href="/docs/getting-started/installation">Get started</a>
-					<a class="cta" href="/demo">Open console demo</a>
-					<a class="cta" href="https://github.com/siracusa5/context-cake">GitHub</a>
+		<main>
+			<section class="hero">
+				<div class="hero-copy">
+					<p class="kicker">Context for AI work</p>
+					<h1>Keep policy, team practice, and local judgment in the same answer.</h1>
+					<p class="sub">
+						Most teams already have the right material. It is just scattered across repo docs,
+						runbooks, and local notes, so every AI tool gets a partial view. ContextCake turns
+						that stack into one working answer with visible sources, dates, and disagreements.
+					</p>
+					<div class="ctas">
+						<a class="cta primary" href="/demo">See the demo</a>
+						<a class="cta" href="/docs">Read the docs</a>
+						<a class="cta" href="/packs">Explore Packs</a>
+					</div>
+					<p class="hero-note">Open source engine for teams that need a verifiable context layer.</p>
+					<CopyCommand command="gh release download --repo siracusa5/context-cake --archive=tar.gz --output contextcake.tar.gz" />
 				</div>
-			</div>
 
 			<figure
 				class="composite"
@@ -242,7 +243,7 @@ const mcpTools = [
 		</section>
 
 		<section class="problem">
-			<h2>Team knowledge doesn't agree with itself.</h2>
+			<h2>The source material is there. The working view usually is not.</h2>
 			<dl class="beats">
 				<div class="beat">
 					<dt>Scattered</dt>
@@ -269,7 +270,7 @@ const mcpTools = [
 		</section>
 
 		<section class="how">
-			<h2>Stack the layers. Resolve at read time. Serve one view.</h2>
+			<h2>Stack the context. Resolve one answer. Keep the source visible.</h2>
 			<ol class="steps">
 				{
 					steps.map((s, i) => (
@@ -284,12 +285,12 @@ const mcpTools = [
 				}
 			</ol>
 			<p class="how-cta">
-				<a href="/demo">Open the live console demo -></a>
+				<a href="/demo">See the demo in context -></a>
 			</p>
 		</section>
 
 		<section class="features">
-			<h2>A resolver, not another wiki.</h2>
+			<h2>A context system, not another place to lose the thread.</h2>
 			<div class="grid">
 				{
 					features.map((f) => (
@@ -308,7 +309,7 @@ const mcpTools = [
 		</section>
 
 		<section class="agents">
-			<h2>Speaks MCP. Answers with provenance.</h2>
+			<h2>Ready for agents. Honest about the source.</h2>
 			<p class="agents-lede">
 				Any agent that speaks MCP can query the resolved graph. Every <code>read_file</code>{' '}
 				answer comes back with who said what, when, and where the layers disagree.
@@ -337,11 +338,11 @@ const mcpTools = [
 		</section>
 
 		<section class="quickstart">
-			<h2>Quickstart</h2>
-			<p>Plain Node.js ≥ 18. Download the release archive, unpack it, and run.</p>
+			<h2>Try the engine locally</h2>
+			<p>Plain Node.js ≥ 18. Download the release archive, unpack it, and inspect the full path.</p>
 			<CodeBlock className="quickstart-code" lang="bash" code={quickstartCommand} />
 			<p class="quickstart-cta">
-				<a class="cta primary" href="/docs/getting-started/installation">Read the docs</a>
+				<a class="cta primary" href="/docs">Read the docs</a>
 				<a class="cta" href="/install">Install guide</a>
 			</p>
 		</section>
@@ -389,6 +390,12 @@ const mcpTools = [
 		max-width: 42rem;
 		font-size: 1.15rem;
 		margin: 0 0 2rem;
+	}
+	.hero-note {
+		margin: 1.5rem 0 0.85rem;
+		color: var(--cc-text-muted);
+		font-size: 0.95rem;
+		max-width: 38rem;
 	}
 	.ctas {
 		display: flex;

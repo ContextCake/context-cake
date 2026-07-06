@@ -1,11 +1,15 @@
 ---
 title: Installation
-description: Install from a versioned release archive — no npm install, no install scripts, plain Node.js ≥ 18.
+description: Install from a versioned release archive and run the bundled demo in a few minutes.
 ---
 
 ContextCake installs from a **versioned release archive**. The engine is
 dependency-free: there is no `npm install` step, no install scripts execute, and
 nothing is fetched after you unpack the archive.
+
+If you are still evaluating whether the model fits your team, start with the
+[demo](/demo) or [the docs overview](/docs) and come back here when you want the
+local setup path.
 
 ## Prerequisites
 

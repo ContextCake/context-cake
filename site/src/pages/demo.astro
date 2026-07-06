@@ -1,32 +1,76 @@
 ---
 import Base from '../layouts/Base.astro';
+
+const demoUrl = '/demo-app/';
+
+const narrativePoints = [
+	{
+		title: 'The answer keeps its source',
+		body: 'The console shows a working answer without pretending every part came from the same place. Policy, team practice, and local judgment stay legible.',
+	},
+	{
+		title: 'Disagreement stays visible',
+		body: 'When one layer overrides another, the losing view does not vanish into edit history. It stays attached with its layer and date.',
+	},
+	{
+		title: 'The full workflow is intact',
+		body: 'This is the real console surface, hosted inside the main site, with overview, triage, conflicts, concept detail, and the grounded assistant.',
+	},
+];
 ---
 
 <Base
 	title="ContextCake demo"
-	description="Explore the ContextCake console on the main site: layer views, resolved concepts, conflict inspection, and the interactive cascade canvas."
+	description="See the ContextCake console in context, with a clearer explanation of what the resolved view is proving."
 >
 	<main class="demo-page">
-		<section class="demo-shell" aria-labelledby="demo-title">
-			<div class="demo-copy">
+		<section class="hero">
+			<div class="hero-copy">
 				<p class="eyebrow">Live demo</p>
-				<h1 id="demo-title">The console runs here now.</h1>
-				<p>
-					This is the same ContextCake console, served from the main site instead of a separate
-					domain. Open it full-screen or use it in place below.
+				<h1>See how one team decision resolves without flattening the disagreement.</h1>
+				<p class="lede">
+					The surface below is the actual ContextCake console. It is showing one problem well:
+					how company policy, team practice, and local judgment can resolve into a usable
+					answer without hiding where each part came from.
 				</p>
 				<div class="actions">
-					<a class="button primary" href="/demo-app/" target="_blank" rel="noreferrer">Open full demo</a>
-					<a class="button" href="/docs/getting-started/first-cascade">Read the first-cascade guide</a>
+					<a class="cta primary" href={demoUrl} target="_blank" rel="noreferrer">Open full demo</a>
+					<a class="cta" href="/docs/getting-started/first-cascade">Walk the first cascade</a>
 				</div>
 			</div>
+
+			<aside class="scenario" aria-label="Demo framing">
+				<p class="scenario-label">What to look for</p>
+				<h2>One decision, three layers, one working view.</h2>
+				<p>
+					Start on the canvas or conflicts view. The point is not the interface chrome. The
+					point is that the console keeps the winning answer, the dissent, and the provenance
+					in the same place.
+				</p>
+			</aside>
+		</section>
+
+		<section class="frame-section">
 			<div class="frame-wrap">
 				<iframe
 					class="demo-frame"
-					src="/demo-app/"
+					src={demoUrl}
 					title="ContextCake console demo"
 					loading="eager"
 				/>
+			</div>
+		</section>
+
+		<section class="signals">
+			<p class="eyebrow">What to notice</p>
+			<h2>The demo should answer three questions quickly.</h2>
+			<div class="signal-grid">
+				{narrativePoints.map((point) => (
+					<article class="signal">
+						<h3>{point.title}</h3>
+						<p>{point.body}</p>
+					</article>
+				))}
 			</div>
 		</section>
 	</main>
@@ -36,68 +80,103 @@ import Base from '../layouts/Base.astro';
 	.demo-page {
 		max-width: 76rem;
 		margin: 0 auto;
-		padding: 2.5rem 1.5rem 2rem;
+		padding: 3rem 1.5rem 2rem;
 	}
-	.demo-shell {
+	.hero,
+	.signals {
+		padding-bottom: 3rem;
+	}
+	.hero {
 		display: grid;
-		gap: 1.25rem;
+		grid-template-columns: minmax(0, 1.05fr) minmax(18rem, 0.95fr);
+		gap: 2rem;
+		align-items: start;
 	}
-	.eyebrow {
-		margin: 0 0 0.75rem;
+	.eyebrow,
+	.scenario-label {
+		margin: 0 0 0.85rem;
 		color: var(--cc-layer-team);
 		font-family: var(--cc-font-mono);
 		font-size: 0.78rem;
 		font-weight: 700;
-		letter-spacing: 0;
 		text-transform: uppercase;
 	}
 	h1,
+	h2,
+	h3,
 	p {
 		letter-spacing: 0;
 	}
-	h1 {
+	h1,
+	h2,
+	h3 {
 		margin: 0;
-		max-width: 12ch;
-		font-size: clamp(2.1rem, 4vw, 3.4rem);
-		line-height: 0.96;
-		color: var(--cc-text);
 	}
-	.demo-copy p:last-of-type {
-		max-width: 62ch;
-		margin: 0.95rem 0 0;
+	h1 {
+		max-width: 12ch;
+		font-size: clamp(2.6rem, 5vw, 4.5rem);
+		line-height: 0.96;
+	}
+	.lede,
+	.scenario p,
+	.signal p {
 		color: var(--cc-text-body);
-		font-size: 1.06rem;
-		line-height: 1.62;
+	}
+	.lede {
+		max-width: 58ch;
+		margin: 1.4rem 0 0;
+		font-size: clamp(1.08rem, 2vw, 1.22rem);
+		line-height: 1.65;
 	}
 	.actions {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.8rem;
-		margin-top: 1.2rem;
+		margin-top: 2rem;
 	}
-	.button {
+	.cta {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
 		min-height: 44px;
 		padding: 0 1rem;
 		border: 1px solid var(--cc-border);
-		border-radius: 6px;
+		border-radius: 999px;
 		color: var(--cc-text);
+		font-family: var(--cc-font-heading);
 		font-weight: 700;
 		text-decoration: none;
 	}
-	.button.primary {
-		border-color: var(--cc-cta);
+	.cta.primary {
 		background: var(--cc-cta);
+		border-color: var(--cc-cta);
 		color: var(--cc-on-cta);
+	}
+	.scenario,
+	.signal,
+	.frame-wrap {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-lg);
+		box-shadow: var(--cc-shadow-panel);
+	}
+	.scenario {
+		padding: 1.3rem;
+	}
+	.scenario h2 {
+		font-size: clamp(1.55rem, 3vw, 2.15rem);
+		line-height: 1.02;
+		margin-bottom: 0.9rem;
+	}
+	.scenario p {
+		margin: 0;
+	}
+	.frame-section {
+		padding-bottom: 3rem;
 	}
 	.frame-wrap {
 		overflow: hidden;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-lg);
 		background: color-mix(in srgb, var(--cc-surface) 82%, transparent);
-		box-shadow: var(--cc-shadow-panel);
 	}
 	.demo-frame {
 		display: block;
@@ -106,12 +185,28 @@ import Base from '../layouts/Base.astro';
 		border: 0;
 		background: #0f1115;
 	}
-	@media (max-width: 620px) {
-		.demo-page {
-			padding-top: 2rem;
-		}
-		.demo-frame {
-			min-height: 72vh;
+	.signals h2 {
+		font-size: clamp(2rem, 4vw, 3rem);
+		line-height: 0.98;
+		max-width: 14ch;
+		margin-bottom: 1.5rem;
+	}
+	.signal-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 1rem;
+	}
+	.signal {
+		padding: 1.3rem;
+	}
+	.signal h3 {
+		font-size: 1.05rem;
+		margin-bottom: 0.65rem;
+	}
+	@media (max-width: 900px) {
+		.hero,
+		.signal-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>

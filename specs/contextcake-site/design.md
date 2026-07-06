@@ -163,7 +163,7 @@ unauthenticated (private repo → skipped/empty until visibility resolves).
 
 | Phase | Deliverable | Status |
 |---|---|---|
-| 1 | Decisions (visibility, distribution, domain) | domain: **contextcake.com** · distribution: **clone-and-run at launch; roadmap owned by `specs/contextcake-distribution/`** · visibility: **open — the last launch gate** |
+| 1 | Decisions (visibility, distribution, domain) | domain: **contextcake.com** · distribution: **versioned release archive first; source checkout secondary** |
 | 2 | Brand kit: logo SVG, tokens.css, OG template | scaffold has tokens; logo TODO |
 | 3 | Scaffold + homepage (static hero) | scaffold committed; homepage = agent task |
 | 4 | Docs port (all §5 pages) + `/doc-reviewer` pass | agent task |

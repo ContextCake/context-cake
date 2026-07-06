@@ -1,60 +1,166 @@
 ---
 import Base from '../../layouts/Base.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+
+const packSections = [
+	['overview/', 'What the pack covers, who it is for, and the standards it tries to make consistent.'],
+	['workflows/', 'Repeatable step-by-step playbooks for real tasks, not generic AI advice.'],
+	['templates/', 'Reusable deliverables for specs, summaries, checklists, and handoffs.'],
+	['examples/', 'Concrete examples that show what strong output looks like in practice.'],
+	['local-overlay/', 'A place for team-specific rules and exceptions that should stay outside the base pack.'],
+	['updates/', 'Changelog and merge guidance so revisions stay visible and reviewable.'],
+];
+
+const featuredPack = {
+	name: 'Data & Analytics Teams',
+	href: '/packs/data-analytics-teams',
+	status: 'Available now',
+	summary:
+		'For teams that field the same dashboard, metric, and stakeholder questions every week.',
+	bestFor: 'Small analytics teams answering recurring requests and writing stakeholder-facing insight.',
+	benefits: [
+		'Clarify vague requests faster',
+		'Keep metric and validation rules consistent',
+		'Review real files before you buy',
+	],
+	includes: ['4 workflows', '5 templates', '1 local overlay guide', 'Update notes included'],
+	formats: ['Plain markdown files', 'Claude Code plugin', 'OKF-compatible structure'],
+};
+
+const heroPoints = [
+	'Use the same pack across Claude, ChatGPT, Cursor, Copilot, and plain docs',
+	'Inspect the files instead of guessing what is inside',
+	'Keep team-specific edits in a local overlay',
+];
+
+const structurePreview = `data-analytics-team/
+├── overview/
+├── workflows/
+├── templates/
+├── examples/
+├── local-overlay/
+└── updates/`;
 ---
 
 <Base
-	title="ContextCake Packs - portable context for real team workflows"
-	description="Profession-specific ContextCake packs give small teams reusable AI context they can inspect, edit, and carry across tools."
+	title="ContextCake Packs - structured context packs"
+	description="Browse ContextCake Packs: structured, inspectable knowledge bundles built as OKF-compatible markdown for real team workflows."
 >
 	<main class="packs-index">
-		<section class="intro">
-			<p class="eyebrow">ContextCake Packs</p>
-			<h1>Portable context kits for teams that repeat the same work in every AI tool.</h1>
-			<p>
-				Packs are plain-file bundles with workflows, templates, examples, and tool guidance.
-				They sit under the ContextCake brand, but the first pack is sold and fulfilled
-				separately from the open-source engine.
-			</p>
+		<section class="hero" aria-labelledby="packs-title">
+			<div class="hero-copy">
+				<p class="eyebrow">ContextCake Packs</p>
+				<h1 id="packs-title">Ready-made files for teams that already use AI at work.</h1>
+				<p class="lede">
+					Each pack bundles the files a team keeps recreating in chat: rules, workflows,
+					templates, examples, and editor guidance. You can inspect the structure, keep local
+					edits separate, and reuse the same material across tools.
+				</p>
+				<ul class="hero-points" aria-label="Pack benefits">
+					{heroPoints.map((item) => <li>{item}</li>)}
+				</ul>
+				<div class="hero-actions">
+					<a class="view-link hero-link" href={featuredPack.href}>View current pack</a>
+					<a class="view-link hero-link hero-link-secondary" href="#structure">See the file layout</a>
+				</div>
+			</div>
+			<aside class="hero-panel" aria-label="How packs are structured">
+				<p class="panel-label">Open knowledge format</p>
+				<p>
+					Pack content uses OKF-compatible markdown where that shape helps. The practical
+					bit: the files stay inspectable, referenceable, and easy to layer with local team
+					edits.
+				</p>
+				<a href="/docs/concepts/okf-bundles">Read the OKF bundle shape</a>
+			</aside>
 		</section>
 
-		<section class="featured" aria-labelledby="featured-pack">
-			<div class="pack-marker" aria-hidden="true">
-				<span></span>
-				<span></span>
-				<span></span>
+		<section class="catalog" aria-labelledby="catalog-title">
+			<div class="section-head">
+				<p class="eyebrow">Available pack</p>
+				<h2 id="catalog-title">Current pack</h2>
 			</div>
-			<div>
-				<p class="status">First pack</p>
-				<h2 id="featured-pack">Data & Analytics Teams</h2>
+
+			<article class="pack-card">
+				<div class="pack-mark" aria-hidden="true">
+					<span></span>
+					<span></span>
+					<span></span>
+				</div>
+				<div class="pack-copy">
+					<p class="status">{featuredPack.status}</p>
+					<h3>{featuredPack.name}</h3>
+					<p>{featuredPack.summary}</p>
+					<p class="best-for"><strong>Best for:</strong> {featuredPack.bestFor}</p>
+					<ul class="benefit-list" aria-label={`${featuredPack.name} benefits`}>
+						{featuredPack.benefits.map((item) => <li>{item}</li>)}
+					</ul>
+				</div>
+				<div class="pack-meta">
+					<div>
+						<p class="meta-label">Includes</p>
+						<ul>
+							{featuredPack.includes.map((item) => <li>{item}</li>)}
+						</ul>
+					</div>
+					<div>
+						<p class="meta-label">Formats</p>
+						<ul>
+							{featuredPack.formats.map((format) => <li>{format}</li>)}
+						</ul>
+					</div>
+					<a class="view-link" href={featuredPack.href}>View pack</a>
+				</div>
+			</article>
+		</section>
+
+		<section class="structure" aria-labelledby="structure-title">
+			<div class="section-head compact">
+				<p class="eyebrow">Pack contract</p>
+				<h2 id="structure-title">Same layout every time.</h2>
 				<p>
-					For the recurring path from stakeholder request to clarified spec, validated build,
-					and insight summary.
+					The pack shape is part of the product. A person can scan it quickly, and an AI tool
+					can navigate it without guessing.
 				</p>
 			</div>
-			<a href="/packs/data-analytics-teams">View pack</a>
-		</section>
-
-		<section class="bench" aria-labelledby="bench-title">
-			<h2 id="bench-title">On the bench</h2>
-			<p>
-				Grant teams, GovCon/RFP, HR, and Insurance remain candidate packs. They wait until
-				there is real design-partner access instead of only a paper score.
-			</p>
+			<div class="structure-layout">
+				<div class="structure-preview">
+					<CodeBlock className="tree-preview" lang="text" code={structurePreview} />
+				</div>
+				<div class="structure-grid">
+					{packSections.map(([name, body]) => (
+						<article>
+							<h3>{name}</h3>
+							<p>{body}</p>
+						</article>
+					))}
+				</div>
+			</div>
 		</section>
 	</main>
 </Base>
 
 <style>
 	.packs-index {
-		max-width: 72rem;
+		max-width: 76rem;
 		margin: 0 auto;
-		padding: 4rem 1.5rem 2rem;
+		padding: 2.5rem 1.5rem 2rem;
 	}
-	.intro {
-		max-width: 54rem;
+	.hero,
+	.pack-card {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
+		gap: 1.5rem;
+		align-items: start;
+	}
+	.hero {
+		padding: 0.75rem 0 2.5rem;
+		border-bottom: 1px solid var(--cc-border);
 	}
 	.eyebrow,
-	.status {
+	.status,
+	.panel-label,
+	.meta-label {
 		margin: 0 0 0.75rem;
 		color: var(--cc-layer-team);
 		font-family: var(--cc-font-mono);
@@ -63,82 +169,228 @@ import Base from '../../layouts/Base.astro';
 		letter-spacing: 0;
 		text-transform: uppercase;
 	}
-	h1 {
-		max-width: 12ch;
-		margin: 0;
-		font-size: clamp(3.1rem, 8vw, 6.8rem);
-		line-height: 0.94;
+	h1,
+	h2,
+	h3,
+	p {
 		letter-spacing: 0;
 	}
-	.intro p:last-child,
-	.bench p,
-	.featured p {
-		max-width: 62ch;
-		color: var(--cc-text-body);
-		font-size: 1.12rem;
+	h1 {
+		max-width: 11ch;
+		margin: 0;
+		font-size: clamp(2.15rem, 3.3vw, 3.5rem);
+		line-height: 0.97;
 	}
-	.featured {
+	.lede,
+	.hero-panel p,
+	.pack-copy p,
+	.section-head > p:last-child,
+	.structure-grid p {
+		color: var(--cc-text-body);
+		line-height: 1.62;
+	}
+	.lede {
+		max-width: 60ch;
+		margin: 1rem 0 0;
+		font-size: 1.1rem;
+	}
+	.hero-points,
+	.benefit-list,
+	.pack-meta ul {
+		margin: 1rem 0 0;
+		padding: 0;
+		list-style: none;
+	}
+	.hero-points,
+	.benefit-list {
 		display: grid;
-		grid-template-columns: auto minmax(0, 1fr) auto;
-		align-items: center;
+		gap: 0.55rem;
+	}
+	.hero-points li,
+	.benefit-list li,
+	.pack-meta li {
+		color: var(--cc-text-body);
+	}
+	.hero-points li::before,
+	.benefit-list li::before,
+	.pack-meta li::before {
+		content: '';
+		display: inline-block;
+		width: 0.5rem;
+		height: 0.5rem;
+		margin-right: 0.55rem;
+		border-radius: 2px;
+		background: var(--cc-layer-personal);
+		vertical-align: 0.08em;
+	}
+	.hero-panel,
+	.pack-meta {
+		padding: 1rem 1.05rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: var(--cc-surface);
+		box-shadow: var(--cc-shadow-panel);
+	}
+	.hero-panel a,
+	.view-link {
+		color: var(--cc-text);
+		font-weight: 700;
+		text-decoration-thickness: 1px;
+		text-underline-offset: 0.24em;
+	}
+	.catalog,
+	.structure {
+		padding: 2.5rem 0 0;
+	}
+	.hero-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.8rem;
+		margin-top: 1.25rem;
+	}
+	.section-head {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr);
 		gap: 1.5rem;
-		margin-top: 4rem;
-		padding: 1.5rem 0;
+		align-items: end;
+		margin-bottom: 1.5rem;
+	}
+	.section-head.compact {
+		align-items: start;
+	}
+	.section-head .eyebrow {
+		grid-column: 1 / -1;
+		margin-bottom: -0.25rem;
+	}
+	.section-head h2 {
+		max-width: 11ch;
+		margin: 0;
+		font-size: clamp(1.55rem, 2.2vw, 2.25rem);
+		line-height: 1.03;
+	}
+	.section-head > p:last-child {
+		margin: 0;
+		font-size: 1rem;
+	}
+	.pack-card {
+		grid-template-columns: auto minmax(0, 1fr) minmax(15rem, 18rem);
+		padding: 1.1rem 0 1.25rem;
 		border-top: 1px solid var(--cc-border);
 		border-bottom: 1px solid var(--cc-border);
 	}
-	.pack-marker {
+	.pack-mark {
 		display: grid;
 		gap: 0.35rem;
-		width: 4rem;
+		width: 4.25rem;
+		padding-top: 0.3rem;
 	}
-	.pack-marker span {
+	.pack-mark span {
 		display: block;
-		height: 0.85rem;
-		border-radius: 3px;
+		height: 0.82rem;
+		border-radius: 4px;
 	}
-	.pack-marker span:nth-child(1) {
+	.pack-mark span:nth-child(1) {
+		margin-left: 0.85rem;
 		background: var(--cc-layer-personal);
-		margin-left: 0.8rem;
 	}
-	.pack-marker span:nth-child(2) {
+	.pack-mark span:nth-child(2) {
 		background: var(--cc-layer-team);
 	}
-	.pack-marker span:nth-child(3) {
-		background: var(--cc-layer-company);
+	.pack-mark span:nth-child(3) {
 		margin-left: 0.4rem;
+		background: var(--cc-layer-company);
 	}
-	.featured h2,
-	.bench h2 {
+	.pack-copy h3 {
 		margin: 0;
-		font-size: clamp(2rem, 4vw, 3.2rem);
+		font-size: clamp(1.6rem, 3vw, 2.5rem);
 		line-height: 1;
-		letter-spacing: 0;
 	}
-	.featured a {
+	.pack-copy p {
+		max-width: 56ch;
+		margin: 0.75rem 0 0;
+		font-size: 1rem;
+	}
+	.best-for {
+		margin-top: 0.9rem;
+	}
+	.meta-label {
+		color: var(--cc-layer-personal);
+	}
+	.view-link {
 		display: inline-flex;
 		align-items: center;
+		justify-content: center;
 		min-height: 44px;
+		margin-top: 1.2rem;
 		padding: 0 1rem;
 		border: 1px solid var(--cc-cta);
 		border-radius: 6px;
-		color: var(--cc-canvas);
 		background: var(--cc-cta);
-		font-weight: 700;
+		color: var(--cc-on-cta);
 		text-decoration: none;
-		white-space: nowrap;
 	}
-	.bench {
-		margin-top: 4rem;
-		max-width: 44rem;
+	.hero-link {
+		margin-top: 0;
 	}
-	@media (max-width: 720px) {
-		.featured {
+	.hero-link-secondary {
+		border-color: var(--cc-border);
+		background: transparent;
+		color: var(--cc-text);
+	}
+	.structure-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.85rem;
+	}
+	.structure-layout {
+		display: grid;
+		grid-template-columns: minmax(17rem, 22rem) minmax(0, 1fr);
+		gap: 1rem;
+		align-items: start;
+	}
+	.structure-preview :global(.tree-preview .shiki) {
+		font-size: 0.92rem;
+		line-height: 1.55;
+	}
+	.structure-grid article {
+		padding: 1rem 0 1rem 1rem;
+		border-left: 2px solid color-mix(in srgb, var(--cc-layer-team) 40%, var(--cc-border));
+	}
+	.structure-grid h3 {
+		margin: 0 0 0.65rem;
+		color: var(--cc-text);
+		font-family: var(--cc-font-mono);
+		font-size: 0.92rem;
+	}
+	.structure-grid p {
+		margin: 0;
+		font-size: 0.97rem;
+	}
+	@media (max-width: 920px) {
+		.hero,
+		.section-head,
+		.pack-card {
 			grid-template-columns: 1fr;
 		}
-		.featured a {
-			justify-content: center;
-			width: fit-content;
+		.structure-layout {
+			grid-template-columns: 1fr;
+		}
+		.section-head .eyebrow {
+			margin-bottom: 0;
+		}
+		.structure-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	@media (max-width: 620px) {
+		.packs-index {
+			padding-top: 2rem;
+		}
+		.pack-card {
+			grid-template-columns: 1fr;
+		}
+		.structure-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>

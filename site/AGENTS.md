@@ -8,11 +8,9 @@ structure, code style, and three-tier boundaries (✅ always / ⚠️ ask first 
 
 - Colors/fonts ONLY via `var(--cc-*)` tokens from `src/styles/tokens.css`. The layer
   colors are product semantics (personal amber / team teal / company indigo).
-- Install story is **clone-and-run** (no npm — deliberate, see spec Open Questions).
-  Never add an `npm install`/`npx` step for the engine. The one remaining launch gate
-  is repo visibility: the clone URL 404s publicly until the repo goes public.
-  Future channels (.mcpb, Homebrew, gated npm, GUI) are owned by
-  `specs/contextcake-distribution/spec.md` — add them to `/install` only when they ship.
+- Install story is **versioned release archive first**. Do not make `git clone` the
+  primary user install path; keep source checkout as an audit/contribution path.
+  Never add an `npm install` step for the engine.
 - Docs routes live under `src/content/docs/docs/` (the extra `docs/` gives `/docs/*`
   URLs; the marketing pages own `/`). Sidebar is explicit in `astro.config.mjs`.
 - Self-hosted assets only (fonts via @fontsource). No CDN, no analytics, no npm deps

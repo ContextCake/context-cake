@@ -1,0 +1,42 @@
+---
+import { codeToHtml } from 'shiki';
+
+interface Props {
+	className?: string;
+	code: string;
+	lang: string;
+}
+
+const { className = '', code, lang } = Astro.props;
+const html = await codeToHtml(code, {
+	lang,
+	theme: 'github-dark-default',
+});
+---
+
+<div class={`code-block ${className}`.trim()} set:html={html} />
+
+<style>
+	.code-block {
+		overflow: auto;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-surface) 84%, transparent);
+	}
+	.code-block :global(.shiki) {
+		margin: 0;
+		padding: 1rem 1.1rem;
+		background: transparent !important;
+		font-family: var(--cc-font-mono);
+		font-size: 0.88rem;
+		line-height: 1.65;
+	}
+	.code-block :global(.shiki code) {
+		white-space: pre;
+	}
+	@media (max-width: 620px) {
+		.code-block :global(.shiki) {
+			font-size: 0.84rem;
+		}
+	}
+</style>

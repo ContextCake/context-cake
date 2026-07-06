@@ -1,161 +1,205 @@
 ---
+import { fileURLToPath } from 'node:url';
+import PackExplorer from '../../components/PackExplorer.astro';
 import Base from '../../layouts/Base.astro';
+import { loadPackExplorer } from '../../lib/pack-explorer';
 
-const workflow = [
-	{
-		step: '01',
-		title: 'Clarify the ask',
-		body: 'Turn a loose stakeholder request into a scoped question, acceptance criteria, and known caveats.',
-	},
-	{
-		step: '02',
-		title: 'Name the source of truth',
-		body: 'Make the metric definition, grain, ownership, and freshness rules explicit before building.',
-	},
-	{
-		step: '03',
-		title: 'Validate the build',
-		body: 'Check the answer against expected ranges, sample records, prior reports, and open assumptions.',
-	},
-	{
-		step: '04',
-		title: 'Deliver the insight',
-		body: 'Send the summary with confidence, caveats, and a next action instead of a screenshot with context missing.',
-	},
+const packRoot = fileURLToPath(
+	new URL(
+		'../../../../specs/contextcake-packs/private-repo-template/packs/data-analytics-team',
+		import.meta.url,
+	),
+);
+const explorer = await loadPackExplorer(packRoot, 'data-analytics-team');
+const fileCount = explorer.files.length;
+const folderCount = explorer.treeEntries.filter((entry) => entry.kind === 'dir').length;
+
+const fitRows = [
+	['Good fit', 'Small in-house data and analytics teams handling recurring stakeholder requests.'],
+	['Not for', 'Teams shopping for a BI tool, warehouse connector, or live metrics product.'],
+	['Delivery', 'Plain markdown files first, with Claude Code plugin packaging included.'],
 ];
 
-const inside = [
-	['Scoping', 'Clarification prompts, spec templates, and examples of weak requests turned into useful asks.'],
-	['Validation', 'Source-of-truth rules, validation checklists, and repeatable review language.'],
-	['Delivery', 'Insight-summary templates and guidance for caveats, confidence, and stakeholder-ready next steps.'],
-	['Portability', 'Plain files first, with Claude Code plugin packaging and tool guides for other AI surfaces.'],
+const valuePoints = [
+	'Clarification workflow for vague requests',
+	'Source-of-truth and validation rules',
+	'Spec, checklist, and summary templates',
+	'Local overlay guidance for team-specific edits',
+];
+
+const quickFacts = [
+	['Files', `${fileCount} source files`],
+	['Folders', `${folderCount} directories`],
+	['Format', 'Markdown first'],
+	['Overlay model', 'Base pack + local edits'],
+];
+
+const featuredFiles = [
+	{ label: 'Start here', path: 'skills/data-analytics-team-pack/START-HERE.md' },
+	{ label: 'Request flow', path: 'skills/data-analytics-team-pack/workflows/request-clarification.md' },
+	{ label: 'Spec template', path: 'skills/data-analytics-team-pack/templates/clarified-spec-template.md' },
+	{ label: 'Source rules', path: 'skills/data-analytics-team-pack/overview/source-of-truth-precedence.md' },
+];
+
+const useCases = [
+	['Dashboard requests', 'When the same stakeholder question shows up every week with slightly different framing.'],
+	['Analyst onboarding', 'When new team members need the team’s standards without digging through old chats.'],
+	['AI drafting guardrails', 'When Claude, ChatGPT, Cursor, or Copilot can draft the work but still need team rules.'],
+	['Insight delivery', 'When the answer needs caveats, confidence, and a clear next action, not just a screenshot.'],
+];
+
+const deliveryCards = [
+	{
+		label: 'Base pack',
+		title: 'Current Data & Analytics Teams pack',
+		body: 'One-time access to the current workflows, templates, examples, and tool guidance.',
+		href: 'mailto:hello@contextcake.com?subject=Data%20%26%20Analytics%20Teams%20pack',
+		link: 'Request access',
+		primary: true,
+	},
+	{
+		label: 'Optional updates',
+		title: 'Curated editorial releases',
+		body: 'Sharper examples, clearer merge notes, and improved guidance shipped separately from the base pack.',
+		href: 'mailto:hello@contextcake.com?subject=Data%20%26%20Analytics%20Teams%20updates',
+		link: 'Request updates',
+		primary: false,
+	},
+	{
+		label: 'Format',
+		title: 'Inspectable files',
+		body: 'Editable markdown with OKF-compatible structure where appropriate, plus Claude Code packaging for teams that want it.',
+		href: '/docs/concepts/okf-bundles',
+		link: 'Read the OKF bundle shape',
+		primary: false,
+	},
 ];
 
 const faqs = [
 	{
 		q: 'Is this a BI tool or data catalog?',
-		a: 'No. It is reusable working context for AI-assisted analytics workflows. It does not connect to your warehouse or scan your metrics.',
+		a: 'No. It is a file-based working kit for analytics teams. It does not connect to your warehouse or manage live data.',
 	},
 	{
 		q: 'Do we need ContextCake to use it?',
-		a: 'No. The baseline deliverable is plain files. ContextCake compatibility keeps the future layer path clean, but it is not required for v1.',
-	},
-	{
-		q: 'What are the updates?',
-		a: 'Editorial pack releases: better examples, sharper workflows, merge notes, and improved tool guidance. Updates are separate and optional.',
+		a: 'No. The baseline deliverable is plain files. ContextCake compatibility just keeps the structure layer-friendly and easy to merge with local overlays later.',
 	},
 	{
 		q: 'Can we customize it?',
-		a: 'Yes. Keep the pack clean and put team-specific policies, metric exceptions, and examples in your local context or overlay.',
+		a: 'Yes. The intended model is to keep the base pack clean and put team-specific policies, examples, and exceptions in your own local overlay.',
 	},
 ];
 ---
 
 <Base
 	title="ContextCake Pack: Data & Analytics Teams"
-	description="A portable context pack for data teams turning stakeholder requests into clarified specs, validated builds, and insight summaries."
+	description="A file-based pack for data teams that need repeatable request scoping, validation, and insight delivery standards across AI tools."
 >
 	<main class="pack-page">
 		<section class="hero" aria-labelledby="hero-title">
 			<div class="hero-copy">
-				<p class="eyebrow">First ContextCake Pack</p>
-				<h1 id="hero-title">Data requests should not start from scratch every time.</h1>
+				<p class="eyebrow">ContextCake Pack</p>
+				<h1 id="hero-title">A working kit for recurring analytics requests.</h1>
 				<p class="lede">
-					A portable context kit for small data and analytics teams: clarify the ask,
-					validate the build, and deliver the insight with the same working standards in
-					Claude, ChatGPT, Cursor, Copilot, or plain project docs.
+					For teams that keep answering the same questions in slightly different ways:
+					what was asked, which metric definition applies, how should we check the build,
+					and how should the answer be written up.
 				</p>
 				<div class="hero-actions" aria-label="Primary actions">
-					<a class="button primary" href="#pricing">See pricing</a>
-					<a class="button" href="#inside">What's inside</a>
+					<a class="button primary" href="#pricing">Request access</a>
+					<a class="button" href="#explorer">Explore the files</a>
 				</div>
-			</div>
-
-			<figure class="workflow-board" aria-label="Four-step analytics workflow">
-				<figcaption>stakeholder request -> insight summary</figcaption>
-				<div class="request-line">
-					<span>Can you pull the churn numbers?</span>
-					<span>Need it by Friday</span>
-				</div>
-				<div class="workflow-stack">
-					{workflow.map((item) => (
-						<div class="workflow-step">
-							<span class="step">{item.step}</span>
-							<strong>{item.title}</strong>
-							<p>{item.body}</p>
+				<dl class="quick-facts" aria-label="Pack quick facts">
+					{quickFacts.map(([term, body]) => (
+						<div>
+							<dt>{term}</dt>
+							<dd>{body}</dd>
 						</div>
 					))}
+				</dl>
+				<ul class="value-list" aria-label="What the pack includes">
+					{valuePoints.map((item) => <li>{item}</li>)}
+				</ul>
+			</div>
+
+			<aside class="summary-panel" aria-label="Pack fit summary">
+				<p class="panel-label">At a glance</p>
+				<dl class="fit-list">
+					{fitRows.map(([term, body]) => (
+						<div>
+							<dt>{term}</dt>
+							<dd>{body}</dd>
+						</div>
+					))}
+				</dl>
+			</aside>
+		</section>
+
+		<section id="explorer" class="explorer-section" aria-labelledby="explorer-title">
+			<div class="section-head">
+				<div>
+					<p class="eyebrow">Look inside</p>
+					<h2 id="explorer-title">Open the pack.</h2>
 				</div>
-			</figure>
-		</section>
-
-		<section class="workflow" aria-labelledby="workflow-title">
-			<p class="eyebrow">Hero workflow</p>
-			<h2 id="workflow-title">From vague request to answer someone can act on.</h2>
-			<div class="numbered">
-				{workflow.map((item) => (
-					<article>
-						<span>{item.step}</span>
-						<h3>{item.title}</h3>
-						<p>{item.body}</p>
-					</article>
-				))}
+				<p>
+					File tree on the left, syntax-highlighted preview on the right. Start with the
+					featured files if you just want the quick read.
+				</p>
 			</div>
+			<PackExplorer
+				id="data-analytics-pack-explorer"
+				explorer={explorer}
+				featuredFiles={featuredFiles}
+				defaultFile="skills/data-analytics-team-pack/START-HERE.md"
+				title="Data & Analytics Teams pack explorer"
+			/>
 		</section>
 
-		<section id="inside" class="inside" aria-labelledby="inside-title">
-			<p class="eyebrow">What's inside</p>
-			<h2 id="inside-title">Not prompts. Operating context.</h2>
-			<div class="inside-grid">
-				{inside.map(([title, body]) => (
-					<article>
-						<h3>{title}</h3>
-						<p>{body}</p>
-					</article>
-				))}
-			</div>
-		</section>
-
-		<section class="compatibility" aria-labelledby="compatibility-title">
-			<div>
-				<p class="eyebrow">Portable by default</p>
-				<h2 id="compatibility-title">Plain files first. Tool packaging second.</h2>
-			</div>
-			<p>
-				The pack ships as editable markdown, templates, examples, and merge notes. Claude
-				Code plugin packaging is included for this first pack, but the baseline is still a
-				folder your team can inspect, upload, copy, and adapt.
-			</p>
-		</section>
-
-		<section id="pricing" class="pricing" aria-labelledby="pricing-title">
-			<p class="eyebrow">Pilot pricing</p>
-			<h2 id="pricing-title">Base pack now. Updates only if they earn their keep.</h2>
-			<div class="price-rows">
-				<article>
+		<section class="detail-band" aria-labelledby="pack-uses-title">
+			<div class="detail-column">
+				<div class="section-head compact-head">
 					<div>
-						<h3>Base pack</h3>
-						<p>One-time purchase for the current Data & Analytics Teams pack.</p>
+						<p class="eyebrow">Use it for</p>
+						<h2 id="pack-uses-title">What teams actually use it for.</h2>
 					</div>
-					<a href="#stripe-pending" aria-disabled="true">Payment link pending</a>
-				</article>
-				<article>
-					<div>
-						<h3>Monthly updates</h3>
-						<p>Optional curated releases with changelog and manual merge guidance.</p>
-					</div>
-					<a href="#stripe-pending" aria-disabled="true">Payment link pending</a>
-				</article>
+				</div>
+				<div class="case-grid">
+					{useCases.map(([title, body]) => (
+						<article>
+							<h3>{title}</h3>
+							<p>{body}</p>
+						</article>
+					))}
+				</div>
 			</div>
-			<p id="stripe-pending" class="note">
-				Stripe Payment Links will be added after the pack validates locally and the
-				fulfillment runbook has been rehearsed.
-			</p>
+
+			<div class="detail-column">
+				<div class="section-head compact-head">
+					<div>
+						<p class="eyebrow">What ships</p>
+						<h2 id="pricing">What ships with the pack.</h2>
+					</div>
+				</div>
+				<div class="delivery-grid">
+					{deliveryCards.map((card) => (
+						<article>
+							<p class="card-label">{card.label}</p>
+							<h3>{card.title}</h3>
+							<p>{card.body}</p>
+							<a class={`button${card.primary ? ' primary' : ''}`} href={card.href}>{card.link}</a>
+						</article>
+					))}
+				</div>
+			</div>
 		</section>
 
 		<section class="faq" aria-labelledby="faq-title">
-			<p class="eyebrow">FAQ</p>
-			<h2 id="faq-title">The constraints are part of the product.</h2>
+			<div class="section-head">
+				<div>
+					<p class="eyebrow">FAQ</p>
+					<h2 id="faq-title">Before you ask.</h2>
+				</div>
+			</div>
 			<div class="faq-list">
 				{faqs.map((item) => (
 					<details>
@@ -165,35 +209,28 @@ const faqs = [
 				))}
 			</div>
 		</section>
-
-		<section class="credibility" aria-label="ContextCake engine note">
-			<p>
-				Built on <a href="/">ContextCake</a>, the context-cascade engine that keeps base
-				context, team overlays, and updates visible instead of silently blended.
-			</p>
-		</section>
 	</main>
 </Base>
 
 <style>
 	.pack-page {
-		--packs-accent: var(--cc-layer-team);
-		--packs-accent-alt: var(--cc-layer-personal);
-		--packs-base: var(--cc-layer-company);
 		max-width: 76rem;
 		margin: 0 auto;
-		padding: 3.5rem 1.5rem 2rem;
+		padding: 2.5rem 1.5rem 2rem;
 	}
 	.hero {
 		display: grid;
-		grid-template-columns: minmax(0, 0.95fr) minmax(20rem, 0.85fr);
-		gap: clamp(2rem, 6vw, 5rem);
-		align-items: center;
-		padding: 1rem 0 0.75rem;
+		grid-template-columns: minmax(0, 1fr) minmax(18rem, 23rem);
+		gap: 1.2rem;
+		align-items: start;
+		padding: 0.75rem 0 2rem;
+		border-bottom: 1px solid var(--cc-border);
 	}
-	.eyebrow {
-		margin: 0 0 0.9rem;
-		color: var(--packs-accent);
+	.eyebrow,
+	.panel-label,
+	.card-label {
+		margin: 0 0 0.75rem;
+		color: var(--cc-layer-team);
 		font-family: var(--cc-font-mono);
 		font-size: 0.78rem;
 		font-weight: 700;
@@ -207,26 +244,59 @@ const faqs = [
 		letter-spacing: 0;
 	}
 	h1 {
-		max-width: 13ch;
+		max-width: 10ch;
 		margin: 0;
-		font-size: clamp(2.8rem, 5.4vw, 4.6rem);
+		font-size: clamp(2rem, 3vw, 3rem);
 		line-height: 0.98;
 	}
-	.lede {
-		max-width: 60ch;
-		margin: 1.5rem 0 0;
+	.lede,
+	.section-head > p:last-child,
+	.fit-list dd,
+	.case-grid p,
+	.delivery-grid p,
+	.faq p {
 		color: var(--cc-text-body);
-		font-size: clamp(1.08rem, 2vw, 1.26rem);
-		line-height: 1.65;
+		line-height: 1.62;
+	}
+	.lede {
+		max-width: 58ch;
+		margin: 0.95rem 0 0;
+		font-size: 1.08rem;
 	}
 	.hero-actions {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.8rem;
-		margin-top: 2rem;
+		margin-top: 1.25rem;
 	}
-	.button,
-	.price-rows a {
+	.quick-facts {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 0.65rem;
+		margin: 1rem 0 0;
+	}
+	.quick-facts div {
+		padding: 0.8rem 0.85rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-surface) 70%, transparent);
+	}
+	.quick-facts dt {
+		margin: 0;
+		color: var(--cc-layer-team);
+		font-family: var(--cc-font-mono);
+		font-size: 0.72rem;
+		font-weight: 700;
+		text-transform: uppercase;
+	}
+	.quick-facts dd {
+		margin: 0.35rem 0 0;
+		color: var(--cc-text);
+		font-size: 0.94rem;
+		font-weight: 700;
+		line-height: 1.35;
+	}
+	.button {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -241,205 +311,159 @@ const faqs = [
 	.button.primary {
 		border-color: var(--cc-cta);
 		background: var(--cc-cta);
-		color: var(--cc-canvas);
+		color: var(--cc-on-cta);
 	}
-	.workflow-board {
-		margin: 0;
-		padding: 0.85rem;
-		border: 1px solid var(--cc-border);
-		border-radius: 8px;
-		background: var(--cc-surface);
-	}
-	.workflow-board figcaption {
-		margin-bottom: 1rem;
-		color: var(--cc-text-muted);
-		font-family: var(--cc-font-mono);
-		font-size: 0.78rem;
-	}
-	.request-line {
-		display: grid;
-		gap: 0.4rem;
-		margin-bottom: 0.75rem;
-		font-family: var(--cc-font-mono);
-		font-size: 0.82rem;
-	}
-	.request-line span {
-		display: block;
-		padding: 0.55rem 0.7rem;
-		border-left: 4px solid var(--packs-accent-alt);
-		background: color-mix(in srgb, var(--cc-surface-raised) 78%, var(--cc-canvas));
-		color: var(--cc-text-body);
-	}
-	.workflow-stack {
-		display: grid;
-		gap: 0.45rem;
-	}
-	.workflow-step {
-		display: grid;
-		grid-template-columns: auto 1fr;
-		gap: 0.25rem 0.75rem;
-		padding: 0.65rem 0.75rem;
-		border-left: 4px solid var(--packs-accent);
-		background: var(--cc-surface-raised);
-	}
-	.workflow-step:nth-child(2) {
-		border-left-color: var(--packs-base);
-	}
-	.workflow-step:nth-child(3) {
-		border-left-color: var(--packs-accent-alt);
-	}
-	.workflow-step:nth-child(4) {
-		border-left-color: var(--cc-cta);
-	}
-	.workflow-step .step {
-		grid-row: span 2;
-		color: var(--cc-text);
-		font-family: var(--cc-font-mono);
-		font-weight: 700;
-	}
-	.workflow-step strong {
-		color: var(--cc-text);
-	}
-	.workflow-step p {
-		margin: 0;
-		color: var(--cc-text-body);
-		font-size: 0.84rem;
-		line-height: 1.38;
-	}
-	.workflow,
-	.inside,
-	.compatibility,
-	.pricing,
-	.faq,
-	.credibility {
-		padding: clamp(3rem, 7vw, 5rem) 0;
-		border-top: 1px solid var(--cc-border);
-	}
-	.workflow h2,
-	.inside h2,
-	.compatibility h2,
-	.pricing h2,
-	.faq h2 {
-		max-width: 12ch;
-		margin: 0;
-		font-size: clamp(2.4rem, 6vw, 5rem);
-		line-height: 0.95;
-	}
-	.numbered {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 1rem;
-		margin-top: 2rem;
-	}
-	.numbered article,
-	.inside-grid article {
-		padding-top: 1rem;
-		border-top: 4px solid var(--packs-accent);
-	}
-	.numbered article:nth-child(2),
-	.inside-grid article:nth-child(2) {
-		border-top-color: var(--packs-base);
-	}
-	.numbered article:nth-child(3),
-	.inside-grid article:nth-child(3) {
-		border-top-color: var(--packs-accent-alt);
-	}
-	.numbered article:nth-child(4),
-	.inside-grid article:nth-child(4) {
-		border-top-color: var(--cc-cta);
-	}
-	.numbered span {
-		color: var(--cc-text-muted);
-		font-family: var(--cc-font-mono);
-		font-size: 0.78rem;
-	}
-	.numbered h3,
-	.inside-grid h3 {
-		margin: 0.6rem 0 0.45rem;
-		color: var(--cc-text);
-		font-size: 1.15rem;
-	}
-	.numbered p,
-	.inside-grid p,
-	.compatibility p,
-	.price-rows p,
-	.faq p,
-	.credibility p,
-	.note {
-		color: var(--cc-text-body);
-	}
-	.inside-grid {
+	.value-list {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 2rem 1rem;
-		margin-top: 2rem;
+		gap: 0.55rem 1rem;
+		margin: 1rem 0 0;
+		padding: 0;
+		list-style: none;
+		max-width: 48rem;
 	}
-	.compatibility {
+	.value-list li {
+		color: var(--cc-text-body);
+	}
+	.value-list li::before {
+		content: '';
+		display: inline-block;
+		width: 0.5rem;
+		height: 0.5rem;
+		margin-right: 0.55rem;
+		border-radius: 2px;
+		background: var(--cc-layer-personal);
+		vertical-align: 0.08em;
+	}
+	.summary-panel {
+		padding: 1rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-surface) 82%, transparent);
+		box-shadow: var(--cc-shadow-panel);
+	}
+	.fit-list {
 		display: grid;
-		grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr);
-		gap: 2rem;
+		gap: 0.85rem;
+		margin: 0;
+	}
+	.fit-list div {
+		display: grid;
+		gap: 0.18rem;
+	}
+	.fit-list dt {
+		color: var(--cc-text);
+		font-weight: 700;
+	}
+	.fit-list dd {
+		margin: 0;
+		font-size: 0.98rem;
+	}
+	.explorer-section,
+	.detail-band,
+	.faq {
+		padding: 2.25rem 0 0;
+	}
+	.section-head {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 0.88fr);
+		gap: 1.4rem;
+		align-items: end;
+		margin-bottom: 1.25rem;
+	}
+	.section-head h2 {
+		max-width: 11ch;
+		margin: 0;
+		font-size: clamp(1.45rem, 2vw, 2.05rem);
+		line-height: 1.04;
+	}
+	.section-head > p:last-child {
+		margin: 0;
+		font-size: 1rem;
+	}
+	.compact-head {
+		margin-bottom: 1rem;
+	}
+	.compact-head .section-head > p:last-child {
+		display: none;
+	}
+	.detail-band {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1.1rem;
 		align-items: start;
 	}
-	.compatibility > p {
-		margin: 0;
-		font-size: 1.18rem;
-		line-height: 1.7;
+	.detail-column {
+		min-width: 0;
 	}
-	.price-rows {
+	.case-grid,
+	.delivery-grid {
 		display: grid;
-		gap: 1rem;
-		margin-top: 2rem;
+		gap: 0.9rem;
 	}
-	.price-rows article {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		gap: 1rem;
-		align-items: center;
-		padding: 1.25rem 0;
-		border-top: 1px solid var(--cc-border);
+	.case-grid {
+		grid-template-columns: 1fr;
 	}
-	.price-rows h3 {
+	.delivery-grid {
+		grid-template-columns: 1fr;
+	}
+	.case-grid article,
+	.delivery-grid article {
+		padding: 1rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-surface) 72%, transparent);
+	}
+	.case-grid article {
+		border-top: 4px solid var(--cc-layer-team);
+	}
+	.case-grid article:nth-child(2) {
+		border-top-color: var(--cc-layer-company);
+	}
+	.case-grid article:nth-child(3) {
+		border-top-color: var(--cc-layer-personal);
+	}
+	.case-grid article:nth-child(4) {
+		border-top-color: var(--cc-cta);
+	}
+	.case-grid h3,
+	.delivery-grid h3 {
 		margin: 0;
-		font-size: 1.4rem;
+		color: var(--cc-text);
+		font-size: 1.12rem;
 	}
-	.price-rows p {
-		margin: 0.4rem 0 0;
+	.case-grid p,
+	.delivery-grid p {
+		margin: 0.55rem 0 0;
+		font-size: 0.98rem;
 	}
-	.price-rows a[aria-disabled='true'] {
-		color: var(--cc-text-muted);
-		cursor: not-allowed;
+	.card-label {
+		color: var(--cc-layer-personal);
 	}
-	.note {
-		max-width: 56ch;
-		font-size: 0.95rem;
+	.delivery-grid .button {
+		margin-top: 1rem;
+		width: fit-content;
 	}
 	.faq-list {
 		display: grid;
-		gap: 0.75rem;
-		margin-top: 2rem;
+		gap: 0.6rem;
 	}
 	details {
-		border-top: 1px solid var(--cc-border);
 		padding: 1rem 0;
+		border-top: 1px solid var(--cc-border);
 	}
 	summary {
 		color: var(--cc-text);
 		cursor: pointer;
 		font-weight: 700;
 	}
-	.credibility {
-		padding-bottom: 0;
-	}
-	.credibility p {
-		max-width: 62ch;
-		margin: 0;
-	}
-	@media (max-width: 900px) {
+	@media (max-width: 920px) {
 		.hero,
-		.compatibility {
+		.section-head,
+		.detail-band {
 			grid-template-columns: 1fr;
 		}
-		.numbered {
+		.quick-facts {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 	}
@@ -447,16 +471,11 @@ const faqs = [
 		.pack-page {
 			padding-top: 2rem;
 		}
-		.workflow-board {
-			display: none;
-		}
-		.numbered,
-		.inside-grid,
-		.price-rows article {
+		.quick-facts {
 			grid-template-columns: 1fr;
 		}
-		.price-rows a {
-			width: fit-content;
+		.value-list {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>

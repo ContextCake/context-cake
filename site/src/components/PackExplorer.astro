@@ -1,0 +1,290 @@
+---
+import { codeToHtml } from 'shiki';
+import type { PackExplorerData } from '../lib/pack-explorer';
+
+interface Props {
+	defaultFile?: string;
+	explorer: PackExplorerData;
+	featuredFiles?: Array<{ label: string; path: string }>;
+	id: string;
+	title?: string;
+}
+
+const { defaultFile, explorer, featuredFiles = [], id, title = 'Pack explorer' } = Astro.props;
+const selectedFile = defaultFile ?? explorer.files[0]?.path ?? '';
+const validPaths = new Set(explorer.files.map((file) => file.path));
+const quickFiles = featuredFiles.filter((file) => validPaths.has(file.path));
+const renderedFiles = await Promise.all(
+	explorer.files.map(async (file) => ({
+		...file,
+		html: await codeToHtml(file.content, {
+			lang: file.language,
+			theme: 'github-dark-default',
+		}),
+	})),
+);
+---
+
+<section class="pack-explorer" data-pack-explorer={id}>
+	<div class="explorer-sidebar">
+		<div class="terminal-head">
+			<span>tree</span>
+			<code>{explorer.rootLabel}</code>
+		</div>
+		<div class="tree-lines" role="tree" aria-label={title}>
+			{renderedFiles.length > 0 && (
+				<div class="tree-root">
+					<span class="root-prefix">.</span>
+				</div>
+			)}
+			{explorer.treeEntries.map((entry) =>
+				entry.kind === 'dir' ? (
+					<div class="tree-row dir" role="treeitem" aria-expanded="true">
+						<span class="tree-prefix">{entry.prefix}</span>
+						<span class="tree-name">{entry.name}</span>
+					</div>
+				) : (
+					<button
+						class={`tree-row file${entry.path === selectedFile ? ' active' : ''}`}
+						data-file-trigger={entry.path}
+						role="treeitem"
+						type="button"
+					>
+						<span class="tree-prefix">{entry.prefix}</span>
+						<span class="tree-name">{entry.name}</span>
+					</button>
+				),
+			)}
+		</div>
+	</div>
+
+	<div class="explorer-preview">
+		{renderedFiles.map((file) => (
+			<article
+				class={`preview-pane${file.path === selectedFile ? ' active' : ''}`}
+				data-file-panel={file.path}
+				hidden={file.path !== selectedFile}
+			>
+				<header class="preview-head">
+					<div class="preview-title">
+						<p class="preview-label">Read-only preview</p>
+						<h3>{file.path}</h3>
+					</div>
+					<div class="preview-meta">
+						{quickFiles.length > 0 && (
+							<div class="preview-jump" aria-label="Featured files">
+								{quickFiles.map((featured) => (
+									<button
+										class={`jump-chip${featured.path === file.path ? ' active' : ''}`}
+										data-file-trigger={featured.path}
+										type="button"
+									>
+										{featured.label}
+									</button>
+								))}
+							</div>
+						)}
+						<span class="preview-lang">{file.language}</span>
+					</div>
+				</header>
+				<div class="preview-code" set:html={file.html} />
+			</article>
+		))}
+	</div>
+</section>
+
+<style>
+	.pack-explorer {
+		display: grid;
+		grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
+		gap: 1rem;
+	}
+	.explorer-sidebar,
+	.preview-pane {
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-surface) 76%, transparent);
+	}
+	.explorer-sidebar {
+		overflow: hidden;
+	}
+	.terminal-head,
+	.preview-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.9rem 1rem;
+		border-bottom: 1px solid var(--cc-border);
+	}
+	.terminal-head span,
+	.preview-label,
+	.preview-lang {
+		color: var(--cc-layer-team);
+		font-family: var(--cc-font-mono);
+		font-size: 0.76rem;
+		font-weight: 700;
+		letter-spacing: 0;
+		text-transform: uppercase;
+	}
+	.terminal-head code {
+		color: var(--cc-text);
+		font-family: var(--cc-font-mono);
+		font-size: 0.88rem;
+	}
+	.tree-lines {
+		padding: 0.8rem 0;
+		font-family: var(--cc-font-mono);
+		font-size: 0.86rem;
+	}
+	.tree-root,
+	.tree-row {
+		display: flex;
+		align-items: center;
+		width: 100%;
+		padding: 0.18rem 1rem;
+		box-sizing: border-box;
+		font: inherit;
+	}
+	.tree-row {
+		border: 0;
+		background: transparent;
+		color: var(--cc-text-body);
+		text-align: left;
+	}
+	.tree-row.file {
+		cursor: pointer;
+	}
+	.tree-row.file:hover,
+	.tree-row.file.active {
+		background: rgba(243, 239, 230, 0.06);
+		color: var(--cc-text);
+	}
+	.tree-prefix {
+		flex: 0 0 auto;
+		color: var(--cc-text-faint);
+		white-space: pre;
+	}
+	.root-prefix {
+		color: var(--cc-text-faint);
+	}
+	.tree-name {
+		overflow-wrap: anywhere;
+	}
+	.tree-row.dir .tree-name {
+		color: var(--cc-text);
+	}
+	.preview-pane {
+		overflow: hidden;
+	}
+	.preview-head {
+		align-items: start;
+	}
+	.preview-title {
+		min-width: 0;
+	}
+	.preview-head h3 {
+		margin: 0.25rem 0 0;
+		color: var(--cc-text);
+		font-family: var(--cc-font-mono);
+		font-size: 0.95rem;
+		line-height: 1.35;
+		word-break: break-word;
+	}
+	.preview-meta {
+		display: grid;
+		justify-items: end;
+		gap: 0.75rem;
+	}
+	.preview-jump {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: end;
+		gap: 0.45rem;
+		max-width: 22rem;
+	}
+	.jump-chip {
+		min-height: 2.1rem;
+		padding: 0 0.7rem;
+		border: 1px solid var(--cc-border);
+		border-radius: 999px;
+		background: transparent;
+		color: var(--cc-text-body);
+		font-family: var(--cc-font-mono);
+		font-size: 0.74rem;
+		font-weight: 700;
+		letter-spacing: 0;
+		cursor: pointer;
+	}
+	.jump-chip.active,
+	.jump-chip:hover {
+		border-color: color-mix(in srgb, var(--cc-layer-team) 55%, var(--cc-border));
+		background: color-mix(in srgb, var(--cc-layer-team) 16%, transparent);
+		color: var(--cc-text);
+	}
+	.preview-code {
+		max-height: 36rem;
+		overflow: auto;
+	}
+	.preview-code :global(.shiki) {
+		margin: 0;
+		padding: 1rem;
+		background: transparent !important;
+		font-family: var(--cc-font-mono);
+		font-size: 0.88rem;
+		line-height: 1.65;
+	}
+	.preview-code :global(.shiki code) {
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+	@media (max-width: 920px) {
+		.pack-explorer {
+			grid-template-columns: 1fr;
+		}
+		.preview-meta,
+		.preview-jump {
+			justify-items: start;
+			justify-content: start;
+		}
+		.preview-code {
+			max-height: none;
+		}
+	}
+</style>
+
+<script>
+	for (const explorer of document.querySelectorAll('[data-pack-explorer]')) {
+		const triggers = explorer.querySelectorAll('[data-file-trigger]');
+		const panels = explorer.querySelectorAll('[data-file-panel]');
+		const treeTriggerByPath = new Map();
+
+		for (const trigger of triggers) {
+			if (!trigger.classList.contains('tree-row')) continue;
+			const path = trigger.getAttribute('data-file-trigger');
+			if (path) treeTriggerByPath.set(path, trigger);
+		}
+
+		for (const trigger of triggers) {
+			trigger.addEventListener('click', () => {
+				const target = trigger.getAttribute('data-file-trigger');
+				if (!target) return;
+
+				for (const candidate of triggers) {
+					candidate.classList.toggle(
+						'active',
+						candidate.getAttribute('data-file-trigger') === target,
+					);
+				}
+
+				for (const panel of panels) {
+					const isActive = panel.getAttribute('data-file-panel') === target;
+					panel.toggleAttribute('hidden', !isActive);
+					panel.classList.toggle('active', isActive);
+				}
+
+				treeTriggerByPath.get(target)?.scrollIntoView({ block: 'nearest' });
+			});
+		}
+	}
+</script>

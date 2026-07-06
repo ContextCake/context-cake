@@ -4,6 +4,7 @@
 // resolver at build time (src/data/demo-cascade.json, via the prebuild seam) —
 // never hand-authored merge output (spec homepage AC 5).
 import Base from '../layouts/Base.astro';
+import CodeBlock from '../components/CodeBlock.astro';
 import CopyCommand from '../components/CopyCommand.astro';
 import demo from '../data/demo-cascade.json';
 
@@ -66,6 +67,15 @@ const agentPayload = {
 	})),
 };
 const agentJson = JSON.stringify(agentPayload, null, 2);
+const quickstartCommand = `gh release download --repo siracusa5/context-cake --archive=tar.gz --output contextcake.tar.gz
+mkdir contextcake
+tar -xzf contextcake.tar.gz -C contextcake --strip-components=1
+cd contextcake
+node classify-context.mjs --demo
+node ingest.mjs --demo
+node write.mjs --signals control-surface/signals.json --manifest layers.json --target-layer team
+node mcp-server.mjs --manifest layers.json
+npm run playground`;
 
 // Lucide icon paths (inlined SVG — no icon-font, no emoji). 24×24, stroked.
 const icons = {
@@ -185,8 +195,7 @@ const mcpTools = [
 					closest layer wins <em>each section</em>, the rest carries through untouched, and
 					wherever they disagree the agent sees both — with dates.
 				</p>
-				{/* Distribution decision 2026-07-02: clone-and-run, no npm (spec.md Open Questions) */}
-				<CopyCommand command="git clone https://github.com/siracusa5/context-cake.git" />
+				<CopyCommand command="gh release download --repo siracusa5/context-cake --archive=tar.gz --output contextcake.tar.gz" />
 				<div class="ctas">
 					<a class="cta primary" href="/docs/getting-started/installation">Get started</a>
 					<a class="cta" href="/demo">Open console demo</a>
@@ -322,20 +331,15 @@ const mcpTools = [
 				</table>
 				<figure class="payload">
 					<figcaption>read_file · decisions/primary-db <span class="muted">(real resolver output, content truncated)</span></figcaption>
-					<pre><code>{agentJson}</code></pre>
+					<CodeBlock className="payload-code" lang="json" code={agentJson} />
 				</figure>
 			</div>
 		</section>
 
 		<section class="quickstart">
 			<h2>Quickstart</h2>
-			<p>Plain Node.js ≥ 18. No dependencies.</p>
-			<pre><code>git clone https://github.com/siracusa5/context-cake.git && cd context-cake
-node classify-context.mjs --demo
-node ingest.mjs --demo
-node write.mjs --signals control-surface/signals.json --manifest layers.json --target-layer team
-node mcp-server.mjs --manifest layers.json
-npm run playground</code></pre>
+			<p>Plain Node.js ≥ 18. Download the release archive, unpack it, and run.</p>
+			<CodeBlock className="quickstart-code" lang="bash" code={quickstartCommand} />
 			<p class="quickstart-cta">
 				<a class="cta primary" href="/docs/getting-started/installation">Read the docs</a>
 				<a class="cta" href="/install">Install guide</a>
@@ -705,14 +709,16 @@ npm run playground</code></pre>
 	.payload .muted {
 		color: var(--cc-text-muted);
 	}
-	.payload pre {
+	.payload :global(.payload-code) {
 		margin: 0;
+		border: 0;
+		border-radius: 0;
+		background: transparent;
+	}
+	.payload :global(.payload-code .shiki) {
 		padding: 1rem;
-		overflow-x: auto;
-		font-family: var(--cc-font-mono);
 		font-size: 0.78rem;
 		line-height: 1.55;
-		color: var(--cc-text-body);
 	}
 
 	/* Quickstart */
@@ -720,13 +726,7 @@ npm run playground</code></pre>
 		padding: 4rem 0 2rem;
 		border-top: 1px solid var(--cc-border);
 	}
-	.quickstart pre {
-		background: var(--cc-surface);
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-md);
-		padding: 1rem 1.25rem;
-		overflow-x: auto;
-		font-family: var(--cc-font-mono);
+	.quickstart :global(.quickstart-code .shiki) {
 		font-size: 0.9rem;
 		line-height: 1.7;
 	}

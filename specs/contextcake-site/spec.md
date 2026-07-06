@@ -88,8 +88,8 @@ provides a working install command.
 ## Out of Scope
 
 - Building the desktop app / GUI, installers, and auto-update — that product surface is
-  owned by `specs/contextcake-distribution/spec.md`. The site documents channels as they
-  ship; at site launch the only channel is clone-and-run.
+  owned by `specs/contextcake-distribution/spec.md`. The site presents a versioned release
+  archive as the primary install path and keeps source checkout separate.
 - Hosted/SaaS ContextCake, accounts, telemetry, or analytics requiring consent banners.
 - Blog. `/changelog` is generated from GitHub releases; no authored posts at launch.
 - Rewriting `docs/architecture.md` — the docs port supersedes it for public consumption;
@@ -98,27 +98,17 @@ provides a working install command.
 
 ## Open Questions
 
-- [NEEDS CLARIFICATION: Repo visibility — `siracusa5/context-cake` is private. Public site
-  + "clone the repo" requires making it public. Make public at launch, or npm-only install?]
-- ~~Distribution~~ **RESOLVED 2026-07-02 (for site launch): git clone only — no npm publish.**
-  Deferred pending a supply-chain security review (2026 saw repeated npm compromises of
-  AI/agent packages via postinstall droppers — Mastra, TrapDoor; npm v12 changes defaults
-  in July 2026). The zero-dependency engine makes clone-and-run the honest path anyway:
-  no `npm install`, no install scripts, no transitive deps — the site presents this as a
-  security property, not a limitation.
-  **The channel roadmap is owned by `specs/contextcake-distribution/spec.md`** (merged in
-  2026-07-02): `.mcpb` and Homebrew lead, npm follows a supply-chain-hardening review and
-  publishes as `contextcake` (with `context-cake` reserved anti-typosquat). As each channel
-  ships, `/install` and the docs installation page gain that channel — the clone-and-run
-  story remains the auditability baseline, not a limitation to walk back.
+- ~~Distribution~~ **UPDATED 2026-07-06: versioned release archive first.** The engine
+  remains dependency-free: no `npm install`, no install scripts, no transitive deps.
+  `/install` and the docs installation page present a tagged archive download as the
+  primary path. `git clone` is documented only as a source checkout path for auditing,
+  contribution, or forks.
 - ~~Domain~~ **RESOLVED 2026-07-02: `contextcake.com`** (registered; only the .com for
   now). Canonical URLs, OG tags, and the Cloudflare Pages custom domain all use it.
   Other TLDs (.dev/.ai/.io) verified available same day but not purchased — revisit
   defensive registration post-launch.
 
-**Resolution gate:** repo visibility is now the single remaining gate. Install content is
-written against the public GitHub URL and clone-based install — it cannot go live while
-the repo is private.
+**Resolution gate:** install content assumes public GitHub release access.
 
 ## Dependencies
 
@@ -133,5 +123,6 @@ the repo is private.
   Build guidance: design.md §11.5.
 - **Deploy pipeline** — Cloudflare Pages; preview via push to main (`/deploy-preview`),
   production via GitHub release (`/go-live`).
-- **Distribution roadmap** — `specs/contextcake-distribution/spec.md` owns install
-  channels, the GUI, and auto-update; `/install` grows a section per channel as they ship.
+- **Distribution spec** — `specs/contextcake-distribution/spec.md` owns packaged app and
+  updater work; this site keeps the release-archive install path public and source checkout
+  secondary.

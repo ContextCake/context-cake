@@ -9,7 +9,6 @@ import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/700.css';
 import '../styles/tokens.css';
-import StrataMark from '../components/StrataMark.astro';
 
 interface Props {
 	title: string;
@@ -47,7 +46,7 @@ const ogImage = new URL('/og.png', Astro.site).href;
 	<body>
 		<header class="nav">
 			<a href="/" class="brand" aria-label="ContextCake home">
-				<StrataMark size={22} />
+				<span class="brand-mark" aria-hidden="true">C</span>
 				<span>ContextCake</span>
 			</a>
 			<nav aria-label="Main">
@@ -68,10 +67,25 @@ const ogImage = new URL('/og.png', Astro.site).href;
 <style>
 	:global(body) {
 		margin: 0;
-		background: var(--cc-canvas);
+		min-height: 100vh;
+		background:
+			radial-gradient(circle at 16% 0%, rgba(141, 195, 168, 0.13), transparent 30%),
+			radial-gradient(circle at 82% 14%, rgba(217, 171, 83, 0.11), transparent 28%),
+			linear-gradient(180deg, #181914 0%, var(--cc-canvas) 42%, #0b0c0a 100%);
 		color: var(--cc-text-body);
 		font-family: var(--cc-font-body);
 		line-height: 1.6;
+	}
+	:global(body::before) {
+		content: '';
+		position: fixed;
+		inset: 0;
+		pointer-events: none;
+		background-image:
+			linear-gradient(rgba(243, 239, 230, 0.025) 1px, transparent 1px),
+			linear-gradient(90deg, rgba(243, 239, 230, 0.025) 1px, transparent 1px);
+		background-size: 36px 36px;
+		mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent 72%);
 	}
 	:global(h1, h2, h3) {
 		font-family: var(--cc-font-heading);
@@ -90,9 +104,16 @@ const ogImage = new URL('/og.png', Astro.site).href;
 		justify-content: space-between;
 		flex-wrap: wrap;
 		gap: 0.75rem 1rem;
-		max-width: 72rem;
-		margin: 0 auto;
-		padding: 1.25rem 1.5rem;
+		position: relative;
+		z-index: 1;
+		max-width: 76rem;
+		margin: 1rem auto 0;
+		padding: 0.75rem 0.8rem 0.75rem 1rem;
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-xl);
+		box-shadow: var(--cc-shadow-panel);
+		backdrop-filter: blur(18px);
 	}
 	.brand {
 		display: inline-flex;
@@ -103,26 +124,58 @@ const ogImage = new URL('/og.png', Astro.site).href;
 		text-decoration: none;
 		color: var(--cc-text);
 	}
+	.brand-mark {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 2.6rem;
+		height: 2.6rem;
+		border-radius: 16px;
+		background: rgba(141, 195, 168, 0.12);
+		color: var(--cc-text);
+		font-family: Georgia, 'Times New Roman', serif;
+		font-size: 1.55rem;
+		font-weight: 700;
+		line-height: 1;
+	}
 	.nav nav {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 1.5rem;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.25rem;
+		border-radius: 999px;
+		background: var(--cc-surface-soft);
 	}
 	@media (max-width: 480px) {
+		.nav {
+			margin: 0.75rem 0.75rem 0;
+			border-radius: 24px;
+		}
 		.nav nav {
-			gap: 1rem;
+			width: 100%;
+			border-radius: 20px;
 		}
 	}
 	.nav nav a {
+		display: inline-flex;
+		align-items: center;
+		min-height: 36px;
+		padding: 0 0.8rem;
+		border-radius: 999px;
 		text-decoration: none;
 		color: var(--cc-text-body);
-		transition: color var(--cc-transition);
+		font-weight: 600;
+		transition:
+			color var(--cc-transition),
+			background var(--cc-transition);
 	}
 	.nav nav a:hover {
+		background: rgba(243, 239, 230, 0.08);
 		color: var(--cc-text);
 	}
 	.footer {
-		max-width: 72rem;
+		max-width: 76rem;
 		margin: 4rem auto 0;
 		padding: 2rem 1.5rem;
 		border-top: 1px solid var(--cc-border);

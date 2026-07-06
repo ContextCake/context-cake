@@ -189,7 +189,7 @@ const mcpTools = [
 				<CopyCommand command="git clone https://github.com/siracusa5/context-cake.git" />
 				<div class="ctas">
 					<a class="cta primary" href="/docs/getting-started/installation">Get started</a>
-					<a class="cta" href="/demo">See it resolve</a>
+					<a class="cta" href="/demo">Open console demo</a>
 					<a class="cta" href="https://github.com/siracusa5/context-cake">GitHub</a>
 				</div>
 			</div>
@@ -275,7 +275,7 @@ const mcpTools = [
 				}
 			</ol>
 			<p class="how-cta">
-				<a href="/demo">Watch a concept resolve, section by section →</a>
+				<a href="/demo">Open the live console demo -></a>
 			</p>
 		</section>
 
@@ -346,14 +346,14 @@ npm run playground</code></pre>
 
 <style>
 	main {
-		max-width: 72rem;
+		max-width: 76rem;
 		margin: 0 auto;
 		padding: 0 1.5rem;
 	}
 	.kicker {
 		font-family: var(--cc-font-mono);
 		font-size: 0.8rem;
-		letter-spacing: 0.14em;
+		letter-spacing: 0;
 		text-transform: uppercase;
 		color: var(--cc-text-muted);
 		margin: 0 0 0.5rem;
@@ -396,17 +396,22 @@ npm run playground</code></pre>
 		font-family: var(--cc-font-heading);
 		text-decoration: none;
 		border: 1px solid var(--cc-border);
-		border-radius: 8px;
+		border-radius: 999px;
 		padding: 0.65rem 1.25rem;
-		transition: border-color var(--cc-transition), background var(--cc-transition);
+		font-weight: 700;
+		transition:
+			border-color var(--cc-transition),
+			background var(--cc-transition),
+			color var(--cc-transition);
 	}
 	.cta:hover {
 		border-color: var(--cc-text-muted);
+		background: rgba(243, 239, 230, 0.06);
 	}
 	.cta.primary {
 		background: var(--cc-cta);
 		border-color: var(--cc-cta);
-		color: #052e16;
+		color: var(--cc-on-cta);
 		font-weight: 700;
 	}
 	.cta.primary:hover {
@@ -419,9 +424,11 @@ npm run playground</code></pre>
 		margin: 0;
 		background: var(--cc-surface);
 		border: 1px solid var(--cc-border);
-		border-radius: 12px;
-		padding: 1rem;
+		border-radius: var(--cc-radius-lg);
+		padding: 1.1rem;
 		min-width: 0;
+		box-shadow: var(--cc-shadow-panel);
+		backdrop-filter: blur(16px);
 	}
 	.composite figcaption {
 		display: flex;
@@ -456,7 +463,8 @@ npm run playground</code></pre>
 		text-transform: capitalize;
 		border: 1px solid var(--cc-border);
 		border-radius: 999px;
-		padding: 0.15rem 0.55rem;
+		background: rgba(243, 239, 230, 0.04);
+		padding: 0.18rem 0.6rem;
 	}
 	.stack-dot {
 		width: 8px;
@@ -484,7 +492,7 @@ npm run playground</code></pre>
 		gap: 1rem;
 		border: 1px solid var(--cc-border);
 		background: var(--cc-surface-raised);
-		border-radius: 6px;
+		border-radius: var(--cc-radius-sm);
 		padding: 0.6rem 0.9rem;
 		font-family: var(--cc-font-mono);
 		font-size: 0.9rem;
@@ -567,8 +575,9 @@ npm run playground</code></pre>
 	.step {
 		background: var(--cc-surface);
 		border: 1px solid var(--cc-border);
-		border-radius: 12px;
+		border-radius: var(--cc-radius-lg);
 		padding: 1.5rem;
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
 	}
 	.step-head {
 		display: flex;
@@ -682,7 +691,7 @@ npm run playground</code></pre>
 		margin: 0;
 		background: var(--cc-surface);
 		border: 1px solid var(--cc-border);
-		border-radius: 12px;
+		border-radius: var(--cc-radius-lg);
 		overflow: hidden;
 	}
 	.payload figcaption {
@@ -714,7 +723,7 @@ npm run playground</code></pre>
 	.quickstart pre {
 		background: var(--cc-surface);
 		border: 1px solid var(--cc-border);
-		border-radius: 8px;
+		border-radius: var(--cc-radius-md);
 		padding: 1rem 1.25rem;
 		overflow-x: auto;
 		font-family: var(--cc-font-mono);

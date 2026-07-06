@@ -9,18 +9,23 @@
 }
 
 :root[data-theme='dark'] {
-  --sl-color-accent-low: #312e81;
-  --sl-color-accent: var(--cc-layer-company);
-  --sl-color-accent-high: #c7d2fe;
+  --sl-color-accent-low: rgba(141, 195, 168, 0.18);
+  --sl-color-accent: var(--cc-layer-team);
+  --sl-color-accent-high: var(--cc-cta);
   --sl-color-bg: var(--cc-canvas);
-  --sl-color-bg-nav: var(--cc-canvas);
-  --sl-color-bg-sidebar: var(--cc-canvas);
+  --sl-color-bg-nav: #151612;
+  --sl-color-bg-sidebar: #151612;
+  --sl-color-bg-inline-code: var(--cc-surface-raised);
+  --sl-color-hairline: var(--cc-border);
+  --sl-color-text: var(--cc-text);
+  --sl-color-text-accent: var(--cc-layer-team);
+  --sl-color-text-invert: var(--cc-on-cta);
 }
 
 :root[data-theme='light'] {
-  --sl-color-accent-low: #e0e7ff;
-  --sl-color-accent: #4f46e5;
-  --sl-color-accent-high: #312e81;
+  --sl-color-accent-low: #dcebe1;
+  --sl-color-accent: #39795d;
+  --sl-color-accent-high: #173c2b;
 }
 
 /* Headings in the brand mono, matching the marketing pages */

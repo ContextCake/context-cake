@@ -5,25 +5,37 @@
 
 :root {
   /* Surfaces */
-  --cc-canvas: #0f172a;
-  --cc-surface: #1e293b;
-  --cc-surface-raised: #273449;
-  --cc-border: #334155;
+  --cc-canvas: #10110f;
+  --cc-surface: rgba(30, 31, 28, 0.78);
+  --cc-surface-solid: #1e1f1c;
+  --cc-surface-raised: #23241f;
+  --cc-surface-soft: rgba(243, 239, 230, 0.055);
+  --cc-border: rgba(235, 226, 207, 0.11);
+  --cc-border-strong: rgba(235, 226, 207, 0.2);
 
   /* Text */
-  --cc-text: #f8fafc;
-  --cc-text-body: #cbd5e1;
-  --cc-text-muted: #94a3b8; /* large sizes / labels only — fails 4.5:1 at body size on surface */
+  --cc-text: #f3efe6;
+  --cc-text-body: #d2ccc0;
+  --cc-text-muted: #a9a296; /* large sizes / labels only */
+  --cc-text-faint: #80796f;
 
   /* Provenance stripes — layer semantics */
-  --cc-layer-personal: #f59e0b; /* level 3, top stratum */
-  --cc-layer-team: #14b8a6;     /* level 2 */
-  --cc-layer-company: #6366f1;  /* level 0, base stratum */
+  --cc-layer-personal: #d9ab53; /* level 3, top stratum */
+  --cc-layer-team: #8dc3a8;     /* level 2 */
+  --cc-layer-company: #8bbad1;  /* level 0, base stratum */
 
   /* Accents */
-  --cc-conflict: #f87171; /* dissent — use sparingly */
-  --cc-cta: #22c55e;
-  --cc-cta-hover: #16a34a;
+  --cc-conflict: #e07a56; /* dissent — use sparingly */
+  --cc-cta: #e8e0d0;
+  --cc-cta-hover: #f3efe6;
+  --cc-on-cta: #11130f;
+
+  /* Shape and elevation */
+  --cc-radius-sm: 10px;
+  --cc-radius-md: 16px;
+  --cc-radius-lg: 22px;
+  --cc-radius-xl: 30px;
+  --cc-shadow-panel: 0 20px 60px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.035);
 
   /* Type — Bricolage Grotesque carries headings + body (a single family with
    * committed weight contrast); JetBrains Mono is reserved for code, data, and
@@ -33,5 +45,5 @@
   --cc-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
 
   /* Motion */
-  --cc-transition: 200ms ease;
+  --cc-transition: 200ms cubic-bezier(0.16, 1, 0.3, 1);
 }

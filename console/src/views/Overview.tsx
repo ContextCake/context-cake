@@ -1,15 +1,15 @@
 import { C, css, lc, MONO } from '../theme'
-import { activity as activityData, layerName, layers, sources } from '../data'
+import { layerName, layers } from '../data'
 import { useStore } from '../store'
 
 export function Overview() {
-  const { setView, signals, conflicts } = useStore()
+  const { setView, signals, conflicts, sources, concepts, activity } = useStore()
   const openConflicts = conflicts.filter((c) => c.status === 'open').length
   const triageCount = signals.filter((s) => s.route === 'review_required').length
 
   const statTiles = [
     { label: 'Sources', value: String(sources.length), unit: 'feeding', accent: C.tealStroke, numColor: C.ink },
-    { label: 'Concepts', value: '178', unit: 'resolved', accent: C.blueStroke, numColor: C.ink },
+    { label: 'Concepts', value: String(concepts.length), unit: 'resolved', accent: C.blueStroke, numColor: C.ink },
     { label: 'Open conflicts', value: String(openConflicts), unit: 'to resolve', accent: C.amberStrokeE, numColor: C.amberText },
     { label: 'To triage', value: String(triageCount), unit: 'signals', accent: C.amberStroke, numColor: C.amberText },
   ]
@@ -21,7 +21,7 @@ export function Overview() {
     return { id, L, col, nc }
   })
 
-  const statusColor = (s: string) => (s === 'watching' ? C.tealStroke : s === 'serving' ? C.tealStrokeE : C.blueStroke)
+  const statusColor = (s: string) => (s === 'error' ? C.amberStrokeE : s === 'watching' ? C.tealStroke : s === 'serving' ? C.tealStrokeE : C.blueStroke)
   const kindMap: Record<string, { g: string; l: string }> = {
     repo: { g: '{ }', l: 'repo' }, mcp: { g: '⇄', l: 'MCP source' }, 'okf-local': { g: '▤', l: 'OKF bundle' },
   }
@@ -137,19 +137,21 @@ export function Overview() {
             </div>
           </section>
 
-          {/* Activity */}
-          <section style={css('background:#FBFAF6; border:1px solid #D8D6CC; border-radius:13px; padding:20px;')}>
-            <h2 style={css('margin:0 0 14px; font-size:15px; font-weight:600;')}>Recent activity</h2>
-            <div style={css('display:flex; flex-direction:column;')}>
-              {activityData.map((a, i) => (
-                <div key={i} style={css('display:grid; grid-template-columns:14px 1fr auto; gap:12px; padding:9px 0; border-top:1px solid #EAE7DD;')}>
-                  <span style={css(`width:8px; height:8px; border-radius:999px; margin-top:6px; background:${lc(a.layer).strokeE};`)} />
-                  <div style={css('font-size:12.5px; color:#3A3934; line-height:1.4;')}>{a.pre}<strong style={css('font-weight:600; color:#1A1915;')}>{a.strong}</strong>{a.post}</div>
-                  <div style={css(`font-size:11px; color:#8A8A82; font-family:${MONO}; white-space:nowrap;`)}>{a.time}</div>
-                </div>
-              ))}
-            </div>
-          </section>
+          {/* Activity — demo-only feed; hidden in live mode (no fake feed) */}
+          {activity.length > 0 && (
+            <section style={css('background:#FBFAF6; border:1px solid #D8D6CC; border-radius:13px; padding:20px;')}>
+              <h2 style={css('margin:0 0 14px; font-size:15px; font-weight:600;')}>Recent activity</h2>
+              <div style={css('display:flex; flex-direction:column;')}>
+                {activity.map((a, i) => (
+                  <div key={i} style={css('display:grid; grid-template-columns:14px 1fr auto; gap:12px; padding:9px 0; border-top:1px solid #EAE7DD;')}>
+                    <span style={css(`width:8px; height:8px; border-radius:999px; margin-top:6px; background:${lc(a.layer).strokeE};`)} />
+                    <div style={css('font-size:12.5px; color:#3A3934; line-height:1.4;')}>{a.pre}<strong style={css('font-weight:600; color:#1A1915;')}>{a.strong}</strong>{a.post}</div>
+                    <div style={css(`font-size:11px; color:#8A8A82; font-family:${MONO}; white-space:nowrap;`)}>{a.time}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </div>

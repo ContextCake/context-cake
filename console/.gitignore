@@ -4,3 +4,6 @@ dist
 .DS_Store
 .vite
 *.tsbuildinfo
+
+# Generated demo bundle — produced by scripts/build-demo-data.mjs (real resolver output)
+src/generated/

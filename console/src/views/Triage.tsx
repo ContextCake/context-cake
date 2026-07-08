@@ -14,6 +14,19 @@ export function Triage() {
   const curList = filtered(triageTab)
   const selSig = signals.find((s) => s.id === selSignal) || null
 
+  if (signals.length === 0) {
+    return (
+      <div style={css('display:grid; place-items:center; min-height:320px; background:#FBFAF6; border:1px dashed #C3C1B8; border-radius:13px; padding:32px; text-align:center;')}>
+        <div style={css('max-width:380px;')}>
+          <div style={css('font-weight:600; font-size:14.5px; color:#1A1915; margin-bottom:8px;')}>No captured signals</div>
+          <p style={css('margin:0; font-size:12.5px; color:#57564F; line-height:1.5;')}>
+            Live triage is read-only (D6). Run <code style={css(`font-family:${MONO}; font-size:11.5px; padding:1px 5px; background:#F1EFE7; border:1px solid #D8D6CC; border-radius:5px;`)}>ingest.mjs</code> to populate the review queue.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div>
       {/* tabs */}

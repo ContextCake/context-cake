@@ -4,8 +4,20 @@ import { LayerChip } from '../components/LayerChip'
 import { useStore } from '../store'
 
 export function Conflicts() {
-  const { conflicts, selConflict, setSelConflict, resolveConflict } = useStore()
+  const { conflicts, selConflict, setSelConflict, resolveConflict, mode } = useStore()
   const selConf = conflicts.find((c) => c.id === selConflict) || null
+  const readOnly = mode === 'live'
+
+  if (conflicts.length === 0) {
+    return (
+      <div style={css('display:grid; place-items:center; min-height:320px; background:#FBFAF6; border:1px dashed #C3C1B8; border-radius:13px; padding:32px; text-align:center;')}>
+        <div style={css('max-width:380px;')}>
+          <div style={css('font-weight:600; font-size:14.5px; color:#1A1915; margin-bottom:8px;')}>No conflicts</div>
+          <p style={css('margin:0; font-size:12.5px; color:#57564F; line-height:1.5;')}>Every section resolves cleanly across the cascade — no layer disagrees with another right now.</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={css('display:grid; grid-template-columns:326px minmax(0,1fr); gap:20px; align-items:start;')}>
@@ -84,21 +96,26 @@ export function Conflicts() {
 
             {selConf.status === 'open' && (
               <div style={{ marginTop: 22 }}>
-                <div style={css('font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8A8A82; margin-bottom:11px;')}>Resolve</div>
-                <div style={css('display:grid; grid-template-columns:1fr 1fr; gap:9px;')}>
-                  <button className="cc-h-tealfill2" onClick={() => resolveConflict('accept')} style={css('display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#EAF7F5; border:1px solid #2C8A82; border-radius:10px; cursor:pointer; font:inherit; text-align:left;')}>
+                <div style={css('display:flex; align-items:center; gap:10px; margin-bottom:11px;')}>
+                  <div style={css('font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8A8A82;')}>Resolve</div>
+                  {readOnly && (
+                    <span style={css(`font-family:${MONO}; font-size:10px; color:${C.amberText};`)}>Read-only in live mode</span>
+                  )}
+                </div>
+                <div style={css(`display:grid; grid-template-columns:1fr 1fr; gap:9px; ${readOnly ? 'opacity:0.5;' : ''}`)}>
+                  <button disabled={readOnly} className="cc-h-tealfill2" onClick={() => resolveConflict('accept')} style={css(`display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#EAF7F5; border:1px solid #2C8A82; border-radius:10px; cursor:${readOnly ? 'not-allowed' : 'pointer'}; font:inherit; text-align:left;`)}>
                     <span style={css('font-weight:600; font-size:13px; color:#134F49;')}>Keep {winnerName} value</span>
                     <span style={css('font-size:11.5px; color:#1E6B64;')}>Confirm the current effective result</span>
                   </button>
-                  <button className="cc-h-bd-faint" onClick={() => resolveConflict('promote')} style={css('display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:10px; cursor:pointer; font:inherit; text-align:left;')}>
+                  <button disabled={readOnly} className="cc-h-bd-faint" onClick={() => resolveConflict('promote')} style={css(`display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:10px; cursor:${readOnly ? 'not-allowed' : 'pointer'}; font:inherit; text-align:left;`)}>
                     <span style={css('font-weight:600; font-size:13px; color:#1A1915;')}>Promote {loserName} value</span>
                     <span style={css('font-size:11.5px; color:#57564F;')}>Override upward, replace effective</span>
                   </button>
-                  <button className="cc-h-bd-faint" onClick={() => resolveConflict('override')} style={css('display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:10px; cursor:pointer; font:inherit; text-align:left;')}>
+                  <button disabled={readOnly} className="cc-h-bd-faint" onClick={() => resolveConflict('override')} style={css(`display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:10px; cursor:${readOnly ? 'not-allowed' : 'pointer'}; font:inherit; text-align:left;`)}>
                     <span style={css('font-weight:600; font-size:13px; color:#1A1915;')}>Write a personal override</span>
                     <span style={css('font-size:11.5px; color:#57564F;')}>Only you see it, until promoted</span>
                   </button>
-                  <button className="cc-h-bd-faint" onClick={() => resolveConflict('annotate')} style={css('display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:10px; cursor:pointer; font:inherit; text-align:left;')}>
+                  <button disabled={readOnly} className="cc-h-bd-faint" onClick={() => resolveConflict('annotate')} style={css(`display:flex; flex-direction:column; gap:3px; padding:13px 15px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:10px; cursor:${readOnly ? 'not-allowed' : 'pointer'}; font:inherit; text-align:left;`)}>
                     <span style={css('font-weight:600; font-size:13px; color:#1A1915;')}>Annotate both</span>
                     <span style={css('font-size:11.5px; color:#57564F;')}>Keep the tension, add context</span>
                   </button>

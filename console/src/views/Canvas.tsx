@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { C, css, lc, MONO, type LayerId } from '../theme'
-import { concepts, layerLevel, layers, type Concept } from '../data'
+import { layerLevel, layers, type Concept } from '../data'
 import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
 import { useStore } from '../store'
@@ -23,7 +23,7 @@ const primaryLayer = (c: Concept): LayerId =>
 interface NodePos { c: Concept; x: number; y: number; conflict: boolean }
 interface GhostPos { key: string; parent: NodePos; layer: LayerId; value: string; x: number; y: number }
 
-function computeLayout() {
+function computeLayout(concepts: Concept[]) {
   const nodes: NodePos[] = concepts.map((c, i) => {
     const x = START_X + i * (NODE_W + GAP_X)
     const y = laneY(laneIndex(primaryLayer(c))) + NODE_DY
@@ -53,8 +53,8 @@ function edgePath(x1: number, y1: number, x2: number, y2: number) {
 }
 
 export function Canvas() {
-  const { setSelConcept, setSelConflict, setView, conflicts } = useStore()
-  const { nodes, ghosts, worldW, worldH } = computeLayout()
+  const { setSelConcept, setSelConflict, setView, conflicts, concepts } = useStore()
+  const { nodes, ghosts, worldW, worldH } = computeLayout(concepts)
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const [view, setViewT] = useState({ tx: 40, ty: 20, scale: 1 })

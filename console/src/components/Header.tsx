@@ -1,4 +1,4 @@
-import { sources, useStore, type ViewId } from '../store'
+import { useStore, type ViewId } from '../store'
 
 const TITLES: Record<ViewId, [string, string]> = {
   canvas: ['Live cascade', 'Effective knowledge by layer, with conflicts and overrides visible.'],
@@ -9,7 +9,7 @@ const TITLES: Record<ViewId, [string, string]> = {
 }
 
 export function Header() {
-  const { view, query, setQuery, signals, conflicts } = useStore()
+  const { view, query, setQuery, signals, conflicts, sources } = useStore()
   const [title, sub] = TITLES[view]
   const showSearch = view === 'triage' || view === 'concepts'
   const placeholder = view === 'concepts' ? 'Search concepts, paths, layers' : 'Filter by repo, owner, label'

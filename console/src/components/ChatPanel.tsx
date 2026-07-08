@@ -1,13 +1,22 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { C, css, lc, MONO } from '../theme'
 import { useStore } from '../store'
 
 const SUGGESTIONS = ['What database do we use?', 'How do we handle on-call?']
+const MCP_CONFIG_CMD = 'claude mcp add contextcake -- node mcp-server.mjs --manifest layers.json'
 
 export function ChatPanel() {
   const { chatMessages, chatBusy, chatInput, setChatInput, closeChat, send } = useStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const [copied, setCopied] = useState(false)
+
+  const copyMcpConfig = () => {
+    navigator.clipboard?.writeText(MCP_CONFIG_CMD).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
 
   useEffect(() => {
     const el = scrollRef.current
@@ -34,6 +43,14 @@ export function ChatPanel() {
             <div style={css('font-weight:600; font-size:14px;')}>Ask ContextCake</div>
             <div style={css('font-size:11px; color:#8A8A82;')}>Answers from your resolved cascade</div>
           </div>
+          <button
+            className="cc-h-eae"
+            onClick={copyMcpConfig}
+            title="Copy the command to connect a real agent"
+            style={css(`display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid ${C.line}; background:transparent; border-radius:7px; cursor:pointer; font:inherit; font-family:${MONO}; font-size:10.5px; color:${C.caption};`)}
+          >
+            {copied ? 'Copied' : 'Copy MCP config'}
+          </button>
           <button className="cc-h-eae" onClick={closeChat} aria-label="Close chat" style={css('display:grid; place-items:center; width:30px; height:30px; border:none; background:transparent; border-radius:7px; cursor:pointer; color:#57564F;')}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
@@ -61,6 +78,9 @@ export function ChatPanel() {
                   )}
                   {m.note && (
                     <div style={css('margin-top:9px; padding-top:9px; border-top:1px solid #EAE7DD; font-size:11.5px; color:#7A5A28; line-height:1.45;')}>{m.note}</div>
+                  )}
+                  {m.canned && (
+                    <div style={css(`margin-top:9px; padding-top:9px; border-top:1px solid #EAE7DD; font-family:${MONO}; font-size:10.5px; color:#8A8A82; letter-spacing:0.01em;`)}>Sample answer — connect an agent (Copy MCP config) for real ones</div>
                   )}
                 </div>
               </div>

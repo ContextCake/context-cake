@@ -4,10 +4,17 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "build-demo-data": "node scripts/build-demo-data.mjs",
+    "predev": "npm run build-demo-data",
     "dev": "vite",
+    "prebuild": "npm run build-demo-data",
     "build": "tsc -b && vite build",
+    "prebuild:live": "npm run build-demo-data",
+    "build:live": "tsc -b && vite build --base=/console/",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "pretypecheck": "npm run build-demo-data",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@fontsource/bricolage-grotesque": "^5.2.10",
@@ -20,6 +27,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
   }
 }

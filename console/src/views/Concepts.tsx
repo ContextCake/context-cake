@@ -1,11 +1,10 @@
 import { C, css, conceptTypeStyle, MONO } from '../theme'
-import { concepts } from '../data'
 import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
 import { useStore } from '../store'
 
 export function Concepts() {
-  const { query, selConcept, setSelConcept } = useStore()
+  const { query, selConcept, setSelConcept, concepts } = useStore()
   const q = query.trim().toLowerCase()
   const list = concepts.filter((c) => !q || `${c.title} ${c.id}`.toLowerCase().includes(q))
   const selCpt = concepts.find((c) => c.id === selConcept) || null

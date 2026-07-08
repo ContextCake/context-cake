@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "pretypecheck": "npm run build-demo-data",
     "typecheck": "tsc --noEmit",
+    "pretest": "npm run build-demo-data",
     "test": "vitest run"
   },
   "dependencies": {

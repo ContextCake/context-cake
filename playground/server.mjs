@@ -26,6 +26,15 @@ const args = parseArgs(process.argv.slice(2));
 const MANIFEST = path.resolve(args.manifest ?? path.join(HERE, "manifest.json"));
 const MANIFEST_DIR = path.dirname(MANIFEST);
 const PORT = Number(args.port ?? 8790);
+// Optional: serve a built ContextCake Console (its dist/) under /console/, so the
+// console can run in live mode against this server's same-origin /api/* surface.
+// Guarded exactly like the file APIs (traversal + symlink); read-only static.
+const CONSOLE_DIR = args.console ? path.resolve(args.console) : null;
+// Real path of the console root (resolves e.g. macOS /var → /private/var) so the
+// symlink guard compares like-for-like against realpath'd targets.
+const CONSOLE_DIR_REAL = CONSOLE_DIR
+  ? (() => { try { return fs.realpathSync.native(CONSOLE_DIR); } catch { return CONSOLE_DIR; } })()
+  : null;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -105,6 +114,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/sources/sync" && req.method === "POST") {
       return json(res, 200, await syncSourceApi(url.searchParams.get("name")));
     }
+    if (CONSOLE_DIR && (url.pathname === "/console" || url.pathname.startsWith("/console/"))) {
+      return serveConsole(url.pathname, res);
+    }
     return serveStatic(url.pathname, res);
   } catch (err) {
     json(res, err.status ?? 500, { error: err.message });
@@ -117,7 +129,8 @@ server.listen(PORT, "127.0.0.1", () => {
     `ContextCake Playground\n` +
     `  manifest: ${MANIFEST}\n` +
     `  layers:   ${(manifest.layers ?? []).map((l) => `${l.name}(L${l.level})`).join("  >  ")}\n` +
-    `  open:     http://127.0.0.1:${PORT}/\n`,
+    `  open:     http://127.0.0.1:${PORT}/\n` +
+    (CONSOLE_DIR ? `  console:  http://127.0.0.1:${PORT}/console/  (live)\n` : ""),
   );
 });
 
@@ -539,6 +552,38 @@ function serveStatic(pathname, res) {
     if (err) return json(res, 404, { error: "Not found" });
     res.writeHead(200, { "content-type": MIME[path.extname(filePath)] ?? "application/octet-stream" });
     res.end(data);
+  });
+}
+
+// Serve the built console under /console/. SPA fallback: any path without a file
+// extension (a client-side route) resolves to index.html. Guarded against
+// traversal (normalized path must stay inside CONSOLE_DIR) and symlink escape
+// (realpath re-checked), matching the file-API guards above.
+function serveConsole(pathname, res) {
+  let rel = pathname.replace(/^\/console\/?/, "");
+  if (rel === "" || !path.extname(rel)) rel = "index.html"; // SPA route → shell
+  const filePath = path.join(CONSOLE_DIR, rel);
+  if (filePath !== CONSOLE_DIR && !filePath.startsWith(CONSOLE_DIR + path.sep)) {
+    return json(res, 403, { error: "Forbidden" });
+  }
+  const send = (target) => fs.readFile(target, (err, data) => {
+    if (err) {
+      // Missing client route (no extension already rewritten) shouldn't 404;
+      // a genuinely missing asset does.
+      if (rel !== "index.html") return json(res, 404, { error: "Not found" });
+      return json(res, 404, { error: "Console build not found — run `npm run build:live` in console/" });
+    }
+    res.writeHead(200, { "content-type": MIME[path.extname(target)] ?? "application/octet-stream" });
+    res.end(data);
+  });
+  // Symlink guard: a symlink inside CONSOLE_DIR could still point outside it.
+  // Compare realpath'd target against the realpath'd root.
+  fs.realpath.native(filePath, (rErr, real) => {
+    if (rErr) return send(filePath); // ENOENT etc. → let readFile produce the 404
+    if (real !== CONSOLE_DIR_REAL && !real.startsWith(CONSOLE_DIR_REAL + path.sep)) {
+      return json(res, 403, { error: "Forbidden" });
+    }
+    send(real);
   });
 }
 

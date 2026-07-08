@@ -14,6 +14,21 @@ import type { LayerId, RouteId } from './theme'
 export type ViewId = 'canvas' | 'overview' | 'triage' | 'conflicts' | 'concepts'
 export type TriageTab = 'review' | 'captured' | 'ignored'
 
+const VIEW_IDS: ViewId[] = ['canvas', 'overview', 'triage', 'conflicts', 'concepts']
+
+/** Parse the URL hash into a view + optional concept id (deep link). */
+function parseHash(): { view?: ViewId; concept?: string } {
+  if (typeof window === 'undefined') return {}
+  const h = window.location.hash.replace(/^#\/?/, '')
+  if (!h) return {}
+  const slash = h.indexOf('/')
+  const view = (slash === -1 ? h : h.slice(0, slash)) as ViewId
+  const rest = slash === -1 ? '' : h.slice(slash + 1)
+  if (!VIEW_IDS.includes(view)) return {}
+  if (view === 'concepts' && rest) return { view, concept: decodeURIComponent(rest) }
+  return { view }
+}
+
 export interface Cite { layer: LayerId; label: string }
 export interface ChatMessage {
   role: 'assistant' | 'user'
@@ -117,7 +132,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [signals, setSignals] = useState<Signal[]>(mode === 'demo' ? initialSignals : [])
   const activity = mode === 'demo' ? demoActivity : []
 
-  const [view, setView] = useState<ViewId>('canvas')
+  const [view, setView] = useState<ViewId>(() => parseHash().view ?? 'canvas')
   const [triageTab, setTriageTab] = useState<TriageTab>('review')
   const [selSignal, setSelSignal] = useState<string | null>(mode === 'demo' ? 'sig-1' : null)
   const [selConflict, setSelConflict] = useState('')
@@ -144,7 +159,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setConcepts(raw.map(adaptConcept))
         const derivedConflicts = adaptConflicts(raw)
         setConflicts(derivedConflicts)
-        setSelConcept((prev) => prev || raw[0]?.id || '')
+        // Honor a deep-linked concept from the URL hash; else default to the first.
+        const pending = pendingConceptRef.current
+        if (pending && raw.some((c) => c.id === pending)) {
+          setView('concepts')
+          setSelConcept(pending)
+        } else {
+          setSelConcept((prev) => prev || raw[0]?.id || '')
+        }
+        pendingConceptRef.current = undefined
         setSelConflict((prev) => prev || derivedConflicts[0]?.id || '')
       } catch (e) {
         if (cancelled) return
@@ -166,6 +189,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const chatInputRef = useRef(chatInput); chatInputRef.current = chatInput
   const conceptsRef = useRef(concepts); conceptsRef.current = concepts
   const modeRef = useRef(mode); modeRef.current = mode
+  const pendingConceptRef = useRef<string | undefined>(parseHash().concept)
+  const prevViewRef = useRef<ViewId>(view)
+
+  // URL hash ⇄ state: reflect view/selected-concept for deep links, restore on
+  // load (above), and support back/forward. pushState on view change (a real
+  // navigation), replaceState within a view (selection tweak) to avoid spam.
+  useEffect(() => {
+    const target = view === 'concepts' && selConcept
+      ? `#/concepts/${encodeURIComponent(selConcept)}`
+      : `#/${view}`
+    if (window.location.hash === target) { prevViewRef.current = view; return }
+    const viewChanged = prevViewRef.current !== view
+    prevViewRef.current = view
+    if (viewChanged) window.history.pushState(null, '', target)
+    else window.history.replaceState(null, '', target)
+  }, [view, selConcept])
+
+  useEffect(() => {
+    const onPop = () => {
+      const p = parseHash()
+      if (p.view) setView(p.view)
+      if (p.concept) setSelConcept(p.concept)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
 
   const filtered = useCallback((tab: TriageTab): Signal[] => {
     const route = TAB_TO_ROUTE[tab]

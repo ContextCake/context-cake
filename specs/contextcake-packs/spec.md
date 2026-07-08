@@ -88,8 +88,12 @@ updates/CHANGELOG.md
 updates/MERGE-GUIDE.md
 ```
 
-The private repository implementation MAY nest that contract under a Claude Code skill directory,
-but the plain zip SHALL expose the contract at zip root.
+The private repository implementation MAY nest that contract under a Claude Code skill directory.
+The plain zip SHALL contain a single top-level folder named for the pack (for example
+`data-analytics-team-pack/`); that delivered pack root SHALL expose the contract files and
+directories listed above. The zip filename carries the pack version (for example
+`data-analytics-team-pack-v0.1.0.zip`). This is the standard customer-friendly archive convention:
+unzipping yields one clearly named folder rather than loose files.
 
 Customer-facing content markdown SHALL be valid OKF unless explicitly excluded:
 

@@ -4,7 +4,10 @@
 //   GET /api/resolve?concept=<id>   -> one concept resolved by the real engine
 // Everything on screen is a rendering of that engine output.
 
-const LAYER_PALETTE = ["#a78bfa", "#38bdf8", "#34d399", "#f5b544", "#f472b6", "#facc15"];
+// Index 0-2 are the brand provenance trio (personal/team/company, matching
+// site + console); indices 3+ are extra hues for manifests with more than
+// three layers, cycling after the trio.
+const LAYER_PALETTE = ["#d9ab53", "#8dc3a8", "#8bbad1", "#f5b544", "#f472b6", "#facc15"];
 const NODE_W = 240;
 const RES_W = 264;
 

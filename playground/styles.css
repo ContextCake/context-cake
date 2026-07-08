@@ -15,13 +15,15 @@
 
   --accent: #34d399;         /* ContextCake brand green */
   --accent-soft: rgba(52, 211, 153, 0.14);
-  --warn: #f5b544;           /* conflict amber */
-  --warn-soft: rgba(245, 181, 68, 0.13);
+  --warn: #e07a56;           /* conflict — brand dissent accent, use sparingly */
+  --warn-soft: rgba(224, 122, 86, 0.14);
 
-  /* Per-layer accents, assigned by precedence rank in JS via these vars. */
-  --c-personal: #a78bfa;     /* highest precedence */
-  --c-team: #38bdf8;
-  --c-company: #34d399;      /* base */
+  /* Per-layer accents, assigned by precedence rank in JS (see LAYER_PALETTE
+     in app.js, which is the source of truth for rendered swatches/badges).
+     These three mirror the brand provenance trio for the common 3-layer case. */
+  --c-personal: #d9ab53;     /* highest precedence */
+  --c-team: #8dc3a8;
+  --c-company: #8bbad1;      /* base */
 
   --radius: 14px;
   --radius-sm: 9px;

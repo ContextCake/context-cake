@@ -56,6 +56,7 @@ export default defineConfig({
 						{ label: 'CLI', slug: 'docs/reference/cli' },
 						{ label: 'MCP tools', slug: 'docs/reference/mcp-tools' },
 						{ label: 'Override syntax', slug: 'docs/reference/override-syntax' },
+						{ label: 'Update checks and privacy', slug: 'docs/reference/updates-and-privacy' },
 					],
 				},
 			],

@@ -74,6 +74,16 @@ export function App() {
   const closeWizard = () => setWizardOpen(false)
   const reopenWizard = () => setWizardOpen(true)
 
+  // Mobile off-canvas nav drawer (inert on desktop, where the sidebar is static).
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const closeDrawer = () => setDrawerOpen(false)
+  useEffect(() => {
+    if (!drawerOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawerOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [drawerOpen])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (view !== 'triage' || chatOpen) return
@@ -101,22 +111,28 @@ export function App() {
     body = <ErrorState kind={error.kind} message={error.message} reload={reload} />
   } else {
     body = (
-      <div className="cc-app-shell">
+      <div className="cc-app-shell" data-drawer={drawerOpen ? 'open' : 'closed'}>
+        <div className="cc-drawer-scrim" onClick={closeDrawer} aria-hidden="true" />
         <div className="cc-shell-inner">
-          <Sidebar onReopenSetup={needsSetup ? reopenWizard : undefined} />
-          <Header />
-          {view === 'canvas' ? (
-            <main className="cc-main cc-main-canvas">
-              <Canvas />
-            </main>
-          ) : (
-            <main className="cc-main">
-              {view === 'overview' && <Overview />}
-              {view === 'triage' && <Triage />}
-              {view === 'conflicts' && <Conflicts />}
-              {view === 'concepts' && <Concepts />}
-            </main>
-          )}
+          <Sidebar
+            onReopenSetup={needsSetup ? reopenWizard : undefined}
+            onNavigate={closeDrawer}
+          />
+          <div className="cc-content">
+            <Header onOpenMenu={() => setDrawerOpen(true)} />
+            {view === 'canvas' ? (
+              <main className="cc-main cc-main-canvas">
+                <Canvas />
+              </main>
+            ) : (
+              <main className="cc-main">
+                {view === 'overview' && <Overview />}
+                {view === 'triage' && <Triage />}
+                {view === 'conflicts' && <Conflicts />}
+                {view === 'concepts' && <Concepts />}
+              </main>
+            )}
+          </div>
         </div>
         {chatOpen && <ChatPanel />}
       </div>

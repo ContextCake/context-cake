@@ -22,11 +22,9 @@ Use absolute paths — the client spawns the process from its own working
 directory, not the manifest author's. The server identifies itself over the
 MCP `initialize` handshake as `contextcake`.
 
-:::caution
-The manifest named in `--manifest` is a trust boundary: a layer with
-`"source": "mcp"` spawns its own `command` with `args` as your user. Only
-point any client at a manifest you trust.
-:::
+> **Caution:** the manifest named in `--manifest` is a trust boundary: a layer
+> with `"source": "mcp"` spawns its own `command` with `args` as your user.
+> Only point any client at a manifest you trust.
 
 ## The four tools {#the-four-tools}
 

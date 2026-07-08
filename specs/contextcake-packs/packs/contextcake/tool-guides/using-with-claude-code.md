@@ -32,11 +32,9 @@ primary database, and does that conflict with company policy?" — Claude calls
 `search` or `read_file` and reasons over the returned `sourceLayer` and
 `conflicts` fields instead of guessing.
 
-:::caution
-The manifest is a trust boundary. A layer with `"source": "mcp"` spawns its
-`command` with `args` as your user. Only register a manifest you trust —
-same model as any other MCP client config.
-:::
+> **Caution:** the manifest is a trust boundary. A layer with `"source": "mcp"`
+> spawns its `command` with `args` as your user. Only register a manifest you
+> trust — same model as any other MCP client config.
 
 ## Option 2: install this pack as static context {#install-this-pack-as-static-context}
 

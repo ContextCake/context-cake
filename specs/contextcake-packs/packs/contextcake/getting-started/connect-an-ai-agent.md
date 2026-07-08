@@ -25,11 +25,9 @@ node mcp-server.mjs --personal ~/kb-personal --shared ~/kb-shared
 
 `--help` prints usage for both forms.
 
-:::caution
-The manifest is a trust boundary. A layer with `"source": "mcp"` spawns its
-`command` with `args` as your user. Only point `--manifest` at a config you
-trust — same model as any MCP client config.
-:::
+> **Caution:** the manifest is a trust boundary. A layer with `"source": "mcp"`
+> spawns its `command` with `args` as your user. Only point `--manifest` at a
+> config you trust — same model as any MCP client config.
 
 ## Register it as an MCP server {#register-it-as-an-mcp-server}
 

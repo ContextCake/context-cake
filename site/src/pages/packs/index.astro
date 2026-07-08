@@ -6,6 +6,7 @@ const packSections = [
 	['overview/', 'What ContextCake is, the problem it solves, and the mental model.'],
 	['architecture/', 'Federated storage, the resolver, section merge, conflicts, OKF, and the MCP server.'],
 	['getting-started/', 'Install, resolve your first cascade, write a layer, connect an agent.'],
+	['use-cases/', 'Multi-layer context, foreign MCP graphs, and capturing or promoting knowledge.'],
 	['examples/', 'A real OKF concept, a working layers.json, and a resolved read_file payload.'],
 	['nuances/', 'The sharp edges: precedence, the trust boundary, conflicts-not-hidden.'],
 	['tool-guides/', 'Use the pack with Claude Code, ChatGPT, Cursor, and Copilot.'],
@@ -30,7 +31,7 @@ const featuredPack = {
 const heroPoints = [
 	'Use the same pack across Claude, ChatGPT, Cursor, Copilot, and plain docs',
 	'Inspect the files instead of guessing what is inside',
-	'Keep team-specific edits in a local overlay',
+	'Give your AI assistant accurate context, not guesses',
 ];
 
 const structurePreview = `contextcake/
@@ -53,9 +54,9 @@ const structurePreview = `contextcake/
 				<p class="eyebrow">ContextCake Packs</p>
 				<h1 id="packs-title">Ready-made files for teams that already use AI at work.</h1>
 				<p class="lede">
-					Each pack bundles the files a team keeps recreating in chat: rules, workflows,
-					templates, examples, and editor guidance. You can inspect the structure, keep local
-					edits separate, and reuse the same material across tools.
+					Each pack bundles the context a team keeps re-explaining in chat: concepts,
+					architecture, guides, and worked examples. You can inspect every file before you
+					rely on it, and reuse the same material across tools.
 				</p>
 				<ul class="hero-points" aria-label="Pack benefits">
 					{heroPoints.map((item) => <li>{item}</li>)}
@@ -117,10 +118,10 @@ const structurePreview = `contextcake/
 
 		<section class="structure" aria-labelledby="structure-title">
 			<div class="section-head compact">
-				<p class="eyebrow">Pack contract</p>
-				<h2 id="structure-title">Same layout every time.</h2>
+				<p class="eyebrow">Inside the pack</p>
+				<h2 id="structure-title">A shape an agent can navigate.</h2>
 				<p>
-					The pack shape is part of the product. A person can scan it quickly, and an AI tool
+					The structure is part of the product. A person can scan it quickly, and an AI tool
 					can navigate it without guessing.
 				</p>
 			</div>

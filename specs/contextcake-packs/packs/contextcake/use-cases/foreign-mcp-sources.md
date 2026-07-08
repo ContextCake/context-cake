@@ -75,11 +75,11 @@ still answer.
 An `mcp` layer runs `command` with `args` taken straight from the manifest —
 whoever controls the manifest controls what gets executed as you. Only
 point `--manifest` at a config you trust; see
-`nuances/the-manifest-is-a-trust-boundary.md`.
+`architecture/the-manifest-and-trust-boundary.md`.
 
 ## Next {#next}
 
 - `examples/layers-json-example.md` — the full manifest shape, including an
   `mcp` layer's fields
-- `nuances/the-manifest-is-a-trust-boundary.md` — what spawning a manifest
+- `architecture/the-manifest-and-trust-boundary.md` — what spawning a manifest
   command means for your machine

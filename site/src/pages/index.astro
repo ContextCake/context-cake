@@ -39,6 +39,50 @@ const heroBands = bodySections.map((s) => ({
 // The contributing layers, shown as the "stack" that resolves into the composite.
 const heroContributors = primaryDb.contributors;
 
+// Human-facing labels for the hero visual: the layer semantics, in plain words.
+const layerName = { personal: 'Your notes', team: 'Team practice', company: 'Company policy' };
+const layerShort = { personal: 'You', team: 'Team', company: 'Company' };
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const shortDate = (iso) => {
+	const [, m, d] = iso.split('-').map(Number);
+	return `${MONTHS[m - 1]} ${d}`;
+};
+
+// Friendly labels for the sections of the concept resolved in the hero.
+const sectionLabel = {
+	choice: 'Which database',
+	rationale: 'Why',
+	analytics: 'Analytics store',
+	ownership: 'Who owns it',
+};
+
+// A curated four-row cut of the REAL resolved sections that tells the whole
+// story at a glance: all three layers win something, two carry a live
+// disagreement. Still resolver output — a selection, never hand-authored.
+const byKey = Object.fromEntries(bodySections.map((s) => [s.key, s]));
+const storyBands = ['choice', 'rationale', 'analytics', 'ownership']
+	.map((k) => byKey[k])
+	.filter(Boolean)
+	.map((s) => ({
+		label: sectionLabel[s.key] ?? label(s.heading),
+		layer: s.sourceLayer,
+		updated: s.sourceUpdated,
+		conflict: s.conflicts?.[0]?.layer ?? null,
+	}));
+
+// One real disagreement, shown in full — the losing value kept, dated, visible.
+// Trim to a clean sentence boundary so the quote never cuts mid-word.
+const choiceConflict = byKey.choice?.conflicts?.[0] ?? null;
+const dissentQuote = (() => {
+	if (!choiceConflict) return '';
+	const one = choiceConflict.content.replace(/\s+/g, ' ').trim();
+	if (one.length <= 92) return one;
+	const cut = one.slice(0, 92);
+	const boundary = cut.lastIndexOf('. ');
+	return boundary > 40 ? cut.slice(0, boundary + 1) : `${cut.trimEnd()}…`;
+})();
+const conceptTitle = primaryDb.frontmatter?.title ?? 'decisions/primary-db';
+
 // A real (truncated) read_file payload for the "For agents" section. Structure
 // is untouched; only long content strings are shortened for display (§11.3).
 const flatten = (str, n = 84) => {
@@ -167,57 +211,96 @@ const mcpTools = [
 		<main>
 			<section class="hero">
 				<div class="hero-copy">
-					<p class="kicker">Context for AI work</p>
-					<h1>Keep policy, team practice, and local judgment in the same answer.</h1>
+					<p class="kicker">Context layer for AI agents</p>
+					<h1>One answer for your AI, stitched from every layer of your team's context.</h1>
 					<p class="sub">
-						Most teams already have the right material. It is just scattered across repo docs,
-						runbooks, and local notes, so every AI tool gets a partial view. ContextCake turns
-						that stack into one working answer with visible sources, dates, and disagreements.
+						Company policy, team runbooks, and your own notes live in different places — so
+						every AI tool answers from just one of them, and usually the stale one. ContextCake
+						resolves those layers into a single answer per topic: each line tagged with where it
+						came from, every disagreement kept in view instead of flattened away.
+					</p>
+					<p class="mechanic">
+						The closest layer wins each section; whatever it doesn't cover falls through from the
+						layer below. Any MCP agent reads the merged, sourced result.
 					</p>
 					<div class="ctas">
-						<a class="cta primary" href="/demo">See the demo</a>
+						<a class="cta primary" href="/demo">See the live demo</a>
 						<a class="cta" href="/docs">Read the docs</a>
-						<a class="cta" href="/packs">Explore Packs</a>
+						<a class="cta" href="https://github.com/ContextCake/context-cake">GitHub</a>
 					</div>
-					<p class="hero-note">Open source engine for teams that need a verifiable context layer.</p>
+					<p class="hero-note">
+						Open-source engine · Node ≥ 18, zero dependencies · <a href="/packs">Data &amp; Analytics Pack →</a>
+					</p>
 					<CopyCommand command="gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz" />
 				</div>
 
 			<figure
 				class="composite"
-				aria-label="The concept decisions/primary-db, resolved: three layers stacked in precedence order, resolving into one composite where each section is marked with the layer that won it, with provenance and conflicts."
+				aria-label={`The concept "${conceptTitle}" resolved from three layers. Your notes (${shortDate(heroContributors[0].updated)}), team practice (${shortDate(heroContributors[1].updated)}), and company policy (${shortDate(heroContributors[2].updated)}) merge into one answer where each section is tagged with the layer that won it, and disagreements are kept with their layer and date.`}
 			>
-				<figcaption><span class="dot" aria-hidden="true"></span>decisions/primary-db — resolved</figcaption>
+				<figcaption>
+					<span class="dot" aria-hidden="true"></span>
+					<span class="cap-title">{conceptTitle}</span>
+					<span class="cap-sub">what your agent reads</span>
+				</figcaption>
+
 				<div class="stack" aria-hidden="true">
-					{
-						heroContributors.map((ct) => (
-							<span class="stack-chip" style={`--band: ${layerColor[ct.layer]}`}>
-								<span class="stack-dot" />
-								{ct.layer}
-								<span class="stack-lvl">L{ct.level}</span>
-							</span>
-						))
-					}
-					<Icon name="chevron-down" size={16} class="stack-arrow" />
-				</div>
-				<div class="bands">
-					{
-						heroBands.map((b) => (
-							<div class="band" style={`--band: ${layerColor[b.layer]}`}>
-								<span class="section"><span class="swatch" aria-hidden="true" />{b.label}</span>
-								<span class="prov">
-									<span class="layer">{b.layer}</span> · {b.updated}
-									{b.conflict && (
-										<span class="conflict">
-											<Icon name="alert" size={12} strokeWidth={2.2} />
-											{b.conflict} disagrees
-										</span>
-									)}
+					<span class="rail-label">3 sources</span>
+					<div class="stack-chips">
+						{
+							heroContributors.map((ct) => (
+								<span class="stack-chip" style={`--band: ${layerColor[ct.layer]}`}>
+									<span class="stack-dot" />
+									<span class="stack-name">{layerName[ct.layer]}</span>
+									<span class="stack-date">{shortDate(ct.updated)}</span>
 								</span>
-							</div>
-						))
-					}
+							))
+						}
+					</div>
 				</div>
+
+				<div class="resolve" aria-hidden="true">
+					<span class="resolve-line" />
+					<span class="resolve-word">resolves into</span>
+					<Icon name="chevron-down" size={15} class="resolve-arrow" />
+				</div>
+
+				<div class="bands">
+					<span class="rail-label">1 answer</span>
+					<div class="bands-list">
+						{
+							storyBands.map((b) => (
+								<div class="band" style={`--band: ${layerColor[b.layer]}`}>
+									<span class="section"><span class="swatch" aria-hidden="true" />{b.label}</span>
+									<span class="prov">
+										<span class="layer">{layerShort[b.layer]}</span> · {shortDate(b.updated)}
+										{b.conflict && (
+											<span class="conflict">
+												<Icon name="alert" size={12} strokeWidth={2.2} />
+												{layerShort[b.conflict]} disagreed
+											</span>
+										)}
+									</span>
+								</div>
+							))
+						}
+					</div>
+				</div>
+
+				{
+					choiceConflict && (
+						<div class="dissent">
+							<span class="dissent-tag">
+								<Icon name="alert" size={13} strokeWidth={2.2} />
+								Kept, not overwritten
+							</span>
+							<p class="dissent-quote">"{dissentQuote}"</p>
+							<span class="dissent-src">
+								{layerName[choiceConflict.layer]} · {shortDate(choiceConflict.updated)}
+							</span>
+						</div>
+					)
+				}
 			</figure>
 		</section>
 
@@ -368,13 +451,28 @@ const mcpTools = [
 	.sub {
 		max-width: 42rem;
 		font-size: 1.15rem;
-		margin: 0 0 2rem;
+		margin: 0 0 1rem;
+	}
+	.mechanic {
+		max-width: 42rem;
+		margin: 0;
+		color: var(--cc-text-muted);
+		font-size: 1rem;
 	}
 	.hero-note {
 		margin: 1.5rem 0 0.85rem;
 		color: var(--cc-text-muted);
 		font-size: 0.95rem;
 		max-width: 38rem;
+	}
+	.hero-note a {
+		color: var(--cc-layer-team);
+		text-decoration: none;
+		font-weight: 600;
+		white-space: nowrap;
+	}
+	.hero-note a:hover {
+		text-decoration: underline;
 	}
 	.ctas {
 		display: flex;
@@ -422,89 +520,137 @@ const mcpTools = [
 	}
 	.composite figcaption {
 		display: flex;
-		align-items: center;
+		align-items: baseline;
 		gap: 0.5rem;
 		font-family: var(--cc-font-mono);
 		font-size: 0.85rem;
 		color: var(--cc-text-muted);
-		margin-bottom: 0.75rem;
+		margin-bottom: 1rem;
 	}
 	.composite .dot {
+		align-self: center;
+		flex: none;
 		width: 8px;
 		height: 8px;
 		border-radius: 50%;
 		background: var(--cc-cta);
 	}
-	/* The "stack": the layers that resolve into the composite below. */
-	.stack {
+	.composite .cap-title {
+		color: var(--cc-text);
+		font-weight: 700;
+	}
+	.composite .cap-sub {
+		margin-left: auto;
+		font-size: 0.72rem;
+		color: var(--cc-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	/* Tiny rail labels that name the two halves: "3 sources" → "1 answer". */
+	.rail-label {
+		display: block;
+		font-family: var(--cc-font-mono);
+		font-size: 0.66rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.09em;
+		color: var(--cc-text-muted);
+		margin-bottom: 0.5rem;
+	}
+	/* The "stack": the three source layers, in precedence order, in plain words. */
+	.stack-chips {
 		display: flex;
 		flex-wrap: wrap;
-		align-items: center;
 		gap: 0.4rem 0.5rem;
-		margin-bottom: 0.85rem;
 	}
 	.stack-chip {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
+		gap: 0.4rem;
 		font-family: var(--cc-font-mono);
-		font-size: 0.75rem;
+		font-size: 0.76rem;
 		color: var(--cc-text-body);
-		text-transform: capitalize;
 		border: 1px solid var(--cc-border);
 		border-radius: 999px;
 		background: rgba(243, 239, 230, 0.04);
-		padding: 0.18rem 0.6rem;
+		padding: 0.2rem 0.65rem;
 	}
 	.stack-dot {
-		width: 8px;
-		height: 8px;
+		flex: none;
+		width: 9px;
+		height: 9px;
 		border-radius: 50%;
 		background: var(--band);
 	}
-	.stack-lvl {
-		color: var(--band);
-		font-weight: 700;
+	.stack-name {
+		color: var(--cc-text);
+		font-weight: 500;
 	}
-	.stack-arrow {
+	.stack-date {
 		color: var(--cc-text-muted);
-		margin-left: 0.15rem;
 	}
-	.bands {
+	/* The resolve seam between the sources and the one answer. */
+	.resolve {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		margin: 0.9rem 0;
+		color: var(--cc-text-faint);
+	}
+	.resolve-line {
+		flex: 1;
+		height: 1px;
+		background: var(--cc-border);
+	}
+	.resolve-word {
+		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+	.resolve-arrow {
+		color: var(--cc-text-muted);
+	}
+	.bands-list {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: 0.45rem;
 	}
 	.band {
 		display: flex;
 		justify-content: space-between;
-		align-items: baseline;
-		gap: 1rem;
+		align-items: center;
+		gap: 0.75rem;
 		border: 1px solid var(--cc-border);
+		border-left: 3px solid var(--band);
 		background: var(--cc-surface-raised);
 		border-radius: var(--cc-radius-sm);
-		padding: 0.6rem 0.9rem;
+		padding: 0.55rem 0.85rem;
 		font-family: var(--cc-font-mono);
-		font-size: 0.9rem;
+		font-size: 0.86rem;
 	}
 	.band .section {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.55rem;
+		min-width: 0;
 		color: var(--cc-text);
 	}
-	/* Provenance key: a layer-colored swatch, not a side-stripe accent */
+	/* Provenance key: a layer-colored swatch matching the source chip's dot. */
 	.band .swatch {
 		flex: none;
-		width: 10px;
-		height: 10px;
-		border-radius: 3px;
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
 		background: var(--band);
 	}
 	.band .prov {
-		color: var(--cc-text-body);
-		font-size: 0.8rem;
-		text-align: right;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex: none;
+		color: var(--cc-text-muted);
+		font-size: 0.78rem;
 		white-space: nowrap;
 	}
 	.band .layer {
@@ -514,9 +660,38 @@ const mcpTools = [
 	.band .conflict {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.25rem;
+		gap: 0.22rem;
 		color: var(--cc-conflict);
-		margin-left: 0.5rem;
+	}
+	/* The killer detail: a real losing value, kept with its layer and date. */
+	.dissent {
+		margin-top: 0.85rem;
+		padding: 0.7rem 0.85rem;
+		border: 1px solid color-mix(in srgb, var(--cc-conflict) 34%, var(--cc-border));
+		border-radius: var(--cc-radius-sm);
+		background: color-mix(in srgb, var(--cc-conflict) 8%, transparent);
+	}
+	.dissent-tag {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.32rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--cc-conflict);
+	}
+	.dissent-quote {
+		margin: 0.45rem 0 0.35rem;
+		color: var(--cc-text-body);
+		font-size: 0.85rem;
+		line-height: 1.5;
+	}
+	.dissent-src {
+		font-family: var(--cc-font-mono);
+		font-size: 0.72rem;
+		color: var(--cc-text-muted);
 	}
 
 	/* Problem */
@@ -744,10 +919,10 @@ const mcpTools = [
 	@media (max-width: 480px) {
 		.band {
 			flex-direction: column;
-			gap: 0.15rem;
+			align-items: flex-start;
+			gap: 0.2rem;
 		}
 		.band .prov {
-			text-align: left;
 			white-space: normal;
 		}
 	}
@@ -776,7 +951,7 @@ const mcpTools = [
 		.composite .stack-chip:nth-child(3) {
 			animation-delay: 0.17s;
 		}
-		.composite .stack-arrow {
+		.composite .resolve {
 			opacity: 0;
 			animation: cc-fade 0.32s ease 0.24s forwards;
 		}
@@ -785,23 +960,21 @@ const mcpTools = [
 			transform: translateX(-10px);
 			animation: cc-band 0.4s ease forwards;
 		}
-		.composite .bands .band:nth-child(1) {
-			animation-delay: 0.3s;
+		.composite .bands-list .band:nth-child(1) {
+			animation-delay: 0.34s;
 		}
-		.composite .bands .band:nth-child(2) {
-			animation-delay: 0.38s;
+		.composite .bands-list .band:nth-child(2) {
+			animation-delay: 0.42s;
 		}
-		.composite .bands .band:nth-child(3) {
-			animation-delay: 0.46s;
+		.composite .bands-list .band:nth-child(3) {
+			animation-delay: 0.5s;
 		}
-		.composite .bands .band:nth-child(4) {
-			animation-delay: 0.54s;
+		.composite .bands-list .band:nth-child(4) {
+			animation-delay: 0.58s;
 		}
-		.composite .bands .band:nth-child(5) {
-			animation-delay: 0.62s;
-		}
-		.composite .bands .band:nth-child(6) {
-			animation-delay: 0.7s;
+		.composite .dissent {
+			opacity: 0;
+			animation: cc-fade 0.4s ease 0.66s forwards;
 		}
 	}
 	@keyframes cc-fade {

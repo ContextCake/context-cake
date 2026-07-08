@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import Icon from '../components/Icon.astro';
 
 // Point at index.html explicitly: Cloudflare Pages resolves the directory, but
 // `astro dev` does not serve a trailing-slash directory index, so `/demo-app/`
@@ -39,7 +40,7 @@ const narrativePoints = [
 					each part came from.
 				</p>
 				<div class="actions">
-					<a class="cta primary" href={demoUrl} target="_blank" rel="noreferrer">Open full demo</a>
+					<a class="cta primary" href="#demo-stage">Try the live console</a>
 					<a class="cta" href="/docs/getting-started/first-cascade">Walk the first cascade</a>
 					<a class="cta" href="/install">Install ContextCake</a>
 				</div>
@@ -57,14 +58,56 @@ const narrativePoints = [
 		</section>
 
 		<section class="frame-section">
-			<div class="frame-wrap">
-				<iframe
-					class="demo-frame"
-					src={demoUrl}
-					title="ContextCake console demo"
-					loading="eager"
-				/>
+			<div class="stage" id="demo-stage" data-demo-stage>
+				<figure class="frame-wrap" data-demo-frame>
+					<div class="chrome">
+						<span class="chrome-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+						<span class="chrome-title">
+							<span class="chrome-live" aria-hidden="true"></span>
+							console.contextcake.com<span class="chrome-path"> · decisions/primary-db</span>
+						</span>
+						<span class="chrome-actions">
+							<a class="chrome-btn" href={demoUrl} target="_blank" rel="noreferrer">
+								<Icon name="external-link" size={15} strokeWidth={2.2} />
+								<span class="chrome-btn-label">New tab</span>
+							</a>
+							<button
+								type="button"
+								class="chrome-btn"
+								data-demo-expand
+								aria-expanded="false"
+								aria-controls="demo-frame-body"
+							>
+								<Icon name="maximize" size={15} strokeWidth={2.2} />
+								<span class="chrome-btn-label">Expand</span>
+							</button>
+						</span>
+					</div>
+					<div class="frame-body" id="demo-frame-body">
+						<iframe
+							class="demo-frame"
+							src={demoUrl}
+							title="ContextCake console demo"
+							loading="eager"
+						/>
+						<span class="frame-hint" data-demo-hint aria-hidden="true">
+							<Icon name="maximize" size={15} strokeWidth={2.2} />
+							Interact to expand full screen
+						</span>
+					</div>
+					<button
+						type="button"
+						class="demo-minimize"
+						data-demo-minimize
+						tabindex="-1"
+						aria-hidden="true"
+					>
+						<Icon name="minimize" size={16} strokeWidth={2.2} />
+						Minimize
+					</button>
+				</figure>
 			</div>
+			<div class="demo-scrim" data-demo-scrim hidden></div>
 		</section>
 
 		<section class="signals">
@@ -81,6 +124,120 @@ const narrativePoints = [
 		</section>
 	</main>
 </Base>
+
+<script>
+	// Immersive demo: the embedded console expands to fill the viewport the moment
+	// the visitor engages with it (or hits Expand), then retracts via the corner
+	// minimize button, the scrim, Escape, or by scrolling the page away. One live
+	// iframe throughout — expanding only re-lays it out, it never reloads.
+	const frame = document.querySelector<HTMLElement>('[data-demo-frame]');
+	const stage = document.querySelector<HTMLElement>('[data-demo-stage]');
+	const scrim = document.querySelector<HTMLElement>('[data-demo-scrim]');
+	const iframe = document.querySelector<HTMLIFrameElement>('.demo-frame');
+	const expandBtn = document.querySelector<HTMLButtonElement>('[data-demo-expand]');
+	const minimizeBtn = document.querySelector<HTMLButtonElement>('[data-demo-minimize]');
+
+	if (frame && stage && scrim && iframe && expandBtn && minimizeBtn) {
+		const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+		let expanded = false;
+		let scrollAnchor = 0;
+		let openedAt = 0;
+
+		// FLIP: grow/shrink the panel smoothly between its inline box and the
+		// viewport, with no reflow of the iframe document.
+		const flip = (mutate: () => void) => {
+			if (reduceMotion.matches) {
+				mutate();
+				return;
+			}
+			const first = frame.getBoundingClientRect();
+			mutate();
+			const last = frame.getBoundingClientRect();
+			const dx = first.left - last.left;
+			const dy = first.top - last.top;
+			const sx = first.width / last.width;
+			const sy = first.height / last.height;
+			frame.style.transformOrigin = 'top left';
+			frame.style.transition = 'none';
+			frame.style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+			requestAnimationFrame(() => {
+				frame.style.transition = 'transform 360ms cubic-bezier(0.16, 1, 0.3, 1)';
+				frame.style.transform = 'none';
+				const clear = () => {
+					frame.style.transition = '';
+					frame.style.transform = '';
+					frame.style.transformOrigin = '';
+					frame.removeEventListener('transitionend', clear);
+				};
+				frame.addEventListener('transitionend', clear);
+			});
+		};
+
+		const expand = (moveFocus: boolean) => {
+			if (expanded) return;
+			expanded = true;
+			openedAt = Date.now();
+			scrollAnchor = window.scrollY;
+			scrim.hidden = false;
+			// Reserve the inline height so surrounding content does not jump.
+			stage.style.height = `${stage.offsetHeight}px`;
+			requestAnimationFrame(() => scrim.classList.add('is-open'));
+			flip(() => frame.classList.add('is-expanded'));
+			expandBtn.setAttribute('aria-expanded', 'true');
+			minimizeBtn.tabIndex = 0;
+			minimizeBtn.setAttribute('aria-hidden', 'false');
+			// Only pull focus for keyboard/button entry — never interrupt a visitor
+			// who reached immersive mode by clicking inside the live console.
+			if (moveFocus) minimizeBtn.focus();
+		};
+
+		const collapse = (moveFocus: boolean) => {
+			if (!expanded) return;
+			expanded = false;
+			scrim.classList.remove('is-open');
+			flip(() => frame.classList.remove('is-expanded'));
+			expandBtn.setAttribute('aria-expanded', 'false');
+			minimizeBtn.tabIndex = -1;
+			minimizeBtn.setAttribute('aria-hidden', 'true');
+			window.setTimeout(() => {
+				if (!expanded) {
+					scrim.hidden = true;
+					stage.style.height = '';
+				}
+			}, 380);
+			// Re-arm interaction detection: hand focus back out of the iframe.
+			if (document.activeElement === iframe) window.focus();
+			if (moveFocus) expandBtn.focus();
+		};
+
+		expandBtn.addEventListener('click', () => expand(true));
+		minimizeBtn.addEventListener('click', () => collapse(true));
+		scrim.addEventListener('click', () => collapse(false));
+
+		// "Start interacting with it" — a click into the live iframe blurs the
+		// parent window and makes the iframe the active element.
+		window.addEventListener('blur', () => {
+			window.setTimeout(() => {
+				if (!expanded && document.activeElement === iframe) expand(false);
+			}, 0);
+		});
+
+		document.addEventListener('keydown', (event) => {
+			if (event.key === 'Escape' && expanded) collapse(true);
+		});
+
+		// Scroll the page away from the demo and it retracts back into the flow.
+		window.addEventListener(
+			'scroll',
+			() => {
+				if (!expanded) return;
+				if (Date.now() - openedAt < 400) return;
+				if (Math.abs(window.scrollY - scrollAnchor) > 40) collapse(false);
+			},
+			{ passive: true },
+		);
+	}
+</script>
 
 <style>
 	.demo-page {
@@ -160,15 +317,26 @@ const narrativePoints = [
 		font-family: var(--cc-font-heading);
 		font-weight: 700;
 		text-decoration: none;
+		transition:
+			border-color var(--cc-transition),
+			background var(--cc-transition),
+			color var(--cc-transition);
+	}
+	.cta:hover {
+		border-color: var(--cc-border-strong);
+		background: var(--cc-surface-soft);
 	}
 	.cta.primary {
 		background: var(--cc-cta);
 		border-color: var(--cc-cta);
 		color: var(--cc-on-cta);
 	}
+	.cta.primary:hover {
+		background: var(--cc-cta-hover);
+		border-color: var(--cc-cta-hover);
+	}
 	.scenario,
-	.signal,
-	.frame-wrap {
+	.signal {
 		background: var(--cc-surface);
 		border: 1px solid var(--cc-border);
 		border-radius: var(--cc-radius-lg);
@@ -185,25 +353,224 @@ const narrativePoints = [
 	.scenario p {
 		margin: 0;
 	}
+
+	/* Live demo stage ------------------------------------------------------ */
 	.frame-section {
 		padding-bottom: 3rem;
 	}
+	/* The stage holds the inline height; the panel fills it absolutely so that
+	   when it goes fixed (immersive) the page keeps its place — no jump. */
+	.stage {
+		position: relative;
+		height: clamp(30rem, 116vw, 46rem);
+		scroll-margin-top: 5rem;
+	}
+	@media (min-width: 640px) {
+		.stage {
+			height: clamp(34rem, 84vh, 52rem);
+		}
+	}
 	.frame-wrap {
+		position: absolute;
+		inset: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
 		overflow: hidden;
-		background: color-mix(in srgb, var(--cc-surface) 82%, transparent);
+		background: var(--cc-surface-solid);
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-lg);
+		box-shadow: var(--cc-shadow-panel);
+		will-change: transform;
+	}
+	.frame-wrap.is-expanded {
+		position: fixed;
+		inset: clamp(0.6rem, 2.4vw, 2.75rem);
+		z-index: 60;
+		border-color: var(--cc-border-strong);
+		box-shadow: 0 40px 120px rgba(0, 0, 0, 0.55);
+	}
+	/* macOS-style window chrome — reads as a real product surface, and gives the
+	   controls a home. */
+	.chrome {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex: none;
+		padding: 0.6rem 0.7rem 0.6rem 0.95rem;
+		border-bottom: 1px solid var(--cc-border);
+		background: var(--cc-surface-raised);
+	}
+	.chrome-dots {
+		display: inline-flex;
+		gap: 0.4rem;
+		flex: none;
+	}
+	.chrome-dots i {
+		width: 11px;
+		height: 11px;
+		border-radius: 50%;
+		background: var(--cc-border-strong);
+	}
+	.chrome-dots i:nth-child(1) {
+		background: #e06c5a;
+	}
+	.chrome-dots i:nth-child(2) {
+		background: #d9ab53;
+	}
+	.chrome-dots i:nth-child(3) {
+		background: #8dc3a8;
+	}
+	.chrome-title {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-width: 0;
+		flex: 1;
+		justify-content: center;
+		font-family: var(--cc-font-mono);
+		font-size: 0.8rem;
+		color: var(--cc-text-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.chrome-live {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		flex: none;
+		background: var(--cc-layer-team);
+		box-shadow: 0 0 0 0 rgba(141, 195, 168, 0.55);
+		animation: cc-pulse 2.4s ease-out infinite;
+	}
+	.chrome-path {
+		color: var(--cc-text-faint);
+	}
+	.chrome-actions {
+		display: inline-flex;
+		gap: 0.35rem;
+		flex: none;
+	}
+	.chrome-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		height: 32px;
+		padding: 0 0.7rem;
+		border: 1px solid var(--cc-border);
+		border-radius: 999px;
+		background: var(--cc-surface-soft);
+		color: var(--cc-text-body);
+		font-family: var(--cc-font-heading);
+		font-size: 0.82rem;
+		font-weight: 600;
+		text-decoration: none;
+		cursor: pointer;
+		transition:
+			border-color var(--cc-transition),
+			background var(--cc-transition),
+			color var(--cc-transition);
+	}
+	.chrome-btn:hover {
+		border-color: var(--cc-border-strong);
+		background: rgba(243, 239, 230, 0.1);
+		color: var(--cc-text);
+	}
+	/* In immersive mode the corner Minimize is the retract control — the chrome
+	   Expand button would be a no-op, so drop it. */
+	.frame-wrap.is-expanded [data-demo-expand] {
+		display: none;
+	}
+	.frame-body {
+		position: relative;
+		flex: 1;
+		min-height: 0;
 	}
 	.demo-frame {
 		display: block;
 		width: 100%;
-		height: clamp(28rem, 108vw, 44rem);
+		height: 100%;
 		border: 0;
 		background: #0f1115;
 	}
-	@media (min-width: 640px) {
-		.demo-frame {
-			height: clamp(32rem, 82vh, 50rem);
-		}
+	/* Live/clickable affordance over the collapsed console. */
+	.frame-hint {
+		position: absolute;
+		left: 50%;
+		bottom: 0.85rem;
+		transform: translateX(-50%);
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		padding: 0.4rem 0.85rem;
+		border: 1px solid var(--cc-border-strong);
+		border-radius: 999px;
+		background: rgba(16, 17, 15, 0.82);
+		backdrop-filter: blur(8px);
+		color: var(--cc-text-body);
+		font-family: var(--cc-font-mono);
+		font-size: 0.74rem;
+		pointer-events: none;
+		opacity: 0.9;
+		transition: opacity var(--cc-transition);
 	}
+	.frame-wrap:hover .frame-hint {
+		opacity: 0.45;
+	}
+	.frame-wrap.is-expanded .frame-hint {
+		opacity: 0;
+	}
+	/* Corner minimize — only live in immersive mode. */
+	.demo-minimize {
+		position: absolute;
+		right: 1.1rem;
+		bottom: 1.1rem;
+		z-index: 2;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		padding: 0.55rem 0.95rem;
+		border: 1px solid var(--cc-border-strong);
+		border-radius: 999px;
+		background: rgba(16, 17, 15, 0.86);
+		backdrop-filter: blur(10px);
+		color: var(--cc-text);
+		font-family: var(--cc-font-heading);
+		font-size: 0.85rem;
+		font-weight: 700;
+		cursor: pointer;
+		opacity: 0;
+		transform: translateY(0.4rem);
+		pointer-events: none;
+		transition:
+			opacity var(--cc-transition),
+			transform var(--cc-transition),
+			border-color var(--cc-transition),
+			background var(--cc-transition);
+	}
+	.frame-wrap.is-expanded .demo-minimize {
+		opacity: 1;
+		transform: none;
+		pointer-events: auto;
+	}
+	.demo-minimize:hover {
+		border-color: var(--cc-layer-team);
+		background: rgba(16, 17, 15, 0.94);
+	}
+	.demo-scrim {
+		position: fixed;
+		inset: 0;
+		z-index: 55;
+		background: rgba(6, 7, 6, 0.62);
+		backdrop-filter: blur(3px);
+		opacity: 0;
+		transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.demo-scrim.is-open {
+		opacity: 1;
+	}
+
 	.signals h2 {
 		font-size: clamp(2rem, 4vw, 3rem);
 		line-height: 0.98;
@@ -226,6 +593,37 @@ const narrativePoints = [
 		.hero,
 		.signal-grid {
 			grid-template-columns: 1fr;
+		}
+	}
+	@media (max-width: 560px) {
+		.chrome-path,
+		.chrome-btn-label {
+			display: none;
+		}
+		.chrome-btn {
+			padding: 0 0.55rem;
+		}
+	}
+	@keyframes cc-pulse {
+		0% {
+			box-shadow: 0 0 0 0 rgba(141, 195, 168, 0.5);
+		}
+		70% {
+			box-shadow: 0 0 0 7px rgba(141, 195, 168, 0);
+		}
+		100% {
+			box-shadow: 0 0 0 0 rgba(141, 195, 168, 0);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.chrome-live {
+			animation: none;
+		}
+		.cta,
+		.frame-hint,
+		.demo-minimize,
+		.demo-scrim {
+			transition: none;
 		}
 	}
 </style>

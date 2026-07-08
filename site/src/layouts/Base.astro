@@ -9,6 +9,7 @@ import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/700.css';
 import '../styles/tokens.css';
+import Icon from '../components/Icon.astro';
 
 interface Props {
 	title: string;
@@ -20,6 +21,40 @@ const { title, description } = Astro.props;
 // Absolute URLs for canonical + OpenGraph (Astro.site = https://contextcake.com).
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
 const ogImage = new URL('/og.png', Astro.site).href;
+
+const repoUrl = 'https://github.com/ContextCake/context-cake';
+const year = new Date().getFullYear();
+
+// Footer navigation — every href is a real route (marketing pages + Starlight docs).
+const footerColumns = [
+	{
+		heading: 'Product',
+		links: [
+			{ label: 'Demo', href: '/demo' },
+			{ label: 'Packs', href: '/packs' },
+			{ label: 'Install', href: '/install' },
+			{ label: 'Changelog', href: '/changelog' },
+		],
+	},
+	{
+		heading: 'Documentation',
+		links: [
+			{ label: 'Overview', href: '/docs' },
+			{ label: 'Installation', href: '/docs/getting-started/installation' },
+			{ label: 'Your first cascade', href: '/docs/getting-started/first-cascade' },
+			{ label: 'MCP tools', href: '/docs/reference/mcp-tools' },
+		],
+	},
+	{
+		heading: 'Concepts',
+		links: [
+			{ label: 'The layer cake', href: '/docs/concepts/layer-cake' },
+			{ label: 'Merge semantics', href: '/docs/concepts/merge-semantics' },
+			{ label: 'Conflicts & provenance', href: '/docs/concepts/conflicts-and-provenance' },
+			{ label: 'The trust boundary', href: '/docs/concepts/trust-boundary' },
+		],
+	},
+];
 ---
 
 <!doctype html>
@@ -59,7 +94,42 @@ const ogImage = new URL('/og.png', Astro.site).href;
 		</header>
 		<slot />
 		<footer class="footer">
-			<p>ContextCake — conflicts surfaced, not hidden. MIT licensed.</p>
+			<div class="footer-inner">
+				<div class="footer-top">
+					<div class="footer-brand">
+						<a href="/" class="footer-logo" aria-label="ContextCake home">
+							<span class="brand-mark" aria-hidden="true">C</span>
+							<span>ContextCake</span>
+						</a>
+						<p class="footer-tagline">
+							Working context for AI teams. Policy, team practice, and local judgment
+							resolve into one answer — with every source and disagreement still attached.
+						</p>
+						<a class="footer-repo" href={repoUrl} rel="noreferrer">
+							<Icon name="github" size={17} strokeWidth={2} />
+							<span>Star on GitHub</span>
+						</a>
+					</div>
+					<nav class="footer-nav" aria-label="Footer">
+						{footerColumns.map((col) => (
+							<div class="footer-col">
+								<h2 class="footer-heading">{col.heading}</h2>
+								<ul>
+									{col.links.map((link) => (
+										<li><a href={link.href}>{link.label}</a></li>
+									))}
+								</ul>
+							</div>
+						))}
+					</nav>
+				</div>
+				<div class="footer-bottom">
+					<p class="footer-legal">
+						© {year} ContextCake · Open source, MIT licensed
+					</p>
+					<p class="footer-motto">Conflicts surfaced, not hidden.</p>
+				</div>
+			</div>
 		</footer>
 	</body>
 </html>
@@ -175,11 +245,132 @@ const ogImage = new URL('/og.png', Astro.site).href;
 		color: var(--cc-text);
 	}
 	.footer {
-		max-width: 76rem;
-		margin: 4rem auto 0;
-		padding: 2rem 1.5rem;
+		position: relative;
+		z-index: 1;
+		margin-top: 6rem;
 		border-top: 1px solid var(--cc-border);
+		background: linear-gradient(180deg, transparent, rgba(11, 12, 10, 0.55));
+	}
+	.footer-inner {
+		max-width: 76rem;
+		margin: 0 auto;
+		padding: 3.5rem 1.5rem 2.25rem;
+	}
+	.footer-top {
+		display: grid;
+		grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr);
+		gap: 3rem 2.5rem;
+		padding-bottom: 2.5rem;
+		border-bottom: 1px solid var(--cc-border);
+	}
+	.footer-brand {
+		max-width: 30rem;
+	}
+	.footer-logo {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.6rem;
+		font-family: var(--cc-font-heading);
+		font-size: 1.15rem;
+		font-weight: 700;
+		text-decoration: none;
+		color: var(--cc-text);
+	}
+	.footer-logo .brand-mark {
+		width: 2.2rem;
+		height: 2.2rem;
+		border-radius: 13px;
+		font-size: 1.3rem;
+	}
+	.footer-tagline {
+		margin: 1rem 0 1.4rem;
+		color: var(--cc-text-body);
+		font-size: 0.95rem;
+		line-height: 1.6;
+	}
+	.footer-repo {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.5rem 0.95rem;
+		border: 1px solid var(--cc-border);
+		border-radius: 999px;
+		background: var(--cc-surface-soft);
+		color: var(--cc-text-body);
+		font-family: var(--cc-font-heading);
+		font-weight: 600;
+		font-size: 0.88rem;
+		text-decoration: none;
+		transition:
+			border-color var(--cc-transition),
+			background var(--cc-transition),
+			color var(--cc-transition);
+	}
+	.footer-repo:hover {
+		border-color: var(--cc-border-strong);
+		background: rgba(243, 239, 230, 0.08);
+		color: var(--cc-text);
+	}
+	.footer-nav {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 2rem;
+	}
+	.footer-heading {
+		margin: 0 0 0.9rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.72rem;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
 		color: var(--cc-text-muted);
-		font-size: 0.9rem;
+	}
+	.footer-col ul {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+	}
+	.footer-col a {
+		color: var(--cc-text-body);
+		font-size: 0.92rem;
+		text-decoration: none;
+		transition: color var(--cc-transition);
+	}
+	.footer-col a:hover {
+		color: var(--cc-text);
+	}
+	.footer-bottom {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem 1.5rem;
+		padding-top: 1.75rem;
+		color: var(--cc-text-muted);
+		font-size: 0.85rem;
+	}
+	.footer-legal {
+		margin: 0;
+	}
+	.footer-motto {
+		margin: 0;
+		font-family: var(--cc-font-mono);
+		font-size: 0.8rem;
+		color: var(--cc-text-faint);
+	}
+	@media (max-width: 780px) {
+		.footer-top {
+			grid-template-columns: 1fr;
+			gap: 2.5rem;
+		}
+	}
+	@media (max-width: 480px) {
+		.footer-nav {
+			grid-template-columns: 1fr 1fr;
+			gap: 1.75rem;
+		}
 	}
 </style>

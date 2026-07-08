@@ -14,10 +14,10 @@ const explorer = await loadPackExplorer(packRoot, 'data-analytics-team');
 const fileCount = explorer.files.length;
 const folderCount = explorer.treeEntries.filter((entry) => entry.kind === 'dir').length;
 
-// Stripe Payment Links — placeholders until Stripe setup (Phase 7) is done.
-// Replace these two constants with the real buy.stripe.com links and set checkoutLive = true.
-const STRIPE_BASE_PACK_URL = 'https://buy.stripe.com/REPLACE_WITH_BASE_PACK_LINK';
-const STRIPE_UPDATES_URL = 'https://buy.stripe.com/REPLACE_WITH_UPDATES_LINK';
+// Lemon Squeezy checkout links — placeholders until the ContextCake store is set up.
+// Replace with the real https://<store>.lemonsqueezy.com/buy/<uuid> links, then set checkoutLive = true.
+const LEMONSQUEEZY_BASE_PACK_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_BASE_PACK';
+const LEMONSQUEEZY_UPDATES_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_UPDATES';
 const checkoutLive = false;
 
 const fitRows = [
@@ -71,21 +71,23 @@ const useCases = [
 const pricingPlans = [
 	{
 		label: 'Base pack',
-		cadence: 'One-time purchase',
-		note: 'Yours to keep',
+		price: '$99',
+		priceSuffix: 'one-time',
+		cadence: 'Yours to keep — no subscription required.',
 		title: 'Data & Analytics Teams pack',
 		body: 'The full pack: workflows, templates, examples, policies, and tool guides your team keeps rebuilding in chat. Delivered as plain files plus Claude Code packaging.',
-		href: STRIPE_BASE_PACK_URL,
+		href: LEMONSQUEEZY_BASE_PACK_URL,
 		link: 'Get the base pack',
 		primary: true,
 	},
 	{
 		label: 'Optional updates',
-		cadence: 'Monthly subscription',
-		note: 'Cancel anytime',
+		price: '$9',
+		priceSuffix: '/ month',
+		cadence: 'Cancel anytime. Annual option available.',
 		title: 'Curated updates',
 		body: 'Sharper examples and improved guidance shipped as reviewable editorial releases. Optional — the base pack keeps working on its own.',
-		href: STRIPE_UPDATES_URL,
+		href: LEMONSQUEEZY_UPDATES_URL,
 		link: 'Add monthly updates',
 		primary: false,
 	},
@@ -255,10 +257,11 @@ const faqs = [
 				{pricingPlans.map((plan) => (
 					<article class={`plan${plan.primary ? ' plan-primary' : ''}`}>
 						<p class="card-label">{plan.label}</p>
-						<p class="cadence">
-							<span class="cadence-main">{plan.cadence}</span>
-							<span class="cadence-note">{plan.note}</span>
+						<p class="price">
+							<span class="price-amount">{plan.price}</span>
+							<span class="price-suffix">{plan.priceSuffix}</span>
 						</p>
+						<p class="cadence">{plan.cadence}</p>
 						<h3>{plan.title}</h3>
 						<p class="plan-body">{plan.body}</p>
 						<a
@@ -274,7 +277,7 @@ const faqs = [
 			{!checkoutLive && (
 				<p class="pricing-note">
 					Checkout links go live just before the pilot — the buttons above are
-					placeholders until Stripe is connected.
+					placeholders until the Lemon Squeezy store is connected.
 				</p>
 			)}
 		</section>
@@ -623,24 +626,29 @@ const faqs = [
 		border-color: color-mix(in srgb, var(--cc-cta) 55%, var(--cc-border));
 		box-shadow: var(--cc-shadow-panel);
 	}
-	.cadence {
+	.price {
 		display: flex;
-		flex-wrap: wrap;
 		align-items: baseline;
-		gap: 0.5rem;
-		margin: 0.15rem 0 0;
+		gap: 0.4rem;
+		margin: 0.2rem 0 0;
 	}
-	.cadence-main {
+	.price-amount {
 		color: var(--cc-text);
-		font-size: 1.2rem;
+		font-size: 2rem;
 		font-weight: 700;
+		line-height: 1;
 	}
-	.cadence-note {
+	.price-suffix {
 		color: var(--cc-text-body);
 		font-family: var(--cc-font-mono);
-		font-size: 0.76rem;
+		font-size: 0.8rem;
 		text-transform: uppercase;
 		letter-spacing: 0;
+	}
+	.cadence {
+		margin: 0.4rem 0 0;
+		color: var(--cc-text-body);
+		font-size: 0.9rem;
 	}
 	.plan h3 {
 		margin: 0.75rem 0 0;

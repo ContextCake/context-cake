@@ -160,8 +160,11 @@ plain zip.
 - Claude Code plugin packaging is first-class for this first pack.
 - Future ContextCake integration can point `layers.json` at an unzipped pack, but that is not a v1
   requirement.
-- Base pack and updates are separate Stripe products.
-- Fulfillment is manual in v1 through Stripe order notices and the private repo/release assets.
+- Base pack and updates are separate products sold through Lemon Squeezy (merchant of record),
+  which handles checkout, receipts, and sales-tax/VAT compliance.
+- The plain-files channel is delivered automatically by Lemon Squeezy on purchase (file plus
+  license key). The Claude Code plugin channel (private-repo access) stays a manual collaborator
+  invite in v1 until it is automated via Lemon Squeezy webhooks.
 
 ## 8. Acceptance Criteria
 

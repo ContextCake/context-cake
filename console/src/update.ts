@@ -6,7 +6,12 @@
 // check is disable-able per mode (see isUpdateCheckEnabled) so the public
 // demo/Pages embed stays network-silent by default.
 
-const RELEASES_URL = 'https://api.github.com/repos/ContextCake/context-cake/releases/latest'
+// The monorepo publishes releases under two tag namespaces: engine `v*` and
+// console `console-v*` (console-deploy.yml deploys on the latter). We list
+// recent releases and pick the newest console one — `/releases/latest` would
+// return whichever namespace released most recently and misreport versions.
+const RELEASES_URL = 'https://api.github.com/repos/ContextCake/context-cake/releases?per_page=20'
+const TAG_PREFIX = /^console-v(?=\d)/
 const STORAGE_KEY = 'cc-update-check'
 
 export interface UpdateInfo {
@@ -63,16 +68,19 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
     return null
   }
 
-  const tag = (data as { tag_name?: unknown } | null)?.tag_name
-  const htmlUrl = (data as { html_url?: unknown } | null)?.html_url
-  if (typeof tag !== 'string' || !tag) {
+  // Newest console release: releases come newest-first; skip drafts,
+  // prereleases, and the engine's `v*` namespace.
+  const releases = Array.isArray(data) ? (data as Array<Record<string, unknown>>) : []
+  const release = releases.find((r) =>
+    typeof r?.tag_name === 'string' && TAG_PREFIX.test(r.tag_name) && r.draft !== true && r.prerelease !== true)
+  const tag = release?.tag_name as string | undefined
+  const htmlUrl = release?.html_url
+  if (!tag) {
     cached = null
     return null
   }
 
-  // Tags may carry a non-numeric prefix (v1.2.0, console-v0.1.0) — strip
-  // everything up to the first digit so version comparison sees "0.1.0".
-  const latest = tag.replace(/^[^\d]*/, '')
+  const latest = tag.replace(TAG_PREFIX, '')
   if (!latest || compareVersions(latest, currentVersion) <= 0) {
     cached = null
     return null

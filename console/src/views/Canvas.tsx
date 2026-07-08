@@ -67,11 +67,25 @@ export function Canvas() {
     const el = wrapRef.current
     if (!el) return
     const cw = el.clientWidth, ch = el.clientHeight
-    const scale = Math.min(1, (cw - 48) / worldW, (ch - 48) / worldH)
+    // Guard against a not-yet-laid-out element (async data can populate before
+    // layout settles): a zero width would yield a negative scale that never
+    // self-corrects, collapsing the whole canvas to a speck.
+    if (cw < 40 || ch < 40) return
+    const scale = Math.max(0.2, Math.min(1, (cw - 48) / worldW, (ch - 48) / worldH))
     setViewT({ scale, tx: (cw - worldW * scale) / 2, ty: Math.max(24, (ch - worldH * scale) / 2) })
   }, [worldW, worldH])
 
   useLayoutEffect(() => { fit() }, [fit])
+
+  // Refit once the canvas actually has a measured size and on any resize — the
+  // useLayoutEffect above can fire before the element is laid out.
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => fit())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [fit])
 
   // native wheel listener so we can preventDefault (zoom toward cursor)
   useEffect(() => {

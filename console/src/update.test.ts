@@ -16,11 +16,11 @@ describe('checkForUpdate', () => {
   it('returns update info when the latest release is newer', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
-      json: async () => ({ tag_name: 'v1.2.0', html_url: 'https://github.com/siracusa5/context-cake/releases/tag/v1.2.0' }),
+      json: async () => ({ tag_name: 'v1.2.0', html_url: 'https://github.com/ContextCake/context-cake/releases/tag/v1.2.0' }),
     } as Response)
 
     const result = await checkForUpdate('1.1.0')
-    expect(result).toEqual({ latest: '1.2.0', url: 'https://github.com/siracusa5/context-cake/releases/tag/v1.2.0' })
+    expect(result).toEqual({ latest: '1.2.0', url: 'https://github.com/ContextCake/context-cake/releases/tag/v1.2.0' })
   })
 
   it('strips a leading v from the tag', async () => {
@@ -31,6 +31,26 @@ describe('checkForUpdate', () => {
 
     const result = await checkForUpdate('1.0.0')
     expect(result?.latest).toBe('2.0.0')
+  })
+
+  it('strips a non-numeric tag prefix like console-v (the real release scheme)', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ tag_name: 'console-v1.2.0', html_url: 'https://example.com/console-v1.2.0' }),
+    } as Response)
+
+    const result = await checkForUpdate('0.1.0')
+    expect(result?.latest).toBe('1.2.0')
+  })
+
+  it('returns null for a tag with no digits at all', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ tag_name: 'latest', html_url: 'https://example.com/latest' }),
+    } as Response)
+
+    const result = await checkForUpdate('0.1.0')
+    expect(result).toBeNull()
   })
 
   it('returns null when the latest release equals the current version', async () => {

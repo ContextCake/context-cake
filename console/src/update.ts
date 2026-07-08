@@ -6,7 +6,7 @@
 // check is disable-able per mode (see isUpdateCheckEnabled) so the public
 // demo/Pages embed stays network-silent by default.
 
-const RELEASES_URL = 'https://api.github.com/repos/siracusa5/context-cake/releases/latest'
+const RELEASES_URL = 'https://api.github.com/repos/ContextCake/context-cake/releases/latest'
 const STORAGE_KEY = 'cc-update-check'
 
 export interface UpdateInfo {
@@ -70,13 +70,15 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
     return null
   }
 
-  const latest = tag.replace(/^v/, '')
-  if (compareVersions(latest, currentVersion) <= 0) {
+  // Tags may carry a non-numeric prefix (v1.2.0, console-v0.1.0) — strip
+  // everything up to the first digit so version comparison sees "0.1.0".
+  const latest = tag.replace(/^[^\d]*/, '')
+  if (!latest || compareVersions(latest, currentVersion) <= 0) {
     cached = null
     return null
   }
 
-  const result: UpdateInfo = { latest, url: typeof htmlUrl === 'string' && htmlUrl ? htmlUrl : `https://github.com/siracusa5/context-cake/releases/tag/${tag}` }
+  const result: UpdateInfo = { latest, url: typeof htmlUrl === 'string' && htmlUrl ? htmlUrl : `https://github.com/ContextCake/context-cake/releases/tag/${tag}` }
   cached = result
   return result
 }

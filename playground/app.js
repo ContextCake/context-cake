@@ -824,7 +824,7 @@ function escapeAttr(v) { return escapeHtml(v); }
 // demo embed).
 // ===========================================================================
 
-const UPDATE_RELEASES_URL = "https://api.github.com/repos/siracusa5/context-cake/releases/latest";
+const UPDATE_RELEASES_URL = "https://api.github.com/repos/ContextCake/context-cake/releases/latest";
 const UPDATE_STORAGE_KEY = "cc-update-check";
 // Bumped manually alongside releases; the playground has no package.json of its own.
 const PLAYGROUND_VERSION = "0.1.0";
@@ -868,11 +868,13 @@ async function checkForUpdatePlayground() {
   }
   const tag = data && data.tag_name;
   if (typeof tag !== "string" || !tag) return null;
-  const latest = tag.replace(/^v/, "");
-  if (updateCompareVersions(latest, PLAYGROUND_VERSION) <= 0) return null;
+  // Tags may carry a non-numeric prefix (v1.2.0, console-v0.1.0) — strip
+  // everything up to the first digit so version comparison sees "0.1.0".
+  const latest = tag.replace(/^[^\d]*/, "");
+  if (!latest || updateCompareVersions(latest, PLAYGROUND_VERSION) <= 0) return null;
   const url = typeof data.html_url === "string" && data.html_url
     ? data.html_url
-    : `https://github.com/siracusa5/context-cake/releases/tag/${tag}`;
+    : `https://github.com/ContextCake/context-cake/releases/tag/${tag}`;
   return { latest, url };
 }
 

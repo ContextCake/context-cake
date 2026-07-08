@@ -15,7 +15,7 @@ Both UIs can check whether a newer ContextCake release exists. The check is a si
 unauthenticated HTTPS `GET` to a pinned host:
 
 ```
-https://api.github.com/repos/siracusa5/context-cake/releases/latest
+https://api.github.com/repos/ContextCake/context-cake/releases/latest
 ```
 
 Nothing is attached beyond the implicit HTTP request — no personal data, no tokens,

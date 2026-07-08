@@ -1,0 +1,139 @@
+---
+// Install page — spec.md "Install (/install)".
+import Base from '../layouts/Base.astro';
+import CodeBlock from '../components/CodeBlock.astro';
+import CopyCommand from '../components/CopyCommand.astro';
+---
+
+<Base
+	title="Install ContextCake"
+	description="Install ContextCake from a versioned release archive. Plain Node.js ≥ 18, no dependency install step."
+>
+	<main>
+		<h1>Install</h1>
+
+		<p class="lede">
+			Install ContextCake from a <strong>versioned release archive</strong>. The engine has
+			zero runtime dependencies: after you unpack it, there is no <code>npm install</code>{' '}
+			step, no install scripts, and no transitive package tree to trust.
+		</p>
+
+		<h2>Prerequisites</h2>
+		<ul>
+			<li><code>gh</code> for the terminal path, or a browser for manual download</li>
+			<li>Node.js ≥ 18</li>
+		</ul>
+
+		<h2>1. Download the release archive</h2>
+		<CopyCommand command="gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz" />
+		<p>
+			Prefer a browser? Open{' '}
+			<a href="https://github.com/ContextCake/context-cake/releases/latest">the latest
+				ContextCake release</a>{' '}
+			and download the source archive.
+		</p>
+
+		<h2>2. Unpack it</h2>
+		<CodeBlock
+			lang="bash"
+			code={`mkdir contextcake
+tar -xzf contextcake.tar.gz -C contextcake --strip-components=1
+cd contextcake`}
+		/>
+
+		<h2>3. Resolve your first concept</h2>
+		<p>
+			The repo ships a tiny three-layer demo bundle. Resolve a concept where the layers
+			disagree and watch the merge — provenance and conflicts included:
+		</p>
+		<CodeBlock
+			lang="bash"
+			code={`node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db`}
+		/>
+		<p>
+			You'll get JSON: each section tagged with the layer that won it, and a{' '}
+			<code>conflicts</code> array where the losing layers dissent — with dates.
+		</p>
+
+		<h2>4. Serve it to an agent</h2>
+		<p>Start the MCP server against the same demo bundle:</p>
+		<CodeBlock
+			lang="bash"
+			code={`node mcp-server.mjs --manifest apps/playground/manifest.json`}
+		/>
+		<p>Or register it with an MCP client (Claude Code shown):</p>
+		<CodeBlock
+			lang="bash"
+			code={`claude mcp add contextcake -- node /path/to/context-cake/mcp-server.mjs --manifest /path/to/context-cake/apps/playground/manifest.json`}
+		/>
+		<p>
+			From here, point the manifest at your own layers — see{' '}
+			<a href="/docs/getting-started/first-cascade">Your first cascade</a> and{' '}
+			<a href="/docs/getting-started/connect-an-agent">Connect an agent</a>.
+		</p>
+
+		<h2>Optional: explore visually</h2>
+		<CodeBlock lang="bash" code={`npm run playground   # http://127.0.0.1:8790`} />
+		<p>
+			The playground is a local canvas over the same engine — sources, live merges, and
+			an N-way conflict resolver. (It runs from the clone too: its libraries are vendored
+			in the repo, not fetched.)
+		</p>
+
+		<h2>Source checkout</h2>
+		<p>
+			Use a git checkout when you want to inspect history, contribute changes, or pin your
+			own fork:
+		</p>
+		<CodeBlock
+			lang="bash"
+			code={`git clone https://github.com/ContextCake/context-cake.git
+cd context-cake`}
+		/>
+
+		<h2>A note on trust</h2>
+		<p>
+			The manifest is a trust boundary: a layer with <code>"source": "mcp"</code> spawns
+			the command it names, as your user. Only point ContextCake at manifests you wrote
+			or trust — the same rule as any MCP client config.{' '}
+			<a href="/docs/concepts/trust-boundary">Read the details</a>.
+		</p>
+
+		<h2>Why a release archive?</h2>
+		<p>
+			Registry supply-chain attacks have repeatedly hit AI and agent tooling — compromised
+			maintainer accounts shipping credential-stealing <code>postinstall</code> payloads
+			to thousands of downstreams. A knowledge engine that your agents read from should
+			have a supply chain you can audit: a tagged release archive is small, inspectable,
+			and runnable as plain Node.js.
+		</p>
+	</main>
+</Base>
+
+<style>
+	main {
+		max-width: 46rem;
+		margin: 0 auto;
+		padding: 3rem 1.5rem;
+	}
+	.lede {
+		font-size: 1.1rem;
+	}
+	h2 {
+		margin-top: 2.5rem;
+		font-size: 1.25rem;
+	}
+	code {
+		font-family: var(--cc-font-mono);
+	}
+	p code, li code {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 4px;
+		padding: 0.1rem 0.35rem;
+		font-size: 0.9em;
+	}
+	a {
+		color: var(--cc-layer-team);
+	}
+</style>

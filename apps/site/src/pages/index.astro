@@ -1,0 +1,989 @@
+---
+// Homepage — spec.md "Homepage (/)", section order in design.md §4.
+// Hero composite + the "For agents" payload are generated from the REAL
+// resolver at build time (src/data/demo-cascade.json, via the prebuild seam) —
+// never hand-authored merge output (spec homepage AC 5).
+import Base from '../layouts/Base.astro';
+import CodeBlock from '../components/CodeBlock.astro';
+import CopyCommand from '../components/CopyCommand.astro';
+import Icon from '../components/Icon.astro';
+import demo from '../data/demo-cascade.json';
+
+const primaryDb = demo.concepts.find((c) => c.id === 'decisions/primary-db');
+
+// Section label from an OKF heading: "## Choice {#choice}" → "Choice".
+const label = (heading) =>
+	heading
+		.replace(/^#+\s*/, '')
+		.replace(/\s*\{#.*?\}\s*$/, '')
+		.trim();
+
+const layerColor = {
+	personal: 'var(--cc-layer-personal)',
+	team: 'var(--cc-layer-team)',
+	company: 'var(--cc-layer-company)',
+};
+
+// Hero bands = the real resolved sections, minus the empty title section and
+// any suppressed tombstones. Each band knows the layer that won it + its date.
+const bodySections = primaryDb.sections.filter(
+	(s) => !s.suppressed && s.content.trim() !== '',
+);
+
+// The contributing layers, shown as the "stack" that resolves into the composite.
+const heroContributors = primaryDb.contributors;
+
+// Human-facing labels for the hero visual: the layer semantics, in plain words.
+const layerName = { personal: 'Your notes', team: 'Team practice', company: 'Company policy' };
+const layerShort = { personal: 'You', team: 'Team', company: 'Company' };
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const shortDate = (iso) => {
+	const [, m, d] = iso.split('-').map(Number);
+	return `${MONTHS[m - 1]} ${d}`;
+};
+
+// Friendly labels for the sections of the concept resolved in the hero.
+const sectionLabel = {
+	choice: 'Which database',
+	rationale: 'Why',
+	analytics: 'Analytics store',
+	ownership: 'Who owns it',
+};
+
+// A curated four-row cut of the REAL resolved sections that tells the whole
+// story at a glance: all three layers win something, two carry a live
+// disagreement. Still resolver output — a selection, never hand-authored.
+const byKey = Object.fromEntries(bodySections.map((s) => [s.key, s]));
+const storyBands = ['choice', 'rationale', 'analytics', 'ownership']
+	.map((k) => byKey[k])
+	.filter(Boolean)
+	.map((s) => ({
+		label: sectionLabel[s.key] ?? label(s.heading),
+		layer: s.sourceLayer,
+		updated: s.sourceUpdated,
+		conflict: s.conflicts?.[0]?.layer ?? null,
+	}));
+
+// One real disagreement, shown in full — the losing value kept, dated, visible.
+// Trim to a clean sentence boundary so the quote never cuts mid-word.
+const choiceConflict = byKey.choice?.conflicts?.[0] ?? null;
+const dissentQuote = (() => {
+	if (!choiceConflict) return '';
+	const one = choiceConflict.content.replace(/\s+/g, ' ').trim();
+	if (one.length <= 92) return one;
+	const cut = one.slice(0, 92);
+	const boundary = cut.lastIndexOf('. ');
+	return boundary > 40 ? cut.slice(0, boundary + 1) : `${cut.trimEnd()}…`;
+})();
+const conceptTitle = primaryDb.frontmatter?.title ?? 'decisions/primary-db';
+
+// Built from the actual contributor list (not a fixed count/order) so the
+// label stays correct if the demo data ever has a different set of layers.
+const sourcesDescription = heroContributors
+	.map((ct) => `${layerName[ct.layer] ?? ct.layer} (${shortDate(ct.updated)})`)
+	.join(', ');
+const heroAriaLabel = `The concept "${conceptTitle}" resolved from ${heroContributors.length} sources: ${sourcesDescription}. They merge into one answer where each section is tagged with the layer that won it, and disagreements are kept with their layer and date.`;
+
+// A real (truncated) read_file payload for the "For agents" section. Structure
+// is untouched; only long content strings are shortened for display (§11.3).
+const flatten = (str, n = 84) => {
+	const one = str.replace(/\s+/g, ' ').trim();
+	return one.length > n ? one.slice(0, n).trimEnd() + ' …' : one;
+};
+const agentPayload = {
+	id: primaryDb.id,
+	contributors: primaryDb.contributors,
+	frontmatter: primaryDb.frontmatter,
+	frontmatterProvenance: primaryDb.frontmatterProvenance,
+	sections: bodySections.slice(0, 2).map((s) => ({
+		key: s.key,
+		heading: s.heading,
+		content: flatten(s.content),
+		sourceLayer: s.sourceLayer,
+		sourceUpdated: s.sourceUpdated,
+		...(s.conflicts
+			? {
+					conflicts: s.conflicts.map((c) => ({
+						layer: c.layer,
+						updated: c.updated,
+						content: flatten(c.content),
+					})),
+				}
+			: {}),
+	})),
+};
+const agentJson = JSON.stringify(agentPayload, null, 2);
+const quickstartCommand = `gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz
+mkdir contextcake
+tar -xzf contextcake.tar.gz -C contextcake --strip-components=1
+cd contextcake
+node classify-context.mjs --demo
+node ingest.mjs --demo
+node write.mjs --signals apps/control-surface/signals.json --manifest layers.json --target-layer team
+node mcp-server.mjs --manifest layers.json
+npm run playground`;
+
+// §4.3 How it works — one stratum color each (§11.1).
+const steps = [
+	{
+		name: 'Stack',
+		icon: 'layers',
+		color: 'company',
+		body: 'Each scope is its own repo: your drafts, the team\'s runbooks, company policy. If you can read the repo, you can read the layer. There is no second permission system to keep in sync.',
+	},
+	{
+		name: 'Resolve',
+		icon: 'merge',
+		color: 'team',
+		body: 'Read a concept and the resolver assembles it a section at a time. The closest layer wins each section; whatever it doesn\'t mention falls through to the layer below.',
+	},
+	{
+		name: 'Serve',
+		icon: 'send',
+		color: 'personal',
+		body: 'Agents pull the finished concept over MCP, every section tagged with the layer it came from and the day it was written.',
+	},
+];
+
+// §4.5 Feature grid — the seven items (§11.2).
+const features = [
+	{
+		icon: 'layers',
+		title: 'Section-level merge',
+		body: 'Layers merge a section at a time, not a file at a time. An override touches only the section it speaks to; everything else falls through from below.',
+	},
+	{
+		icon: 'compare',
+		title: 'Conflicts carry dates',
+		body: 'When two layers disagree, the losing value doesn\'t disappear. It travels with its layer and its date, so nobody reopens a call that was already made.',
+	},
+	{
+		icon: 'tag',
+		title: 'Provenance on every section',
+		body: 'Every section knows the layer it came from, and every field its origin. An agent can tell company policy from your Tuesday-night override before it acts on either.',
+	},
+	{
+		icon: 'share',
+		title: 'Foreign graphs stitch in',
+		body: 'A layer doesn\'t have to be markdown. Point one at a foreign MCP graph and ContextCake translates it to OKF as it reads, then merges it with everything else.',
+	},
+	{
+		icon: 'branch',
+		title: 'Captured from real work',
+		body: 'It watches the work you\'re already doing, sorts the signal from the noise, and drafts concepts back. Safe ones land in the layer; anything sensitive waits for a human.',
+	},
+	{
+		icon: 'shield',
+		title: 'Zero dependencies',
+		body: 'Plain Node 18 and nothing else. No npm install, no lockfile, no postinstall scripts — a supply chain you can read start to finish in an afternoon.',
+	},
+	{
+		icon: 'dashboard',
+		title: 'Playground',
+		body: 'The same engine with a face on it: wire up sources, watch them merge in real time, and settle an N-way conflict by hand.',
+	},
+];
+
+// §4.6 For agents — README's four-row MCP tool table, verbatim.
+const mcpTools = [
+	{
+		name: 'search',
+		desc: 'Full-text search across all layers; one entry per concept with its contributing layers.',
+	},
+	{
+		name: 'read_file',
+		desc: 'The resolved effective concept — section merge, provenance, per-section conflicts. Pass a layer for a raw single-layer read.',
+	},
+	{
+		name: 'list_concepts',
+		desc: 'All effective concept IDs with their contributing layers.',
+	},
+	{
+		name: 'get_links',
+		desc: 'Outgoing and incoming links, resolved against the effective graph.',
+	},
+];
+---
+
+<Base
+	title="ContextCake — working context for AI teams"
+	description="Keep policy, team practice, and local judgment in the same answer. ContextCake resolves layered team context with visible sources and disagreements."
+>
+		<main>
+			<section class="hero">
+				<div class="hero-copy">
+					<p class="kicker">Context layer for AI agents</p>
+					<h1>One answer for your AI, stitched from every layer of your team's context.</h1>
+					<p class="sub">
+						Company policy, team runbooks, and your own notes live in different places — so
+						every AI tool answers from just one of them, and usually the stale one. ContextCake
+						resolves those layers into a single answer per topic: each line tagged with where it
+						came from, every disagreement kept in view instead of flattened away.
+					</p>
+					<p class="mechanic">
+						The closest layer wins each section; whatever it doesn't cover falls through from the
+						layer below. Any MCP agent reads the merged, sourced result.
+					</p>
+					<div class="ctas">
+						<a class="cta primary" href="/demo">See the live demo</a>
+						<a class="cta" href="/docs">Read the docs</a>
+						<a class="cta" href="https://github.com/ContextCake/context-cake">GitHub</a>
+					</div>
+					<p class="hero-note">
+						Open-source engine · Node ≥ 18, zero dependencies · <a href="/packs">Data &amp; Analytics Pack →</a>
+					</p>
+					<CopyCommand command="gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz" />
+				</div>
+
+			<figure class="composite" aria-label={heroAriaLabel}>
+				<figcaption>
+					<span class="dot" aria-hidden="true"></span>
+					<span class="cap-title">{conceptTitle}</span>
+					<span class="cap-sub">what your agent reads</span>
+				</figcaption>
+
+				<div class="stack" aria-hidden="true">
+					<span class="rail-label">3 sources</span>
+					<div class="stack-chips">
+						{
+							heroContributors.map((ct) => (
+								<span class="stack-chip" style={`--band: ${layerColor[ct.layer]}`}>
+									<span class="stack-dot" />
+									<span class="stack-name">{layerName[ct.layer]}</span>
+									<span class="stack-date">{shortDate(ct.updated)}</span>
+								</span>
+							))
+						}
+					</div>
+				</div>
+
+				<div class="resolve" aria-hidden="true">
+					<span class="resolve-line" />
+					<span class="resolve-word">resolves into</span>
+					<Icon name="chevron-down" size={15} class="resolve-arrow" />
+				</div>
+
+				<div class="bands">
+					<span class="rail-label">1 answer</span>
+					<div class="bands-list">
+						{
+							storyBands.map((b) => (
+								<div class="band" style={`--band: ${layerColor[b.layer]}`}>
+									<span class="section"><span class="swatch" aria-hidden="true" />{b.label}</span>
+									<span class="prov">
+										<span class="layer">{layerShort[b.layer]}</span> · {shortDate(b.updated)}
+										{b.conflict && (
+											<span class="conflict">
+												<Icon name="alert" size={12} strokeWidth={2.2} />
+												{layerShort[b.conflict]} disagreed
+											</span>
+										)}
+									</span>
+								</div>
+							))
+						}
+					</div>
+				</div>
+
+				{
+					choiceConflict && (
+						<div class="dissent">
+							<span class="dissent-tag">
+								<Icon name="alert" size={13} strokeWidth={2.2} />
+								Kept, not overwritten
+							</span>
+							<p class="dissent-quote">"{dissentQuote}"</p>
+							<span class="dissent-src">
+								{layerName[choiceConflict.layer]} · {shortDate(choiceConflict.updated)}
+							</span>
+						</div>
+					)
+				}
+			</figure>
+		</section>
+
+		<section class="problem">
+			<h2>The source material is there. The working view usually is not.</h2>
+			<dl class="beats">
+				<div class="beat">
+					<dt>Scattered</dt>
+					<dd>
+						It lives in repo READMEs, a wiki nobody has opened in months, and three people's
+						heads. Ask two of those sources what's current and you'll get two answers.
+					</dd>
+				</div>
+				<div class="beat">
+					<dt>Agents read stale</dt>
+					<dd>
+						Point an agent at one document and it answers from that document alone. It has no
+						idea a newer decision, one layer up, already overruled it.
+					</dd>
+				</div>
+				<div class="beat">
+					<dt>Overwriting loses the dissent</dt>
+					<dd>
+						The usual fix is to flatten everything into a single doc. That quietly erases the
+						objection you'll go looking for the next time something breaks.
+					</dd>
+				</div>
+			</dl>
+		</section>
+
+		<section class="how">
+			<h2>Stack the context. Resolve one answer. Keep the source visible.</h2>
+			<ol class="steps">
+				{
+					steps.map((s, i) => (
+						<li class="step" style={`--accent: ${layerColor[s.color]}`}>
+							<div class="step-head">
+								<span class="step-num" aria-hidden="true">{i + 1}</span>
+								<h3>{s.name}</h3>
+							</div>
+							<p>{s.body}</p>
+						</li>
+					))
+				}
+			</ol>
+			<p class="how-cta">
+				<a href="/demo">See the demo in context -></a>
+			</p>
+		</section>
+
+		<section class="features">
+			<h2>A context system, not another place to lose the thread.</h2>
+			<div class="grid">
+				{
+					features.map((f) => (
+						<div class="feature">
+							<span class="feature-ico" aria-hidden="true">
+								<Icon name={f.icon} size={20} />
+							</span>
+							<div>
+								<h3>{f.title}</h3>
+								<p>{f.body}</p>
+							</div>
+						</div>
+					))
+				}
+			</div>
+		</section>
+
+		<section class="agents">
+			<h2>Ready for agents. Honest about the source.</h2>
+			<p class="agents-lede">
+				Any agent that speaks MCP can query the resolved graph. Every <code>read_file</code>{' '}
+				answer comes back with who said what, when, and where the layers disagree.
+			</p>
+			<div class="agents-body">
+				<table class="tools">
+					<thead>
+						<tr><th>Tool</th><th>What it does</th></tr>
+					</thead>
+					<tbody>
+						{
+							mcpTools.map((t) => (
+								<tr>
+									<td><code>{t.name}</code></td>
+									<td>{t.desc}</td>
+								</tr>
+							))
+						}
+					</tbody>
+				</table>
+				<figure class="payload">
+					<figcaption>read_file · decisions/primary-db <span class="muted">(real resolver output, content truncated)</span></figcaption>
+					<CodeBlock className="payload-code" lang="json" code={agentJson} />
+				</figure>
+			</div>
+		</section>
+
+		<section class="quickstart">
+			<h2>Try the engine locally</h2>
+			<p>Plain Node.js ≥ 18. Download the release archive, unpack it, and inspect the full path.</p>
+			<CodeBlock className="quickstart-code" lang="bash" code={quickstartCommand} />
+			<p class="quickstart-cta">
+				<a class="cta primary" href="/docs">Read the docs</a>
+				<a class="cta" href="/install">Install guide</a>
+			</p>
+		</section>
+	</main>
+</Base>
+
+<style>
+	main {
+		max-width: 76rem;
+		margin: 0 auto;
+		padding: 0 1.5rem;
+	}
+	.kicker {
+		font-family: var(--cc-font-mono);
+		font-size: 0.8rem;
+		letter-spacing: 0;
+		text-transform: uppercase;
+		color: var(--cc-text-muted);
+		margin: 0 0 0.5rem;
+	}
+	section h2 {
+		font-size: clamp(1.5rem, 3vw, 2rem);
+		line-height: 1.2;
+		margin: 0 0 2rem;
+		max-width: 30ch;
+	}
+
+	/* Hero */
+	.hero {
+		display: grid;
+		grid-template-columns: 1.1fr 0.9fr;
+		gap: 3rem;
+		align-items: center;
+		padding: 4rem 0 5rem;
+	}
+	.hero-copy {
+		min-width: 0;
+	}
+	h1 {
+		font-size: clamp(2rem, 5vw, 3.25rem);
+		line-height: 1.15;
+		margin: 0 0 1rem;
+	}
+	.sub {
+		max-width: 42rem;
+		font-size: 1.15rem;
+		margin: 0 0 1rem;
+	}
+	.mechanic {
+		max-width: 42rem;
+		margin: 0;
+		color: var(--cc-text-muted);
+		font-size: 1rem;
+	}
+	.hero-note {
+		margin: 1.5rem 0 0.85rem;
+		color: var(--cc-text-muted);
+		font-size: 0.95rem;
+		max-width: 38rem;
+	}
+	.hero-note a {
+		color: var(--cc-layer-team);
+		text-decoration: none;
+		font-weight: 600;
+		white-space: nowrap;
+	}
+	.hero-note a:hover {
+		text-decoration: underline;
+	}
+	.ctas {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem;
+		margin: 1.5rem 0 0;
+	}
+	.cta {
+		font-family: var(--cc-font-heading);
+		text-decoration: none;
+		border: 1px solid var(--cc-border);
+		border-radius: 999px;
+		padding: 0.65rem 1.25rem;
+		font-weight: 700;
+		transition:
+			border-color var(--cc-transition),
+			background var(--cc-transition),
+			color var(--cc-transition);
+	}
+	.cta:hover {
+		border-color: var(--cc-text-muted);
+		background: rgba(243, 239, 230, 0.06);
+	}
+	.cta.primary {
+		background: var(--cc-cta);
+		border-color: var(--cc-cta);
+		color: var(--cc-on-cta);
+		font-weight: 700;
+	}
+	.cta.primary:hover {
+		background: var(--cc-cta-hover);
+		border-color: var(--cc-cta-hover);
+	}
+
+	/* Banded composite (hero + reused pattern) */
+	.composite {
+		margin: 0;
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-lg);
+		padding: 1.1rem;
+		min-width: 0;
+		box-shadow: var(--cc-shadow-panel);
+		backdrop-filter: blur(16px);
+	}
+	.composite figcaption {
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.85rem;
+		color: var(--cc-text-muted);
+		margin-bottom: 1rem;
+	}
+	.composite .dot {
+		align-self: center;
+		flex: none;
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--cc-cta);
+	}
+	.composite .cap-title {
+		color: var(--cc-text);
+		font-weight: 700;
+	}
+	.composite .cap-sub {
+		margin-left: auto;
+		font-size: 0.72rem;
+		color: var(--cc-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	/* Tiny rail labels that name the two halves: "3 sources" → "1 answer". */
+	.rail-label {
+		display: block;
+		font-family: var(--cc-font-mono);
+		font-size: 0.66rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.09em;
+		color: var(--cc-text-muted);
+		margin-bottom: 0.5rem;
+	}
+	/* The "stack": the three source layers, in precedence order, in plain words. */
+	.stack-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem 0.5rem;
+	}
+	.stack-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.76rem;
+		color: var(--cc-text-body);
+		border: 1px solid var(--cc-border);
+		border-radius: 999px;
+		background: rgba(243, 239, 230, 0.04);
+		padding: 0.2rem 0.65rem;
+	}
+	.stack-dot {
+		flex: none;
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
+		background: var(--band);
+	}
+	.stack-name {
+		color: var(--cc-text);
+		font-weight: 500;
+	}
+	.stack-date {
+		color: var(--cc-text-muted);
+	}
+	/* The resolve seam between the sources and the one answer. */
+	.resolve {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		margin: 0.9rem 0;
+		color: var(--cc-text-faint);
+	}
+	.resolve-line {
+		flex: 1;
+		height: 1px;
+		background: var(--cc-border);
+	}
+	.resolve-word {
+		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+	.resolve-arrow {
+		color: var(--cc-text-muted);
+	}
+	.bands-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+	}
+	.band {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 0.75rem;
+		border: 1px solid var(--cc-border);
+		border-left: 3px solid var(--band);
+		background: var(--cc-surface-raised);
+		border-radius: var(--cc-radius-sm);
+		padding: 0.55rem 0.85rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.86rem;
+	}
+	.band .section {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.55rem;
+		min-width: 0;
+		color: var(--cc-text);
+	}
+	/* Provenance key: a layer-colored swatch matching the source chip's dot. */
+	.band .swatch {
+		flex: none;
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
+		background: var(--band);
+	}
+	.band .prov {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex: none;
+		color: var(--cc-text-muted);
+		font-size: 0.78rem;
+		white-space: nowrap;
+	}
+	.band .layer {
+		color: var(--band);
+		font-weight: 700;
+	}
+	.band .conflict {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.22rem;
+		color: var(--cc-conflict);
+	}
+	/* The killer detail: a real losing value, kept with its layer and date. */
+	.dissent {
+		margin-top: 0.85rem;
+		padding: 0.7rem 0.85rem;
+		border: 1px solid color-mix(in srgb, var(--cc-conflict) 34%, var(--cc-border));
+		border-radius: var(--cc-radius-sm);
+		background: color-mix(in srgb, var(--cc-conflict) 8%, transparent);
+	}
+	.dissent-tag {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.32rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--cc-conflict);
+	}
+	.dissent-quote {
+		margin: 0.45rem 0 0.35rem;
+		color: var(--cc-text-body);
+		font-size: 0.85rem;
+		line-height: 1.5;
+	}
+	.dissent-src {
+		font-family: var(--cc-font-mono);
+		font-size: 0.72rem;
+		color: var(--cc-text-muted);
+	}
+
+	/* Problem */
+	.problem,
+	.how,
+	.features,
+	.agents {
+		padding: 4rem 0;
+		border-top: 1px solid var(--cc-border);
+	}
+	/* Problem — an editorial label → statement sequence, not cards */
+	.beats {
+		display: flex;
+		flex-direction: column;
+		margin: 0;
+	}
+	.beat {
+		display: grid;
+		grid-template-columns: minmax(9rem, 13rem) 1fr;
+		gap: 0.5rem 3rem;
+		padding: 1.75rem 0;
+		border-top: 1px solid var(--cc-border);
+		align-items: baseline;
+	}
+	.beat dt {
+		font-family: var(--cc-font-heading);
+		font-size: 1.1rem;
+		font-weight: 700;
+		color: var(--cc-text);
+	}
+	.beat dd {
+		margin: 0;
+		color: var(--cc-text-body);
+		max-width: 60ch;
+	}
+
+	/* How it works — a numbered 3-step flow (a real sequence earns numbers) */
+	.steps {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 1.25rem;
+	}
+	.step {
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-lg);
+		padding: 1.5rem;
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+	}
+	.step-head {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		margin-bottom: 0.85rem;
+	}
+	.step-num {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex: none;
+		width: 2rem;
+		height: 2rem;
+		border-radius: 999px;
+		font-family: var(--cc-font-mono);
+		font-weight: 700;
+		font-size: 0.95rem;
+		color: var(--accent);
+		border: 1.5px solid var(--accent);
+	}
+	.step h3 {
+		font-size: 1.15rem;
+		margin: 0;
+		color: var(--accent);
+	}
+	.step p {
+		margin: 0;
+		color: var(--cc-text-body);
+	}
+	.how-cta {
+		margin: 2rem 0 0;
+	}
+	.how-cta a {
+		font-family: var(--cc-font-heading);
+		font-weight: 600;
+		font-size: 1rem;
+		color: var(--cc-layer-team);
+		text-decoration: none;
+	}
+	.how-cta a:hover {
+		text-decoration: underline;
+	}
+
+	/* Features — a de-carded icon + text list, not a grid of boxes */
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+		gap: 2rem 2.5rem;
+	}
+	.feature {
+		display: flex;
+		gap: 0.85rem;
+		align-items: flex-start;
+	}
+	.feature-ico {
+		display: inline-flex;
+		flex: none;
+		color: var(--cc-layer-team);
+		margin-top: 0.15rem;
+	}
+	.feature h3 {
+		font-size: 1.05rem;
+		margin: 0 0 0.35rem;
+	}
+	.feature p {
+		margin: 0;
+		color: var(--cc-text-body);
+		font-size: 0.95rem;
+	}
+
+	/* For agents */
+	.agents-lede {
+		max-width: 44rem;
+		margin: -1rem 0 2rem;
+		color: var(--cc-text-body);
+	}
+	.agents-body {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1.5rem;
+		align-items: start;
+	}
+	.tools {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.9rem;
+	}
+	.tools th,
+	.tools td {
+		text-align: left;
+		padding: 0.7rem 0.75rem;
+		border-bottom: 1px solid var(--cc-border);
+		vertical-align: top;
+	}
+	.tools th {
+		font-family: var(--cc-font-heading);
+		font-weight: 600;
+		font-size: 0.8rem;
+		letter-spacing: 0.02em;
+		color: var(--cc-text-muted);
+	}
+	.tools td code {
+		font-family: var(--cc-font-mono);
+		color: var(--cc-layer-team);
+	}
+	.tools td:last-child {
+		color: var(--cc-text-body);
+	}
+	.payload {
+		margin: 0;
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-lg);
+		overflow: hidden;
+	}
+	.payload figcaption {
+		font-family: var(--cc-font-mono);
+		font-size: 0.8rem;
+		color: var(--cc-text);
+		padding: 0.75rem 1rem;
+		border-bottom: 1px solid var(--cc-border);
+		background: var(--cc-surface-raised);
+	}
+	.payload .muted {
+		color: var(--cc-text-muted);
+	}
+	.payload :global(.payload-code) {
+		margin: 0;
+		border: 0;
+		border-radius: 0;
+		background: transparent;
+	}
+	.payload :global(.payload-code .shiki) {
+		padding: 1rem;
+		font-size: 0.78rem;
+		line-height: 1.55;
+	}
+
+	/* Quickstart */
+	.quickstart {
+		padding: 4rem 0 2rem;
+		border-top: 1px solid var(--cc-border);
+	}
+	.quickstart :global(.quickstart-code .shiki) {
+		font-size: 0.9rem;
+		line-height: 1.7;
+	}
+	.quickstart-cta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem;
+		margin-top: 1.5rem;
+	}
+
+	@media (max-width: 900px) {
+		.hero {
+			grid-template-columns: 1fr;
+			gap: 2rem;
+			padding: 3rem 0 4rem;
+		}
+		.steps {
+			grid-template-columns: 1fr;
+		}
+		.beat {
+			grid-template-columns: 1fr;
+			gap: 0.4rem;
+			padding: 1.5rem 0;
+		}
+		.agents-body {
+			grid-template-columns: 1fr;
+		}
+	}
+	@media (max-width: 480px) {
+		.band {
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 0.2rem;
+		}
+		.band .prov {
+			white-space: normal;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.cta,
+		.feature {
+			transition: none;
+		}
+	}
+
+	/* Hero cascade reveal: the stack appears, then the composite resolves band
+	   by band. Gated on no-preference — reduced-motion sees the static composite
+	   (spec homepage AC 4), which is the default (un-animated) state. */
+	@media (prefers-reduced-motion: no-preference) {
+		.composite .stack-chip {
+			opacity: 0;
+			animation: cc-fade 0.32s ease forwards;
+		}
+		.composite .stack-chip:nth-child(1) {
+			animation-delay: 0.03s;
+		}
+		.composite .stack-chip:nth-child(2) {
+			animation-delay: 0.1s;
+		}
+		.composite .stack-chip:nth-child(3) {
+			animation-delay: 0.17s;
+		}
+		.composite .resolve {
+			opacity: 0;
+			animation: cc-fade 0.32s ease 0.24s forwards;
+		}
+		.composite .band {
+			opacity: 0;
+			transform: translateX(-10px);
+			animation: cc-band 0.4s ease forwards;
+		}
+		.composite .bands-list .band:nth-child(1) {
+			animation-delay: 0.34s;
+		}
+		.composite .bands-list .band:nth-child(2) {
+			animation-delay: 0.42s;
+		}
+		.composite .bands-list .band:nth-child(3) {
+			animation-delay: 0.5s;
+		}
+		.composite .bands-list .band:nth-child(4) {
+			animation-delay: 0.58s;
+		}
+		.composite .dissent {
+			opacity: 0;
+			animation: cc-fade 0.4s ease 0.66s forwards;
+		}
+	}
+	@keyframes cc-fade {
+		to {
+			opacity: 1;
+		}
+	}
+	@keyframes cc-band {
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+</style>

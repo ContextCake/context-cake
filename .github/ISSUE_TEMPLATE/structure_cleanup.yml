@@ -1,0 +1,27 @@
+name: Structure or cleanup
+description: Propose repo organization, naming, or maintenance cleanup.
+title: "[Cleanup]: "
+labels: ["type:enhancement"]
+body:
+  - type: textarea
+    id: current
+    attributes:
+      label: Current friction
+      description: What is harder than it should be for humans or AI contributors?
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: Proposed cleanup
+      description: Name the files, directories, commands, or docs affected.
+    validations:
+      required: true
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints
+      options:
+        - label: Keeps the root engine dependency-free.
+        - label: Preserves existing public root commands or names a migration path.
+        - label: Updates tests, docs, or workflows affected by the move.

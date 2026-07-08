@@ -93,7 +93,7 @@ npm run playground
 ```
 
 Open `http://127.0.0.1:8790` and select `decisions/primary-db` in the bundled
-demo (`playground/demo-layers/`, three layers: personal/team/company) to see
+demo (`apps/playground/demo-layers/`, three layers: personal/team/company) to see
 the same contributors, sourceLayer tags, and conflict panels in the inspector,
 without writing any files yourself.
 

@@ -50,7 +50,7 @@ node classify-context.mjs --demo
 node ingest.mjs --demo
 
 # Write captured signals into a layer bundle
-node write.mjs --signals control-surface/signals.json --manifest layers.json --target-layer team
+node write.mjs --signals apps/control-surface/signals.json --manifest layers.json --target-layer team
 
 # Start the MCP server (cascade mode)
 node mcp-server.mjs --manifest layers.json
@@ -59,7 +59,7 @@ node mcp-server.mjs --manifest layers.json
 node mcp-server.mjs --personal ~/kb-personal --shared ~/kb-shared
 
 # Open the dashboard
-python3 -m http.server 8788 --directory control-surface
+python3 -m http.server 8788 --directory apps/control-surface
 # → http://127.0.0.1:8788
 
 # Run tests
@@ -70,27 +70,27 @@ npm test
 
 A React + Vite front-end for reading and resolving the cascade — Canvas,
 Overview, Triage, Conflicts, Concepts, and an "Ask ContextCake" assistant —
-lives in [`console/`](console/) and deploys to Cloudflare Pages
+lives in [`apps/console/`](apps/console/) and deploys to Cloudflare Pages
 (`https://contextcake-console.pages.dev`). It's a self-contained npm package; the
-engine at the repo root stays dependency-free.
+core engine stays dependency-free.
 
 ```bash
-cd console
+cd apps/console
 npm install
 npm run dev        # http://localhost:5173
 ```
 
-See [`console/README.md`](console/README.md) for the full tour.
+See [`apps/console/README.md`](apps/console/README.md) for the full tour.
 
 ## Validation
 
-The merge gate runs the root engine tests plus the independent `console/` and
-`site/` builds:
+The merge gate runs the root engine tests plus the independent console and site
+builds:
 
 ```bash
 npm test
 
-cd console
+cd apps/console
 npm ci
 npm run typecheck
 npm run build
@@ -100,15 +100,15 @@ npm ci
 npm run build
 ```
 
-The root stays dependency-free. Only `console/` and `site/` run `npm ci`.
+The root stays dependency-free. Only `apps/console/` and `apps/site/` run `npm ci`.
 
 ## Release surfaces
 
 This repo has more than one public-facing surface, and "live" is not a single
 state across all of them.
 
-- `site/` = marketing site, docs, and future demo surface
-- `console/` = application UI on its own Cloudflare Pages project
+- `apps/site/` = marketing site, docs, and future demo surface
+- `apps/console/` = application UI on its own Cloudflare Pages project
 - repo root = engine / MCP / CLI, which is not a hosted app by default
 
 See [`docs/go-live.md`](docs/go-live.md) for the release contract and the exact
@@ -124,7 +124,7 @@ meaning of `merged`, `preview`, and `live` for each surface.
 ] }
 ```
 
-A layer declares a `source`. An **`okf-local`** layer is an [OKF](https://cloud.google.com/blog/products/ai-machine-learning/google-cloud-launches-open-knowledge-format) bundle — a directory of markdown files with YAML frontmatter (the only required field is `type`). An **`mcp`** layer is a foreign knowledge graph reached over a stdio MCP server (`command` + `args`); its responses are translated into OKF at read time, so it stitches in alongside the local bundles. `source` defaults to `okf-local` when omitted. See `examples/mock-context-source.mjs` for a runnable foreign source.
+A layer declares a `source`. An **`okf-local`** layer is an [OKF](https://cloud.google.com/blog/products/ai-machine-learning/google-cloud-launches-open-knowledge-format) bundle — a directory of markdown files with YAML frontmatter (the only required field is `type`). An **`mcp`** layer is a foreign knowledge graph reached over a stdio MCP server (`command` + `args`); its responses are translated into OKF at read time, so it stitches in alongside the local bundles. `source` defaults to `okf-local` when omitted. See `examples/mock-mcp-source/server.mjs` for a runnable foreign source.
 
 ## MCP tools
 
@@ -159,4 +159,4 @@ repo activity → classify-context.mjs → ingest.mjs → signals.json → write
 
 ## Architecture
 
-Full design, decisions log, and diagrams: [`docs/architecture.md`](docs/architecture.md).
+Full design, decisions log, and diagrams: [`docs/architecture/README.md`](docs/architecture/README.md).

@@ -1,0 +1,38 @@
+name: Bug report
+description: Report broken behavior in ContextCake.
+title: "[Bug]: "
+labels: ["type:bug"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - core
+        - console
+        - site
+        - playground
+        - docs
+        - packs
+        - unsure
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include expected behavior and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: List commands, inputs, manifests, or URLs needed to reproduce.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation notes
+      description: Include test output, browser console errors, or logs if available.

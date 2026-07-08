@@ -204,9 +204,9 @@ This spec is being handed to a separate session to **review, design, and impleme
 
 **Project facts (do not re-derive):**
 - **Commands, architecture, gotchas:** see root `CLAUDE.md`. **Engine contract:** `specs/contextcake-core/design.md`.
-- **Testing:** bash-based — `npm test` runs `smoke-test.sh`, `resolver-test.sh`, `source-test.sh`,
-  `playground-test.sh`. Add tests alongside; run from repo root. Prefer TDD (`superpowers:test-driven-development`).
-- **Code style:** ESM `.mjs`, Node ≥18. **The core engine (`resolver.mjs`, `sources/`) is
+- **Testing:** bash-based — `npm test` runs the shell tests under `packages/core/tests/`.
+  Add tests alongside; run from repo root. Prefer TDD (`superpowers:test-driven-development`).
+- **Code style:** ESM `.mjs`, Node ≥18. **The core engine (`packages/core/src/`) is
   dependency-free (plain Node built-ins) — keep it that way** (§7). GUI/updater may use their own
   stack, but must not pull deps into the core.
 - **Git workflow:** conventional commits (`feat:`/`fix:`/`docs:`…); branch per feature; **specs are

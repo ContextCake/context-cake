@@ -25,7 +25,7 @@ Precision instrument with one warm joke. The cake metaphor is expressed through
 product semantics and must mean the same thing on every surface (hero, docs code samples,
 diagrams, OG images).
 
-### Tokens (`site/src/styles/tokens.css` — single source of truth)
+### Tokens (`apps/site/src/styles/tokens.css` — single source of truth)
 
 > **Amended 2026-07-07:** this table now records the *shipped* `tokens.css` values —
 > the palette drifted warm during the two /impeccable critique rounds and is ratified
@@ -125,7 +125,7 @@ Sidebar order = reading order. Sources named per page; port and correct, don't i
 |---|---|
 | **Getting Started** | |
 | Installation | README Quick start + distribution decision |
-| Your first cascade (5 min) | README layer-cake example, `playground/demo-layers/` |
+| Your first cascade (5 min) | README layer-cake example, `apps/playground/demo-layers/` |
 | Connect an agent (MCP) | README MCP tools + `mcp-server.mjs` flags |
 | **Concepts** | |
 | The layer cake | README + core design.md §1–3 |
@@ -134,8 +134,8 @@ Sidebar order = reading order. Sources named per page; port and correct, don't i
 | Conflicts & provenance | README `read_file` description; "surfaced, not hidden" |
 | The trust boundary | CLAUDE.md gotcha — honest, prominent |
 | **Guides** | |
-| Playground tour | `playground/README.md` (near-verbatim port) |
-| Foreign MCP sources | README + `examples/mock-context-source.mjs` |
+| Playground tour | `apps/playground/README.md` (near-verbatim port) |
+| Foreign MCP sources | README + `examples/mock-mcp-source/server.mjs` |
 | The capture write path | README write path + `ingest.mjs`/`write.mjs` |
 | Promoting concepts | `promote.mjs` |
 | **Reference** | |
@@ -145,29 +145,29 @@ Sidebar order = reading order. Sources named per page; port and correct, don't i
 | Override syntax | README override table |
 
 **Correctness rule:** reference pages are written against current source, not against
-`docs/architecture.md` (partially superseded). Anything mentioning `--hash`, `--shadow`,
+`docs/architecture/README.md` (partially superseded). Anything mentioning `--hash`, `--shadow`,
 `override: exception`, Group layer, or recency tiebreak is stale — those subsystems were
 removed in the core re-arch.
 
 ## 6. Tech stack
 
-- **Astro + Starlight**, static output (`site/` in this repo). Docs shell, search, dark
+- **Astro + Starlight**, static output (`apps/site/` in this repo). Docs shell, search, dark
   mode come free; marketing pages are custom Astro pages with scoped styles.
 - **No Tailwind.** Styling = `tokens.css` custom properties + Astro scoped CSS. Keeps the
   dependency list short, consistent with project ethos.
 - **Icons:** Lucide, inlined as SVG (no icon-font, no emoji-as-icon).
 - **Hero/demo viz:** vanilla JS + SVG/canvas island. No three.js unless /demo genuinely
   needs it (decide in Phase 5; occlusion risk noted in the brainstorm applies to /demo).
-- **Demo data seam:** `site/scripts/build-demo-data.mjs` enumerates concepts in
-  `playground/demo-layers/` (via the manifest) and calls the resolver per concept →
-  `site/src/data/demo-cascade.json`, run as a `prebuild` step. `resolver.mjs --concept`
+- **Demo data seam:** `apps/site/scripts/build-demo-data.mjs` enumerates concepts in
+  `apps/playground/demo-layers/` (via the manifest) and calls the resolver per concept →
+  `apps/site/src/data/demo-cascade.json`, run as a `prebuild` step. `resolver.mjs --concept`
   already emits JSON; only the enumeration wrapper is new.
 - **Changelog:** build-time fetch of GitHub releases (graceful empty state while none).
-- **Engine stays dependency-free** — all site deps live in `site/package.json` only.
+- **Engine stays dependency-free** — all site deps live in `apps/site/package.json` only.
 
 ## 7. Deployment
 
-Cloudflare Pages, build root `site/`, `npm run build` → `site/dist`.
+Cloudflare Pages, build root `apps/site/`, `npm run build` → `apps/site/dist`.
 Preview: push to main (`/deploy-preview`). Production: GitHub release (`/go-live`) →
 **contextcake.com** (registered 2026-07-02; the only TLD owned — .dev/.ai were available
 but not purchased). No secrets in the build; the GitHub-releases fetch is
@@ -189,7 +189,7 @@ unauthenticated (private repo → skipped/empty until visibility resolves).
 ### Commands
 
 ```bash
-cd site
+cd apps/site
 npm install          # once
 npm run dev          # http://localhost:4321
 npm run build        # static build → dist/ (the CI gate; must exit 0)
@@ -197,7 +197,7 @@ npm run preview      # serve the built output
 ```
 
 Engine tests are unaffected by site work; root `npm test` must still pass if any engine
-file is touched (only `site/scripts/build-demo-data.mjs` should read engine code, and
+file is touched (only `apps/site/scripts/build-demo-data.mjs` should read engine code, and
 only read).
 
 ### Testing
@@ -209,7 +209,7 @@ only read).
 ### Project structure
 
 ```
-site/
+apps/site/
 ├── astro.config.mjs        # Starlight config: title, sidebar, customCss
 ├── package.json            # site-only deps
 ├── scripts/
@@ -241,14 +241,14 @@ site/
 
 ### Boundaries
 
-- ✅ **Always:** run `npm run build` in `site/` before any commit; keep all site
-  dependencies inside `site/package.json`; use tokens for every color; provide
+- ✅ **Always:** run `npm run build` in `apps/site/` before any commit; keep all site
+  dependencies inside `apps/site/package.json`; use tokens for every color; provide
   reduced-motion fallbacks; self-host every asset.
 - ⚠️ **Ask first:** adding dependencies beyond the scaffold set (Astro, Starlight,
   @fontsource, Lucide); changing brand tokens or the layer-color semantics; modifying any
   engine file; publishing anything to npm; changing repo visibility settings.
 - 🚫 **Never:** commit secrets or API keys; commit `layers.json` or generated data
-  (`site/src/data/*.json`, `site/dist/`); add third-party CDN/analytics/tracking; write
+  (`apps/site/src/data/*.json`, `apps/site/dist/`); add third-party CDN/analytics/tracking; write
   install instructions that contradict the unresolved distribution decision as if final;
   force-push or push to `main`.
 
@@ -267,7 +267,7 @@ do not invent copy where approved copy is given.
 - Tagline (footer, OG default): **"Conflicts surfaced, not hidden."**
 - Hero headline (shipped in scaffold): **"Every layer of what your team knows — one
   effective view."**
-- Hero subhead: as in `site/src/pages/index.astro` (keep).
+- Hero subhead: as in `apps/site/src/pages/index.astro` (keep).
 - Problem beats (§4.2), one short paragraph each:
   1. *Scattered* — your team's knowledge lives in repo docs, wikis, and heads; no two
      sources agree on what's current.
@@ -289,7 +289,7 @@ do not invent copy where approved copy is given.
 | Foreign graphs stitch in | README `layers.json` shape (mcp source → OKF at read time) |
 | Write path captures from repos | README "Write path" pipeline |
 | Zero dependencies | README Quick start ("plain Node.js ≥ 18") + /install page framing |
-| Playground | `playground/README.md` intro |
+| Playground | `apps/playground/README.md` intro |
 
 ### 11.3 "For agents" section (§4.6) — real payload
 
@@ -297,7 +297,7 @@ The MCP tool table is README's four-row table verbatim. The JSON sample MUST be 
 output of:
 
 ```bash
-node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db
+node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db
 ```
 
 Truncate `content` strings for display; never alter structure. Shape (verified):
@@ -319,16 +319,16 @@ Truncate `content` strings for display; never alter structure. Shape (verified):
 
 (`suppressed: true` sections exist in the wild — renderers must skip them.)
 
-### 11.4 Demo-data seam (`site/scripts/build-demo-data.mjs`) — contract
+### 11.4 Demo-data seam (`apps/site/scripts/build-demo-data.mjs`) — contract
 
-1. Read `playground/manifest.json` (paths are relative to the manifest file).
+1. Read `apps/playground/manifest.json` (paths are relative to the manifest file).
 2. Enumerate concept IDs: for each layer path, glob `**/*.md`; the concept ID is the
    relative path minus `.md`. Union across layers. Current demo yields exactly:
    `decisions/primary-db` (3 layers), `interfaces/auth-tokens` (2),
    `runbooks/incident-response` (company only), `runbooks/deploy` (team only).
 3. Resolve each ID (shell out to `resolver.mjs`, or import `resolveConcept` — read-only
    import of engine code is allowed; modifying engine files is not).
-4. Emit `site/src/data/demo-cascade.json`: `{ "concepts": [ <resolved objects> ] }`.
+4. Emit `apps/site/src/data/demo-cascade.json`: `{ "concepts": [ <resolved objects> ] }`.
    The directory is gitignored — this file is generated, never committed, never
    hand-edited. Wire as the site `prebuild` npm script.
 

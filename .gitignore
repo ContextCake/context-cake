@@ -3,7 +3,10 @@ node_modules/
 *.log
 
 # Generated dashboard data — produced by ingest.mjs + write.mjs, not authored
-control-surface/signals.json
+apps/control-surface/signals.json
+apps/console/src/generated/
+apps/site/src/data/demo-cascade.json
+apps/site/public/demo-app/
 
 # Local layer manifests may contain absolute paths — don't commit
 layers.json
@@ -11,7 +14,7 @@ layers.json
 # Plans are never committed
 docs/plans/
 .claude/plans/
-demo/layers/
-demo/mcp/
+examples/team-demo/layers/
+examples/team-demo/mcp/
 /mcp-local.json
 layers/personal/

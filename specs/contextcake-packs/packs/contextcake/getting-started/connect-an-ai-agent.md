@@ -68,7 +68,7 @@ conflict.
 ## Try it against the demo {#try-it-against-the-demo}
 
 ```bash
-node mcp-server.mjs --manifest playground/manifest.json
+node mcp-server.mjs --manifest apps/playground/manifest.json
 ```
 
 Then call `read_file` with `concept_id: "decisions/primary-db"` from your

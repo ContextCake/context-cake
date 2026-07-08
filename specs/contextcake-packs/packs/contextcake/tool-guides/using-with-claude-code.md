@@ -23,7 +23,7 @@ claude mcp add contextcake -- node /ABS/PATH/mcp-server.mjs --manifest /ABS/PATH
 No manifest yet, or just trying it out — point at the bundled demo instead:
 
 ```bash
-claude mcp add contextcake -- node /ABS/PATH/mcp-server.mjs --manifest /ABS/PATH/playground/manifest.json
+claude mcp add contextcake -- node /ABS/PATH/mcp-server.mjs --manifest /ABS/PATH/apps/playground/manifest.json
 ```
 
 Once registered, Claude has four tools: `search`, `read_file`, `list_concepts`,

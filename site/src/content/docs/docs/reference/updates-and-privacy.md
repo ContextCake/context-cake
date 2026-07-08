@@ -15,15 +15,17 @@ Both UIs can check whether a newer ContextCake release exists. The check is a si
 unauthenticated HTTPS `GET` to a pinned host:
 
 ```
-https://api.github.com/repos/ContextCake/context-cake/releases/latest
+https://api.github.com/repos/ContextCake/context-cake/releases?per_page=20
 ```
 
 Nothing is attached beyond the implicit HTTP request — no personal data, no tokens,
 no identifiers, no telemetry. The request carries the same information any browser
 request to that URL would (the standard HTTP headers your client sends; GitHub sees
-whatever it would see from any anonymous visitor). The response — the latest release
-tag and its URL — is compared against the running version and cached for the session,
-so at most one request happens per page load, no matter how many components ask.
+whatever it would see from any anonymous visitor). From the response, each surface
+picks the newest release in its own tag namespace (`console-v*` for the console,
+`v*` for the playground/engine), compares it against the running version, and caches
+the result for the session — at most one request per page load, no matter how many
+components ask.
 
 ## It is disable-able
 

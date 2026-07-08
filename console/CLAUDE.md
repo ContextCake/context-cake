@@ -2,8 +2,10 @@
 
 React + Vite + TypeScript front-end for the ContextCake knowledge cascade. A
 single-page console: a pan/zoom Canvas home, four structured views (Overview,
-Triage, Conflicts, Concepts), and an "Ask ContextCake" chat slide-over. No
-runtime dependencies beyond React; all sample data is in `src/data.ts`.
+Triage, Conflicts, Concepts), and an "Ask ContextCake" chat slide-over. Runtime
+dependencies are React plus self-hosted @fontsource fonts. Data is real
+resolver output — a build-time demo bundle or the live playground API (see
+**Data** below); only triage signals and the activity feed remain demo fixtures.
 
 This is the `console/` package of the ContextCake monorepo — the cascade engine
 lives at the repo root and is deliberately dependency-free. This package is the
@@ -13,17 +15,23 @@ only place npm dependencies live. Run every command below from `console/`.
 
 ```bash
 npm install
-npm run dev         # Vite dev server, http://localhost:5173
+npm run dev         # Vite dev server, http://localhost:5173 (demo mode)
 npm run typecheck   # tsc --noEmit (strict)
+npm test            # vitest (api adapters, update check)
 npm run build       # tsc -b + vite build → dist/
+npm run build:live  # build with --base=/console/ for the playground mount
 npm run preview     # serve the production build
+
+# Live mode against the playground server (from the repo root):
+npm run console:live   # builds, then serves console at /console/ + playground at /
 
 # Deploy the built dist/ to Cloudflare Pages
 npx wrangler pages deploy dist --project-name=contextcake-console --branch=main
 ```
 
-There is no test runner or linter configured — `npm run typecheck` (strict mode,
-`noUnusedLocals`/`noUnusedParameters`) is the gate. Run it before committing.
+The gates are `npm run typecheck` (strict, `noUnusedLocals`/`noUnusedParameters`)
+and `npm test`; CI runs both. dev/build/typecheck/test all regenerate
+`src/generated/demo-cascade.json` (gitignored) via their pre-hooks.
 
 ## Architecture
 
@@ -41,8 +49,14 @@ There is no test runner or linter configured — `npm run typecheck` (strict mod
   `:root[data-theme="dark"]`). `C` in `src/theme.ts` holds the variable references; `css()` parses inline
   `"prop:val; …"` strings into style objects **and** remaps literal hex
   colors to their variables via `HEX_VARS`.
-- **Data** — `src/data.ts`: layers, sources, signals, conflicts, concepts.
-  Fictional sample content; swap for live MCP/graph data when wiring a backend.
+- **Data** — `src/api.ts` is the single seam: demo mode imports a bundle
+  generated at build time by shelling out to the real `resolver.mjs`
+  (`scripts/build-demo-data.mjs`), live mode fetches the same-origin playground
+  API (`/api/graph`, `/api/resolve-all`). Adapters map wire types (`types.ts`)
+  onto the view model in `src/data.ts`, deriving provenance from contributor
+  levels. `src/data.ts` keeps only lane semantics and the demo-only
+  triage/activity fixtures. Live errors are typed (`LiveDataError`) and
+  rendered honestly — never a silent fallback to demo.
 - **Chat** — `src/components/ChatPanel.tsx` + `store.send()` call
   `window.claude.complete` when present and fall back to canned answers.
 

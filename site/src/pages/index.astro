@@ -29,12 +29,6 @@ const layerColor = {
 const bodySections = primaryDb.sections.filter(
 	(s) => !s.suppressed && s.content.trim() !== '',
 );
-const heroBands = bodySections.map((s) => ({
-	label: label(s.heading),
-	layer: s.sourceLayer,
-	updated: s.sourceUpdated,
-	conflict: s.conflicts?.[0]?.layer ?? null,
-}));
 
 // The contributing layers, shown as the "stack" that resolves into the composite.
 const heroContributors = primaryDb.contributors;
@@ -82,6 +76,13 @@ const dissentQuote = (() => {
 	return boundary > 40 ? cut.slice(0, boundary + 1) : `${cut.trimEnd()}…`;
 })();
 const conceptTitle = primaryDb.frontmatter?.title ?? 'decisions/primary-db';
+
+// Built from the actual contributor list (not a fixed count/order) so the
+// label stays correct if the demo data ever has a different set of layers.
+const sourcesDescription = heroContributors
+	.map((ct) => `${layerName[ct.layer] ?? ct.layer} (${shortDate(ct.updated)})`)
+	.join(', ');
+const heroAriaLabel = `The concept "${conceptTitle}" resolved from ${heroContributors.length} sources: ${sourcesDescription}. They merge into one answer where each section is tagged with the layer that won it, and disagreements are kept with their layer and date.`;
 
 // A real (truncated) read_file payload for the "For agents" section. Structure
 // is untouched; only long content strings are shortened for display (§11.3).
@@ -234,10 +235,7 @@ const mcpTools = [
 					<CopyCommand command="gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz" />
 				</div>
 
-			<figure
-				class="composite"
-				aria-label={`The concept "${conceptTitle}" resolved from three layers. Your notes (${shortDate(heroContributors[0].updated)}), team practice (${shortDate(heroContributors[1].updated)}), and company policy (${shortDate(heroContributors[2].updated)}) merge into one answer where each section is tagged with the layer that won it, and disagreements are kept with their layer and date.`}
-			>
+			<figure class="composite" aria-label={heroAriaLabel}>
 				<figcaption>
 					<span class="dot" aria-hidden="true"></span>
 					<span class="cap-title">{conceptTitle}</span>

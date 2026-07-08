@@ -95,7 +95,13 @@ const narrativePoints = [
 							Interact to expand full screen
 						</span>
 					</div>
-					<button type="button" class="demo-minimize" data-demo-minimize tabindex="-1">
+					<button
+						type="button"
+						class="demo-minimize"
+						data-demo-minimize
+						tabindex="-1"
+						aria-hidden="true"
+					>
 						<Icon name="minimize" size={16} strokeWidth={2.2} />
 						Minimize
 					</button>
@@ -179,7 +185,7 @@ const narrativePoints = [
 			flip(() => frame.classList.add('is-expanded'));
 			expandBtn.setAttribute('aria-expanded', 'true');
 			minimizeBtn.tabIndex = 0;
-			document.documentElement.classList.add('demo-immersive');
+			minimizeBtn.setAttribute('aria-hidden', 'false');
 			// Only pull focus for keyboard/button entry — never interrupt a visitor
 			// who reached immersive mode by clicking inside the live console.
 			if (moveFocus) minimizeBtn.focus();
@@ -192,7 +198,7 @@ const narrativePoints = [
 			flip(() => frame.classList.remove('is-expanded'));
 			expandBtn.setAttribute('aria-expanded', 'false');
 			minimizeBtn.tabIndex = -1;
-			document.documentElement.classList.remove('demo-immersive');
+			minimizeBtn.setAttribute('aria-hidden', 'true');
 			window.setTimeout(() => {
 				if (!expanded) {
 					scrim.hidden = true;

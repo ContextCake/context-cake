@@ -566,6 +566,24 @@ function wireChrome() {
   el.omni.addEventListener("input", (e) => { state.filter = e.target.value; renderConceptList(); });
   document.getElementById("syncBtn").addEventListener("click", sync);
   document.getElementById("fitBtn").addEventListener("click", fitView);
+
+  // The brand mark reads like a hamburger — so let it collapse/expand the rail.
+  const railToggle = document.getElementById("railToggle");
+  const app = document.querySelector(".app");
+  const RAIL_KEY = "cc-pg-rail";
+  const applyRail = (collapsed) => {
+    app.dataset.rail = collapsed ? "collapsed" : "expanded";
+    railToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  };
+  let railCollapsed = false;
+  try { railCollapsed = window.localStorage.getItem(RAIL_KEY) === "collapsed"; } catch { /* ignore */ }
+  applyRail(railCollapsed);
+  railToggle.addEventListener("click", () => {
+    railCollapsed = !railCollapsed;
+    applyRail(railCollapsed);
+    try { window.localStorage.setItem(RAIL_KEY, railCollapsed ? "collapsed" : "expanded"); } catch { /* ignore */ }
+    fitView();
+  });
   document.getElementById("zoomIn").addEventListener("click", () => zoomBy(1.15));
   document.getElementById("zoomOut").addEventListener("click", () => zoomBy(1 / 1.15));
   document.getElementById("stageRetry").addEventListener("click", boot);

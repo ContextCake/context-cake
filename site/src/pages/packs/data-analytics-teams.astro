@@ -55,6 +55,7 @@ const deliveryCards = [
 		body: 'One-time access to the current workflows, templates, examples, and tool guidance.',
 		href: 'mailto:hello@contextcake.com?subject=Data%20%26%20Analytics%20Teams%20pack',
 		link: 'Request access',
+		expectation: 'Email us \u2014 a human replies within two business days. No list, no automation.',
 		primary: true,
 	},
 	{
@@ -63,6 +64,7 @@ const deliveryCards = [
 		body: 'Sharper examples, clearer merge notes, and improved guidance shipped separately from the base pack.',
 		href: 'mailto:hello@contextcake.com?subject=Data%20%26%20Analytics%20Teams%20updates',
 		link: 'Request updates',
+		expectation: 'Email us \u2014 a human replies within two business days. No list, no automation.',
 		primary: false,
 	},
 	{
@@ -187,6 +189,7 @@ const faqs = [
 							<h3>{card.title}</h3>
 							<p>{card.body}</p>
 							<a class={`button${card.primary ? ' primary' : ''}`} href={card.href}>{card.link}</a>
+							{card.expectation && <p class="expectation">{card.expectation}</p>}
 						</article>
 					))}
 				</div>
@@ -443,6 +446,11 @@ const faqs = [
 	.delivery-grid .button {
 		margin-top: 1rem;
 		width: fit-content;
+	}
+	.delivery-grid .expectation {
+		margin: 0.6rem 0 0;
+		color: var(--cc-text-muted);
+		font-size: 0.85rem;
 	}
 	.faq-list {
 		display: grid;

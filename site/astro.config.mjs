@@ -16,7 +16,7 @@ export default defineConfig({
 				{
 					icon: 'github',
 					label: 'GitHub',
-					href: 'https://github.com/siracusa5/context-cake',
+					href: 'https://github.com/ContextCake/context-cake',
 				},
 			],
 			customCss: ['./src/styles/custom.css'],

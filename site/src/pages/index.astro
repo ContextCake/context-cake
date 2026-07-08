@@ -67,7 +67,7 @@ const agentPayload = {
 	})),
 };
 const agentJson = JSON.stringify(agentPayload, null, 2);
-const quickstartCommand = `gh release download --repo siracusa5/context-cake --archive=tar.gz --output contextcake.tar.gz
+const quickstartCommand = `gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz
 mkdir contextcake
 tar -xzf contextcake.tar.gz -C contextcake --strip-components=1
 cd contextcake
@@ -201,7 +201,7 @@ const mcpTools = [
 						<a class="cta" href="/packs">Explore Packs</a>
 					</div>
 					<p class="hero-note">Open source engine for teams that need a verifiable context layer.</p>
-					<CopyCommand command="gh release download --repo siracusa5/context-cake --archive=tar.gz --output contextcake.tar.gz" />
+					<CopyCommand command="gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz" />
 				</div>
 
 			<figure

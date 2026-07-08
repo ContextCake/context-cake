@@ -103,10 +103,11 @@ equivalent.
 
 ## 4. Homepage — section order
 
-1. **Hero** — headline, subhead, `npx contextcake` copy box, CTAs (Get started → /docs,
-   GitHub), cascade visual. Launch state: static banded composite (real resolver output,
-   bands striped by layer color, provenance labels + dates on each band, one band showing
-   a `conflicts[]` chip). Phase 5 upgrades it to the animated stack→column→composite.
+1. **Hero** — headline, subhead, `gh release download` copy box (release-archive install,
+   not `npx`), CTAs (See the live demo → /demo, Read the docs → /docs, GitHub), cascade
+   visual. Launch state: static banded composite (real resolver output, bands striped by
+   layer color, provenance labels + dates on each band, one band showing a `conflicts[]`
+   chip). Phase 5 upgrades it to the animated stack→column→composite.
 2. **Problem** — three beats: knowledge scattered; agents read stale/contradictory docs;
    overwriting loses the dissent.
 3. **How it works** — Stack / Resolve / Serve, one stratum color each.

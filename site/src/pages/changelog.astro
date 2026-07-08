@@ -8,7 +8,7 @@ import Base from '../layouts/Base.astro';
 async function loadReleases() {
 	try {
 		const res = await fetch(
-			'https://api.github.com/repos/siracusa5/context-cake/releases',
+			'https://api.github.com/repos/ContextCake/context-cake/releases',
 			{
 				headers: {
 					Accept: 'application/vnd.github+json',
@@ -57,7 +57,7 @@ const releases = await loadReleases();
 					<p class="muted">
 						ContextCake installs from a <a href="/install">versioned release archive</a>.
 						Release notes appear here, pulled from{' '}
-						<a href="https://github.com/siracusa5/context-cake/releases">GitHub Releases</a>{' '}
+						<a href="https://github.com/ContextCake/context-cake/releases">GitHub Releases</a>{' '}
 						at build time.
 					</p>
 				</div>

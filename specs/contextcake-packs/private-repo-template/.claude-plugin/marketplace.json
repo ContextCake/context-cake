@@ -1,6 +1,8 @@
 {
   "name": "contextcake-packs",
-  "displayName": "ContextCake Packs",
+  "owner": {
+    "name": "ContextCake"
+  },
   "description": "Private marketplace for paid ContextCake pack plugins.",
   "plugins": [
     {

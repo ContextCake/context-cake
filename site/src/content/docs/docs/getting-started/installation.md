@@ -19,14 +19,14 @@ local setup path.
 ## Download
 
 ```bash
-gh release download --repo siracusa5/context-cake --archive=tar.gz --output contextcake.tar.gz
+gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz
 mkdir contextcake
 tar -xzf contextcake.tar.gz -C contextcake --strip-components=1
 cd contextcake
 ```
 
 You can also download the source archive from the
-[latest ContextCake release](https://github.com/siracusa5/context-cake/releases/latest).
+[latest ContextCake release](https://github.com/ContextCake/context-cake/releases/latest).
 
 ## Verify
 
@@ -63,7 +63,7 @@ Use a git checkout when you want to inspect history, contribute changes, or pin
 your own fork:
 
 ```bash
-git clone https://github.com/siracusa5/context-cake.git
+git clone https://github.com/ContextCake/context-cake.git
 cd context-cake
 ```
 

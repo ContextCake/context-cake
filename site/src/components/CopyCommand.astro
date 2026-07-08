@@ -89,14 +89,31 @@ const html = await codeToHtml(`$ ${command}`, {
 				return true;
 			}
 		} catch {
-			/* fall through to the select-to-copy fallback */
+			/* fall through to execCommand */
 		}
-		return false;
+		// Insecure context (e.g. LAN http:// preview) or a denied clipboard
+		// permission: execCommand is deprecated but still copies everywhere,
+		// and the spec's AC is that the button copies — copy the bare command,
+		// not the rendered "$ " prompt.
+		try {
+			const ta = document.createElement('textarea');
+			ta.value = text;
+			ta.setAttribute('readonly', '');
+			ta.style.position = 'fixed';
+			ta.style.opacity = '0';
+			document.body.appendChild(ta);
+			ta.select();
+			const ok = document.execCommand('copy');
+			ta.remove();
+			return ok;
+		} catch {
+			return false;
+		}
 	}
 
-	// Graceful fallback when the Clipboard API is unavailable (insecure context,
-	// permission denied, older browser): select the command text in the visible
-	// code view so the user can copy it themselves (Cmd/Ctrl-C).
+	// Last-resort fallback when both clipboard paths fail: select the command
+	// text in the visible code view so the user can copy it themselves
+	// (Cmd/Ctrl-C). Excludes the rendered "$ " prompt so the paste is runnable.
 	function selectCommandText(button: HTMLButtonElement) {
 		const view = button
 			.closest('.copy-command')
@@ -106,6 +123,18 @@ const html = await codeToHtml(`$ ${command}`, {
 		if (!selection) return;
 		const range = document.createRange();
 		range.selectNodeContents(view);
+		// Skip past the leading "$ " prompt so a manual copy pastes a runnable
+		// command. The prompt is the first rendered characters of the block.
+		const walker = document.createTreeWalker(view, NodeFilter.SHOW_TEXT);
+		const first = walker.nextNode();
+		if (first?.textContent?.startsWith('$')) {
+			const skip = first.textContent.startsWith('$ ') ? 2 : 1;
+			if (first.textContent.length > skip) range.setStart(first, skip);
+			else {
+				const next = walker.nextNode();
+				if (next) range.setStart(next, next.textContent?.startsWith(' ') ? 1 : 0);
+			}
+		}
 		selection.removeAllRanges();
 		selection.addRange(range);
 	}

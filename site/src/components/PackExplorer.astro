@@ -453,6 +453,17 @@ const renderedFiles = await Promise.all(
 		pane.toggleAttribute('data-overflowing', hasMoreBelow);
 	}
 
+	// Coalesce scroll/resize bursts to one measurement per frame per pane.
+	const overflowScheduled = new WeakSet<HTMLElement>();
+	function scheduleOverflow(pane: HTMLElement) {
+		if (overflowScheduled.has(pane)) return;
+		overflowScheduled.add(pane);
+		requestAnimationFrame(() => {
+			overflowScheduled.delete(pane);
+			updateOverflow(pane);
+		});
+	}
+
 	for (const explorer of document.querySelectorAll('[data-pack-explorer]')) {
 		const rows = Array.from(explorer.querySelectorAll<HTMLElement>('[data-tree-row]'));
 		const folders = Array.from(explorer.querySelectorAll<HTMLElement>('[data-folder-path]'));
@@ -461,12 +472,14 @@ const renderedFiles = await Promise.all(
 
 		for (const pane of panes) {
 			for (const body of pane.querySelectorAll<HTMLElement>('.preview-body')) {
-				body.addEventListener('scroll', () => updateOverflow(pane));
+				body.addEventListener('scroll', () => scheduleOverflow(pane), { passive: true });
 			}
 			updateOverflow(pane);
 		}
 		window.addEventListener('resize', () => {
-			for (const pane of panes) updateOverflow(pane);
+			// Only the visible pane's fade can change on resize.
+			const active = explorer.querySelector<HTMLElement>('[data-file-panel]:not([hidden])');
+			if (active) scheduleOverflow(active);
 		});
 
 		// --- collapsible folders ---

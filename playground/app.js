@@ -66,6 +66,7 @@ async function init() {
   wireCanvas();
   wireFiles();
   wireSources();
+  wireUpdateCheck();
   await boot();
 }
 
@@ -796,6 +797,108 @@ function escapeHtml(v) {
     .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
 function escapeAttr(v) { return escapeHtml(v); }
+
+// ===========================================================================
+// Update awareness — a single, unauthenticated, PII-free check against a
+// pinned GitHub host. Never blocks boot, never retries. Reuses the same
+// localStorage key as the console (`cc-update-check`), default ON here since
+// the playground is a local dev tool (vs. off-by-default for the public
+// demo embed).
+// ===========================================================================
+
+const UPDATE_RELEASES_URL = "https://api.github.com/repos/siracusa5/context-cake/releases/latest";
+const UPDATE_STORAGE_KEY = "cc-update-check";
+// Bumped manually alongside releases; the playground has no package.json of its own.
+const PLAYGROUND_VERSION = "0.1.0";
+
+function updateCompareVersions(a, b) {
+  const as = a.split(".");
+  const bs = b.split(".");
+  const len = Math.max(as.length, bs.length);
+  for (let i = 0; i < len; i++) {
+    const an = Number.parseInt(as[i] ?? "0", 10) || 0;
+    const bn = Number.parseInt(bs[i] ?? "0", 10) || 0;
+    if (an !== bn) return an - bn;
+  }
+  return 0;
+}
+
+function isUpdateCheckEnabled() {
+  let stored = null;
+  try { stored = window.localStorage.getItem(UPDATE_STORAGE_KEY); } catch { stored = null; }
+  if (stored === "off") return false;
+  return true; // default on in the playground
+}
+
+function setUpdateCheckEnabled(enabled) {
+  try { window.localStorage.setItem(UPDATE_STORAGE_KEY, enabled ? "on" : "off"); } catch { /* ignore */ }
+}
+
+async function checkForUpdatePlayground() {
+  let res;
+  try {
+    res = await fetch(UPDATE_RELEASES_URL, { headers: { accept: "application/vnd.github+json" } });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    return null;
+  }
+  const tag = data && data.tag_name;
+  if (typeof tag !== "string" || !tag) return null;
+  const latest = tag.replace(/^v/, "");
+  if (updateCompareVersions(latest, PLAYGROUND_VERSION) <= 0) return null;
+  const url = typeof data.html_url === "string" && data.html_url
+    ? data.html_url
+    : `https://github.com/siracusa5/context-cake/releases/tag/${tag}`;
+  return { latest, url };
+}
+
+function wireUpdateCheck() {
+  const badge = document.getElementById("updateBadge");
+  const link = document.getElementById("updateBadgeLink");
+  const dismissBtn = document.getElementById("updateBadgeDismiss");
+  const settingsBtn = document.getElementById("updateSettingsBtn");
+  if (!badge || !link || !dismissBtn || !settingsBtn) return;
+
+  let menu = null;
+  const closeMenu = () => { if (menu) { menu.remove(); menu = null; } };
+  settingsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (menu) { closeMenu(); return; }
+    menu = document.createElement("div");
+    menu.id = "updateSettingsMenu";
+    menu.innerHTML = `<label><input id="updateCheckToggle" type="checkbox" ${isUpdateCheckEnabled() ? "checked" : ""}> Check for updates</label>`;
+    settingsBtn.parentElement.style.position = settingsBtn.parentElement.style.position || "relative";
+    settingsBtn.insertAdjacentElement("afterend", menu);
+    document.getElementById("updateCheckToggle").addEventListener("change", (ev) => {
+      const enabled = ev.target.checked;
+      setUpdateCheckEnabled(enabled);
+      if (!enabled) badge.hidden = true;
+      else runUpdateCheck();
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (menu && !menu.contains(e.target) && e.target !== settingsBtn) closeMenu();
+  });
+
+  dismissBtn.addEventListener("click", () => { badge.hidden = true; });
+
+  async function runUpdateCheck() {
+    if (!isUpdateCheckEnabled()) return;
+    const info = await checkForUpdatePlayground();
+    if (!info) return;
+    link.href = info.url;
+    link.textContent = `Update available → v${info.latest}`;
+    badge.hidden = false;
+  }
+
+  void runUpdateCheck();
+}
 
 // ===========================================================================
 // Files mode — explorer + editor (CodeMirror) + rich preview (md / svg / image / pdf)

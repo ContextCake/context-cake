@@ -181,9 +181,14 @@ const narrativePoints = [
 	.demo-frame {
 		display: block;
 		width: 100%;
-		min-height: 78vh;
+		height: clamp(28rem, 108vw, 44rem);
 		border: 0;
 		background: #0f1115;
+	}
+	@media (min-width: 640px) {
+		.demo-frame {
+			height: clamp(32rem, 82vh, 50rem);
+		}
 	}
 	.signals h2 {
 		font-size: clamp(2rem, 4vw, 3rem);

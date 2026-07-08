@@ -87,7 +87,10 @@ const renderedFiles = await Promise.all(
 						<span class="preview-lang">{file.language}</span>
 					</div>
 				</header>
-				<div class="preview-code" set:html={file.html} />
+				<div class="preview-code-wrap">
+					<div class="preview-code" set:html={file.html} />
+					<span class="scroll-fade" aria-hidden="true"></span>
+				</div>
 			</article>
 		))}
 	</div>
@@ -222,9 +225,33 @@ const renderedFiles = await Promise.all(
 		background: color-mix(in srgb, var(--cc-layer-team) 16%, transparent);
 		color: var(--cc-text);
 	}
+	.preview-code-wrap {
+		position: relative;
+		max-width: 100%;
+		overflow: hidden;
+	}
 	.preview-code {
 		max-height: 36rem;
+		max-width: 100%;
 		overflow: auto;
+	}
+	.scroll-fade {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: 2.25rem;
+		background: linear-gradient(
+			to bottom,
+			transparent,
+			color-mix(in srgb, var(--cc-surface-solid) 92%, transparent)
+		);
+		pointer-events: none;
+		opacity: 0;
+		transition: opacity var(--cc-transition);
+	}
+	.preview-code-wrap:has(.preview-code[data-overflowing]) .scroll-fade {
+		opacity: 1;
 	}
 	.preview-code :global(.shiki) {
 		margin: 0;
@@ -254,10 +281,27 @@ const renderedFiles = await Promise.all(
 </style>
 
 <script>
+	function updateOverflow(panel) {
+		const code = panel.querySelector('.preview-code');
+		if (!code) return;
+		const hasMoreBelow =
+			code.scrollHeight - code.clientHeight - code.scrollTop > 4;
+		code.toggleAttribute('data-overflowing', hasMoreBelow);
+	}
+
 	for (const explorer of document.querySelectorAll('[data-pack-explorer]')) {
 		const triggers = explorer.querySelectorAll('[data-file-trigger]');
 		const panels = explorer.querySelectorAll('[data-file-panel]');
 		const treeTriggerByPath = new Map();
+
+		for (const panel of panels) {
+			updateOverflow(panel);
+			const code = panel.querySelector('.preview-code');
+			if (code) code.addEventListener('scroll', () => updateOverflow(panel));
+		}
+		window.addEventListener('resize', () => {
+			for (const panel of panels) updateOverflow(panel);
+		});
 
 		for (const trigger of triggers) {
 			if (!trigger.classList.contains('tree-row')) continue;
@@ -281,6 +325,7 @@ const renderedFiles = await Promise.all(
 					const isActive = panel.getAttribute('data-file-panel') === target;
 					panel.toggleAttribute('hidden', !isActive);
 					panel.classList.toggle('active', isActive);
+					if (isActive) updateOverflow(panel);
 				}
 
 				treeTriggerByPath.get(target)?.scrollIntoView({ block: 'nearest' });

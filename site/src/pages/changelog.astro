@@ -48,7 +48,12 @@ const releases = await loadReleases();
 		{
 			releases.length === 0 ? (
 				<div class="empty">
-					<p>No releases yet.</p>
+					<div class="strata" aria-hidden="true">
+						<span></span>
+						<span></span>
+						<span></span>
+					</div>
+					<p class="empty-title">No releases published yet.</p>
 					<p class="muted">
 						ContextCake installs from a <a href="/install">versioned release archive</a>.
 						Release notes appear here, pulled from{' '}
@@ -105,6 +110,34 @@ const releases = await loadReleases();
 		border: 1px solid var(--cc-border);
 		border-radius: 12px;
 		padding: 2rem;
+	}
+	.strata {
+		display: grid;
+		gap: 0.35rem;
+		width: 4.25rem;
+		margin-bottom: 1.25rem;
+	}
+	.strata span {
+		display: block;
+		height: 0.82rem;
+		border-radius: 4px;
+	}
+	.strata span:nth-child(1) {
+		margin-left: 0.85rem;
+		background: var(--cc-layer-personal);
+	}
+	.strata span:nth-child(2) {
+		background: var(--cc-layer-team);
+	}
+	.strata span:nth-child(3) {
+		margin-left: 0.4rem;
+		background: var(--cc-layer-company);
+	}
+	.empty-title {
+		color: var(--cc-text);
+		font-family: var(--cc-font-heading);
+		font-weight: 700;
+		font-size: 1.1rem;
 	}
 	.empty p {
 		margin: 0 0 0.75rem;

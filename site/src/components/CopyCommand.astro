@@ -89,32 +89,38 @@ const html = await codeToHtml(`$ ${command}`, {
 				return true;
 			}
 		} catch {
-			/* fall through to the execCommand fallback */
+			/* fall through to the select-to-copy fallback */
 		}
-		try {
-			const ta = document.createElement('textarea');
-			ta.value = text;
-			ta.setAttribute('readonly', '');
-			ta.style.position = 'fixed';
-			ta.style.left = '-9999px';
-			document.body.appendChild(ta);
-			ta.select();
-			const ok = document.execCommand('copy');
-			document.body.removeChild(ta);
-			return ok;
-		} catch {
-			return false;
-		}
+		return false;
+	}
+
+	// Graceful fallback when the Clipboard API is unavailable (insecure context,
+	// permission denied, older browser): select the command text in the visible
+	// code view so the user can copy it themselves (Cmd/Ctrl-C).
+	function selectCommandText(button: HTMLButtonElement) {
+		const view = button
+			.closest('.copy-command')
+			?.querySelector<HTMLElement>('.command-view code');
+		if (!view) return;
+		const selection = window.getSelection();
+		if (!selection) return;
+		const range = document.createRange();
+		range.selectNodeContents(view);
+		selection.removeAllRanges();
+		selection.addRange(range);
 	}
 
 	for (const button of document.querySelectorAll<HTMLButtonElement>('.copy-command button')) {
 		button.addEventListener('click', async () => {
-			await copyText(button.dataset.command ?? '');
-			// Confirm regardless — the command is visible, so the worst case is a
-			// manual copy, and the user still gets feedback that the click landed.
-			button.classList.add('copied');
+			const ok = await copyText(button.dataset.command ?? '');
 			const label = button.querySelector('.label');
-			if (label) label.textContent = 'Copied';
+			if (ok) {
+				button.classList.add('copied');
+				if (label) label.textContent = 'Copied';
+			} else {
+				selectCommandText(button);
+				if (label) label.textContent = 'Selected — press ⌘/Ctrl-C';
+			}
 			setTimeout(() => {
 				button.classList.remove('copied');
 				if (label) label.textContent = 'Copy';

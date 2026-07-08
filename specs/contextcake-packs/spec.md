@@ -156,6 +156,9 @@ plain zip.
 
 ## 7. Distribution
 
+- v1 launches as a **free preview**: the full base pack is readable on the public site and live
+  payments are deferred (the checkout infrastructure is kept dormant behind a `paymentsLive` flag).
+  Paid updates and future packs are marketed as coming soon.
 - Plain zip is the baseline channel. It must work without ContextCake, Claude Code, or a terminal.
 - Claude Code plugin packaging is first-class for this first pack.
 - Future ContextCake integration can point `layers.json` at an unzipped pack, but that is not a v1

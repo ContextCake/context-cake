@@ -5,20 +5,31 @@ updated: 2026-07-06
 
 # Validation Checklist Template {#validation-checklist-template}
 
-The checklist that gates the Validate phase — a fixed set of checks an
-analysis must clear before it's allowed to reach the Deliver phase.
+Copy this checklist for every build before you deliver it. Work through all three
+groups in order — definitions and scope come first because reconciliation against the
+wrong definition just produces a confidently wrong number. See
+`workflows/build-and-validate.md` for the full validate phase and
+`policies-and-rules/source-of-truth-precedence.md` for resolving source conflicts.
 
-## What it checks {#what-it-checks}
+Attach the completed checklist (or a link to it) to the deliverable — an insight
+summary without an attached checklist has not been validated.
 
-Reconciliation against the source of truth, sanity bounds on the result,
-handling of known data gaps or backfills, and a record of what was
-checked and against which system — so validation is a documented step,
-not a vibe.
+## Definitions & scope {#definitions-scope}
 
-## Why it's a checklist, not a paragraph {#why-a-checklist}
+- [ ] Source of truth identified _[e.g., billing system confirmed, not the CRM]_
+- [ ] Metric definition matches the agreed definition _[e.g., committed MRR, matches `glossary/metric-definitions.md`]_
+- [ ] Grain correct _[e.g., one row per account per month, not per subscription line]_
+- [ ] Filters / segments applied correctly _[e.g., internal test accounts excluded]_
 
-A checklist is fast to run and hard to skip silently. It also gives the
-Deliver phase something concrete to point to when stating a confidence
-level — "validated against X" means something specific, not a hand wave.
+## Reconciliation {#reconciliation}
 
-_The complete version ships with the pack._
+- [ ] Record counts reconcile _[e.g., row count matches expected account count for the period]_
+- [ ] Totals reconcile to a source-of-truth control number _[e.g., monthly MRR total matches billing system's finance-blessed figure]_
+- [ ] Sample rows spot-checked _[e.g., 5 accounts traced by hand from source system to output]_
+- [ ] Nulls & duplicates checked _[e.g., no unexpected NULLs in metric or key columns, no duplicate account-month rows]_
+- [ ] Date boundaries / time zone correct _[e.g., month boundaries use billing system's close date, not UTC midnight]_
+
+## Reproducibility & review {#reproducibility-review}
+
+- [ ] Result is reproducible _[e.g., saved query or notebook, not a one-off scratchpad run]_
+- [ ] Peer reviewed _[e.g., a second analyst re-ran the query and confirmed the totals]_

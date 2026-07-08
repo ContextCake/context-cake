@@ -14,14 +14,14 @@ const packSections = [
 const featuredPack = {
 	name: 'Data & Analytics Teams',
 	href: '/packs/data-analytics-teams',
-	status: 'Available now',
+	status: 'Free preview',
 	summary:
 		'For teams that field the same dashboard, metric, and stakeholder questions every week.',
 	bestFor: 'Small analytics teams answering recurring requests and writing stakeholder-facing insight.',
 	benefits: [
 		'Clarify vague requests faster',
 		'Keep metric and validation rules consistent',
-		'Review real files before you buy',
+		'Read the full pack free while it’s in preview',
 	],
 	includes: ['Clarify + validate workflows', 'Spec, checklist & summary templates', 'Worked examples', 'Local overlay guide', 'Update notes included'],
 	formats: ['Plain markdown files', 'Claude Code plugin', 'OKF-compatible structure'],
@@ -60,7 +60,7 @@ const structurePreview = `data-analytics-team/
 					{heroPoints.map((item) => <li>{item}</li>)}
 				</ul>
 				<div class="hero-actions">
-					<a class="view-link hero-link" href={featuredPack.href}>View current pack</a>
+					<a class="view-link hero-link" href={featuredPack.href}>Read it free</a>
 					<a class="view-link hero-link hero-link-secondary" href="#structure">See the file layout</a>
 				</div>
 			</div>
@@ -109,7 +109,7 @@ const structurePreview = `data-analytics-team/
 							{featuredPack.formats.map((format) => <li>{format}</li>)}
 						</ul>
 					</div>
-					<a class="view-link" href={featuredPack.href}>View pack</a>
+					<a class="view-link" href={featuredPack.href}>Read the pack</a>
 				</div>
 			</article>
 		</section>

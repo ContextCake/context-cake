@@ -14,11 +14,11 @@ const explorer = await loadPackExplorer(packRoot, 'data-analytics-team');
 const fileCount = explorer.files.length;
 const folderCount = explorer.treeEntries.filter((entry) => entry.kind === 'dir').length;
 
-// Lemon Squeezy checkout links — placeholders until the ContextCake store is set up.
-// Replace with the real https://<store>.lemonsqueezy.com/buy/<uuid> links, then set checkoutLive = true.
+// Checkout infrastructure is kept but dormant — live payments are deferred while the base
+// pack ships as a free preview. To start selling: fill these links and set paymentsLive = true.
 const LEMONSQUEEZY_BASE_PACK_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_BASE_PACK';
 const LEMONSQUEEZY_UPDATES_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_UPDATES';
-const checkoutLive = false;
+const paymentsLive = false;
 
 const fitRows = [
 	['Good fit', 'Small in-house data and analytics teams handling recurring stakeholder requests.'],
@@ -135,8 +135,8 @@ const faqs = [
 					and how should the answer be written up.
 				</p>
 				<div class="hero-actions" aria-label="Primary actions">
-					<a class="button primary" href="#pricing">See pricing</a>
-					<a class="button" href="#explorer">Explore the files</a>
+					<a class="button primary" href="#explorer">Read the pack free</a>
+					<a class="button" href="#pricing">What’s coming</a>
 				</div>
 				<dl class="quick-facts" aria-label="Pack quick facts">
 					{quickFacts.map(([term, body]) => (
@@ -245,39 +245,63 @@ const faqs = [
 		<section id="pricing" class="pricing" aria-labelledby="pricing-title">
 			<div class="section-head">
 				<div>
-					<p class="eyebrow">Pricing</p>
-					<h2 id="pricing-title">Buy once. Update if you want.</h2>
+					<p class="eyebrow">{paymentsLive ? 'Pricing' : 'Early access'}</p>
+					<h2 id="pricing-title">{paymentsLive ? 'Buy once. Update if you want.' : 'Free while it’s in preview.'}</h2>
 				</div>
 				<p>
-					The base pack is a one-time purchase you keep. Updates are a separate, optional
-					monthly subscription — never required to use what you bought.
+					{paymentsLive
+						? 'The base pack is a one-time purchase you keep. Updates are a separate, optional monthly subscription — never required to use what you bought.'
+						: 'The full base pack is free to read right now while we finish it. Curated updates and more packs are on the way as paid add-ons — the base pack stays free.'}
 				</p>
 			</div>
-			<div class="plan-grid">
-				{pricingPlans.map((plan) => (
-					<article class={`plan${plan.primary ? ' plan-primary' : ''}`}>
-						<p class="card-label">{plan.label}</p>
+
+			{paymentsLive ? (
+				<div class="plan-grid">
+					{pricingPlans.map((plan) => (
+						<article class={`plan${plan.primary ? ' plan-primary' : ''}`}>
+							<p class="card-label">{plan.label}</p>
+							<p class="price">
+								<span class="price-amount">{plan.price}</span>
+								<span class="price-suffix">{plan.priceSuffix}</span>
+							</p>
+							<p class="cadence">{plan.cadence}</p>
+							<h3>{plan.title}</h3>
+							<p class="plan-body">{plan.body}</p>
+							<a class={`button${plan.primary ? ' primary' : ''}`} href={plan.href}>{plan.link}</a>
+						</article>
+					))}
+				</div>
+			) : (
+				<div class="plan-grid">
+					<article class="plan plan-primary">
+						<p class="card-label">Base pack</p>
 						<p class="price">
-							<span class="price-amount">{plan.price}</span>
-							<span class="price-suffix">{plan.priceSuffix}</span>
+							<span class="price-amount">Free</span>
+							<span class="price-suffix">in preview</span>
 						</p>
-						<p class="cadence">{plan.cadence}</p>
-						<h3>{plan.title}</h3>
-						<p class="plan-body">{plan.body}</p>
-						<a
-							class={`button${plan.primary ? ' primary' : ''}`}
-							href={plan.href}
-							aria-disabled={checkoutLive ? undefined : 'true'}
-						>
-							{plan.link}
-						</a>
+						<p class="cadence">Normally $99 · read the whole thing, no signup.</p>
+						<h3>Data & Analytics Teams pack</h3>
+						<p class="plan-body">The full pack — workflows, templates, examples, policies, and tool guides — free to read right now. Open the explorer above and take it for a spin.</p>
+						<a class="button primary" href="#explorer">Read the full pack</a>
 					</article>
-				))}
-			</div>
-			{!checkoutLive && (
+					<article class="plan">
+						<p class="card-label">Coming soon</p>
+						<p class="price">
+							<span class="price-amount">$9</span>
+							<span class="price-suffix">/ mo, later</span>
+						</p>
+						<p class="cadence">Curated monthly updates — never required to use the base pack.</p>
+						<h3>Updates and more packs</h3>
+						<p class="plan-body">When paid tiers open, the base pack stays free. You’d only pay for ongoing curated updates and additional packs.</p>
+						<span class="button coming-soon" aria-disabled="true">Coming soon</span>
+					</article>
+				</div>
+			)}
+
+			{!paymentsLive && (
 				<p class="pricing-note">
-					Checkout links go live just before the pilot — the buttons above are
-					placeholders until the Lemon Squeezy store is connected.
+					No checkout yet — the base pack is free to read while it’s in preview. Paid updates
+					and more packs are coming.
 				</p>
 			)}
 		</section>
@@ -430,8 +454,12 @@ const faqs = [
 		color: var(--cc-on-cta);
 	}
 	.button[aria-disabled='true'] {
-		opacity: 0.55;
-		cursor: not-allowed;
+		opacity: 0.7;
+		cursor: default;
+	}
+	.button.coming-soon {
+		border-style: dashed;
+		color: var(--cc-text-body);
 	}
 	.value-list {
 		display: grid;

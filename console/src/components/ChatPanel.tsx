@@ -9,14 +9,27 @@ export function ChatPanel() {
   const { chatMessages, chatBusy, chatInput, setChatInput, closeChat, send } = useStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>()
 
   const copyMcpConfig = () => {
-    navigator.clipboard?.writeText(MCP_CONFIG_CMD).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
+    const settle = (state: 'copied' | 'failed') => {
+      setCopied(state)
+      clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopied('idle'), 2000)
+    }
+    if (!navigator.clipboard || !window.isSecureContext) {
+      // Insecure context (e.g. LAN http://) — no async clipboard. Show the
+      // command pre-selected in a prompt so a manual ⌘/Ctrl-C still works.
+      window.prompt('Copy the MCP config command:', MCP_CONFIG_CMD)
+      return
+    }
+    navigator.clipboard.writeText(MCP_CONFIG_CMD)
+      .then(() => settle('copied'))
+      .catch(() => settle('failed'))
   }
+
+  useEffect(() => () => clearTimeout(copyTimer.current), [])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -49,7 +62,7 @@ export function ChatPanel() {
             title="Copy the command to connect a real agent"
             style={css(`display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid ${C.line}; background:transparent; border-radius:7px; cursor:pointer; font:inherit; font-family:${MONO}; font-size:10.5px; color:${C.caption};`)}
           >
-            {copied ? 'Copied' : 'Copy MCP config'}
+            {copied === 'copied' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy MCP config'}
           </button>
           <button className="cc-h-eae" onClick={closeChat} aria-label="Close chat" style={css('display:grid; place-items:center; width:30px; height:30px; border:none; background:transparent; border-radius:7px; cursor:pointer; color:#57564F;')}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>

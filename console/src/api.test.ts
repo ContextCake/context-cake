@@ -135,10 +135,43 @@ describe('adaptConcept', () => {
     expect(c.conflict).toBe(true)
   })
 
-  it('marks draft true only when there is a single contributor', () => {
-    const solo: ResolvedConcept = { ...sample, contributors: [sample.contributors[0]] }
-    expect(adaptConcept(solo).draft).toBe(true)
+  it('marks draft only from OKF frontmatter (write.mjs stamps auto-captures)', () => {
+    const stamped: ResolvedConcept = { ...sample, frontmatter: { ...sample.frontmatter, draft: true } }
+    expect(adaptConcept(stamped).draft).toBe(true)
     expect(adaptConcept(sample).draft).toBe(false)
+    // A concept owned by a single layer is NOT draft — finished knowledge
+    // commonly lives in exactly one layer.
+    const solo: ResolvedConcept = { ...sample, contributors: [sample.contributors[0]], sections: [] }
+    expect(adaptConcept(solo).draft).toBe(false)
+  })
+
+  it('maps non-canonical layer names via contributor levels, not the name', () => {
+    const custom: ResolvedConcept = {
+      id: 'decisions/primary-db',
+      contributors: [
+        { layer: 'acme-eng', level: 2, updated: '2026-01-01' },
+        { layer: 'company', level: 0, updated: '2025-06-01' },
+      ],
+      frontmatter: { title: 'Primary database', type: 'decision' },
+      sections: [
+        {
+          key: 'choice',
+          heading: '## Choice {#choice}',
+          content: 'SingleStore for HTAP workloads.',
+          sourceLayer: 'acme-eng',
+          sourceUpdated: '2026-01-01',
+          conflicts: [
+            { layer: 'company', updated: '2025-06-01', content: 'Postgres (org standard).' },
+          ],
+        },
+      ],
+    }
+    const c = adaptConcept(custom)
+    expect(c.sections[0].winner).toBe('team')
+    expect(c.layers).toEqual(['team', 'company'])
+    const cards = adaptConflicts([custom])
+    expect(cards[0].winner).toBe('team')
+    expect(cards[0].contributions[0].layer).toBe('team')
   })
 
   it('maps section winner, value, and provenance date', () => {
@@ -155,7 +188,6 @@ describe('adaptConcept', () => {
     const s = c.sections[0]
     expect(s.dissents).toHaveLength(1)
     expect(s.dissents?.[0]).toMatchObject({ layer: 'company', value: 'Postgres (org standard).', updated: '2025-06-01' })
-    expect(s.dissent).toEqual(s.dissents?.[0])
   })
 
   it('marks a section suppressed when the engine flags override=none', () => {

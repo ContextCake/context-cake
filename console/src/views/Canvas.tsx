@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { C, css, lc, MONO, type LayerId } from '../theme'
 import { layerLevel, layers, type Concept } from '../data'
 import { LayerChip } from '../components/LayerChip'
@@ -27,18 +27,20 @@ function computeLayout(concepts: Concept[]) {
   const nodes: NodePos[] = concepts.map((c, i) => {
     const x = START_X + i * (NODE_W + GAP_X)
     const y = laneY(laneIndex(primaryLayer(c))) + NODE_DY
-    return { c, x, y, conflict: c.sections.some((s) => s.dissent) }
+    return { c, x, y, conflict: c.sections.some((s) => (s.dissents?.length ?? 0) > 0) }
   })
   const ghosts: GhostPos[] = []
   for (const n of nodes) {
     const seen = new Set<LayerId>()
     for (const s of n.c.sections) {
-      if (!s.dissent || seen.has(s.dissent.layer)) continue
-      seen.add(s.dissent.layer)
-      ghosts.push({
-        key: `${n.c.id}:${s.dissent.layer}`, parent: n, layer: s.dissent.layer, value: s.dissent.value,
-        x: n.x + (NODE_W - GHOST_W) / 2, y: laneY(laneIndex(s.dissent.layer)) + GHOST_DY,
-      })
+      for (const d of s.dissents ?? []) {
+        if (seen.has(d.layer)) continue
+        seen.add(d.layer)
+        ghosts.push({
+          key: `${n.c.id}:${d.layer}`, parent: n, layer: d.layer, value: d.value,
+          x: n.x + (NODE_W - GHOST_W) / 2, y: laneY(laneIndex(d.layer)) + GHOST_DY,
+        })
+      }
     }
   }
   const worldW = START_X + concepts.length * (NODE_W + GAP_X)
@@ -54,7 +56,13 @@ function edgePath(x1: number, y1: number, x2: number, y2: number) {
 
 export function Canvas() {
   const { setSelConcept, setSelConflict, setView, conflicts, concepts } = useStore()
-  const { nodes, ghosts, worldW, worldH } = computeLayout(concepts)
+  // Memoized: pan/zoom re-renders every pointermove — don't re-lay-out for those.
+  const { nodes, ghosts, worldW, worldH } = useMemo(() => computeLayout(concepts), [concepts])
+  const laneCounts = useMemo(() => {
+    const counts: Record<LayerId, number> = { company: 0, team: 0, personal: 0 }
+    for (const c of concepts) counts[primaryLayer(c)] += 1
+    return counts
+  }, [concepts])
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const [view, setViewT] = useState({ tx: 40, ty: 20, scale: 1 })
@@ -166,7 +174,7 @@ export function Canvas() {
                   <span style={css(`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${C.raised}; border:2px solid ${col.strokeE}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:12px;`)}>{L.level}</span>
                   <div style={{ lineHeight: 1.15 }}>
                     <div style={css(`font-size:13px; font-weight:600; color:${col.text};`)}>{L.name}</div>
-                    <div style={css(`font-size:10.5px; color:${C.caption}; font-family:${MONO};`)}>{L.members} · {L.concepts} concepts</div>
+                    <div style={css(`font-size:10.5px; color:${C.caption}; font-family:${MONO};`)}>{L.members} · {laneCounts[id]} concept{laneCounts[id] === 1 ? '' : 's'}</div>
                   </div>
                 </div>
               </div>

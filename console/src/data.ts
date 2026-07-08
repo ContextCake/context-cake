@@ -1,12 +1,12 @@
 import type { LayerId, RouteId } from './theme'
 
 export interface Layer {
-  id: LayerId; name: string; level: number; sub: string; members: string; concepts: number
+  id: LayerId; name: string; level: number; sub: string; members: string
 }
 
 export interface Source {
-  name: string; kind: 'repo' | 'mcp' | 'okf-local'; layer: LayerId
-  coverage: number; focus: string; status: 'watching' | 'serving' | 'synced' | 'error'
+  name: string; kind: 'mcp' | 'okf-local'; layer: LayerId
+  coverage: number; focus: string; status: 'serving' | 'synced' | 'error'
 }
 
 export interface Signal {
@@ -27,8 +27,8 @@ export interface Dissent { layer: LayerId; value: string; updated?: string | nul
 export interface ConceptSection {
   name: string; winner: LayerId; value: string
   key?: string; updated?: string | null; suppressed?: boolean
-  /** All dissenting layers (surfaced, not hidden). `dissent` is the first, for legacy callers. */
-  dissent?: Dissent; dissents?: Dissent[]
+  /** All dissenting layers (surfaced, not hidden). */
+  dissents?: Dissent[]
 }
 export interface Concept {
   id: string; title: string; type: string; layers: LayerId[]
@@ -39,10 +39,13 @@ export interface Activity {
   pre: string; strong: string; post: string; layer: LayerId; time: string; warn?: boolean
 }
 
+// Static lane semantics only (names, precedence, who sees what). Anything
+// countable (per-layer concept counts) is derived from the loaded cascade in
+// the views — never hand-authored, in demo or live mode.
 export const layers: Layer[] = [
-  { id: 'company', name: 'Company', level: 0, sub: 'org-wide canonical knowledge', members: 'everyone', concepts: 126 },
-  { id: 'team', name: 'Team', level: 2, sub: 'runbooks, decisions, system docs', members: 'team members', concepts: 38 },
-  { id: 'personal', name: 'Personal', level: 3, sub: 'your drafts, notes, overrides', members: 'you', concepts: 14 },
+  { id: 'company', name: 'Company', level: 0, sub: 'org-wide canonical knowledge', members: 'everyone' },
+  { id: 'team', name: 'Team', level: 2, sub: 'runbooks, decisions, system docs', members: 'team members' },
+  { id: 'personal', name: 'Personal', level: 3, sub: 'your drafts, notes, overrides', members: 'you' },
 ]
 
 // Sources, concepts, and conflicts are no longer hand-authored here — they come

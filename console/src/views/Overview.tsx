@@ -18,12 +18,14 @@ export function Overview() {
     const L = layers.find((x) => x.id === id)!
     const col = lc(id)
     const nc = conflicts.filter((c) => c.contributions.some((k) => k.layer === id)).length
-    return { id, L, col, nc }
+    // Real count from the loaded cascade: concepts this layer contributes to.
+    const conceptCount = concepts.filter((c) => c.layers.includes(id)).length
+    return { id, L, col, nc, conceptCount }
   })
 
-  const statusColor = (s: string) => (s === 'error' ? C.amberStrokeE : s === 'watching' ? C.tealStroke : s === 'serving' ? C.tealStrokeE : C.blueStroke)
+  const statusColor = (s: string) => (s === 'error' ? C.amberStrokeE : s === 'serving' ? C.tealStrokeE : C.blueStroke)
   const kindMap: Record<string, { g: string; l: string }> = {
-    repo: { g: '{ }', l: 'repo' }, mcp: { g: '⇄', l: 'MCP source' }, 'okf-local': { g: '▤', l: 'OKF bundle' },
+    mcp: { g: '⇄', l: 'MCP source' }, 'okf-local': { g: '▤', l: 'OKF bundle' },
   }
 
   return (
@@ -54,7 +56,7 @@ export function Overview() {
             </div>
             <p style={css('margin:0 0 16px; font-size:12.5px; color:#57564F;')}>Knowledge resolves top-down. A layer overrides only the sections it speaks to; everything else is inherited from below.</p>
             <div style={css('display:flex; flex-direction:column; gap:9px;')}>
-              {cakeBands.map(({ id, L, col, nc }) => (
+              {cakeBands.map(({ id, L, col, nc, conceptCount }) => (
                 <div key={id} style={css(`display:grid; grid-template-columns:44px 1fr auto; align-items:center; gap:14px; padding:14px 16px; background:${col.fill}; border:1.5px solid ${col.stroke}; border-radius:11px;`)}>
                   <div style={css(`display:grid; place-items:center; width:34px; height:34px; border-radius:999px; background:#FFFFFF; border:2px solid ${col.strokeE}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:15px;`)}>{L.level}</div>
                   <div style={{ minWidth: 0 }}>
@@ -66,7 +68,7 @@ export function Overview() {
                   </div>
                   <div style={css('display:flex; gap:8px; align-items:center;')}>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={css(`font-family:${MONO}; font-size:17px; font-weight:500; color:${col.text}; line-height:1;`)}>{L.concepts}</div>
+                      <div style={css(`font-family:${MONO}; font-size:17px; font-weight:500; color:${col.text}; line-height:1;`)}>{conceptCount}</div>
                       <div style={css(`font-size:9.5px; letter-spacing:0.05em; text-transform:uppercase; color:${col.text2}; margin-top:3px;`)}>concepts</div>
                     </div>
                     {nc > 0 && (

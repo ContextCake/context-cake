@@ -22,6 +22,10 @@ async function postSource(body: Record<string, unknown>): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
+  // 409 = the source already exists — e.g. an earlier attempt added it but the
+  // follow-up sync failed. Treat as added so retrying the step proceeds to
+  // sync instead of wedging on the duplicate name.
+  if (res.status === 409) return
   const data = await res.json().catch(() => ({}) as { error?: string })
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
 }

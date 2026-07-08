@@ -8,7 +8,6 @@ import {
 import {
   adaptConcept, adaptConflicts, adaptSources, createDataSource, LiveDataError, type Mode,
 } from './api'
-import type { GraphSummary } from './types'
 import type { LayerId, RouteId } from './theme'
 
 export type ViewId = 'canvas' | 'overview' | 'triage' | 'conflicts' | 'concepts'
@@ -58,7 +57,8 @@ const TAB_TO_ROUTE: Record<TriageTab, RouteId> = {
 function buildContext(concepts: Concept[]): string {
   return concepts
     .map((c) => `${c.id}: ` + c.sections
-      .map((s) => `${s.name} = "${s.value}" [${s.winner}]` + (s.dissent ? ` (conflicts with ${s.dissent.layer}: "${s.dissent.value}")` : ''))
+      .map((s) => `${s.name} = "${s.value}" [${s.winner}]`
+        + (s.dissents ?? []).map((d) => ` (conflicts with ${d.layer}: "${d.value}")`).join(''))
       .join('; '))
     .join('\n')
 }
@@ -88,12 +88,13 @@ export interface Store {
   chatInput: string
   chatMessages: ChatMessage[]
 
-  graph: GraphSummary | null
   concepts: Concept[]
   sources: Source[]
   signals: Signal[]
   conflicts: Conflict[]
   activity: Activity[]
+  /** Concepts that failed to resolve during load (live mode) — shown, not hidden. */
+  loadErrors: { concept: string; error: string }[]
 
   setView: (v: ViewId) => void
   setTriageTab: (t: TriageTab) => void
@@ -123,10 +124,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<LiveDataError | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
-  const [graph, setGraph] = useState<GraphSummary | null>(null)
   const [concepts, setConcepts] = useState<Concept[]>([])
   const [sources, setSources] = useState<Source[]>([])
   const [conflicts, setConflicts] = useState<Conflict[]>([])
+  const [loadErrors, setLoadErrors] = useState<{ concept: string; error: string }[]>([])
   // Triage signals and the activity feed have no resolver equivalent — demo-only
   // fixtures (D6: live-mode triage is read-only, and there is no signal API).
   const [signals, setSignals] = useState<Signal[]>(mode === 'demo' ? initialSignals : [])
@@ -151,10 +152,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setError(null)
       try {
         const g = await source.graph()
-        const ids = g.concepts.map((c) => c.id)
-        const raw = await Promise.all(ids.map((id) => source.resolve(id)))
+        const { concepts: raw, errors } = await source.resolveAll()
+        // Only fail the whole page when nothing resolved; partial failures
+        // render what loaded and surface the rest.
+        if (raw.length === 0 && errors.length > 0) {
+          throw new LiveDataError('bad-shape', `No concept resolved (first error: ${errors[0].concept}: ${errors[0].error})`)
+        }
         if (cancelled) return
-        setGraph(g)
+        setLoadErrors(errors)
         setSources(adaptSources(g))
         setConcepts(raw.map(adaptConcept))
         const derivedConflicts = adaptConflicts(raw)
@@ -196,6 +201,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // load (above), and support back/forward. pushState on view change (a real
   // navigation), replaceState within a view (selection tweak) to avoid spam.
   useEffect(() => {
+    // While a deep-linked concept is still pending (loading, or load failed),
+    // leave the URL alone — rewriting it here would permanently clobber the
+    // deep link before the data arrives to honor it.
+    if (pendingConceptRef.current) return
     const target = view === 'concepts' && selConcept
       ? `#/concepts/${encodeURIComponent(selConcept)}`
       : `#/${view}`
@@ -297,11 +306,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     mode, loading, error,
     view, triageTab, selSignal, selConflict, selConcept, query,
     chatOpen, chatBusy, chatInput, chatMessages,
-    graph, concepts, sources, signals, conflicts, activity,
+    concepts, sources, signals, conflicts, activity, loadErrors,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
     openChat: () => setChatOpen(true), closeChat: () => setChatOpen(false), setChatInput,
     filtered, route, resolveConflict, send, reload,
-  }), [mode, loading, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, graph, concepts, sources, signals, conflicts, activity, filtered, route, resolveConflict, send, reload])
+  }), [mode, loading, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, filtered, route, resolveConflict, send, reload])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

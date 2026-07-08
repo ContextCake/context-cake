@@ -24,7 +24,7 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
       <div style={css('display:flex; flex-direction:column;')}>
         {concept.sections.map((s) => {
           const col = lc(s.winner)
-          const dissents = s.dissents && s.dissents.length > 0 ? s.dissents : (s.dissent ? [s.dissent] : [])
+          const dissents = s.dissents ?? []
           const provenance = `${layerName(s.winner)}${s.updated ? ' · ' + s.updated : ''}`
           return (
             <div key={s.key ?? s.name} style={css('padding:16px 0; border-bottom:1px solid #EDEAE0;')}>

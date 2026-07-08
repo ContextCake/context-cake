@@ -57,7 +57,7 @@ function ErrorState({ kind, message, reload }: { kind: LiveErrorKind; message: s
 }
 
 export function App() {
-  const { view, chatOpen, route, loading, error, reload, mode, sources } = useStore()
+  const { view, chatOpen, route, loading, error, reload, mode, sources, loadErrors } = useStore()
   // Undefined = not yet decided by the auto-trigger effect below; true/false
   // once the user (or the trigger) has taken an explicit stance. Kept separate
   // from `needsSetup` so the wizard's own Success step stays visible even
@@ -120,6 +120,15 @@ export function App() {
           />
           <div className="cc-content">
             <Header onOpenMenu={() => setDrawerOpen(true)} />
+            {loadErrors.length > 0 && (
+              <div role="status" style={css(`display:flex; align-items:center; gap:8px; padding:8px 16px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; font-size:12px; color:${C.amberText};`)}>
+                <span aria-hidden="true">⚠</span>
+                <span>
+                  {loadErrors.length} concept{loadErrors.length === 1 ? '' : 's'} failed to resolve
+                  {' '}({loadErrors.map((e) => e.concept).slice(0, 3).join(', ')}{loadErrors.length > 3 ? ', …' : ''}) — showing the rest.
+                </span>
+              </div>
+            )}
             {view === 'canvas' ? (
               <main className="cc-main cc-main-canvas">
                 <Canvas />

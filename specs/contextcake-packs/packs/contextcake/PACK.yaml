@@ -1,0 +1,26 @@
+id: contextcake
+name: "ContextCake Context Pack"
+version: "0.1.0"
+target_audience: "Developers (and their AI agents) adopting ContextCake in a project"
+hero_workflow: "understand ContextCake -> install -> write a layer -> connect an agent"
+update_cadence: "as the product evolves"
+supported_surfaces:
+  - plain-files
+  - claude-code-plugin
+  - chatgpt-knowledge-upload
+  - cursor
+  - copilot
+required_reading_order:
+  - overview/what-is-contextcake.md
+  - architecture/layers-and-precedence.md
+  - getting-started/installation.md
+  - getting-started/connect-an-ai-agent.md
+included_modules:
+  - overview
+  - architecture
+  - getting-started
+  - use-cases
+  - examples
+  - nuances
+  - tool-guides
+overlay_instructions: "Drop this pack into your project (or point your AI tool at it) so the agent has the full, accurate context to help you use ContextCake."

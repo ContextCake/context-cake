@@ -7,6 +7,11 @@ ContextCake-powered surfaces.
 
 **Date:** 2026-07-06
 **Status:** Approved foundation - ready for private-pack repo implementation
+**Status update (2026-07-08):** launched as a free preview with payments deferred. The publicly
+featured pack is the **ContextCake Context Pack** (`specs/contextcake-packs/packs/contextcake/`,
+served at `/packs/contextcake`); the Data & Analytics pack below remains built and validated but
+is hidden from the site index until relaunch. The commercial model in this spec is unchanged —
+it activates when the `paymentsLive` flag flips.
 **Workflow:** Requirements-first
 **Primary target:** small in-house data and analytics teams
 **Depends on:** `specs/contextcake-core/design.md` and `specs/contextcake-site/`
@@ -88,8 +93,12 @@ updates/CHANGELOG.md
 updates/MERGE-GUIDE.md
 ```
 
-The private repository implementation MAY nest that contract under a Claude Code skill directory,
-but the plain zip SHALL expose the contract at zip root.
+The private repository implementation MAY nest that contract under a Claude Code skill directory.
+The plain zip SHALL contain a single top-level folder named for the pack (for example
+`data-analytics-team-pack/`); that delivered pack root SHALL expose the contract files and
+directories listed above. The zip filename carries the pack version (for example
+`data-analytics-team-pack-v0.1.0.zip`). This is the standard customer-friendly archive convention:
+unzipping yields one clearly named folder rather than loose files.
 
 Customer-facing content markdown SHALL be valid OKF unless explicitly excluded:
 
@@ -152,12 +161,18 @@ plain zip.
 
 ## 7. Distribution
 
+- v1 launches as a **free preview**: the full base pack is readable on the public site and live
+  payments are deferred (the checkout infrastructure is kept dormant behind a `paymentsLive` flag).
+  Paid updates and future packs are marketed as coming soon.
 - Plain zip is the baseline channel. It must work without ContextCake, Claude Code, or a terminal.
 - Claude Code plugin packaging is first-class for this first pack.
 - Future ContextCake integration can point `layers.json` at an unzipped pack, but that is not a v1
   requirement.
-- Base pack and updates are separate Stripe products.
-- Fulfillment is manual in v1 through Stripe order notices and the private repo/release assets.
+- Base pack and updates are separate products sold through Lemon Squeezy (merchant of record),
+  which handles checkout, receipts, and sales-tax/VAT compliance.
+- The plain-files channel is delivered automatically by Lemon Squeezy on purchase (file plus
+  license key). The Claude Code plugin channel (private-repo access) stays a manual collaborator
+  invite in v1 until it is automated via Lemon Squeezy webhooks.
 
 ## 8. Acceptance Criteria
 

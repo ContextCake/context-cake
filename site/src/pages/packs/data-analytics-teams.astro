@@ -14,6 +14,12 @@ const explorer = await loadPackExplorer(packRoot, 'data-analytics-team');
 const fileCount = explorer.files.length;
 const folderCount = explorer.treeEntries.filter((entry) => entry.kind === 'dir').length;
 
+// Checkout infrastructure is kept but dormant — live payments are deferred while the base
+// pack ships as a free preview. To start selling: fill these links and set paymentsLive = true.
+const LEMONSQUEEZY_BASE_PACK_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_BASE_PACK';
+const LEMONSQUEEZY_UPDATES_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_UPDATES';
+const paymentsLive = false;
+
 const fitRows = [
 	['Good fit', 'Small in-house data and analytics teams handling recurring stakeholder requests.'],
 	['Not for', 'Teams shopping for a BI tool, warehouse connector, or live metrics product.'],
@@ -38,7 +44,21 @@ const featuredFiles = [
 	{ label: 'Start here', path: 'skills/data-analytics-team-pack/START-HERE.md' },
 	{ label: 'Request flow', path: 'skills/data-analytics-team-pack/workflows/request-clarification.md' },
 	{ label: 'Spec template', path: 'skills/data-analytics-team-pack/templates/clarified-spec-template.md' },
-	{ label: 'Source rules', path: 'skills/data-analytics-team-pack/overview/source-of-truth-precedence.md' },
+	{ label: 'Source rules', path: 'skills/data-analytics-team-pack/policies-and-rules/source-of-truth-precedence.md' },
+];
+
+const workflowSteps = [
+	['01', 'Clarify', 'Turn a vague ask into a written spec: the real question, the metric definition, the source of truth, and what “done” means.'],
+	['02', 'Build', 'Produce the query, model, or report against the agreed definition — not a guess at what was meant.'],
+	['03', 'Validate', 'Reconcile the result to the source of truth before it ships. Catch the wrong number before the stakeholder does.'],
+	['04', 'Deliver', 'Send an insight summary: the answer, its confidence, the caveats, and a clear next action — not just a screenshot.'],
+];
+
+const insideRows = [
+	['Answer the same request faster', 'A clarification workflow and spec template that stop the back-and-forth on vague asks.'],
+	['Keep numbers consistent', 'Source-of-truth and metric-definition rules so two people report the same figure the same way.'],
+	['Ship results you can defend', 'A validation checklist and insight-summary template that make caveats and confidence explicit.'],
+	['Keep your own edits separate', 'Local overlay guidance so team-specific rules live outside the pack and survive updates.'],
 ];
 
 const useCases = [
@@ -48,31 +68,36 @@ const useCases = [
 	['Insight delivery', 'When the answer needs caveats, confidence, and a clear next action, not just a screenshot.'],
 ];
 
-const deliveryCards = [
+const pricingPlans = [
 	{
 		label: 'Base pack',
-		title: 'Current Data & Analytics Teams pack',
-		body: 'One-time access to the current workflows, templates, examples, and tool guidance.',
-		href: 'mailto:hello@contextcake.com?subject=Data%20%26%20Analytics%20Teams%20pack',
-		link: 'Request access',
+		price: '$99',
+		priceSuffix: 'one-time',
+		cadence: 'Yours to keep — no subscription required.',
+		title: 'Data & Analytics Teams pack',
+		body: 'The full pack: workflows, templates, examples, policies, and tool guides your team keeps rebuilding in chat. Delivered as plain files plus Claude Code packaging.',
+		href: LEMONSQUEEZY_BASE_PACK_URL,
+		link: 'Get the base pack',
 		primary: true,
 	},
 	{
 		label: 'Optional updates',
-		title: 'Curated editorial releases',
-		body: 'Sharper examples, clearer merge notes, and improved guidance shipped separately from the base pack.',
-		href: 'mailto:hello@contextcake.com?subject=Data%20%26%20Analytics%20Teams%20updates',
-		link: 'Request updates',
+		price: '$9',
+		priceSuffix: '/ month',
+		cadence: 'Cancel anytime. Annual option available.',
+		title: 'Curated updates',
+		body: 'Sharper examples and improved guidance shipped as reviewable editorial releases. Optional — the base pack keeps working on its own.',
+		href: LEMONSQUEEZY_UPDATES_URL,
+		link: 'Add monthly updates',
 		primary: false,
 	},
-	{
-		label: 'Format',
-		title: 'Inspectable files',
-		body: 'Editable markdown with OKF-compatible structure where appropriate, plus Claude Code packaging for teams that want it.',
-		href: '/docs/concepts/okf-bundles',
-		link: 'Read the OKF bundle shape',
-		primary: false,
-	},
+];
+
+const compatRows = [
+	['Plain files', 'Markdown you can open, read, and edit anywhere. This is the baseline — no tool required.'],
+	['Claude Code', 'Install as a plugin, or point Claude at the unzipped files.'],
+	['ChatGPT', 'Upload the files as project or knowledge files, then reference them in prompts.'],
+	['Cursor & Copilot', 'Keep the files in your repo so the assistant reads them as working context.'],
 ];
 
 const faqs = [
@@ -81,12 +106,16 @@ const faqs = [
 		a: 'No. It is a file-based working kit for analytics teams. It does not connect to your warehouse or manage live data.',
 	},
 	{
-		q: 'Do we need ContextCake to use it?',
-		a: 'No. The baseline deliverable is plain files. ContextCake compatibility just keeps the structure layer-friendly and easy to merge with local overlays later.',
+		q: 'Do we need any special software to use it?',
+		a: 'No. The baseline deliverable is plain files you can read and edit in any editor. Claude Code packaging is included for teams that want it, but it is optional.',
 	},
 	{
 		q: 'Can we customize it?',
-		a: 'Yes. The intended model is to keep the base pack clean and put team-specific policies, examples, and exceptions in your own local overlay.',
+		a: 'Yes. The intended model is to keep the base pack clean and put team-specific policies, examples, and exceptions in your own local overlay so updates stay easy to merge.',
+	},
+	{
+		q: 'What do the optional updates include?',
+		a: 'Curated editorial releases: clearer examples, sharper guidance, and new templates. They are sent separately from the base pack, and the base pack keeps working whether or not you subscribe.',
 	},
 ];
 ---
@@ -106,8 +135,8 @@ const faqs = [
 					and how should the answer be written up.
 				</p>
 				<div class="hero-actions" aria-label="Primary actions">
-					<a class="button primary" href="#pricing">Request access</a>
-					<a class="button" href="#explorer">Explore the files</a>
+					<a class="button primary" href="#explorer">Read the pack free</a>
+					<a class="button" href="#pricing">What’s coming</a>
 				</div>
 				<dl class="quick-facts" aria-label="Pack quick facts">
 					{quickFacts.map(([term, body]) => (
@@ -133,6 +162,28 @@ const faqs = [
 					))}
 				</dl>
 			</aside>
+		</section>
+
+		<section class="workflow" aria-labelledby="workflow-title">
+			<div class="section-head">
+				<div>
+					<p class="eyebrow">The workflow</p>
+					<h2 id="workflow-title">One request, four steps.</h2>
+				</div>
+				<p>
+					The pack is built around the path every request already takes — it just makes
+					each step repeatable instead of improvised.
+				</p>
+			</div>
+			<ol class="workflow-grid" aria-label="The four-step workflow">
+				{workflowSteps.map(([num, title, body]) => (
+					<li class="step">
+						<span class="step-num" aria-hidden="true">{num}</span>
+						<h3>{title}</h3>
+						<p>{body}</p>
+					</li>
+				))}
+			</ol>
 		</section>
 
 		<section id="explorer" class="explorer-section" aria-labelledby="explorer-title">
@@ -176,21 +227,100 @@ const faqs = [
 			<div class="detail-column">
 				<div class="section-head compact-head">
 					<div>
-						<p class="eyebrow">What ships</p>
-						<h2 id="pricing">What ships with the pack.</h2>
+						<p class="eyebrow">What’s inside</p>
+						<h2 id="inside-title">What you get out of it.</h2>
 					</div>
 				</div>
-				<div class="delivery-grid">
-					{deliveryCards.map((card) => (
-						<article>
-							<p class="card-label">{card.label}</p>
-							<h3>{card.title}</h3>
-							<p>{card.body}</p>
-							<a class={`button${card.primary ? ' primary' : ''}`} href={card.href}>{card.link}</a>
+				<dl class="inside-list">
+					{insideRows.map(([term, body]) => (
+						<div>
+							<dt>{term}</dt>
+							<dd>{body}</dd>
+						</div>
+					))}
+				</dl>
+			</div>
+		</section>
+
+		<section id="pricing" class="pricing" aria-labelledby="pricing-title">
+			<div class="section-head">
+				<div>
+					<p class="eyebrow">{paymentsLive ? 'Pricing' : 'Early access'}</p>
+					<h2 id="pricing-title">{paymentsLive ? 'Buy once. Update if you want.' : 'Free while it’s in preview.'}</h2>
+				</div>
+				<p>
+					{paymentsLive
+						? 'The base pack is a one-time purchase you keep. Updates are a separate, optional monthly subscription — never required to use what you bought.'
+						: 'The full base pack is free to read right now while we finish it. Curated updates and more packs are on the way as paid add-ons — the base pack stays free.'}
+				</p>
+			</div>
+
+			{paymentsLive ? (
+				<div class="plan-grid">
+					{pricingPlans.map((plan) => (
+						<article class={`plan${plan.primary ? ' plan-primary' : ''}`}>
+							<p class="card-label">{plan.label}</p>
+							<p class="price">
+								<span class="price-amount">{plan.price}</span>
+								<span class="price-suffix">{plan.priceSuffix}</span>
+							</p>
+							<p class="cadence">{plan.cadence}</p>
+							<h3>{plan.title}</h3>
+							<p class="plan-body">{plan.body}</p>
+							<a class={`button${plan.primary ? ' primary' : ''}`} href={plan.href}>{plan.link}</a>
 						</article>
 					))}
 				</div>
+			) : (
+				<div class="plan-grid">
+					<article class="plan plan-primary">
+						<p class="card-label">Base pack</p>
+						<p class="price">
+							<span class="price-amount">Free</span>
+							<span class="price-suffix">in preview</span>
+						</p>
+						<p class="cadence">Normally $99 · read the whole thing, no signup.</p>
+						<h3>Data & Analytics Teams pack</h3>
+						<p class="plan-body">The full pack — workflows, templates, examples, policies, and tool guides — free to read right now. Open the explorer above and take it for a spin.</p>
+						<a class="button primary" href="#explorer">Read the full pack</a>
+					</article>
+					<article class="plan">
+						<p class="card-label">Coming soon</p>
+						<p class="price">
+							<span class="price-amount">$9</span>
+							<span class="price-suffix">/ mo, later</span>
+						</p>
+						<p class="cadence">Curated monthly updates — never required to use the base pack.</p>
+						<h3>Updates and more packs</h3>
+						<p class="plan-body">When paid tiers open, the base pack stays free. You’d only pay for ongoing curated updates and additional packs.</p>
+						<span class="button coming-soon" aria-disabled="true">Coming soon</span>
+					</article>
+				</div>
+			)}
+
+			{!paymentsLive && (
+				<p class="pricing-note">
+					No checkout yet — the base pack is free to read while it’s in preview. Paid updates
+					and more packs are coming.
+				</p>
+			)}
+		</section>
+
+		<section class="compatibility" aria-labelledby="compat-title">
+			<div class="section-head compact-head">
+				<div>
+					<p class="eyebrow">Works with your tools</p>
+					<h2 id="compat-title">Plain files first. Everything else is a bonus.</h2>
+				</div>
 			</div>
+			<dl class="compat-grid">
+				{compatRows.map(([term, body]) => (
+					<div>
+						<dt>{term}</dt>
+						<dd>{body}</dd>
+					</div>
+				))}
+			</dl>
 		</section>
 
 		<section class="faq" aria-labelledby="faq-title">
@@ -208,6 +338,14 @@ const faqs = [
 					</details>
 				))}
 			</div>
+		</section>
+
+		<section class="credibility" aria-label="About ContextCake">
+			<p>
+				ContextCake Packs are made by <strong>ContextCake</strong>, the context layer that
+				keeps team knowledge consistent across AI tools.
+			</p>
+			<a class="view-link" href="/">Learn about ContextCake</a>
 		</section>
 	</main>
 </Base>
@@ -253,7 +391,9 @@ const faqs = [
 	.section-head > p:last-child,
 	.fit-list dd,
 	.case-grid p,
-	.delivery-grid p,
+	.inside-list dd,
+	.plan-body,
+	.compat-grid dd,
 	.faq p {
 		color: var(--cc-text-body);
 		line-height: 1.62;
@@ -313,6 +453,14 @@ const faqs = [
 		background: var(--cc-cta);
 		color: var(--cc-on-cta);
 	}
+	.button[aria-disabled='true'] {
+		opacity: 0.7;
+		cursor: default;
+	}
+	.button.coming-soon {
+		border-style: dashed;
+		color: var(--cc-text-body);
+	}
 	.value-list {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -359,8 +507,11 @@ const faqs = [
 		margin: 0;
 		font-size: 0.98rem;
 	}
+	.workflow,
 	.explorer-section,
 	.detail-band,
+	.pricing,
+	.compatibility,
 	.faq {
 		padding: 2.25rem 0 0;
 	}
@@ -372,7 +523,7 @@ const faqs = [
 		margin-bottom: 1.25rem;
 	}
 	.section-head h2 {
-		max-width: 11ch;
+		max-width: 14ch;
 		margin: 0;
 		font-size: clamp(1.45rem, 2vw, 2.05rem);
 		line-height: 1.04;
@@ -387,6 +538,43 @@ const faqs = [
 	.compact-head .section-head > p:last-child {
 		display: none;
 	}
+	.workflow-grid {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 0.9rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.step {
+		padding: 1.1rem 1rem 1.2rem;
+		border: 1px solid var(--cc-border);
+		border-top: 4px solid var(--cc-layer-team);
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-surface) 72%, transparent);
+	}
+	.workflow-grid li:nth-child(2) { border-top-color: var(--cc-layer-company); }
+	.workflow-grid li:nth-child(2) .step-num { color: var(--cc-layer-company); }
+	.workflow-grid li:nth-child(3) { border-top-color: var(--cc-layer-personal); }
+	.workflow-grid li:nth-child(3) .step-num { color: var(--cc-layer-personal); }
+	.workflow-grid li:nth-child(4) { border-top-color: var(--cc-cta); }
+	.workflow-grid li:nth-child(4) .step-num { color: var(--cc-cta); }
+	.step-num {
+		display: block;
+		color: var(--cc-layer-team);
+		font-family: var(--cc-font-mono);
+		font-size: 0.92rem;
+		font-weight: 700;
+	}
+	.step h3 {
+		margin: 0.5rem 0 0;
+		color: var(--cc-text);
+		font-size: 1.12rem;
+	}
+	.step p {
+		margin: 0.5rem 0 0;
+		font-size: 0.95rem;
+	}
 	.detail-band {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -396,25 +584,16 @@ const faqs = [
 	.detail-column {
 		min-width: 0;
 	}
-	.case-grid,
-	.delivery-grid {
+	.case-grid {
 		display: grid;
 		gap: 0.9rem;
-	}
-	.case-grid {
 		grid-template-columns: 1fr;
 	}
-	.delivery-grid {
-		grid-template-columns: 1fr;
-	}
-	.case-grid article,
-	.delivery-grid article {
+	.case-grid article {
 		padding: 1rem;
 		border: 1px solid var(--cc-border);
 		border-radius: var(--cc-radius-md);
 		background: color-mix(in srgb, var(--cc-surface) 72%, transparent);
-	}
-	.case-grid article {
 		border-top: 4px solid var(--cc-layer-team);
 	}
 	.case-grid article:nth-child(2) {
@@ -426,23 +605,118 @@ const faqs = [
 	.case-grid article:nth-child(4) {
 		border-top-color: var(--cc-cta);
 	}
-	.case-grid h3,
-	.delivery-grid h3 {
+	.case-grid h3 {
 		margin: 0;
 		color: var(--cc-text);
 		font-size: 1.12rem;
 	}
-	.case-grid p,
-	.delivery-grid p {
+	.case-grid p {
 		margin: 0.55rem 0 0;
 		font-size: 0.98rem;
 	}
-	.card-label {
-		color: var(--cc-layer-personal);
+	.inside-list {
+		display: grid;
+		gap: 0.85rem;
+		margin: 0;
 	}
-	.delivery-grid .button {
-		margin-top: 1rem;
+	.inside-list div {
+		display: grid;
+		gap: 0.2rem;
+		padding: 0 0 0.85rem;
+		border-bottom: 1px solid var(--cc-border);
+	}
+	.inside-list div:last-child {
+		padding-bottom: 0;
+		border-bottom: 0;
+	}
+	.inside-list dt {
+		color: var(--cc-text);
+		font-weight: 700;
+	}
+	.inside-list dd {
+		margin: 0;
+		font-size: 0.98rem;
+	}
+	.plan-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1rem;
+	}
+	.plan {
+		display: flex;
+		flex-direction: column;
+		padding: 1.25rem 1.2rem 1.35rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-surface) 74%, transparent);
+	}
+	.plan-primary {
+		border-color: color-mix(in srgb, var(--cc-cta) 55%, var(--cc-border));
+		box-shadow: var(--cc-shadow-panel);
+	}
+	.price {
+		display: flex;
+		align-items: baseline;
+		gap: 0.4rem;
+		margin: 0.2rem 0 0;
+	}
+	.price-amount {
+		color: var(--cc-text);
+		font-size: 2rem;
+		font-weight: 700;
+		line-height: 1;
+	}
+	.price-suffix {
+		color: var(--cc-text-body);
+		font-family: var(--cc-font-mono);
+		font-size: 0.8rem;
+		text-transform: uppercase;
+		letter-spacing: 0;
+	}
+	.cadence {
+		margin: 0.4rem 0 0;
+		color: var(--cc-text-body);
+		font-size: 0.9rem;
+	}
+	.plan h3 {
+		margin: 0.75rem 0 0;
+		color: var(--cc-text);
+		font-size: 1.1rem;
+	}
+	.plan-body {
+		margin: 0.5rem 0 0;
+		font-size: 0.98rem;
+	}
+	.plan .button {
+		margin-top: 1.1rem;
 		width: fit-content;
+	}
+	.pricing-note {
+		margin: 1rem 0 0;
+		color: var(--cc-text-body);
+		font-size: 0.94rem;
+	}
+	.compat-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.85rem 1.1rem;
+		margin: 0;
+	}
+	.compat-grid div {
+		display: grid;
+		gap: 0.2rem;
+		padding: 0.9rem 1rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-surface) 70%, transparent);
+	}
+	.compat-grid dt {
+		color: var(--cc-text);
+		font-weight: 700;
+	}
+	.compat-grid dd {
+		margin: 0;
+		font-size: 0.96rem;
 	}
 	.faq-list {
 		display: grid;
@@ -457,11 +731,42 @@ const faqs = [
 		cursor: pointer;
 		font-weight: 700;
 	}
+	.credibility {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem 1.5rem;
+		margin-top: 2.5rem;
+		padding: 1.25rem 0 0;
+		border-top: 1px solid var(--cc-border);
+	}
+	.credibility p {
+		max-width: 52ch;
+		margin: 0;
+		color: var(--cc-text-body);
+		line-height: 1.55;
+	}
+	.credibility strong {
+		color: var(--cc-text);
+	}
+	.view-link {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+		color: var(--cc-text);
+		font-weight: 700;
+		text-decoration-thickness: 1px;
+		text-underline-offset: 0.24em;
+	}
 	@media (max-width: 920px) {
 		.hero,
 		.section-head,
 		.detail-band {
 			grid-template-columns: 1fr;
+		}
+		.workflow-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 		.quick-facts {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -471,6 +776,9 @@ const faqs = [
 		.pack-page {
 			padding-top: 2rem;
 		}
+		.workflow-grid,
+		.plan-grid,
+		.compat-grid,
 		.quick-facts {
 			grid-template-columns: 1fr;
 		}

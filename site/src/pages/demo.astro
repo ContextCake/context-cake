@@ -26,16 +26,19 @@ const narrativePoints = [
 	<main class="demo-page">
 		<section class="hero">
 			<div class="hero-copy">
-				<p class="eyebrow">Live demo</p>
+				<p class="eyebrow">Demo</p>
 				<h1>See how one team decision resolves without flattening the disagreement.</h1>
 				<p class="lede">
-					The surface below is the actual ContextCake console. It is showing one problem well:
-					how company policy, team practice, and local judgment can resolve into a usable
-					answer without hiding where each part came from.
+					The surface below is the actual ContextCake console. Every value in it is real
+					<code>resolver.mjs</code> output over the demo layers, generated at build time —
+					not hand-authored. It is showing one problem well: how company policy, team
+					practice, and local judgment can resolve into a usable answer without hiding where
+					each part came from.
 				</p>
 				<div class="actions">
 					<a class="cta primary" href={demoUrl} target="_blank" rel="noreferrer">Open full demo</a>
 					<a class="cta" href="/docs/getting-started/first-cascade">Walk the first cascade</a>
+					<a class="cta" href="/install">Install ContextCake</a>
 				</div>
 			</div>
 
@@ -127,6 +130,14 @@ const narrativePoints = [
 		margin: 1.4rem 0 0;
 		font-size: clamp(1.08rem, 2vw, 1.22rem);
 		line-height: 1.65;
+	}
+	.lede code {
+		font-family: var(--cc-font-mono);
+		background: var(--cc-surface);
+		border: 1px solid var(--cc-border);
+		border-radius: 4px;
+		padding: 0.1rem 0.35rem;
+		font-size: 0.85em;
 	}
 	.actions {
 		display: flex;

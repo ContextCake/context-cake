@@ -1,0 +1,24 @@
+name: Docs improvement
+description: Suggest an improvement to docs, examples, or contributor guidance.
+title: "[Docs]: "
+labels: ["area:docs"]
+body:
+  - type: textarea
+    id: location
+    attributes:
+      label: Location
+      description: Link or path to the page, doc, or example.
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What should improve?
+      description: Describe what is unclear, stale, missing, or misleading.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested fix
+      description: Optional draft wording or structure.

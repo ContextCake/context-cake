@@ -184,7 +184,7 @@ plain zip.
   optional monthly update subscription.
 - [ ] WHEN the page describes compatibility THE SYSTEM SHALL state that plain files are the baseline
   and tool-specific packaging is additive.
-- [ ] WHEN `cd site && npm run build` runs THE SYSTEM SHALL exit 0 with no broken internal links.
+- [ ] WHEN `cd apps/site && npm run build` runs THE SYSTEM SHALL exit 0 with no broken internal links.
 
 ### Private pack repo template
 
@@ -217,10 +217,10 @@ plain zip.
 
 ## 10. For the Implementing Agent
 
-1. Start site work from `origin/main`, where `site/` and `specs/contextcake-distribution/` exist.
+1. Start site work from `origin/main`, where `apps/site/` and `specs/contextcake-distribution/` exist.
 2. Keep implementation branches/worktrees clean; the root checkout may contain unrelated local work.
 3. Build the public spec and landing page in `context-cake`.
 4. Use `specs/contextcake-packs/private-repo-template/` only as a scaffold handoff for the future
    private repo. Do not add real paid pack content here.
-5. Run `cd site && npm run build` before presenting the preview.
+5. Run `cd apps/site && npm run build` before presenting the preview.
 6. Before opening a PR, compare implementation against this spec and list unmet acceptance criteria.

@@ -49,7 +49,7 @@ wikilinks, so the foreign graph's cross-references stay traversable through
 
 ## A runnable example {#a-runnable-example}
 
-`examples/mock-context-source.mjs` in the repo is a deliberately non-OKF
+`examples/mock-mcp-source/server.mjs` in the repo is a deliberately non-OKF
 mock graph exposed over stdio MCP — it stands in for "some real system you
 can only reach via MCP." Point a manifest at it and resolve a concept it
 exposes:

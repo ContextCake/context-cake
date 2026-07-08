@@ -1,0 +1,33 @@
+- name: area:core
+  color: "0E5A8A"
+  description: Core resolver, MCP server, source adapters, ingest, write, or promote.
+- name: area:console
+  color: "4C7C59"
+  description: React console app under apps/console.
+- name: area:site
+  color: "8464A0"
+  description: Astro product site and docs under apps/site.
+- name: area:playground
+  color: "C57B1E"
+  description: Local playground, control surface, OKF browser, or demo surfaces.
+- name: area:docs
+  color: "6B7280"
+  description: Documentation, examples, specs, or contributor guidance.
+- name: area:packs
+  color: "8A5A0A"
+  description: ContextCake Packs specs, templates, or pack content.
+- name: type:bug
+  color: "D73A4A"
+  description: Something is broken or regressed.
+- name: type:enhancement
+  color: "A2EEEF"
+  description: New capability, cleanup, or improvement.
+- name: good first issue
+  color: "7057FF"
+  description: Small, well-scoped work suitable for a new contributor.
+- name: needs-spec
+  color: "FBCA04"
+  description: Needs product or technical decisions before implementation.
+- name: ai-ready
+  color: "0E8A16"
+  description: Clear enough for an AI contributor to attempt with tests.

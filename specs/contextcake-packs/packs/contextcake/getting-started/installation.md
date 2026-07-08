@@ -41,7 +41,7 @@ Resolve a concept from the bundled three-layer demo, where the layers
 deliberately disagree:
 
 ```bash
-node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db
+node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db
 ```
 
 The JSON output shows `contributors` (each layer and its last-updated date),

@@ -18,17 +18,17 @@ repo activity -> classify-context.mjs -> ingest.mjs -> signals.json -> write.mjs
 
 `classify-context.mjs` takes one normalized event — a merged PR, a repeated
 question, an incident note — and routes it into one of four outcomes using
-the rules in `context-policy.json`: `ignore` (routine noise, not stored),
+the rules in `packages/core/fixtures/context-policy.json`: `ignore` (routine noise, not stored),
 `local` (useful but not shared team knowledge — the default when nothing
 matches), `team_candidate` (durable, confident enough to write
 automatically), or `review_required` (touches auth, secrets, PII, or another
 sensitive path — staged for a human, never written live).
 
 `ingest.mjs` runs a batch of events through the same classifier and produces
-`control-surface/signals.json`, which the dashboard reads:
+`apps/control-surface/signals.json`, which the dashboard reads:
 
 ```bash
-node ingest.mjs --events mock-events.json --out control-surface/signals.json
+node ingest.mjs --events packages/core/fixtures/mock-events.json --out apps/control-surface/signals.json
 ```
 
 ## From signals to a layer bundle {#from-signals-to-a-layer-bundle}
@@ -36,7 +36,7 @@ node ingest.mjs --events mock-events.json --out control-surface/signals.json
 `write.mjs` turns classified signals into real OKF files in a target layer:
 
 ```bash
-node write.mjs --signals control-surface/signals.json --manifest layers.json --target-layer team
+node write.mjs --signals apps/control-surface/signals.json --manifest layers.json --target-layer team
 ```
 
 `team_candidate` signals are written directly, at the path from the

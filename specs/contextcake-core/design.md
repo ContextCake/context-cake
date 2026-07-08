@@ -3,7 +3,7 @@
 **Date:** 2026-06-24
 **Status:** Approved shape (interview-driven) — pending design-doc sign-off, then implementation plan
 **Workflow:** Design-first (re-architecture of the existing engine, grounded in current code)
-**Supersedes the resolution model in:** `docs/architecture.md` §3–§4 (the silent-merge + shadow machinery)
+**Supersedes the resolution model in:** `docs/architecture/README.md` §3–§4 (the silent-merge + shadow machinery)
 
 ---
 
@@ -100,9 +100,9 @@ expected, not a regression. The suppression test is kept.
 | `resolver.mjs` | Core engine: OKF parse, source adapters, primary+conflict resolution | refactor (§5) |
 | `sources/okf-local.mjs` | Adapter: read an OKF git bundle from disk (today's logic, extracted) | new (extracted) |
 | `sources/mcp.mjs` | Adapter: query a foreign graph over MCP, translate response → OKF concept (+edges) | new |
-| `examples/mock-context-source.mjs` | A tiny **non-OKF** MCP graph server for the POC's `org-default` layer (proves translation; self-contained, dependency-free) | new |
+| `examples/mock-mcp-source/server.mjs` | A tiny **non-OKF** MCP graph server for the POC's `org-default` layer (proves translation; self-contained, dependency-free) | new |
 | `mcp-server.mjs` | The read surface agents connect to; resolves via `resolver.mjs`; `read_file`/`get_links`/`search` now return primary+conflicts | light change |
-| manifest | A layer now declares a `source` type: `{ "name":"org-default", "level":0, "source":"mcp", "command":"node", "args":["./examples/mock-context-source.mjs"] }` vs `"source":"okf-local","path":"..."` | schema add |
+| manifest | A layer now declares a `source` type: `{ "name":"org-default", "level":0, "source":"mcp", "command":"node", "args":["./examples/mock-mcp-source/server.mjs"] }` vs `"source":"okf-local","path":"..."` | schema add |
 
 ## 7. POC scope
 
@@ -190,7 +190,6 @@ later); additional adapters beyond OKF-local + one MCP; the live demo content/ru
 - The "hide this conflict" user preference.
 - Additional real adapters (membrain, etc.) against the source contract.
 
-**Demo collision (decided 2026-06-24):** this re-arch deletes `--shadow`/`--hash`, which the paused
-`demo/` track (`demo/setup.sh`, `demo/verify.sh`) depends on. Decision: **clean-delete now**, let the
-demo's shadow beat go stale, and reconcile the demo (swap shadow → the dates-based conflict beat) when
-that track resumes. No deprecated shims carried through the rebuild.
+**Demo reconciliation (updated 2026-07-08):** this re-arch deleted `--shadow`/`--hash`; the team demo
+now lives under `examples/team-demo/` and uses the dates-based `conflicts[]` beat instead of shadow
+drift. No deprecated shims are carried through the rebuild.

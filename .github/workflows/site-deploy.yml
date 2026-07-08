@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'site/**'
+      - 'apps/site/**'
       - '.github/workflows/site-deploy.yml'
   workflow_dispatch:
 
@@ -25,7 +25,7 @@ env:
 
 defaults:
   run:
-    working-directory: site
+    working-directory: apps/site
 
 jobs:
   validate:
@@ -41,7 +41,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: site/package-lock.json
+          cache-dependency-path: apps/site/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -53,7 +53,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: site-dist
-          path: site/dist
+          path: apps/site/dist
           retention-days: 1
 
   deploy:
@@ -70,7 +70,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: site-dist
-          path: site/dist
+          path: apps/site/dist
 
       - name: Deploy Cloudflare Pages production
         id: deploy
@@ -79,7 +79,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: site
+          workingDirectory: apps/site
           command: pages deploy dist --project-name=${{ env.CLOUDFLARE_PROJECT_NAME }} --branch=main --commit-hash=${{ github.sha }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 

@@ -22,15 +22,14 @@ the language they all speak once stitched.
 ## Status {#status}
 
 Re-architected into a stitching layer (2026-06-25, PR #1 merged). All tests passing:
-`smoke-test.sh`, `resolver-test.sh`, `source-test.sh`. The demo track (`demo/`) is
-currently broken — its `setup.sh` and `verify.sh` still reference the removed
-`--shadow/--hash` flags. Pending reconciliation.
+`packages/core/tests/smoke-test.sh`, `packages/core/tests/resolver-test.sh`, `packages/core/tests/source-test.sh`.
+The demo track now lives in `examples/team-demo/` and verifies the dates-based
+`conflicts[]` beat.
 
 ## Outstanding {#outstanding}
 
 - Promotion-up-the-stack: generalize `promote.mjs` from personal→shared to multi-level
 - Nested YAML for `overrides:` frontmatter (blocked on real YAML parser adoption)
-- Demo track: swap shadow beat → dates-based conflict beat in `setup.sh`/`verify.sh`
 - Pretty printer for `resolver.mjs` (`--pretty` flag for human-readable waterfall output)
 - Membrain adapter: needs a protocol shim (`search_nodes`/`open_nodes` → `list_nodes`/`get_node`)
 

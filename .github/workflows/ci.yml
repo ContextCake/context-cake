@@ -91,6 +91,40 @@ jobs:
       - name: Build
         run: npm run build
 
+  desktop:
+    name: desktop
+    # macOS runner: Electron needs a real windowing environment, and this is
+    # the platform the app ships on.
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install console dependencies
+        working-directory: apps/console
+        run: npm ci
+
+      - name: Build console renderer
+        working-directory: apps/console
+        run: npm run build:live
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Smoke test (boot + token gate)
+        working-directory: apps/desktop
+        shell: bash
+        run: npm run smoke | tee smoke.log && grep -q "SMOKE OK" smoke.log
+
   required:
     name: required
     runs-on: ubuntu-latest
@@ -99,13 +133,15 @@ jobs:
       - engine
       - console
       - site
+      - desktop
 
     steps:
       - name: Enforce required job results
         run: |
           if [ "${{ needs.engine.result }}" != "success" ] || \
              [ "${{ needs.console.result }}" != "success" ] || \
-             [ "${{ needs.site.result }}" != "success" ]; then
+             [ "${{ needs.site.result }}" != "success" ] || \
+             [ "${{ needs.desktop.result }}" != "success" ]; then
             echo "At least one required CI job did not succeed." >&2
             exit 1
           fi

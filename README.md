@@ -124,7 +124,7 @@ meaning of `merged`, `preview`, and `live` for each surface.
 ] }
 ```
 
-A layer declares a `source`. An **`okf-local`** layer is an [OKF](https://cloud.google.com/blog/products/ai-machine-learning/google-cloud-launches-open-knowledge-format) bundle — a directory of markdown files with YAML frontmatter (the only required field is `type`). An **`mcp`** layer is a foreign knowledge graph reached over a stdio MCP server (`command` + `args`); its responses are translated into OKF at read time, so it stitches in alongside the local bundles. `source` defaults to `okf-local` when omitted. See `examples/mock-mcp-source/server.mjs` for a runnable foreign source.
+A layer declares a `source`. An **`okf-local`** layer is an [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle — a directory of markdown files with YAML frontmatter (the only required field is `type`). An **`mcp`** layer is a foreign knowledge graph reached over a stdio MCP server (`command` + `args`); its responses are translated into OKF at read time, so it stitches in alongside the local bundles. `source` defaults to `okf-local` when omitted. See `examples/mock-mcp-source/server.mjs` for a runnable foreign source.
 
 ## MCP tools
 

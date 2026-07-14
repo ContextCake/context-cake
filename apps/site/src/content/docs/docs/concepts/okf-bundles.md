@@ -3,7 +3,7 @@ title: OKF bundles
 description: A layer is a directory of OKF markdown — frontmatter plus anchored sections.
 ---
 
-An `okf-local` layer is an [Open Knowledge Format](https://cloud.google.com/blog/products/ai-machine-learning/google-cloud-launches-open-knowledge-format)
+An `okf-local` layer is an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
 bundle: a directory of markdown files with YAML frontmatter. It is the default
 source type. A layer that omits `source` in the manifest is treated as `okf-local`.
 

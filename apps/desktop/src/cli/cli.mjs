@@ -15,7 +15,8 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 function engineSrc() {
   const packaged = path.resolve(here, '..', 'src')
   if (fs.existsSync(path.join(packaged, 'mcp-server.mjs'))) return packaged
-  const dev = path.resolve(here, '..', '..', '..', '..', '..', 'packages', 'core', 'src')
+  // apps/desktop/src/cli → repo root is four levels up.
+  const dev = path.resolve(here, '..', '..', '..', '..', 'packages', 'core', 'src')
   if (fs.existsSync(path.join(dev, 'mcp-server.mjs'))) return dev
   console.error('contextcake: cannot locate the engine (looked in %s and %s)', packaged, dev)
   process.exit(1)

@@ -21,9 +21,10 @@ The **Sources** tab is the configuration + accounting surface:
   - **GitHub repo** — cloned with `git` (uses your credentials, so private repos
     work). Give `owner/name`, an https URL, or an SSH URL, plus an optional
     branch/sub-directory. The repo may or may not contain OKF — non-OKF markdown
-    just yields fewer concepts. **Sync** does a `git pull`. Clones live in
-    `apps/playground/.cache/` (gitignored). Only `owner/name` / https / SSH forms are
-    accepted; other git transports are rejected.
+    just yields fewer concepts. **Sync** does a `git pull`. Clones live in a
+    `.cache/` directory next to the manifest (for the default manifest that is
+    `apps/playground/.cache/`, gitignored). Only `owner/name` / https / SSH forms
+    are accepted; other git transports are rejected.
   - **MCP server** — a `command` + `args` that speak MCP; their graph is
     translated to OKF at read time. (This spawns the command — only add servers
     you trust; the manifest is a trust boundary.)
@@ -31,7 +32,8 @@ The **Sources** tab is the configuration + accounting surface:
   **o200k_base** BPE tokenizer (GPT-4o's; a close proxy for Claude, which isn't
   public). The budget bar shows each source's share of the total context, and
   `raw → effective` shows how much the cascade dedups (e.g. 772 raw → 603 after
-  merge). No npm, no network — the tokenizer is vendored under `vendor/tiktoken/`.
+  merge). No npm, no network — the tokenizer is vendored with the engine under
+  `packages/core/src/vendor/tiktoken/`.
 - Remove a source, change its precedence, or watch a broken source (down MCP,
   missing clone) show an **error** status without taking down the rest.
 
@@ -91,9 +93,10 @@ Writes are sandboxed to the manifest's layer roots (path-traversal and symlink
 guarded, text files only). State-changing requests require a loopback `Host` and
 same-origin (CSRF/DNS-rebinding guard), and rendered source content is sanitized
 (markdown via DOMPurify; SVG shown as an inert image) since a source can be any
-repo. The libraries (CodeMirror, marked, DOMPurify, pdf.js, and the o200k
-tokenizer) are **vendored** under `apps/playground/vendor/` — no CDN, no npm, works
-offline. The engine itself stays dependency-free.
+repo. The browser libraries (CodeMirror, marked, DOMPurify, pdf.js) are
+**vendored** under `apps/playground/vendor/` and the o200k tokenizer under
+`packages/core/src/vendor/tiktoken/` — no CDN, no npm, works offline. The
+engine itself stays dependency-free.
 
 ## The demo data
 

@@ -1,0 +1,54 @@
+appId: com.contextcake.app
+productName: ContextCake
+copyright: © 2026 ContextCake
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - src/**/*
+  - package.json
+
+# The engine and console ship as plain files (not asar) so the CLI shim can
+# exec them under ELECTRON_RUN_AS_NODE and the service can serve the console
+# dist from disk.
+extraResources:
+  - from: ../console/dist
+    to: console
+  - from: ../../packages/core/src
+    to: engine/src
+  - from: ../../packages/core/fixtures
+    to: engine/fixtures
+  - from: src/cli
+    to: engine/cli
+  - from: resources/bin
+    to: bin
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Flipped on by the release workflow once Apple Developer credentials exist
+  # (specs/contextcake-distribution/design.md §8). Never distribute builds
+  # that skipped notarization.
+  notarize: false
+
+dmg:
+  sign: false
+
+protocols:
+  - name: ContextCake
+    schemes: [contextcake]
+
+publish:
+  provider: github
+  owner: ContextCake
+  repo: context-cake

@@ -1,0 +1,23 @@
+{
+  "name": "contextcake-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ContextCake for Mac — desktop shell over the engine and console",
+  "type": "module",
+  "main": "src/main/main.mjs",
+  "scripts": {
+    "renderer": "npm --prefix ../console run build:live",
+    "start": "electron .",
+    "dev": "npm run renderer && electron .",
+    "smoke": "CC_SMOKE=1 electron .",
+    "pack": "npm run renderer && electron-builder --mac --arm64 --dir",
+    "dist": "npm run renderer && electron-builder --mac --arm64"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3"
+  }
+}

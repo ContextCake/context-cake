@@ -50,6 +50,22 @@ export interface DataSource {
   listConcepts(): Promise<string[]>
 }
 
+// ---- Transport --------------------------------------------------------------
+
+/**
+ * fetch for the same-origin engine API. Inside the desktop app the preload
+ * script injects a per-launch bearer token (`window.__CC_DESKTOP`) that the
+ * local service requires on every /api route; in a browser this is a plain
+ * fetch. All renderer code hitting /api/* must go through this.
+ */
+export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = typeof window !== 'undefined' ? window.__CC_DESKTOP?.token : undefined
+  if (!token) return fetch(path, init)
+  const headers = new Headers(init.headers)
+  headers.set('authorization', `Bearer ${token}`)
+  return fetch(path, { ...init, headers })
+}
+
 // ---- Mode selection --------------------------------------------------------
 
 /**
@@ -124,7 +140,7 @@ class LiveSource implements DataSource {
   private async get<T>(path: string): Promise<T> {
     let res: Response
     try {
-      res = await fetch(path, { headers: { accept: 'application/json' } })
+      res = await apiFetch(path, { headers: { accept: 'application/json' } })
     } catch {
       throw new LiveDataError('unreachable', `Cannot reach the ContextCake server (${path}). Is the playground running?`)
     }

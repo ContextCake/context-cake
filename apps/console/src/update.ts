@@ -106,6 +106,9 @@ export function __resetUpdateCheckCache(): void {
  */
 export function isUpdateCheckEnabled(mode: 'demo' | 'live'): boolean {
   if (typeof window === 'undefined') return false
+  // Inside the desktop app the native updater owns update UX; the web check
+  // (console-v* releases) would misreport against the app's own versioning.
+  if (window.__CC_DESKTOP) return false
   let stored: string | null = null
   try {
     stored = window.localStorage.getItem(STORAGE_KEY)

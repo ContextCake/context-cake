@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { useStore } from '../store'
+import { apiFetch } from '../api'
 import type { GraphSummary } from '../types'
 
 type StepId = 'welcome' | 'personal' | 'team' | 'company' | 'review' | 'success'
@@ -17,7 +18,7 @@ interface AddedLayer {
 }
 
 async function postSource(body: Record<string, unknown>): Promise<void> {
-  const res = await fetch('/api/sources', {
+  const res = await apiFetch('/api/sources', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -31,7 +32,7 @@ async function postSource(body: Record<string, unknown>): Promise<void> {
 }
 
 async function syncSource(name: string): Promise<void> {
-  const res = await fetch(`/api/sources/sync?name=${encodeURIComponent(name)}`, { method: 'POST' })
+  const res = await apiFetch(`/api/sources/sync?name=${encodeURIComponent(name)}`, { method: 'POST' })
   const data = await res.json().catch(() => ({}) as { error?: string })
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
 }

@@ -18,16 +18,16 @@ local setup path.
 
 ## Download
 
-Download the [ContextCake source archive](https://github.com/ContextCake/context-cake/archive/refs/heads/main.tar.gz), then unpack it:
+Download the versioned [ContextCake `console-v0.2.0` source archive](https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz), then unpack it:
 
 ```bash
 mkdir contextcake
-tar -xzf ContextCake-context-cake-*.tar.gz -C contextcake --strip-components=1
+tar -xzf context-cake-console-v0.2.0.tar.gz -C contextcake --strip-components=1
 cd contextcake
 ```
 
-GitHub names each downloaded archive with the source commit, so the unpack command
-uses its generated filename pattern.
+This tag is immutable: the archive and the commands above always refer to the same
+released source.
 
 ## Verify
 

@@ -49,7 +49,7 @@ const storyBands = ['choice', 'rationale', 'analytics', 'ownership']
 	}));
 
 const choiceConflict = byKey.choice?.conflicts?.[0] ?? null;
-const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/refs/heads/main.tar.gz';
+const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz';
 
 const principles = [
 	{
@@ -132,7 +132,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 					<a class="text-link" href="/docs">Read the docs</a>
 				</div>
 				<div class="download-meta" aria-label="Download details">
-					<span><i aria-hidden="true"></i>Source archive</span>
+					<span><i aria-hidden="true"></i>Versioned source archive</span>
 					<span>.tar.gz</span>
 					<span>Node 18+</span>
 					<span>Zero runtime dependencies</span>
@@ -276,7 +276,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 				<a class="download-file" href={sourceDownloadUrl} download>
 					<span>
 						<strong>ContextCake source</strong>
-						<small>Current main build · .tar.gz</small>
+						<small>console-v0.2.0 · .tar.gz</small>
 					</span>
 					<Icon name="download" size={24} />
 				</a>
@@ -506,7 +506,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 		font-family: var(--cc-font-mono);
 		font-size: 0.68rem;
 		font-weight: 700;
-		color: var(--layer, var(--cc-ink-muted));
+		color: var(--cc-ink-body);
 	}
 	.principle-copy h3 {
 		margin-bottom: 0.5rem;
@@ -758,7 +758,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 	.window-answer div:last-child { border-bottom: 0; }
 	.window-answer div > span { align-self: stretch; background: var(--layer); }
 	.window-answer strong { font-size: 0.76rem; }
-	.window-answer small { font-family: var(--cc-font-mono); color: var(--layer); }
+	.window-answer small { font-family: var(--cc-font-mono); color: var(--cc-ink-body); }
 	.window-conflict {
 		display: flex;
 		align-items: center;
@@ -767,7 +767,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 		font-family: var(--cc-font-mono);
 		font-size: 0.6rem;
 		font-weight: 700;
-		color: var(--cc-conflict);
+		color: var(--cc-ink-body);
 	}
 
 	.capabilities {

@@ -3,7 +3,7 @@
 import Base from '../layouts/Base.astro';
 import CodeBlock from '../components/CodeBlock.astro';
 
-const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/refs/heads/main.tar.gz';
+const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz';
 ---
 
 <Base
@@ -28,14 +28,15 @@ const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/r
 		<h2>1. Download the source archive</h2>
 		<a class="download-link" href={sourceDownloadUrl} download>Download ContextCake (.tar.gz)</a>
 		<p>
-			This downloads the current source build directly from ContextCake's GitHub repository.
+			This downloads the versioned <code>console-v0.2.0</code> source archive directly from
+			ContextCake's GitHub repository.
 		</p>
 
 		<h2>2. Unpack it</h2>
 		<CodeBlock
 			lang="bash"
 			code={`mkdir contextcake
-tar -xzf ContextCake-context-cake-*.tar.gz -C contextcake --strip-components=1
+	tar -xzf context-cake-console-v0.2.0.tar.gz -C contextcake --strip-components=1
 cd contextcake`}
 		/>
 

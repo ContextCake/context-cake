@@ -1,58 +1,31 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1c1d18"/>
-      <stop offset="1" stop-color="#0b0c0a"/>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#242622"/>
+      <stop offset="1" stop-color="#141612"/>
     </linearGradient>
-    <radialGradient id="glow" cx="50%" cy="42%" r="58%">
-      <stop offset="0" stop-color="#d9ab53" stop-opacity="0.20"/>
-      <stop offset="55%" stop-color="#d9ab53" stop-opacity="0.05"/>
-      <stop offset="100%" stop-color="#d9ab53" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="amberBody" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#e2b866"/>
-      <stop offset="1" stop-color="#bf8f3c"/>
+    <linearGradient id="personal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e6ba62"/>
+      <stop offset="1" stop-color="#c89539"/>
     </linearGradient>
-    <linearGradient id="tealBody" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#97cbb1"/>
-      <stop offset="1" stop-color="#6fa88d"/>
+    <linearGradient id="team" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9bccb2"/>
+      <stop offset="1" stop-color="#75ae91"/>
     </linearGradient>
-    <linearGradient id="indigoBody" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#93c0d6"/>
-      <stop offset="1" stop-color="#6b9db8"/>
+    <linearGradient id="company" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9cc5d8"/>
+      <stop offset="1" stop-color="#739fb8"/>
     </linearGradient>
-    <radialGradient id="amberTop" cx="42%" cy="38%" r="75%">
-      <stop offset="0" stop-color="#f6da97"/>
-      <stop offset="1" stop-color="#e6c274"/>
-    </radialGradient>
-    <radialGradient id="tealTop" cx="42%" cy="38%" r="75%">
-      <stop offset="0" stop-color="#c2e4d2"/>
-      <stop offset="1" stop-color="#a6d4bd"/>
-    </radialGradient>
-    <radialGradient id="indigoTop" cx="42%" cy="38%" r="75%">
-      <stop offset="0" stop-color="#bcdcec"/>
-      <stop offset="1" stop-color="#9ecbe0"/>
-    </radialGradient>
-    <clipPath id="clip">
-      <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
-    </clipPath>
-    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="12"/>
+    <filter id="shadow" x="-20%" y="-35%" width="140%" height="170%">
+      <feGaussianBlur stdDeviation="18"/>
     </filter>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#bg)"/>
-  <g clip-path="url(#clip)">
-    <rect x="100" y="100" width="824" height="824" fill="url(#glow)"/>
-    <ellipse cx="512" cy="724" rx="272" ry="26" fill="#000000" opacity="0.16" filter="url(#soft)"/>
-    <path d="M214,566 L214,670 A298,58 0 0 1 810,670 L810,566 A298,58 0 0 0 214,566 Z" fill="url(#indigoBody)"/>
-    <ellipse cx="512" cy="566" rx="298" ry="58" fill="url(#indigoTop)"/>
-    <ellipse cx="512" cy="590" rx="224" ry="22" fill="#000000" opacity="0.18" filter="url(#soft)"/>
-    <path d="M284,444 L284,548 A228,46 0 0 1 740,548 L740,444 A228,46 0 0 0 284,444 Z" fill="url(#tealBody)"/>
-    <ellipse cx="512" cy="444" rx="228" ry="46" fill="url(#tealTop)"/>
-    <ellipse cx="512" cy="466" rx="150" ry="18" fill="#000000" opacity="0.18" filter="url(#soft)"/>
-    <path d="M354,330 L354,434 A158,36 0 0 1 670,434 L670,330 A158,36 0 0 0 354,330 Z" fill="url(#amberBody)"/>
-    <ellipse cx="512" cy="330" rx="158" ry="36" fill="url(#amberTop)"/>
-    <rect x="100" y="100" width="824" height="300" fill="#ffffff" opacity="0.015"/>
-  </g>
-  <rect x="100.75" y="100.75" width="822.5" height="822.5" rx="184.25" ry="184.25" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1.5"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#ground)"/>
+  <ellipse cx="512" cy="748" rx="292" ry="34" fill="#050605" opacity="0.4" filter="url(#shadow)"/>
+  <rect x="190" y="590" width="644" height="154" rx="58" fill="url(#company)"/>
+  <rect x="246" y="432" width="532" height="138" rx="54" fill="url(#team)"/>
+  <rect x="314" y="292" width="396" height="120" rx="50" fill="url(#personal)"/>
+  <path d="M248 456h528" stroke="#d9f0e3" stroke-opacity="0.12" stroke-width="5" stroke-linecap="round"/>
+  <path d="M192 615h640" stroke="#e0f0f7" stroke-opacity="0.12" stroke-width="5" stroke-linecap="round"/>
+  <rect x="100.75" y="100.75" width="822.5" height="822.5" rx="184.25" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5"/>
 </svg>

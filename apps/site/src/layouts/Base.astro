@@ -81,7 +81,7 @@ const footerColumns = [
 	<body>
 		<header class="nav">
 			<a href="/" class="brand" aria-label="ContextCake home">
-				<span class="brand-mark" aria-hidden="true">C</span>
+				<img class="brand-mark" src="/contextcake-app-icon.svg" alt="" width="42" height="42" />
 				<span>ContextCake</span>
 			</a>
 			<nav aria-label="Main">
@@ -98,7 +98,7 @@ const footerColumns = [
 				<div class="footer-top">
 					<div class="footer-brand">
 						<a href="/" class="footer-logo" aria-label="ContextCake home">
-							<span class="brand-mark" aria-hidden="true">C</span>
+							<img class="brand-mark" src="/contextcake-app-icon.svg" alt="" width="36" height="36" />
 							<span>ContextCake</span>
 						</a>
 						<p class="footer-tagline">
@@ -195,18 +195,12 @@ const footerColumns = [
 		color: var(--cc-text);
 	}
 	.brand-mark {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
+		display: block;
+		flex: none;
 		width: 2.6rem;
 		height: 2.6rem;
-		border-radius: 16px;
-		background: rgba(141, 195, 168, 0.12);
-		color: var(--cc-text);
-		font-family: Georgia, 'Times New Roman', serif;
-		font-size: 1.55rem;
-		font-weight: 700;
-		line-height: 1;
+		border-radius: 0.72rem;
+		box-shadow: 0 0.35rem 1.15rem rgba(0, 0, 0, 0.26);
 	}
 	.nav nav {
 		display: flex;
@@ -279,8 +273,7 @@ const footerColumns = [
 	.footer-logo .brand-mark {
 		width: 2.2rem;
 		height: 2.2rem;
-		border-radius: 13px;
-		font-size: 1.3rem;
+		border-radius: 0.62rem;
 	}
 	.footer-tagline {
 		margin: 1rem 0 1.4rem;

@@ -230,7 +230,12 @@ const mcpTools = [
 						<a class="cta" href="https://github.com/ContextCake/context-cake">GitHub</a>
 					</div>
 					<p class="hero-note">
-						Open-source engine · Node ≥ 18, zero dependencies · <a href="/packs">Data &amp; Analytics Pack →</a>
+						Open-source engine · Node ≥ 18, zero dependencies · <a href="/install">Developer install</a> · <a href="/packs">Data &amp; Analytics Pack →</a>
+					</p>
+					<p class="desktop-note">
+						<span>ContextCake for Mac</span> is the zero-terminal path: a signed, self-updating app
+						with the same engine and an optional command-line tool. Its first public release is
+						being prepared; the archive above remains the available developer path today.
 					</p>
 					<CopyCommand command="gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz" />
 				</div>
@@ -471,6 +476,20 @@ const mcpTools = [
 	}
 	.hero-note a:hover {
 		text-decoration: underline;
+	}
+	.desktop-note {
+		max-width: 42rem;
+		margin: 0 0 1rem;
+		padding-left: 0.8rem;
+		border-left: 2px solid var(--cc-layer-team);
+		color: var(--cc-text-body);
+		font-size: 0.9rem;
+		line-height: 1.55;
+	}
+	.desktop-note span {
+		font-family: var(--cc-font-heading);
+		font-weight: 700;
+		color: var(--cc-text);
 	}
 	.ctas {
 		display: flex;

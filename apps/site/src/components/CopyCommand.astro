@@ -5,15 +5,16 @@ import Icon from './Icon.astro';
 
 interface Props {
 	command: string;
+	tone?: 'dark' | 'paper';
 }
-const { command } = Astro.props;
+const { command, tone = 'dark' } = Astro.props;
 const html = await codeToHtml(`$ ${command}`, {
 	lang: 'bash',
-	theme: 'github-dark-default',
+	theme: tone === 'paper' ? 'github-light' : 'github-dark-default',
 });
 ---
 
-<div class="copy-command">
+<div class:list={['copy-command', `copy-command--${tone}`]}>
 	<div class="command-view" set:html={html} />
 	<button type="button" data-command={command} aria-label="Copy command to clipboard">
 		<Icon name="copy" size={16} />
@@ -34,6 +35,20 @@ const html = await codeToHtml(`$ ${command}`, {
 		padding: 0.75rem 1rem;
 		font-family: var(--cc-font-mono);
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+	}
+	.copy-command--paper {
+		background: var(--cc-paper);
+		border-color: var(--cc-paper-line-strong);
+		box-shadow: none;
+	}
+	.copy-command--paper button {
+		border-color: var(--cc-paper-line-strong);
+		color: var(--cc-ink-body);
+	}
+	.copy-command--paper button:hover,
+	.copy-command--paper button.copied {
+		border-color: var(--cc-ink);
+		color: var(--cc-ink);
 	}
 	.command-view {
 		flex: 1 1 auto;
@@ -93,7 +108,7 @@ const html = await codeToHtml(`$ ${command}`, {
 		}
 		// Insecure context (e.g. LAN http:// preview) or a denied clipboard
 		// permission: execCommand is deprecated but still copies everywhere,
-		// and the spec's AC is that the button copies — copy the bare command,
+		// and the spec's AC is that the button copies: copy the bare command,
 		// not the rendered "$ " prompt.
 		try {
 			const ta = document.createElement('textarea');
@@ -148,7 +163,7 @@ const html = await codeToHtml(`$ ${command}`, {
 				if (label) label.textContent = 'Copied';
 			} else {
 				selectCommandText(button);
-				if (label) label.textContent = 'Selected — press ⌘/Ctrl-C';
+				if (label) label.textContent = 'Selected: press ⌘/Ctrl-C';
 			}
 			setTimeout(() => {
 				button.classList.remove('copied');

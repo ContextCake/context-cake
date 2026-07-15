@@ -49,7 +49,7 @@ $$;
 revoke all on function public.set_user_settings_updated_at() from public;
 
 create trigger set_user_settings_updated_at
-before update on public.user_settings
+before insert or update on public.user_settings
 for each row execute function public.set_user_settings_updated_at();
 
 -- auth.admin.deleteUser requires a service-role key and therefore cannot run

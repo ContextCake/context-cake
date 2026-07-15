@@ -73,13 +73,16 @@ test('OAuth IPC smoke writes only an encrypted session and validates callback st
   await assert.rejects(manager.signInWithGoogle(), /already in progress/)
 
   const callback = new URL(fake.redirectTo())
-  const goodState = callback.searchParams.get('state')
   callback.searchParams.set('code', 'one-time-code')
   callback.searchParams.set('state', 'wrong-state')
   await assert.rejects(manager.handleDeepLink(callback.toString()), /state did not match/)
 
-  callback.searchParams.set('state', goodState)
-  assert.equal(await manager.handleDeepLink(callback.toString()), true)
+  await manager.signInWithGitHub()
+  const retryCallback = new URL(fake.redirectTo())
+  const retryState = retryCallback.searchParams.get('state')
+  retryCallback.searchParams.set('code', 'one-time-code')
+  retryCallback.searchParams.set('state', retryState)
+  assert.equal(await manager.handleDeepLink(retryCallback.toString()), true)
   assert.deepEqual(manager.getState(), { available: true, signedIn: true, email: 'person@example.com' })
 
   const encrypted = fs.readFileSync(path.join(configDir, 'session.enc')).toString()

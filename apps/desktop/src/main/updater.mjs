@@ -10,6 +10,7 @@ const { autoUpdater } = electronUpdater
 const SIX_HOURS = 6 * 60 * 60 * 1000
 
 let timer = null
+let quitHookRegistered = false
 
 export function initUpdater() {
   // KNOWN CONSTRAINT (tracked): electron-updater's GitHub provider reads
@@ -21,7 +22,12 @@ export function initUpdater() {
   //
   // Unsigned dev builds can't apply updates; don't even check.
   if (!app.isPackaged) return
-  if (!readSettings().updateCheck) return
+  if (!readSettings().updateCheck) {
+    if (timer) clearInterval(timer)
+    timer = null
+    return
+  }
+  if (timer) return
 
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
@@ -34,7 +40,10 @@ export function initUpdater() {
   }
   check()
   timer = setInterval(check, SIX_HOURS)
-  app.on('before-quit', () => timer && clearInterval(timer))
+  if (!quitHookRegistered) {
+    quitHookRegistered = true
+    app.on('before-quit', () => timer && clearInterval(timer))
+  }
 }
 
 /** Menu-driven "Check for Updates…" with explicit result dialogs. */

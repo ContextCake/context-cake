@@ -9,7 +9,7 @@ architecture, packaging, or update behavior.
 
 ```bash
 cd apps/desktop
-npm install
+npm ci
 npm run dev     # build console renderer + launch
 npm run smoke   # headless boot check: service up, token enforced, exits
 npm run pack    # unpacked .app (fast) — dist/ is gitignored
@@ -23,8 +23,9 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   path (dev: repo-relative; packaged: `process.resourcesPath/engine`) — see
   `src/main/paths.mjs` for the dual resolution.
 - **The renderer is sandboxed** (`contextIsolation`, `sandbox: true`). The only
-  bridge is `src/preload.cjs` exposing `window.__CC_DESKTOP` (token + version).
-  Keep that surface minimal; the console must keep working in plain browsers.
+  bridge is `src/preload.cjs`: `window.__CC_DESKTOP` exposes static launch metadata,
+  while `window.__CC_AUTH` exposes the narrow auth/settings IPC surface. Keep both
+  minimal; the console must keep working in plain browsers.
 - **Every `/api` call needs the bearer token** — the console's `apiFetch`
   (apps/console/src/api.ts) injects it automatically. Raw `fetch('/api/…')`
   in renderer code will 401 inside the app.
@@ -43,3 +44,6 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   test asserts `userData=ContextCake`.
 - **Known gaps tracked as follow-ups** (not blocking merge): the updater reads the
   repo-wide GitHub "latest" release (see the comment in `updater.mjs`).
+- `npm run pack` and `npm run dist` require public Supabase configuration through
+  `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (or the `SUPABASE_*` aliases).
+  Only publishable/legacy-anon keys are accepted; never use secret/service-role keys.

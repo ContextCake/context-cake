@@ -24,8 +24,8 @@ function persistSettings(patch, changedFields) {
   const dirtyFields = [...new Set([...(current._sync?.dirtyFields ?? []), ...changedFields])]
   // The manifest remains the one authoritative local copy of source configs.
   // Never duplicate paths, commands, or credential references into settings.json.
-  const { sources: _sources, ...diskPatch } = patch
-  const { sources: _currentSources, ...diskCurrent } = current
+  const { sources: _sources, profiles: _profiles, ...diskPatch } = patch
+  const { sources: _currentSources, profiles: _currentProfiles, ...diskCurrent } = current
   const next = {
     ...diskCurrent,
     ...diskPatch,

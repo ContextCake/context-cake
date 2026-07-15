@@ -7,8 +7,8 @@ const SYNC_FIELDS = ['theme', 'updateCheck', 'activeProfile', 'profiles', 'sourc
 const SCRUBBED = new Set(['execution', 'path', 'secret'])
 const SECRET_KEY = /(?:^|_)(?:password|passwd|secret|token|api_?key|authorization|cookie|credential)(?:$|_)/i
 const CONTEXT_KEY = /^(?:content|contents|body|document|documents|knowledge|markdown|payload|raw|resolved|sections|text)$/i
-const CREDENTIAL_VALUE = /(?:^Bearer\s+|\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b)/
-const SECRET_ASSIGNMENT = /(?:^|[\s?&-])(?:access[_-]?token|api[_-]?key|secret|password|credential|authorization)\s*=/i
+const CREDENTIAL_VALUE = /(?:^Bearer\s+|\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bglpat-[A-Za-z0-9_-]{20,}\b|\bnpm_[A-Za-z0-9]{20,}\b|\bxox[baprs]-[A-Za-z0-9-]{20,}\b|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b)/
+const SECRET_ASSIGNMENT = /(?:^|[\s?&#-])(?:access[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|secret|password|credential|authorization|signature|sig)\s*=/i
 const EMAIL_VALUE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
@@ -48,18 +48,62 @@ function assertAllowedKey(key) {
 }
 
 function isAbsolutePath(value) {
-  return value.startsWith('file://')
-    || value.startsWith('~/')
+  return /^file:\/\//i.test(value)
+    || /^~[^/\\]*[/\\]/.test(value)
     || path.posix.isAbsolute(value)
     || path.win32.isAbsolute(value)
 }
 
+function decodeUrlComponent(value) {
+  let decoded = value
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const next = decodeURIComponent(decoded)
+      if (next === decoded) break
+      decoded = next
+    } catch { break }
+  }
+  return decoded
+}
+
 function containsAbsolutePath(value) {
   if (isAbsolutePath(value)) return true
-  return value
-    .split(/[\s=,;]+/)
+  const decoded = decodeUrlComponent(value)
+  if (decoded !== value && containsAbsolutePath(decoded)) return true
+  try {
+    const url = new URL(value)
+    if (url.protocol === 'https:' || url.protocol === 'http:') {
+      for (const candidate of [...url.searchParams.values(), url.hash.slice(1)]) {
+        if (candidate && containsAbsolutePath(decodeUrlComponent(candidate))) return true
+      }
+      return false
+    }
+  } catch { /* not a standalone network URL */ }
+  if (/file:\/\//i.test(value) || /(?:^|[^A-Za-z0-9])~[^/\\\s]*[/\\]/.test(value)) return true
+  if (/(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]/.test(value)) return true
+  const withoutNetworkUrls = value.replace(/https?:\/\/[^\s"'<>]+/gi, '')
+  return withoutNetworkUrls
+    .split(/[\s=,;:()[\]{}]+/)
     .map((part) => part.replace(/^["']|["']$/g, ''))
     .some((part) => isAbsolutePath(part))
+}
+
+function containsUrlCredential(value) {
+  const decoded = decodeUrlComponent(value)
+  const variants = decoded === value ? [value] : [value, decoded]
+  const candidates = variants.flatMap((variant) => [variant, ...(variant.match(/https?:\/\/[^\s"'<>]+/gi) ?? [])])
+  for (const candidate of candidates) {
+    let url
+    try { url = new URL(candidate) } catch { continue }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') continue
+    if (url.username || url.password) return true
+    for (const key of url.searchParams.keys()) {
+      const normalized = normalizedKey(key).toLowerCase()
+      if (isSecretKey(key) || /^(?:auth|token|signature|sig)$/.test(normalized)) return true
+    }
+    if (SECRET_ASSIGNMENT.test(url.hash)) return true
+  }
+  return false
 }
 
 function assertOnlyKeys(value, allowed, label) {
@@ -144,6 +188,57 @@ export function selectSyncSettings(settings) {
   return selected
 }
 
+function dirtyTombstone(field) {
+  if (field === 'profiles') return {}
+  if (field === 'sources') return []
+  return undefined
+}
+
+/** Keep scrubbed remote metadata available while overlaying local values. */
+function overlayLocalValue(remote, local) {
+  if (local === undefined) return remote
+  if (Array.isArray(local)) {
+    const remoteArray = Array.isArray(remote) ? remote : []
+    const used = new Set()
+    const combined = remoteArray.map((entry, index) => {
+      const identity = entry && typeof entry === 'object' && (entry.name ?? entry.id)
+      const localIndex = identity
+        ? local.findIndex((candidate) => candidate && typeof candidate === 'object' && (candidate.name ?? candidate.id) === identity)
+        : index < local.length ? index : -1
+      if (localIndex < 0) return entry
+      used.add(localIndex)
+      return overlayLocalValue(entry, local[localIndex])
+    })
+    for (let index = 0; index < local.length; index += 1) {
+      if (!used.has(index)) combined.push(local[index])
+    }
+    return combined
+  }
+  if (!local || typeof local !== 'object') return local
+  if (isMarker(local)) return local
+  const remoteObject = remote && typeof remote === 'object' && !Array.isArray(remote) ? remote : {}
+  const out = { ...remoteObject }
+  for (const [key, value] of Object.entries(local)) {
+    assertAllowedKey(key)
+    out[key] = overlayLocalValue(remoteObject[key], value)
+  }
+  return out
+}
+
+export function overlaySyncShadow(shadow, current, dirtyFields = []) {
+  const combined = overlayLocalValue(selectSyncSettings(shadow), selectSyncSettings(current))
+  for (const field of dirtyFields) {
+    if (!SYNC_FIELDS.includes(field)) continue
+    if (Object.hasOwn(current, field)) combined[field] = current[field]
+    else {
+      const tombstone = dirtyTombstone(field)
+      if (tombstone === undefined) delete combined[field]
+      else combined[field] = tombstone
+    }
+  }
+  return combined
+}
+
 /** Reject anything suspicious that survived deterministic scrubbing. */
 export function assertSafeSyncPayload(value, key = '') {
   if (isMarker(value)) return
@@ -151,7 +246,10 @@ export function assertSafeSyncPayload(value, key = '') {
   if (CONTEXT_KEY.test(key)) throw new Error('Settings sync rejected context content.')
   if (typeof value === 'string') {
     const gitSshUrl = /^git@[\w.-]+:/.test(value)
-    if (CREDENTIAL_VALUE.test(value) || SECRET_ASSIGNMENT.test(value) || (!gitSshUrl && EMAIL_VALUE.test(value))) {
+    const decoded = decodeUrlComponent(value)
+    if (CREDENTIAL_VALUE.test(value) || CREDENTIAL_VALUE.test(decoded)
+      || SECRET_ASSIGNMENT.test(value) || SECRET_ASSIGNMENT.test(decoded)
+      || containsUrlCredential(value) || (!gitSshUrl && (EMAIL_VALUE.test(value) || EMAIL_VALUE.test(decoded)))) {
       throw new Error('Settings sync rejected a possible credential, personal identifier, or context value.')
     }
     return
@@ -179,7 +277,11 @@ export function assertSafeLocalSettings(value, key = '') {
     if (key.toLowerCase() === 'tokenenv' && ENV_NAME.test(value)) return
     if (value.toLowerCase().startsWith('keychain:')) return
     const gitSshUrl = /^git@[\w.-]+:/.test(value)
-    if (isSecretKey(key) || CONTEXT_KEY.test(key) || CREDENTIAL_VALUE.test(value) || SECRET_ASSIGNMENT.test(value) || (!gitSshUrl && EMAIL_VALUE.test(value))) {
+    const decoded = decodeUrlComponent(value)
+    if (isSecretKey(key) || CONTEXT_KEY.test(key)
+      || CREDENTIAL_VALUE.test(value) || CREDENTIAL_VALUE.test(decoded)
+      || SECRET_ASSIGNMENT.test(value) || SECRET_ASSIGNMENT.test(decoded)
+      || containsUrlCredential(value) || (!gitSshUrl && (EMAIL_VALUE.test(value) || EMAIL_VALUE.test(decoded)))) {
       throw new Error('Local settings rejected a possible plaintext credential, personal identifier, or context value.')
     }
     return
@@ -221,10 +323,13 @@ function mergeRemoteValue(local, remote) {
   }
   if (!remote || typeof remote !== 'object') return remote
 
-  const out = local && typeof local === 'object' && !Array.isArray(local) ? { ...local } : {}
+  // Remote objects are complete snapshots. Missing nested keys represent
+  // deletions; scrub markers explicitly preserve machine-local values.
+  const out = {}
+  const localObject = local && typeof local === 'object' && !Array.isArray(local) ? local : {}
   for (const [key, value] of Object.entries(remote)) {
     assertAllowedKey(key)
-    const merged = mergeRemoteValue(out[key], value)
+    const merged = mergeRemoteValue(localObject[key], value)
     if (merged !== undefined) out[key] = merged
   }
   return out
@@ -232,7 +337,15 @@ function mergeRemoteValue(local, remote) {
 
 /** Remote metadata wins, except scrubbed machine-local values stay local. */
 export function mergeSyncedSettings(local, remote) {
-  return mergeRemoteValue(local, remote)
+  const out = local && typeof local === 'object' && !Array.isArray(local) ? { ...local } : {}
+  if (!remote || typeof remote !== 'object' || Array.isArray(remote)) return mergeRemoteValue(local, remote)
+  for (const [key, value] of Object.entries(remote)) {
+    assertAllowedKey(key)
+    const merged = mergeRemoteValue(out[key], value)
+    if (merged === undefined) delete out[key]
+    else out[key] = merged
+  }
+  return out
 }
 
 function readJson(file) {
@@ -242,15 +355,22 @@ function readJson(file) {
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temporary = `${file}.tmp`
-  const { sources: _sources, ...diskValue } = value
+  const { sources: _sources, profiles: _profiles, ...diskValue } = value
   fs.writeFileSync(temporary, `${JSON.stringify(diskValue, null, 2)}\n`, { mode: 0o600 })
   fs.renameSync(temporary, file)
 }
 
-export function createSettingsSync({ authManager, supabaseClient, localSettingsPath }) {
+export function createSettingsSync({
+  authManager,
+  supabaseClient,
+  localSettingsPath,
+  getCurrentSettings,
+  operationTimeoutMs = 15_000,
+}) {
   const events = new EventEmitter()
   let state = { status: 'idle' }
   let operations = Promise.resolve()
+  let networkTail = Promise.resolve()
 
   const setState = (next) => {
     state = next
@@ -264,21 +384,43 @@ export function createSettingsSync({ authManager, supabaseClient, localSettingsP
   }
 
   function enqueue(operation) {
-    const result = operations.then(operation, operation)
+    const start = () => networkTail.then(operation)
+    const result = operations.then(start, start)
     operations = result.catch(() => {})
     return result
+  }
+
+  function withTimeout(operation) {
+    const controller = new AbortController()
+    const abortable = typeof operation?.abortSignal === 'function'
+      ? operation.abortSignal(controller.signal)
+      : operation
+    const settled = Promise.resolve(abortable)
+    networkTail = settled.catch(() => {})
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        controller.abort()
+        reject(new Error('Settings sync timed out.'))
+      }, operationTimeoutMs)
+      settled.then(
+        (value) => { clearTimeout(timer); resolve(value) },
+        (error) => { clearTimeout(timer); reject(error) },
+      )
+    })
   }
 
   async function pushNow(settings) {
     setState({ status: 'syncing' })
     try {
       const session = await requireSession()
-      const blob = prepareSyncPayload(settings)
-      const { data, error } = await supabaseClient
+      const dirtyFields = settings?._sync?.dirtyFields ?? []
+      const snapshot = overlaySyncShadow(settings?._sync?.shadow, settings, dirtyFields)
+      const blob = prepareSyncPayload(snapshot)
+      const { data, error } = await withTimeout(supabaseClient
         .from('user_settings')
         .upsert({ user_id: session.user.id, blob }, { onConflict: 'user_id' })
         .select('updated_at')
-        .single()
+        .single())
       if (error) throw error
       const updatedAt = data?.updated_at ?? null
       const current = readJson(localSettingsPath)
@@ -292,6 +434,7 @@ export function createSettingsSync({ authManager, supabaseClient, localSettingsP
           dirty: changedDuringPush ? persisted?._sync?.dirty === true : false,
           dirtyFields: changedDuringPush ? (persisted?._sync?.dirtyFields ?? []) : [],
           serverUpdatedAt: updatedAt,
+          shadow: blob,
         },
       }
       writeJson(localSettingsPath, next)
@@ -309,11 +452,11 @@ export function createSettingsSync({ authManager, supabaseClient, localSettingsP
       const session = await requireSession()
       const local = readJson(localSettingsPath)
       const current = currentSettings ?? local
-      const { data, error } = await supabaseClient
+      const { data, error } = await withTimeout(supabaseClient
         .from('user_settings')
         .select('blob, updated_at')
         .eq('user_id', session.user.id)
-        .maybeSingle()
+        .maybeSingle())
       if (error) throw error
       if (!data) {
         if (local?._sync?.dirty === true) return pushNow(current)
@@ -322,18 +465,37 @@ export function createSettingsSync({ authManager, supabaseClient, localSettingsP
       }
 
       const remote = prepareSyncPayload(data.blob ?? {})
-      if (local?._sync?.dirty === true) {
-        const mergedForPush = mergeSyncedSettings(current, remote)
-        for (const field of local._sync.dirtyFields ?? []) {
-          if (Object.hasOwn(current, field)) mergedForPush[field] = current[field]
+      const latestLocal = readJson(localSettingsPath)
+      const changedDuringPull = latestLocal?._sync?.localUpdatedAt !== local?._sync?.localUpdatedAt
+        || latestLocal?._sync?.dirty !== local?._sync?.dirty
+      const effectiveLocal = changedDuringPull ? latestLocal : local
+      const effectiveCurrent = changedDuringPull
+        ? (getCurrentSettings?.() ?? { ...current, ...selectSyncSettings(latestLocal), _sync: latestLocal._sync })
+        : current
+
+      if (effectiveLocal?._sync?.dirty === true) {
+        const mergedForPush = mergeSyncedSettings(effectiveCurrent, remote)
+        for (const field of effectiveLocal._sync.dirtyFields ?? []) {
+          if (Object.hasOwn(effectiveCurrent, field)) mergedForPush[field] = effectiveCurrent[field]
+          else {
+            const tombstone = dirtyTombstone(field)
+            if (tombstone === undefined) delete mergedForPush[field]
+            else mergedForPush[field] = tombstone
+          }
         }
-        mergedForPush._sync = local._sync
+        mergedForPush._sync = { ...effectiveLocal._sync, shadow: remote }
         return pushNow(mergedForPush)
       }
 
-      const localPayload = selectSyncSettings(current)
-      const merged = mergeSyncedSettings(current, remote)
-      merged._sync = { ...(merged._sync ?? {}), dirty: false, dirtyFields: [], serverUpdatedAt: data.updated_at }
+      const localPayload = selectSyncSettings(effectiveCurrent)
+      const merged = mergeSyncedSettings(effectiveCurrent, remote)
+      merged._sync = {
+        ...(merged._sync ?? {}),
+        dirty: false,
+        dirtyFields: [],
+        serverUpdatedAt: data.updated_at,
+        shadow: remote,
+      }
       const overwritten = Object.keys(localPayload).length > 0
         && !isDeepStrictEqual(localPayload, selectSyncSettings(merged))
       writeJson(localSettingsPath, merged)

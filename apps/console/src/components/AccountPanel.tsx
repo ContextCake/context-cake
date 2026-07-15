@@ -83,7 +83,7 @@ export function AccountPanel() {
         setBusy(false)
         setPendingProvider(null)
         setError('Sign-in wasn’t completed. You can try again.')
-      }, 2 * 60 * 1000)
+      }, 10 * 60 * 1000)
     } catch (err) {
       setBusy(false)
       setPendingProvider(null)

@@ -8,9 +8,10 @@
 # Key rotation: revoke in the Apple Developer portal, reissue, replace these
 # secrets. Keys never live in the repository.
 #
-# Without the secrets the workflow still builds (unsigned) and uploads the
-# artifacts to the run for inspection, but it will NOT create a GitHub
-# Release — unnotarized builds are never distributed (distribution spec §7).
+# With public Supabase configuration but without the complete Apple signing
+# credential set, the workflow builds unsigned inspection artifacts but does
+# NOT create a GitHub Release. Missing Supabase configuration fails packaging;
+# unnotarized builds are never distributed (distribution spec §7).
 name: App Release
 
 on:
@@ -57,9 +58,14 @@ jobs:
         id: creds
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          if [ -n "$CSC_LINK" ] && [ -n "$APPLE_API_KEY" ]; then
+          if [ -n "$CSC_LINK" ] && [ -n "$CSC_KEY_PASSWORD" ] \
+            && [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_KEY_ID" ] \
+            && [ -n "$APPLE_API_ISSUER" ]; then
             echo "signed=true" >> "$GITHUB_OUTPUT"
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"

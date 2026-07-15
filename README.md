@@ -84,8 +84,8 @@ See [`apps/console/README.md`](apps/console/README.md) for the full tour.
 
 ## Validation
 
-The merge gate runs the root engine tests plus the independent console and site
-builds:
+The merge gate runs the root engine tests plus the independent console, site, and
+desktop checks:
 
 ```bash
 npm test
@@ -93,14 +93,25 @@ npm test
 cd apps/console
 npm ci
 npm run typecheck
-npm run build
+npm test
 
 cd ../site
 npm ci
 npm run build
+
+cd ../console
+npm run build:live
+
+cd ../desktop
+npm ci
+npm run test:navigation
+npm test
+npm run smoke
+npm run smoke:bootfail
 ```
 
-The root stays dependency-free. Only `apps/console/` and `apps/site/` run `npm ci`.
+The root stays dependency-free. `apps/console/`, `apps/site/`, and `apps/desktop/`
+install from their own lockfiles.
 
 ## Release surfaces
 
@@ -109,6 +120,7 @@ state across all of them.
 
 - `apps/site/` = marketing site, docs, and future demo surface
 - `apps/console/` = application UI on its own Cloudflare Pages project
+- `apps/desktop/` = signed and notarized Mac application published from `app-v*` tags
 - repo root = engine / MCP / CLI, which is not a hosted app by default
 
 See [`docs/go-live.md`](docs/go-live.md) for the release contract and the exact

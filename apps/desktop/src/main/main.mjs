@@ -8,7 +8,12 @@ import { buildMenu } from './menu.mjs'
 import { configDir, manifestPath, settingsPath } from './paths.mjs'
 import { markSettingsDirty, readSettings, writeSettings } from './settings.mjs'
 import { createAuthManager } from './auth.mjs'
-import { assertSafeLocalSettings, createSettingsSync, selectSyncSettings } from './settings-sync.mjs'
+import {
+  assertSafeLocalSettings,
+  createSettingsSync,
+  overlaySyncShadow,
+  selectSyncSettings,
+} from './settings-sync.mjs'
 import { loadSupabaseConfig } from './supabase-config.mjs'
 import { initUpdater } from './updater.mjs'
 import { isEngineOrigin } from './navigation.mjs'
@@ -100,13 +105,17 @@ function readManifestConfig() {
 
 function settingsSnapshot(settings = readSettings()) {
   const manifest = readManifestConfig()
-  const { sources: _storedSources, ...preferences } = settings
-  return {
+  const { sources: _storedSources, profiles: _storedProfiles, ...preferences } = settings
+  const local = {
     ...preferences,
     ...(Array.isArray(manifest.layers) ? { sources: manifest.layers } : {}),
     ...(manifest.profiles && typeof manifest.profiles === 'object' && !Array.isArray(manifest.profiles)
       ? { profiles: manifest.profiles }
       : {}),
+  }
+  return {
+    ...local,
+    ...overlaySyncShadow(settings?._sync?.shadow, local, settings?._sync?.dirtyFields),
   }
 }
 
@@ -167,6 +176,20 @@ function publishPulledSettings(pulled) {
   if (!pulled) return
   applyPulledManifest(pulled.settings)
   sendToRenderer('settings:pulled', selectSyncSettings(pulled.settings))
+  if (app.isReady()) {
+    installApplicationMenu()
+    initUpdater()
+  }
+}
+
+function installApplicationMenu() {
+  Menu.setApplicationMenu(buildMenu(
+    () => win,
+    () => {
+      initUpdater()
+      if (currentAuthState().signedIn) scheduleSettingsPush()
+    },
+  ))
 }
 
 function startManifestSync() {
@@ -300,6 +323,7 @@ async function initializeAccounts() {
     authManager,
     supabaseClient: authManager.getClient(),
     localSettingsPath: settingsPath(),
+    getCurrentSettings: () => settingsSnapshot(),
   })
 
   let wasSignedIn = currentAuthState().signedIn
@@ -406,12 +430,7 @@ app.on('open-url', (event, url) => {
 app.whenReady().then(async () => {
   await initializeAccounts()
   await createWindow()
-  Menu.setApplicationMenu(buildMenu(
-    () => win,
-    () => {
-      if (currentAuthState().signedIn) scheduleSettingsPush()
-    },
-  ))
+  installApplicationMenu()
   initUpdater()
   if (currentAuthState().signedIn) await syncAfterSignIn()
   if (process.env.CC_SMOKE === '1') await smokeCheck()

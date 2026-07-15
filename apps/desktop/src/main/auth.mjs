@@ -6,7 +6,7 @@ import { createClient } from '@supabase/supabase-js'
 
 const CALLBACK_URL = 'contextcake://auth/callback'
 const OAUTH_STATE_KEY = 'contextcake.oauth.state'
-const OAUTH_STATE_TTL_MS = 2 * 60 * 1000
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000
 
 /**
  * Supabase needs one storage adapter for both the PKCE verifier and the
@@ -236,10 +236,14 @@ export function createAuthManager({
     const expected = Buffer.from(expectedState)
     const received = Buffer.from(receivedState)
     if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
+      storage.removeItem(OAUTH_STATE_KEY)
       throw new Error('Sign-in callback state did not match. Please try again.')
     }
     const code = url.searchParams.get('code')
-    if (!code) throw new Error('Sign-in did not return an authorization code. Please try again.')
+    if (!code) {
+      storage.removeItem(OAUTH_STATE_KEY)
+      throw new Error('Sign-in did not return an authorization code. Please try again.')
+    }
 
     storage.removeItem(OAUTH_STATE_KEY)
     const { data, error } = await client.auth.exchangeCodeForSession(code)

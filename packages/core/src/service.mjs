@@ -122,10 +122,16 @@ function safeRealpath(p) {
 }
 
 // Constant-time bearer comparison (hash both sides so lengths never diverge).
+// Parsed without a regex on purpose: `/^Bearer\s+(.+)$/` backtracks
+// polynomially (js/polynomial-redos) on an attacker-supplied header full of
+// whitespace. This single-pass slice/trim is linear.
 function bearerMatches(header, expected) {
-  const match = /^Bearer\s+(.+)$/i.exec(header ?? "");
-  if (!match) return false;
-  const presented = createHash("sha256").update(match[1]).digest();
+  const h = header ?? "";
+  if (h.slice(0, 6).toLowerCase() !== "bearer") return false;
+  const rest = h.slice(6);
+  const token = rest.trim();
+  if (!token || rest.length === token.length) return false; // require ≥1 separator space
+  const presented = createHash("sha256").update(token).digest();
   const wanted = createHash("sha256").update(String(expected)).digest();
   return timingSafeEqual(presented, wanted);
 }

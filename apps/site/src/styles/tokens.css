@@ -4,6 +4,17 @@
  * thing everywhere (hero bands, docs samples, diagrams, OG images). */
 
 :root {
+  /* Warm light surfaces — shared with the Console's default theme. */
+  --cc-page: #f4f3ea;
+  --cc-paper: #fffdf6;
+  --cc-ink: #151917;
+  --cc-ink-body: #313a35;
+  --cc-ink-muted: #69716b;
+  --cc-paper-line: rgba(61, 76, 68, 0.12);
+  --cc-paper-line-strong: rgba(61, 76, 68, 0.2);
+  --cc-paper-soft: rgba(21, 25, 23, 0.055);
+  --cc-paper-shadow: 0 18px 55px rgba(47, 44, 35, 0.08);
+
   /* Surfaces */
   --cc-canvas: #10110f;
   --cc-surface: rgba(30, 31, 28, 0.78);

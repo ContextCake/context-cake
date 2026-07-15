@@ -1,0 +1,76 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18212B"/>
+      <stop offset="1" stop-color="#0E141B"/>
+    </linearGradient>
+    <linearGradient id="personal" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#E6BA62"/>
+      <stop offset="1" stop-color="#C89539"/>
+    </linearGradient>
+    <linearGradient id="team" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#9BCCB2"/>
+      <stop offset="1" stop-color="#75AE91"/>
+    </linearGradient>
+    <linearGradient id="company" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#9CC5D8"/>
+      <stop offset="1" stop-color="#739FB8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#05080C" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" rx="24" fill="url(#background)"/>
+  <path d="M0 126H1200M0 252H1200M0 378H1200M0 504H1200" stroke="#B4C5D2" stroke-opacity="0.045"/>
+  <path d="M120 0V630M240 0V630M360 0V630M480 0V630M600 0V630M720 0V630M840 0V630M960 0V630M1080 0V630" stroke="#B4C5D2" stroke-opacity="0.035"/>
+  <rect x="1" y="1" width="1198" height="628" rx="23" stroke="#D9E5EE" stroke-opacity="0.13" stroke-width="2"/>
+
+  <!-- Current ContextCake mark -->
+  <g filter="url(#shadow)">
+    <rect x="74" y="78" width="112" height="112" rx="30" fill="#242622"/>
+    <rect x="105" y="103" width="50" height="15" rx="7.5" fill="url(#personal)"/>
+    <rect x="97" y="123" width="66" height="17" rx="8.5" fill="url(#team)"/>
+    <rect x="88" y="145" width="84" height="19" rx="9.5" fill="url(#company)"/>
+  </g>
+
+  <text x="216" y="120" fill="#F7FAFC" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="44" font-weight="700" letter-spacing="-1.5">ContextCake</text>
+  <text x="218" y="159" fill="#B6C4D0" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" font-weight="500">One sourced answer from the context your team already has.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="74" y="246" width="438" height="274" rx="20" fill="#111923" stroke="#D6E3ED" stroke-opacity="0.14"/>
+    <text x="106" y="287" fill="#8FA2B3" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" font-weight="700" letter-spacing="1.6">CASCADE RESOLUTION</text>
+    <text x="106" y="329" fill="#F7FAFC" font-family="'SFMono-Regular', Consolas, monospace" font-size="21" font-weight="700">decisions/primary-db</text>
+    <line x1="106" y1="356" x2="480" y2="356" stroke="#D6E3ED" stroke-opacity="0.12"/>
+
+    <rect x="106" y="379" width="13" height="13" rx="4" fill="#E6BA62"/>
+    <text x="136" y="392" fill="#EEF4F8" font-family="'SFMono-Regular', Consolas, monospace" font-size="17" font-weight="600">Choice</text>
+    <text x="425" y="392" fill="#E6BA62" text-anchor="end" font-family="'SFMono-Regular', Consolas, monospace" font-size="15" font-weight="700">personal</text>
+
+    <rect x="106" y="425" width="13" height="13" rx="4" fill="#9BCCB2"/>
+    <text x="136" y="438" fill="#EEF4F8" font-family="'SFMono-Regular', Consolas, monospace" font-size="17" font-weight="600">Rationale</text>
+    <text x="425" y="438" fill="#9BCCB2" text-anchor="end" font-family="'SFMono-Regular', Consolas, monospace" font-size="15" font-weight="700">team</text>
+
+    <rect x="106" y="471" width="13" height="13" rx="4" fill="#9CC5D8"/>
+    <text x="136" y="484" fill="#EEF4F8" font-family="'SFMono-Regular', Consolas, monospace" font-size="17" font-weight="600">Ownership</text>
+    <text x="425" y="484" fill="#9CC5D8" text-anchor="end" font-family="'SFMono-Regular', Consolas, monospace" font-size="15" font-weight="700">company</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="574" y="184" width="552" height="336" rx="20" fill="#111923" stroke="#D6E3ED" stroke-opacity="0.14"/>
+    <text x="612" y="227" fill="#8FA2B3" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" font-weight="700" letter-spacing="1.6">THE LAYER CAKE</text>
+
+    <rect x="612" y="264" width="220" height="57" rx="16" fill="url(#personal)"/>
+    <text x="1090" y="298" fill="#E6BA62" text-anchor="end" font-family="'SFMono-Regular', Consolas, monospace" font-size="16" font-weight="700">personal · 3</text>
+
+    <rect x="612" y="331" width="300" height="63" rx="17" fill="url(#team)"/>
+    <text x="1090" y="368" fill="#9BCCB2" text-anchor="end" font-family="'SFMono-Regular', Consolas, monospace" font-size="16" font-weight="700">team · 2</text>
+
+    <rect x="612" y="404" width="370" height="69" rx="18" fill="url(#company)"/>
+    <text x="1090" y="445" fill="#9CC5D8" text-anchor="end" font-family="'SFMono-Regular', Consolas, monospace" font-size="16" font-weight="700">company · 0</text>
+  </g>
+
+  <rect x="0" y="603" width="400" height="27" fill="url(#personal)"/>
+  <rect x="400" y="603" width="400" height="27" fill="url(#team)"/>
+  <rect x="800" y="603" width="400" height="27" fill="url(#company)"/>
+</svg>

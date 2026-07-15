@@ -8,6 +8,11 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'ContextCake',
+			favicon: '/favicon.svg?v=stacked-1',
+			logo: {
+				src: '../../assets/brand/contextcake-app-icon.svg',
+				alt: 'ContextCake app icon',
+			},
 			description:
 				'Working context for AI teams. Keep policy, team practice, and local judgment in the same answer.',
 			// The marketing 404 (src/pages/404.astro) owns /404 — don't inject Starlight's.

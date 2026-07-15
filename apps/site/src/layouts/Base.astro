@@ -451,6 +451,24 @@ const footerColumns = [
 	/* Paper marketing variant: the Console's warm default theme, carried into
 	   the homepage without changing the dark install/docs-adjacent pages. */
 	:global(body.theme-paper) {
+		/* Re-map the semantic dark tokens too. Individual page components use
+		   these tokens directly, so a surface-only override leaves pale text
+		   stranded on a light background. */
+		--cc-canvas: #f4f3ea;
+		--cc-surface: rgba(255, 253, 246, 0.9);
+		--cc-surface-solid: #fffdf6;
+		--cc-surface-raised: #fffdf6;
+		--cc-surface-soft: rgba(21, 25, 23, 0.055);
+		--cc-border: rgba(61, 76, 68, 0.12);
+		--cc-border-strong: rgba(61, 76, 68, 0.2);
+		--cc-text: #151917;
+		--cc-text-body: #313a35;
+		--cc-text-muted: #56615a;
+		--cc-text-faint: #69716b;
+		--cc-cta: #151917;
+		--cc-cta-hover: #313a35;
+		--cc-on-cta: #fffdf6;
+		--cc-shadow-panel: 0 18px 55px rgba(47, 44, 35, 0.08);
 		background: var(--cc-page);
 		color: var(--cc-ink-body);
 	}

@@ -47,7 +47,10 @@ returns immediately without calling `fetch`.
 The packaged Mac app has a separate native updater. When **Check for Updates
 Automatically** is enabled, it contacts the ContextCake GitHub Releases feed at
 startup and every six hours, sending the version and platform information needed to
-select an artifact. If a newer app release exists, it downloads the signed update in
+select an artifact. electron-updater also sends a stable random rollout identifier in
+the `x-user-staging-id` header and stores it as `.updaterId` in ContextCake's local
+application-support directory. The identifier coordinates staged rollouts; it is not
+an account ID. If a newer app release exists, the updater downloads the signed update in
 the background and installs it when the app quits. Turn off the native menu checkbox
 to prevent automatic checks; the manual **Check for Updates…** command contacts GitHub
 only when you choose it.
@@ -61,10 +64,14 @@ local application settings file.
 
 ## Optional desktop accounts
 
+> **Availability:** Accounts are part of the next signed ContextCake for Mac release.
+> They are not considered live until the packaged GitHub flow and deletion/sync
+> acceptance checks pass.
+
 ContextCake for Mac works fully while signed out. Signing in adds settings sync; it
 does not gate the local engine, sources, profiles, resolve tools, or MCP server.
 
-When you sign in with GitHub or Google, authentication runs in your system browser
+When you sign in with GitHub, authentication runs in your system browser
 through Supabase OAuth with PKCE. The desktop app persists the resulting session only
 when OS-keychain-backed encryption is available; otherwise the session stays in memory
 for that run. Raw tokens are never exposed to the Console renderer or written to logs.

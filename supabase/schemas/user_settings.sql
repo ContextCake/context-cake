@@ -1,7 +1,9 @@
 create table public.user_settings (
   user_id uuid primary key references auth.users (id) on delete cascade,
   blob jsonb not null default '{}'::jsonb,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint user_settings_blob_size_check
+    check (octet_length(blob::text) <= 1000000)
 );
 
 alter table public.user_settings enable row level security;

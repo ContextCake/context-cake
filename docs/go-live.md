@@ -85,8 +85,8 @@ Do not answer "yes" without naming the surface and the release state.
 ### `apps/desktop/`
 
 1. Merge the PR to `main` and verify desktop tests plus both smoke checks.
-2. Apply the reviewed Supabase migration, run database advisors, enable GitHub and
-   Google providers, and allow `contextcake://auth/callback`.
+2. Apply the reviewed Supabase migrations, run database advisors, keep anonymous
+   sign-ins disabled, enable GitHub, and allow `contextcake://auth/callback`.
 3. Add the public `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` release secrets;
    confirm the key is publishable/legacy-anon, never secret/service-role.
 4. Set `apps/desktop/package.json` to the release version and push the matching

@@ -449,6 +449,16 @@ export function createEngineService({
     }
 
     manifest.layers.push(layer);
+    // A synced source whose machine-local path/command was scrubbed waits in
+    // pendingSources. Configuring that source locally promotes it to a runnable
+    // layer without leaving a duplicate metadata-only record behind.
+    if (Array.isArray(manifest.pendingSources)) {
+      manifest.pendingSources = manifest.pendingSources.filter((pending) => pending?.name !== name);
+      if (manifest.pendingSources.length === 0) {
+        delete manifest.pendingSources;
+        delete manifest.pendingSourcesOwnerUserId;
+      }
+    }
     writeManifest(manifest);
     reload();
     return { ok: true, added: name };
@@ -458,8 +468,18 @@ export function createEngineService({
     if (!name) throw httpError(400, "Provide ?name=");
     const manifest = readManifest();
     const before = (manifest.layers ?? []).length;
+    const pendingBefore = (manifest.pendingSources ?? []).length;
     manifest.layers = (manifest.layers ?? []).filter((l) => l.name !== name);
-    if (manifest.layers.length === before) throw httpError(404, `No source named "${name}"`);
+    if (Array.isArray(manifest.pendingSources)) {
+      manifest.pendingSources = manifest.pendingSources.filter((pending) => pending?.name !== name);
+      if (manifest.pendingSources.length === 0) {
+        delete manifest.pendingSources;
+        delete manifest.pendingSourcesOwnerUserId;
+      }
+    }
+    if (manifest.layers.length === before && (manifest.pendingSources ?? []).length === pendingBefore) {
+      throw httpError(404, `No source named "${name}"`);
+    }
     writeManifest(manifest);
     reload();
     return { ok: true, removed: name };

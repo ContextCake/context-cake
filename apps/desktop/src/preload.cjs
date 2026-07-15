@@ -29,6 +29,7 @@ function subscribe(channel, cb) {
 contextBridge.exposeInMainWorld('__CC_AUTH', {
   getState: () => ipcRenderer.invoke('auth:get-state'),
   signIn: (provider) => ipcRenderer.invoke('auth:sign-in', provider),
+  cancelSignIn: () => ipcRenderer.invoke('auth:cancel-sign-in'),
   signOut: () => ipcRenderer.invoke('auth:sign-out'),
   deleteAccount: () => ipcRenderer.invoke('auth:delete-account'),
   onSessionChanged: (cb) => subscribe('auth:session-changed', cb),

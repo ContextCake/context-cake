@@ -186,9 +186,8 @@ export function createAuthManager({
     return publicState(true, currentSession, notice)
   }
 
-  async function signIn(provider) {
+  async function signIn() {
     if (!client) throw new Error('Account sign-in is not configured in this build.')
-    if (provider !== 'github' && provider !== 'google') throw new Error('Unsupported sign-in provider.')
 
     const pending = (() => {
       try { return JSON.parse(storage.getItem(OAUTH_STATE_KEY)) } catch { return null }
@@ -201,7 +200,7 @@ export function createAuthManager({
     const redirectTo = `${CALLBACK_URL}?state=${encodeURIComponent(state)}`
     try {
       const { data, error } = await client.auth.signInWithOAuth({
-        provider,
+        provider: 'github',
         options: { redirectTo, skipBrowserRedirect: true },
       })
       if (error) throw error
@@ -229,14 +228,20 @@ export function createAuthManager({
     try { pending = JSON.parse(storage.getItem(OAUTH_STATE_KEY)) } catch { pending = null }
     const expectedState = pending?.value
     const receivedState = url.searchParams.get('state')
-    if (!expectedState || !receivedState || !Number.isFinite(pending.createdAt) || Date.now() - pending.createdAt >= OAUTH_STATE_TTL_MS) {
+    if (!expectedState || !Number.isFinite(pending.createdAt)) {
       storage.removeItem(OAUTH_STATE_KEY)
+      throw new Error('Sign-in callback state is missing or expired. Please try again.')
+    }
+    if (Date.now() - pending.createdAt >= OAUTH_STATE_TTL_MS) {
+      storage.removeItem(OAUTH_STATE_KEY)
+      throw new Error('Sign-in callback state is missing or expired. Please try again.')
+    }
+    if (!receivedState) {
       throw new Error('Sign-in callback state is missing or expired. Please try again.')
     }
     const expected = Buffer.from(expectedState)
     const received = Buffer.from(receivedState)
     if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
-      storage.removeItem(OAUTH_STATE_KEY)
       throw new Error('Sign-in callback state did not match. Please try again.')
     }
     const code = url.searchParams.get('code')
@@ -258,6 +263,11 @@ export function createAuthManager({
 
   async function getSession() {
     return currentSession
+  }
+
+  function cancelSignIn() {
+    storage.removeItem(OAUTH_STATE_KEY)
+    return publicState(available, currentSession, notice)
   }
 
   async function signOut() {
@@ -290,10 +300,11 @@ export function createAuthManager({
 
   return {
     initialize,
-    signInWithGitHub: () => signIn('github'),
-    signInWithGoogle: () => signIn('google'),
+    signInWithGitHub: signIn,
+    cancelSignIn,
     signOut,
     getSession,
+    getUserId: () => currentSession?.user?.id ?? null,
     getState: () => publicState(available, currentSession, notice),
     deleteAccount,
     handleDeepLink,

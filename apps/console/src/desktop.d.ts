@@ -29,7 +29,8 @@ declare global {
     }
     __CC_AUTH?: {
       getState(): Promise<DesktopAuthState>
-      signIn(provider: 'github' | 'google'): Promise<{ opened: boolean }>
+      signIn(provider: 'github'): Promise<{ opened: boolean }>
+      cancelSignIn(): Promise<DesktopAuthState>
       signOut(): Promise<DesktopAuthState>
       deleteAccount(): Promise<DesktopAuthState>
       onSessionChanged(cb: (state: DesktopAuthState) => void): () => void

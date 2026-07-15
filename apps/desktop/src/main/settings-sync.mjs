@@ -8,11 +8,12 @@ const SCRUBBED = new Set(['execution', 'path', 'secret'])
 const SECRET_KEY = /(?:^|_)(?:password|passwd|secret|token|api_?key|authorization|cookie|credential)(?:$|_)/i
 const CONTEXT_KEY = /^(?:content|contents|body|document|documents|knowledge|markdown|payload|raw|resolved|sections|text)$/i
 const CREDENTIAL_VALUE = /(?:^Bearer\s+|\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bglpat-[A-Za-z0-9_-]{20,}\b|\bnpm_[A-Za-z0-9]{20,}\b|\bxox[baprs]-[A-Za-z0-9-]{20,}\b|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b)/
-const SECRET_ASSIGNMENT = /(?:^|[\s?&#-])(?:access[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|secret|password|credential|authorization|signature|sig)\s*=/i
+const SECRET_ASSIGNMENT = /(?:^|[\s?&#:_'"-])(?:access[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|secret|password|credential|authorization|signature|sig)\s*(?:=|:)/i
 const EMAIL_VALUE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
 const MAX_SYNC_JSON = 1_000_000
+const MAX_DECODE_PASSES = 8
 const SOURCE_KEYS = new Set([
   'args', 'cache', 'command', 'credential', 'kind', 'keychain', 'level', 'name',
   'origin', 'path', 'ref', 'repo', 'source', 'subdir', 'tokenEnv',
@@ -56,13 +57,19 @@ function isAbsolutePath(value) {
 
 function decodeUrlComponent(value) {
   let decoded = value
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_DECODE_PASSES; attempt += 1) {
+    const hasEncodedOctet = /%[0-9A-Fa-f]{2}/.test(decoded)
+    if (!hasEncodedOctet) return decoded
+    if (/%(?![0-9A-Fa-f]{2})/.test(decoded)) {
+      throw new Error('Settings sync rejected a malformed encoded value.')
+    }
     try {
-      const next = decodeURIComponent(decoded)
-      if (next === decoded) break
-      decoded = next
-    } catch { break }
+      decoded = decodeURIComponent(decoded)
+    } catch {
+      throw new Error('Settings sync rejected a malformed encoded value.')
+    }
   }
+  if (/%[0-9A-Fa-f]{2}/.test(decoded)) throw new Error('Settings sync rejected an excessively encoded value.')
   return decoded
 }
 
@@ -226,6 +233,11 @@ function overlayLocalValue(remote, local) {
 }
 
 export function overlaySyncShadow(shadow, current, dirtyFields = []) {
+  const ownerUserId = current?._sync?.ownerUserId
+  const currentUserId = current?._sync?.currentUserId
+  if (currentUserId && ownerUserId !== currentUserId) {
+    return selectSyncSettings(current)
+  }
   const combined = overlayLocalValue(selectSyncSettings(shadow), selectSyncSettings(current))
   for (const field of dirtyFields) {
     if (!SYNC_FIELDS.includes(field)) continue
@@ -237,6 +249,33 @@ export function overlaySyncShadow(shadow, current, dirtyFields = []) {
     }
   }
   return combined
+}
+
+/** Combine locally runnable layers with synced metadata that still needs setup. */
+export function combineManifestSources(
+  layers = [],
+  pendingSources = [],
+  pendingOwnerUserId = null,
+  currentUserId = null,
+) {
+  const ownedPendingSources = currentUserId && pendingOwnerUserId !== currentUserId
+    ? []
+    : pendingSources
+  return overlayLocalValue(
+    Array.isArray(ownedPendingSources) ? ownedPendingSources : [],
+    Array.isArray(layers) ? layers : [],
+  )
+}
+
+/** Include remotely derived profiles only for the account that pulled them. */
+export function selectManifestProfiles(
+  profiles,
+  profilesOwnerUserId = null,
+  currentUserId = null,
+) {
+  if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) return undefined
+  if (currentUserId && profilesOwnerUserId && profilesOwnerUserId !== currentUserId) return undefined
+  return profiles
 }
 
 /** Reject anything suspicious that survived deterministic scrubbing. */
@@ -414,7 +453,10 @@ export function createSettingsSync({
     try {
       const session = await requireSession()
       const dirtyFields = settings?._sync?.dirtyFields ?? []
-      const snapshot = overlaySyncShadow(settings?._sync?.shadow, settings, dirtyFields)
+      const snapshot = overlaySyncShadow(settings?._sync?.shadow, {
+        ...settings,
+        _sync: { ...(settings?._sync ?? {}), currentUserId: session.user.id },
+      }, dirtyFields)
       const blob = prepareSyncPayload(snapshot)
       const { data, error } = await withTimeout(supabaseClient
         .from('user_settings')
@@ -433,6 +475,7 @@ export function createSettingsSync({
           ...(persisted?._sync ?? {}),
           dirty: changedDuringPush ? persisted?._sync?.dirty === true : false,
           dirtyFields: changedDuringPush ? (persisted?._sync?.dirtyFields ?? []) : [],
+          ownerUserId: session.user.id,
           serverUpdatedAt: updatedAt,
           shadow: blob,
         },
@@ -459,7 +502,7 @@ export function createSettingsSync({
         .maybeSingle())
       if (error) throw error
       if (!data) {
-        if (local?._sync?.dirty === true) return pushNow(current)
+        if (local?._sync?.ownerUserId === session.user.id && local?._sync?.dirty === true) return pushNow(current)
         setState({ status: 'idle' })
         return null
       }
@@ -473,7 +516,7 @@ export function createSettingsSync({
         ? (getCurrentSettings?.() ?? { ...current, ...selectSyncSettings(latestLocal), _sync: latestLocal._sync })
         : current
 
-      if (effectiveLocal?._sync?.dirty === true) {
+      if (effectiveLocal?._sync?.ownerUserId === session.user.id && effectiveLocal?._sync?.dirty === true) {
         const mergedForPush = mergeSyncedSettings(effectiveCurrent, remote)
         for (const field of effectiveLocal._sync.dirtyFields ?? []) {
           if (Object.hasOwn(effectiveCurrent, field)) mergedForPush[field] = effectiveCurrent[field]
@@ -493,6 +536,7 @@ export function createSettingsSync({
         ...(merged._sync ?? {}),
         dirty: false,
         dirtyFields: [],
+        ownerUserId: session.user.id,
         serverUpdatedAt: data.updated_at,
         shadow: remote,
       }

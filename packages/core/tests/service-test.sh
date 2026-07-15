@@ -36,7 +36,7 @@ printf -- '---\ntype: note\ntitle: Note\nupdated: 2026-07-01\n---\n\n# Note\n\n#
 printf -- '---\ntype: note\ntitle: N2\n---\n\n# N2\n\n## S {#s}\n\nx.\n' > "$TMP/b2/n.md"
 printf '<!doctype html><title>Console</title><div id=root>CONSOLE_OK</div>\n' > "$TMP/cdist/index.html"
 cat > "$TMP/manifest.json" <<EOF
-{ "layers": [ { "name": "t", "level": 1, "path": "$TMP/bundle" } ] }
+{ "layers": [ { "name": "t", "level": 1, "path": "$TMP/bundle" } ], "pendingSources": [ { "name": "b2", "level": 2, "path": { "__scrubbed": "path" } } ], "pendingSourcesOwnerUserId": "user-1" }
 EOF
 cp "$TMP/manifest.json" "$TMP/manifest2.json"
 
@@ -94,6 +94,8 @@ code 403 "$(C -X POST "${AUTH[@]}" -H 'Origin: http://evil.com' -d '{}' "$BASE/a
 code 403 "$(C -X POST "${AUTH[@]}" -H 'Host: evil.com' -d '{}' "$BASE/api/sources")" "non-loopback Host blocked in the service"
 code 401 "$(C -X POST -d '{}' "$BASE/api/sources")" "mutation without token rejected"
 code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"local\",\"name\":\"b2\",\"level\":2,\"path\":\"$TMP/b2\"}" "$BASE/api/sources")" "add local source"
+grep -q 'pendingSources' "$TMP/manifest.json" && fail "configured source left pending metadata" || pass "configured source promoted out of pending metadata"
+grep -q 'pendingSourcesOwnerUserId' "$TMP/manifest.json" && fail "configured source left pending owner metadata" || pass "configured source removed pending owner metadata"
 N="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{process.stdout.write(String(JSON.parse(s).totals.sources))})')"
 [ "$N" = "2" ] && pass "reload picked up the new source" || fail "reload after add (sources=$N)"
 code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=b2")" "remove source"

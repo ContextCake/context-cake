@@ -6,11 +6,14 @@ import test from 'node:test'
 import {
   assertSafeLocalSettings,
   assertSafeSyncPayload,
+  combineManifestSources,
   createSettingsSync,
   mergeSyncedSettings,
   overlaySyncShadow,
   prepareSyncPayload,
   scrubSettings,
+  selectManifestProfiles,
+  selectSyncSettings,
 } from '../src/main/settings-sync.mjs'
 
 test('scrubSettings recursively removes absolute paths and indirect secrets', () => {
@@ -101,6 +104,185 @@ test('embedded paths and path-shaped object keys are scrubbed or rejected', () =
     () => prepareSyncPayload({ sources: [{ name: 'team', origin: 'https://example.com/#token%3Dplainsecret' }] }),
     /possible credential/,
   )
+  assert.throws(
+    () => prepareSyncPayload({ sources: [{ name: 'team', repo: 'api_key%25253Dsupersecret' }] }),
+    /possible credential/,
+  )
+  assert.throws(
+    () => assertSafeLocalSettings({ sources: [{ name: 'team', repo: 'token%25253Dghp_abcdefghijklmnopqrstuvwxyz1234567890' }] }),
+    /plaintext/,
+  )
+  for (const malformed of [
+    'api_key%3Dsupersecret%ZZ',
+    'token%3Dghp_abcdefghijklmnopqrstuvwxyz1234567890%ZZ',
+    'https://example.com/?api_key%3Dsupersecret%ZZ',
+  ]) {
+    assert.throws(
+      () => prepareSyncPayload({ sources: [{ name: 'team', repo: malformed }] }),
+      /malformed encoded value/,
+    )
+    assert.throws(
+      () => assertSafeLocalSettings({ sources: [{ name: 'team', repo: malformed }] }),
+      /malformed encoded value/,
+    )
+  }
+  assert.deepEqual(prepareSyncPayload({ sources: [{ name: 'team 100% ready' }] }), {
+    sources: [{ name: 'team 100% ready' }],
+  })
+  assert.throws(
+    () => prepareSyncPayload({ sources: [{ name: 'team', repo: 'prefix_api_key=supersecret' }] }),
+    /possible credential/,
+  )
+  const excessivelyEncoded = Array.from({ length: 10 }).reduce((value) => encodeURIComponent(value), 'token=secret')
+  assert.throws(
+    () => prepareSyncPayload({ sources: [{ name: 'team', repo: excessivelyEncoded }] }),
+    /excessively encoded/,
+  )
+})
+
+test('pending source metadata survives an unrelated local source addition', () => {
+  const pending = [{ name: 'company', level: 0, source: 'mcp', command: { __scrubbed: 'execution' } }]
+  const local = [{ name: 'personal', level: 3, path: '/Users/local/personal' }]
+  assert.deepEqual(combineManifestSources(local, pending), [...pending, ...local])
+
+  const configured = [{ name: 'company', level: 0, source: 'mcp', command: 'node', args: ['./company.mjs'] }]
+  assert.deepEqual(combineManifestSources(configured, pending), configured)
+  assert.deepEqual(combineManifestSources(local, pending, 'user-a', 'user-a'), [...pending, ...local])
+  assert.deepEqual(combineManifestSources(local, pending, 'user-a', 'user-b'), local)
+  assert.deepEqual(combineManifestSources(local, pending, null, 'user-b'), local)
+})
+
+test('remotely derived profile metadata stays with the account that pulled it', () => {
+  const profiles = {
+    company: { layers: [{ name: 'private-graph', level: 0, source: 'mcp' }] },
+  }
+  assert.deepEqual(selectManifestProfiles(profiles, 'user-a', 'user-a'), profiles)
+  assert.equal(selectManifestProfiles(profiles, 'user-a', 'user-b'), undefined)
+  assert.deepEqual(selectManifestProfiles(profiles, null, 'user-b'), profiles)
+})
+
+test('sync shadow is discarded when a different account signs in', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-account-scope-'))
+  const file = path.join(dir, 'settings.json')
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.writeFileSync(file, JSON.stringify({ _sync: { ownerUserId: 'user-a' } }))
+  let uploaded = null
+  const supabaseClient = {
+    from() {
+      return {
+        upsert(row) {
+          uploaded = row.blob
+          return { select: () => ({ single: async () => ({ data: { updated_at: '2026-07-15T05:00:00Z' }, error: null }) }) }
+        },
+      }
+    },
+  }
+  const sync = createSettingsSync({
+    authManager: { getSession: async () => ({ user: { id: 'user-b' } }) },
+    supabaseClient,
+    localSettingsPath: file,
+  })
+  await sync.push({
+    theme: 'light',
+    _sync: {
+      ownerUserId: 'user-a',
+      shadow: { theme: 'dark', sources: [{ name: 'company', level: 0 }] },
+    },
+  })
+  assert.deepEqual(uploaded, { theme: 'light' })
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8'))._sync.ownerUserId, 'user-b')
+})
+
+test('another account cannot use stale dirty state to overwrite a missing row', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-account-no-row-'))
+  const file = path.join(dir, 'settings.json')
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const current = {
+    theme: 'light',
+    _sync: {
+      ownerUserId: 'user-a',
+      dirty: true,
+      dirtyFields: ['theme'],
+      shadow: { theme: 'dark', sources: [{ name: 'user-a-private', level: 0 }] },
+    },
+  }
+  const accountAProfiles = {
+    company: { layers: [{ name: 'user-a-private', level: 0, source: 'mcp' }] },
+  }
+  assert.equal(selectManifestProfiles(accountAProfiles, 'user-a', 'user-b'), undefined)
+  fs.writeFileSync(file, JSON.stringify(current))
+  const uploads = []
+  const supabaseClient = {
+    from() {
+      return {
+        select() {
+          return { eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }
+        },
+        upsert(row) {
+          uploads.push(row.blob)
+          return { select: () => ({ single: async () => ({ data: { updated_at: '2026-07-15T05:10:00Z' }, error: null }) }) }
+        },
+      }
+    },
+  }
+  const sync = createSettingsSync({
+    authManager: { getSession: async () => ({ user: { id: 'user-b' } }) },
+    supabaseClient,
+    localSettingsPath: file,
+  })
+
+  assert.equal(await sync.pull(current), null)
+  assert.deepEqual(uploads, [])
+  await sync.push(current)
+  assert.deepEqual(uploads, [{ theme: 'light' }])
+})
+
+test('another account remote row wins over stale dirty bookkeeping', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-account-existing-row-'))
+  const file = path.join(dir, 'settings.json')
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const current = {
+    theme: 'light',
+    _sync: { ownerUserId: 'user-a', dirty: true, dirtyFields: ['theme'] },
+  }
+  const accountAProfiles = {
+    company: { layers: [{ name: 'user-a-private', level: 0, source: 'mcp' }] },
+  }
+  assert.equal(selectManifestProfiles(accountAProfiles, 'user-a', 'user-b'), undefined)
+  fs.writeFileSync(file, JSON.stringify(current))
+  let uploaded = false
+  const supabaseClient = {
+    from() {
+      return {
+        select() {
+          return { eq: () => ({ maybeSingle: async () => ({
+            data: {
+              blob: { theme: 'dark', sources: [{ name: 'user-b-team', level: 1 }] },
+              updated_at: '2026-07-15T05:20:00Z',
+            },
+            error: null,
+          }) }) }
+        },
+        upsert() {
+          uploaded = true
+          return { select: () => ({ single: async () => ({ data: null, error: null }) }) }
+        },
+      }
+    },
+  }
+  const sync = createSettingsSync({
+    authManager: { getSession: async () => ({ user: { id: 'user-b' } }) },
+    supabaseClient,
+    localSettingsPath: file,
+  })
+
+  const pulled = await sync.pull(current)
+  assert.equal(uploaded, false)
+  assert.deepEqual(selectSyncSettings(pulled.settings), {
+    theme: 'dark',
+    sources: [{ name: 'user-b-team', level: 1 }],
+  })
+  assert.equal(pulled.settings._sync.ownerUserId, 'user-b')
 })
 
 test('safe remote shadow survives an unrelated local edit without persisting machine values', () => {
@@ -194,7 +376,7 @@ test('a dirty offline edit is pushed before a remote pull', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-sync-'))
   const file = path.join(dir, 'settings.json')
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
-  fs.writeFileSync(file, JSON.stringify({ theme: 'light', _sync: { dirty: true } }))
+  fs.writeFileSync(file, JSON.stringify({ theme: 'light', _sync: { ownerUserId: 'user-1', dirty: true } }))
   let operation = ''
   const supabaseClient = {
     from() {
@@ -227,7 +409,7 @@ test('dirty fields override remote while untouched remote metadata is retained',
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   fs.writeFileSync(file, JSON.stringify({
     theme: 'light',
-    _sync: { dirty: true, dirtyFields: ['theme'], localUpdatedAt: '2026-07-14T20:00:00Z' },
+    _sync: { ownerUserId: 'user-1', dirty: true, dirtyFields: ['theme'], localUpdatedAt: '2026-07-14T20:00:00Z' },
   }))
   let uploaded = null
   const supabaseClient = {
@@ -262,7 +444,7 @@ test('a dirty profile deletion uploads a tombstone that clears a second client',
   const file = path.join(dir, 'settings.json')
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   fs.writeFileSync(file, JSON.stringify({
-    _sync: { dirty: true, dirtyFields: ['profiles'], localUpdatedAt: '2026-07-14T20:00:00Z' },
+    _sync: { ownerUserId: 'user-1', dirty: true, dirtyFields: ['profiles'], localUpdatedAt: '2026-07-14T20:00:00Z' },
   }))
   let uploaded = null
   const supabaseClient = {
@@ -367,7 +549,7 @@ test('an edit made during a slow pull is reconciled and pushed instead of overwr
   await new Promise((resolve) => setImmediate(resolve))
   fs.writeFileSync(file, JSON.stringify({
     theme: 'dark',
-    _sync: { dirty: true, dirtyFields: ['theme'], localUpdatedAt: '2026-07-14T21:00:00Z' },
+    _sync: { ownerUserId: 'user-1', dirty: true, dirtyFields: ['theme'], localUpdatedAt: '2026-07-14T21:00:00Z' },
   }))
   finishPull({
     data: { blob: { theme: 'light', profiles: [{ id: 'work', name: 'Work' }] }, updated_at: '2026-07-14T20:30:00Z' },

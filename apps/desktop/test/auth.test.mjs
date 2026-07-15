@@ -70,18 +70,26 @@ test('OAuth IPC smoke writes only an encrypted session and validates callback st
   assert.deepEqual(await manager.initialize(), { available: true, signedIn: false })
   await manager.signInWithGitHub()
   assert.deepEqual(opened, ['https://example.supabase.co/auth/v1/authorize'])
-  await assert.rejects(manager.signInWithGoogle(), /already in progress/)
+  await assert.rejects(manager.signInWithGitHub(), /already in progress/)
+  manager.cancelSignIn()
+  await manager.signInWithGitHub()
 
   const callback = new URL(fake.redirectTo())
   callback.searchParams.set('code', 'one-time-code')
   callback.searchParams.set('state', 'wrong-state')
   await assert.rejects(manager.handleDeepLink(callback.toString()), /state did not match/)
+  await assert.rejects(manager.signInWithGitHub(), /already in progress/)
 
+  // The renderer keeps Cancel visible after an unrelated callback error. Once
+  // canceled, a fresh attempt opens immediately instead of waiting for TTL.
+  manager.cancelSignIn()
   await manager.signInWithGitHub()
   const retryCallback = new URL(fake.redirectTo())
-  const retryState = retryCallback.searchParams.get('state')
+  const expectedState = retryCallback.searchParams.get('state')
   retryCallback.searchParams.set('code', 'one-time-code')
-  retryCallback.searchParams.set('state', retryState)
+
+  // An unrelated custom-scheme launch cannot cancel the legitimate callback.
+  retryCallback.searchParams.set('state', expectedState)
   assert.equal(await manager.handleDeepLink(retryCallback.toString()), true)
   assert.deepEqual(manager.getState(), { available: true, signedIn: true, email: 'person@example.com' })
 

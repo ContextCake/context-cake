@@ -3,7 +3,7 @@
 **Date:** 2026-07-14
 **Status:** Approved (decisions locked with John, 2026-07-14)
 **Workflow:** Requirements-First (desired behavior known; provider integration flexible)
-**Provider decision:** Supabase (hosted OAuth + Postgres settings store) — chosen over WorkOS/Clerk for zero-backend settings sync; revisit if enterprise SSO demand materializes
+**Provider decision:** Supabase with GitHub OAuth (hosted OAuth + Postgres settings store) — chosen over WorkOS/Clerk for zero-backend settings sync; Google is deferred until its production provider setup is justified
 **Depends on:** `specs/contextcake-distribution/design.md` (deep link, safeStorage, process model)
 
 ---
@@ -18,7 +18,7 @@ OAuth** — no homegrown password store, no embedded login forms.
 
 ## 2. Goals
 
-- Sign in with **GitHub or Google** via the **system browser** using OAuth 2.0
+- Sign in with **GitHub** via the **system browser** using OAuth 2.0
   authorization code + **PKCE** (public client; no client secret in the app).
 - **Local-first is preserved:** a signed-out user has full local
   functionality. Accounts add sync + entitlements; they gate nothing local.
@@ -38,8 +38,9 @@ stays demo-only) · email/password auth (never, see §7).
   and preferences arrive after sign-in — but every integration re-authenticates
   locally, because tokens never synced.
 - **Theo** refuses accounts entirely; everything except sync works, forever.
-- **A departing user** deletes their account from Settings and all server-side
-  data is gone, no support ticket.
+- **A departing user** deletes their account from Settings and all user-owned
+  Auth/settings rows are gone without a support ticket; provider and Supabase
+  operational/audit logs follow their configured retention policies.
 
 ## 5. Acceptance criteria (EARS)
 
@@ -76,11 +77,13 @@ stays demo-only) · email/password auth (never, see §7).
 ### Account lifecycle & privacy
 - [ ] WHEN the user deletes their account THE SYSTEM SHALL self-serve delete
   all server-side rows (auth user + settings) and return the app to signed-out.
-- [ ] WHEN auth or sync traffic flows THE SYSTEM SHALL use HTTPS to the
-  provider host only, carrying no analytics or telemetry.
+- [ ] WHEN auth or sync traffic flows THE SYSTEM SHALL use HTTPS only to the
+  configured Supabase project and GitHub OAuth endpoints, carrying no
+  analytics or telemetry.
 - [ ] WHEN the docs describe accounts THE SYSTEM SHALL publish exactly what is
-  stored server-side (account email + settings blob) and what never is
-  (context, tokens, paths).
+  stored server-side (managed identity/session/audit records + settings blob),
+  what deletion removes, what operational logs may be retained, and what never
+  leaves the Mac (context, integration tokens, paths).
 
 ## 6. Data model (Supabase)
 
@@ -93,7 +96,7 @@ stays demo-only) · email/password auth (never, see §7).
 
 - ✅ **Always:** system browser + PKCE; tokens via `safeStorage`; RLS on every
   table; signed-out mode fully functional; scrub-then-verify before sync.
-- ⚠️ **Ask first:** adding an auth provider beyond GitHub/Google; storing any
+- ⚠️ **Ask first:** adding an auth provider beyond GitHub; storing any
   server-side field beyond email + settings blob; any scope expansion; moving
   off Supabase.
 - 🚫 **Never:** email/password or any custom credential store; integration
@@ -108,17 +111,18 @@ stays demo-only) · email/password auth (never, see §7).
   The anon key is public-by-design; RLS is the security boundary.
 - **Structure:** auth broker + storage adapter live in `apps/desktop/src/main/`
   (e.g. `auth.mjs`, `settings-sync.mjs`); renderer gets state via preload
-  events only. Console UI: Settings view (sign-in/out, sync status, delete
-  account) in `apps/console/src/views/`.
+  events only. Console account UI (sign-in/out, sync status, delete account)
+  lives in `apps/console/src/components/AccountPanel.tsx`.
 - **Testing:** unit-test the scrubber (path/credential patterns) and the
-  storage adapter round-trip in `apps/console`/`apps/desktop` vitest; flow
-  smoke-tested manually per the verification list below. Engine (`npm test`)
-  untouched by this feature.
+  storage adapter round-trip with `node --test` under `apps/desktop`; use
+  Vitest for Console behavior and run root `npm test` when shared engine/service
+  behavior changes. Smoke-test the packaged flow per the verification list below.
 - **Code style:** desktop main process is ESM `.mjs` matching the engine's
   voice; renderer follows console TS conventions.
 - **Git:** conventional commits; branch per feature.
-- **Verification:** sign in → session present in Keychain (Keychain Access),
-  nothing plaintext under Application Support; settings round-trip from a
+- **Verification:** sign in → encrypted `session.enc` present under Application
+  Support with encryption material protected by Keychain-backed `safeStorage`,
+  and no plaintext tokens on disk; settings round-trip from a
   second macOS user account; delete account → rows gone; grep sync payload for
   `/Users/` and token patterns in a test.
 - **Self-verification:** compare implementation against §5 and list any

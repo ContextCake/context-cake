@@ -36,12 +36,14 @@ npm run dist       # DMG + zip in dist/ (ad-hoc signed until release secrets exi
 | `resources/bin/contextcake` | Shell shim installed for the CLI |
 | `electron-builder.yml` | Packaging: DMG/zip, arm64, hardened runtime, protocols |
 
-## User data (never touched by updates)
+## User data
 
 - Config: `~/Library/Application Support/ContextCake/` (`manifest.json`, `settings.json`)
 - Caches: `~/Library/Caches/ContextCake/`
 - Account session: persisted as encrypted `session.enc` only when Keychain-backed
   `safeStorage` is available; otherwise it remains memory-only for that run
+- Updater rollout ID: electron-updater stores a random `.updaterId` in the config
+  directory and sends it as `x-user-staging-id` when checking for staged updates
 - Supabase project config: optional `supabase.json` (`url` + public `anonKey`), or
   `SUPABASE_URL` / `SUPABASE_ANON_KEY` in development
 
@@ -82,11 +84,11 @@ configured retention and are not necessarily removed with the account.
    npx --yes supabase@2.109.1 db push
    ```
    Run the Database advisors in the Dashboard after deploying.
-3. Create GitHub and Google OAuth applications, using Supabase's provider callback
-   `https://<project-ref>.supabase.co/auth/v1/callback`, then add their client
+3. Create a GitHub OAuth application, using Supabase's provider callback
+   `https://<project-ref>.supabase.co/auth/v1/callback`, then add its client
    credentials under **Authentication → Providers**.
-4. Add `contextcake://auth/callback` to **Authentication → URL Configuration →
-   Redirect URLs**.
+4. Keep anonymous sign-ins disabled. Add `contextcake://auth/callback` to
+   **Authentication → URL Configuration → Redirect URLs**.
 5. For local UI development, export `SUPABASE_URL` and `SUPABASE_ANON_KEY`, then run
    `npm run dev`. Browser OAuth cannot return to the unpackaged dev process because
    macOS registers the custom protocol for packaged apps only. Test the full sign-in

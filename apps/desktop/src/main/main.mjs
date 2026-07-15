@@ -10,8 +10,10 @@ import { markSettingsDirty, readSettings, writeSettings } from './settings.mjs'
 import { createAuthManager } from './auth.mjs'
 import {
   assertSafeLocalSettings,
+  combineManifestSources,
   createSettingsSync,
   overlaySyncShadow,
+  selectManifestProfiles,
   selectSyncSettings,
 } from './settings-sync.mjs'
 import { loadSupabaseConfig } from './supabase-config.mjs'
@@ -106,16 +108,32 @@ function readManifestConfig() {
 function settingsSnapshot(settings = readSettings()) {
   const manifest = readManifestConfig()
   const { sources: _storedSources, profiles: _storedProfiles, ...preferences } = settings
+  const currentUserId = authManager?.getUserId?.() ?? null
+  const sources = combineManifestSources(
+    manifest.layers,
+    manifest.pendingSources,
+    manifest.pendingSourcesOwnerUserId,
+    currentUserId,
+  )
+  const profiles = selectManifestProfiles(
+    manifest.profiles,
+    manifest.profilesOwnerUserId,
+    currentUserId,
+  )
   const local = {
     ...preferences,
-    ...(Array.isArray(manifest.layers) ? { sources: manifest.layers } : {}),
-    ...(manifest.profiles && typeof manifest.profiles === 'object' && !Array.isArray(manifest.profiles)
-      ? { profiles: manifest.profiles }
-      : {}),
+    ...(sources.length > 0 ? { sources } : {}),
+    ...(profiles ? { profiles } : {}),
   }
   return {
     ...local,
-    ...overlaySyncShadow(settings?._sync?.shadow, local, settings?._sync?.dirtyFields),
+    ...overlaySyncShadow(settings?._sync?.shadow, {
+      ...local,
+      _sync: {
+        ...(settings?._sync ?? {}),
+        currentUserId,
+      },
+    }, settings?._sync?.dirtyFields),
   }
 }
 
@@ -156,12 +174,20 @@ function safeProfiles(profiles) {
 
 function applyPulledManifest(settings) {
   const current = readManifestConfig()
-  const layers = Array.isArray(settings?.sources) ? settings.sources.filter(sourceIsRunnable) : current.layers
+  const currentUserId = authManager?.getUserId?.() ?? null
+  const incomingSources = Array.isArray(settings?.sources) ? settings.sources : null
+  const layers = incomingSources ? incomingSources.filter(sourceIsRunnable) : current.layers
+  const pendingSources = incomingSources ? incomingSources.filter((source) => !sourceIsRunnable(source)) : current.pendingSources
   const profiles = safeProfiles(settings?.profiles)
   const next = {
     ...current,
     ...(layers ? { layers } : {}),
-    ...(profiles ? { profiles } : {}),
+    ...(pendingSources?.length ? { pendingSources, pendingSourcesOwnerUserId: currentUserId } : {}),
+    ...(profiles ? { profiles, profilesOwnerUserId: currentUserId } : {}),
+  }
+  if (!pendingSources?.length) {
+    delete next.pendingSources
+    delete next.pendingSourcesOwnerUserId
   }
   if (isDeepStrictEqual(current, next)) return
   const serialized = `${JSON.stringify(next, null, 2)}\n`
@@ -244,7 +270,7 @@ async function handleDeepLink(url) {
   try {
     await authManager.handleDeepLink(url)
   } catch {
-    sendToRenderer('auth:error', 'Sign-in could not be completed. Please try again.')
+    sendToRenderer('auth:error', 'Sign-in could not be completed. Cancel this attempt, then try again.')
   }
 }
 
@@ -257,9 +283,9 @@ function registerAccountIpc() {
   handle('auth:get-state', currentAuthState)
   handle('auth:sign-in', (provider) => {
     if (provider === 'github') return authManager.signInWithGitHub()
-    if (provider === 'google') return authManager.signInWithGoogle()
     throw new Error('Unsupported sign-in provider.')
   })
+  handle('auth:cancel-sign-in', () => authManager.cancelSignIn())
   handle('auth:sign-out', async () => {
     await authManager?.signOut()
     return currentAuthState()

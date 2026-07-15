@@ -36,7 +36,8 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   artifact to users (distribution spec §7).
 - User data layout is contractual (design §5): config in
   `~/Library/Application Support/ContextCake/`, caches in
-  `~/Library/Caches/ContextCake/`. Updates must never write to either.
+  `~/Library/Caches/ContextCake/`. Installers must preserve both. The native
+  updater may maintain only its documented `.updaterId` rollout marker there.
 - **App name is pinned three places that must agree**: `app.setName('ContextCake')`
   in `src/main/main.mjs`, `productName` in `package.json`, and the CLI's
   `CONFIG_DIR` in `src/cli/cli.mjs`. They resolve the same `userData` dir the

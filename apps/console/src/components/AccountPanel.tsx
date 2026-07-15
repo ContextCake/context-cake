@@ -16,7 +16,7 @@ export function AccountPanel() {
   const [auth, setAuth] = useState<AuthState>(() => window.__CC_DESKTOP?.authState ?? SIGNED_OUT)
   const [sync, setSync] = useState<SyncState>(IDLE)
   const [busy, setBusy] = useState(false)
-  const [pendingProvider, setPendingProvider] = useState<'github' | 'google' | null>(null)
+  const [pendingProvider, setPendingProvider] = useState<'github' | null>(null)
   const [error, setError] = useState('')
   const signInTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const signInAttempt = useRef(0)
@@ -44,7 +44,9 @@ export function AccountPanel() {
       clearSignInTimer()
       setError(message)
       setBusy(false)
-      setPendingProvider(null)
+      // The main process deliberately keeps a valid pending OAuth attempt when
+      // an unrelated or forged callback arrives. Keep Cancel visible so that
+      // attempt can never leave the renderer stuck behind the backend lock.
     })
     return () => {
       removeSession()
@@ -70,7 +72,7 @@ export function AccountPanel() {
     }
   }
 
-  const startSignIn = async (provider: 'github' | 'google') => {
+  const startSignIn = async (provider: 'github') => {
     const attempt = ++signInAttempt.current
     setBusy(true)
     setPendingProvider(provider)
@@ -80,6 +82,7 @@ export function AccountPanel() {
       await bridge.signIn(provider)
       if (attempt !== signInAttempt.current) return
       signInTimer.current = setTimeout(() => {
+        bridge.cancelSignIn().catch(() => {})
         setBusy(false)
         setPendingProvider(null)
         setError('Sign-in wasn’t completed. You can try again.')
@@ -89,6 +92,12 @@ export function AccountPanel() {
       setPendingProvider(null)
       setError(messageOf(err))
     }
+  }
+
+  const cancelSignIn = async () => {
+    signInAttempt.current += 1
+    clearSignInTimer()
+    await run(() => bridge.cancelSignIn())
   }
 
   return (
@@ -113,9 +122,7 @@ export function AccountPanel() {
           <button type="button" disabled={busy} onClick={() => startSignIn('github')}>
             {pendingProvider === 'github' ? 'Opening browser…' : 'Sign in with GitHub'}
           </button>
-          <button type="button" disabled={busy} onClick={() => startSignIn('google')}>
-            {pendingProvider === 'google' ? 'Opening browser…' : 'Sign in with Google'}
-          </button>
+          {pendingProvider && <button type="button" onClick={cancelSignIn}>Cancel sign-in</button>}
         </div>
       )}
 

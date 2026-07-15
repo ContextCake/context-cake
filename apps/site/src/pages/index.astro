@@ -4,6 +4,7 @@
 import Base from '../layouts/Base.astro';
 import Icon from '../components/Icon.astro';
 import demo from '../data/demo-cascade.json';
+import appIconUrl from '../../../../assets/brand/contextcake-app-icon.svg?url';
 
 const primaryDb = demo.concepts.find((concept) => concept.id === 'decisions/primary-db');
 if (!primaryDb) throw new Error('Homepage demo concept decisions/primary-db is missing');
@@ -142,7 +143,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 			<figure class="app-window app-window--hero" aria-label="ContextCake Console showing a resolved concept">
 				<div class="window-bar">
 					<div class="window-brand">
-						<img src="/contextcake-app-icon.svg" alt="" width="28" height="28" />
+						<img src={appIconUrl} alt="" width="28" height="28" />
 						<span>ContextCake</span>
 					</div>
 					<div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>

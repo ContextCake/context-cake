@@ -10,6 +10,7 @@ import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/700.css';
 import '../styles/tokens.css';
 import Icon from '../components/Icon.astro';
+import appIconUrl from '../../../../assets/brand/contextcake-app-icon.svg?url';
 
 interface Props {
 	title: string;
@@ -18,6 +19,7 @@ interface Props {
 }
 
 const { title, description, tone = 'dark' } = Astro.props;
+const initialTheme = tone === 'paper' ? 'light' : 'dark';
 
 // Absolute URLs for canonical + OpenGraph (Astro.site = https://contextcake.com).
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
@@ -59,7 +61,7 @@ const footerColumns = [
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" data-cc-theme={initialTheme}>
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -79,10 +81,27 @@ const footerColumns = [
 			<meta name="twitter:description" content={description} />
 			<meta name="twitter:image" content={ogImage} />
 	</head>
-	<body class:list={[`theme-${tone}`]}>
+	<body class:list={[`theme-${tone}`]} data-default-theme={initialTheme}>
+		<script is:inline>
+			const themeStorageKey = 'contextcake-site-theme';
+			const siteBody = document.body;
+			const savedTheme = (() => {
+				try {
+					return localStorage.getItem(themeStorageKey);
+				} catch {
+					return null;
+				}
+			})();
+			const initialSiteTheme = savedTheme === 'light' || savedTheme === 'dark'
+				? savedTheme
+				: siteBody.dataset.defaultTheme;
+			document.documentElement.dataset.ccTheme = initialSiteTheme;
+			siteBody.classList.toggle('theme-paper', initialSiteTheme === 'light');
+			siteBody.classList.toggle('theme-dark', initialSiteTheme === 'dark');
+		</script>
 		<header class="nav">
 			<a href="/" class="brand" aria-label="ContextCake home">
-				<img class="brand-mark" src="/contextcake-app-icon.svg" alt="" width="42" height="42" />
+				<img class="brand-mark" src={appIconUrl} alt="" width="42" height="42" />
 				<span>ContextCake</span>
 			</a>
 			<nav aria-label="Main">
@@ -92,14 +111,42 @@ const footerColumns = [
 				<a href="/install">Install</a>
 				<a href="https://github.com/ContextCake/context-cake">GitHub</a>
 			</nav>
+			<button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" title="Switch to dark mode">
+				<Icon name="moon" size={18} class="theme-toggle__moon" />
+				<Icon name="sun" size={18} class="theme-toggle__sun" />
+				<span class="sr-only">Switch theme</span>
+			</button>
 		</header>
+		<script is:inline>
+			const themeToggle = document.querySelector('[data-theme-toggle]');
+			const applySiteTheme = (theme, persist = false) => {
+				document.documentElement.dataset.ccTheme = theme;
+				siteBody.classList.toggle('theme-paper', theme === 'light');
+				siteBody.classList.toggle('theme-dark', theme === 'dark');
+				themeToggle?.setAttribute('aria-pressed', String(theme === 'dark'));
+				const nextTheme = theme === 'dark' ? 'light' : 'dark';
+				themeToggle?.setAttribute('aria-label', `Switch to ${nextTheme} mode`);
+				themeToggle?.setAttribute('title', `Switch to ${nextTheme} mode`);
+				if (persist) {
+					try {
+						localStorage.setItem(themeStorageKey, theme);
+					} catch {
+						// A blocked storage area should not prevent a local theme preference.
+					}
+				}
+			};
+			applySiteTheme(initialSiteTheme);
+			themeToggle?.addEventListener('click', () => {
+				applySiteTheme(document.documentElement.dataset.ccTheme === 'dark' ? 'light' : 'dark', true);
+			});
+		</script>
 		<slot />
 		<footer class="footer">
 			<div class="footer-inner">
 				<div class="footer-top">
 					<div class="footer-brand">
 						<a href="/" class="footer-logo" aria-label="ContextCake home">
-							<img class="brand-mark" src="/contextcake-app-icon.svg" alt="" width="36" height="36" />
+							<img class="brand-mark" src={appIconUrl} alt="" width="36" height="36" />
 							<span>ContextCake</span>
 						</a>
 						<p class="footer-tagline">
@@ -146,6 +193,12 @@ const footerColumns = [
 		color: var(--cc-text-body);
 		font-family: var(--cc-font-body);
 		line-height: 1.6;
+	}
+	:global(body.theme-paper) {
+		color-scheme: light;
+	}
+	:global(body.theme-dark) {
+		color-scheme: dark;
 	}
 	:global(body::before) {
 		content: '';
@@ -238,6 +291,33 @@ const footerColumns = [
 	.nav nav a:hover {
 		background: rgba(243, 239, 230, 0.08);
 		color: var(--cc-text);
+	}
+	.theme-toggle {
+		display: inline-grid;
+		place-items: center;
+		flex: none;
+		width: 2.75rem;
+		height: 2.75rem;
+		padding: 0;
+		border: 1px solid var(--cc-border);
+		border-radius: 50%;
+		background: var(--cc-surface-soft);
+		color: var(--cc-text);
+		cursor: pointer;
+		transition: background var(--cc-transition), border-color var(--cc-transition), color var(--cc-transition);
+	}
+	.theme-toggle:hover {
+		border-color: var(--cc-border-strong);
+		background: rgba(243, 239, 230, 0.1);
+	}
+	.theme-toggle__sun {
+		display: none;
+	}
+	:global(html[data-cc-theme='dark']) .theme-toggle__sun {
+		display: block;
+	}
+	:global(html[data-cc-theme='dark']) .theme-toggle__moon {
+		display: none;
 	}
 	.footer {
 		position: relative;
@@ -413,6 +493,15 @@ const footerColumns = [
 		background: var(--cc-paper-soft);
 		color: var(--cc-ink);
 	}
+	.theme-paper .theme-toggle {
+		border-color: var(--cc-paper-line);
+		background: var(--cc-paper-soft);
+		color: var(--cc-ink);
+	}
+	.theme-paper .theme-toggle:hover {
+		border-color: var(--cc-paper-line-strong);
+		background: var(--cc-paper-line);
+	}
 	.theme-paper .footer {
 		margin-top: 0;
 		background: var(--cc-paper);
@@ -466,6 +555,10 @@ const footerColumns = [
 			min-height: 32px;
 			padding-inline: 0.38rem;
 			font-size: 0.82rem;
+		}
+		.theme-paper .theme-toggle {
+			width: 2.75rem;
+			height: 2.75rem;
 		}
 		.theme-paper .nav nav a:nth-child(1),
 		.theme-paper .nav nav a:nth-child(4) {

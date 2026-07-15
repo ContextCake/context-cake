@@ -20,6 +20,7 @@ interface Props {
 
 const { title, description, tone = 'dark' } = Astro.props;
 const initialTheme = tone === 'paper' ? 'light' : 'dark';
+const isHome = Astro.url.pathname === '/';
 
 // Absolute URLs for canonical + OpenGraph (Astro.site = https://contextcake.com).
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
@@ -67,7 +68,7 @@ const footerColumns = [
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>{title}</title>
 		<meta name="description" content={description} />
-		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="icon" href="/favicon.svg?v=stacked-1" type="image/svg+xml" />
 		<meta property="og:title" content={title} />
 		<meta property="og:description" content={description} />
 		<meta property="og:type" content="website" />
@@ -99,9 +100,9 @@ const footerColumns = [
 			siteBody.classList.toggle('theme-paper', initialSiteTheme === 'light');
 			siteBody.classList.toggle('theme-dark', initialSiteTheme === 'dark');
 		</script>
-		<header class="nav">
+		<header class:list={['nav', { 'nav--home': isHome }]}>
 			<a href="/" class="brand" aria-label="ContextCake home">
-				<img class="brand-mark" src={appIconUrl} alt="" width="42" height="42" />
+				<img class="brand-mark" src={appIconUrl} alt="" width={isHome ? 50 : 42} height={isHome ? 50 : 42} />
 				<span>ContextCake</span>
 			</a>
 			<nav aria-label="Main">
@@ -266,6 +267,10 @@ const footerColumns = [
 		height: 2.6rem;
 		border-radius: 0.72rem;
 		box-shadow: 0 0.35rem 1.15rem rgba(0, 0, 0, 0.26);
+	}
+	.nav--home .brand-mark {
+		width: 3.125rem;
+		height: 3.125rem;
 	}
 	.nav nav {
 		display: flex;

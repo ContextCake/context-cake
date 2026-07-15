@@ -8,6 +8,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'ContextCake',
+			favicon: '/favicon.svg?v=stacked-1',
 			logo: {
 				src: '../../assets/brand/contextcake-app-icon.svg',
 				alt: 'ContextCake app icon',

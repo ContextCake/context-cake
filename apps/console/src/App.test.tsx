@@ -35,6 +35,48 @@ afterEach(async () => {
 })
 
 describe('App settings surface', () => {
+  it('uses logo-only branding and supports collapsing or resizing the sidebar', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <StoreProvider><App /></StoreProvider>
+      </ThemeModeProvider>,
+    ))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    const sidebar = container.querySelector<HTMLElement>('.cc-sidebar')
+    const brand = container.querySelector('.cc-brand')
+    const separator = container.querySelector<HTMLElement>('.cc-sidebar-resizer')
+    expect(brand?.querySelector('img[alt="ContextCake"]')).toBeTruthy()
+    expect(brand?.textContent).toBe('')
+    expect(sidebar?.dataset.collapsed).toBe('false')
+    expect(sidebar?.style.width).toBe('244px')
+
+    await act(async () => {
+      separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 244 }))
+      window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 80 }))
+      window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 80 }))
+    })
+    expect(sidebar?.dataset.collapsed).toBe('true')
+    expect(sidebar?.style.width).toBe('72px')
+    expect(container.querySelector('[data-view="triage"]')?.getAttribute('aria-label')).toBe('Queue, 3 items awaiting review')
+    expect(container.querySelector('[data-view="conflicts"]')?.getAttribute('aria-label')).toBe('Resolve, 2 open conflicts')
+
+    await act(async () => {
+      separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }))
+    })
+    expect(sidebar?.dataset.collapsed).toBe('false')
+    expect(sidebar?.style.width).toBe('244px')
+    expect(JSON.parse(window.localStorage.getItem('contextcake.sidebar') ?? '{}')).toEqual({ collapsed: false, width: 244 })
+
+    await act(async () => {
+      separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 244 }))
+    })
+    expect(document.body.style.cursor).toBe('col-resize')
+    await act(async () => window.dispatchEvent(new Event('blur')))
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+  })
+
   it('keeps the app shell mounted and restores visible focus when Settings closes', async () => {
     await act(async () => root.render(
       <ThemeModeProvider>

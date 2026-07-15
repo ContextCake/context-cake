@@ -24,7 +24,7 @@ export function UpdatePill({ mode }: { mode: 'demo' | 'live' }) {
   if (!enabled || !info || dismissed) return null
 
   return (
-        <div style={css(`display:flex; align-items:center; gap:6px; padding:7px 8px 7px 12px; border-radius:11px; background:${C.tealFill}; border:1px solid ${C.tealStroke}; font-family:${MONO}; font-size:11px; color:${C.tealText};`)}>
+        <div className="cc-update-pill" style={css(`display:flex; align-items:center; gap:6px; padding:7px 8px 7px 12px; border-radius:11px; background:${C.tealFill}; border:1px solid ${C.tealStroke}; font-family:${MONO}; font-size:11px; color:${C.tealText};`)}>
           <a
             href={info.url}
             target="_blank"

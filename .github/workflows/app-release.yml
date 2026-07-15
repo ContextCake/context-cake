@@ -1,0 +1,138 @@
+# Desktop app release: build, sign, notarize, staple, publish.
+#
+# Trigger: push of an `app-v*` tag whose commit is an ancestor of main.
+# Secrets (see specs/contextcake-distribution/design.md §8):
+#   CSC_LINK / CSC_KEY_PASSWORD          — Developer ID Application cert (.p12, base64)
+#   APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER — notarytool App Store Connect key
+# Key rotation: revoke in the Apple Developer portal, reissue, replace these
+# secrets. Keys never live in the repository.
+#
+# Without the secrets the workflow still builds (unsigned) and uploads the
+# artifacts to the run for inspection, but it will NOT create a GitHub
+# Release — unnotarized builds are never distributed (distribution spec §7).
+name: App Release
+
+on:
+  push:
+    tags:
+      - "app-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main and matches package version
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag commit $GITHUB_SHA is not an ancestor of main"
+            exit 1
+          fi
+          # electron-builder + electron-updater key the release, artifact names,
+          # and latest-mac.yml off apps/desktop/package.json version. If the tag
+          # and package version disagree, the release publishes but no installed
+          # app ever updates to it — refuse rather than ship a dead release.
+          TAG_VERSION="${GITHUB_REF_NAME#app-v}"
+          PKG_VERSION="$(node -p 'require("./apps/desktop/package.json").version')"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME implies version $TAG_VERSION but apps/desktop/package.json is $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Detect signing secrets
+        id: creds
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          if [ -n "$CSC_LINK" ] && [ -n "$APPLE_API_KEY" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Signing/notarization secrets absent — building unsigned, release will NOT be published"
+          fi
+
+      - name: Install console deps
+        working-directory: apps/console
+        run: npm ci
+
+      - name: Install desktop deps
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Write notary key file
+        if: steps.creds.outputs.signed == 'true'
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          echo "$APPLE_API_KEY" > "$RUNNER_TEMP/notary-key.p8"
+
+      - name: Build, sign, notarize
+        if: steps.creds.outputs.signed == 'true'
+        working-directory: apps/desktop
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"
+          # --publish never: on a tag build electron-builder would otherwise try
+          # to auto-publish (and fail without GH_TOKEN, or create a duplicate
+          # v* release). The gh CLI step below is the sole publisher.
+          npm run dist -- --publish never --config.mac.notarize=true
+
+      - name: Build (unsigned — no release)
+        if: steps.creds.outputs.signed != 'true'
+        working-directory: apps/desktop
+        run: npm run dist -- --publish never
+
+      - name: Gatekeeper assessment
+        if: steps.creds.outputs.signed == 'true'
+        working-directory: apps/desktop
+        run: |
+          APP=$(find dist/mac-arm64 -maxdepth 1 -name "*.app" | head -1)
+          codesign --verify --deep --strict "$APP"
+          spctl -a -vv -t install "$APP"
+          xcrun stapler validate "$APP"
+
+      - name: Checksums
+        working-directory: apps/desktop/dist
+        run: |
+          shasum -a 256 *.dmg *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish GitHub Release
+        if: steps.creds.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: apps/desktop/dist
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "ContextCake ${GITHUB_REF_NAME#app-v}" \
+            --generate-notes \
+            *.dmg *.zip latest-mac.yml SHA256SUMS
+
+      - name: Upload artifacts (unsigned build)
+        if: steps.creds.outputs.signed != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: contextcake-mac-unsigned
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/latest-mac.yml
+          retention-days: 7

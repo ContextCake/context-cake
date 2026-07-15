@@ -1,0 +1,17 @@
+#!/bin/sh
+# ContextCake CLI shim. Installed as a symlink at /usr/local/bin/contextcake;
+# resolves back into the app bundle it ships inside, so app updates update the
+# CLI automatically and uninstalling the app leaves only a dangling link.
+SELF_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+BIN_DIR="$(cd "$(dirname "$SELF_PATH")" && pwd -P)"          # …/Contents/Resources/bin
+RESOURCES="$(dirname "$BIN_DIR")"                             # …/Contents/Resources
+CONTENTS="$(dirname "$RESOURCES")"                            # …/Contents
+ELECTRON="$CONTENTS/MacOS/ContextCake"
+
+if [ ! -x "$ELECTRON" ]; then
+  echo "contextcake: cannot find ContextCake.app (looked at $ELECTRON)" >&2
+  echo "Reinstall the app, then run 'Install Command Line Tool…' from the app menu." >&2
+  exit 1
+fi
+
+ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$RESOURCES/engine/cli/cli.mjs" "$@"

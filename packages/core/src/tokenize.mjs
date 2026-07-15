@@ -1,7 +1,7 @@
-// Server-side token counting for the playground's context-budget view.
-// Uses a vendored o200k_base BPE tokenizer (js-tiktoken lite). o200k is GPT-4o's
-// tokenizer; Anthropic does not publish Claude's, so treat this as a close proxy.
-// Vendored under vendor/tiktoken — no npm, no network.
+// Server-side token counting for the engine service's context-budget view
+// (/api/graph). Uses a vendored o200k_base BPE tokenizer (js-tiktoken lite).
+// o200k is GPT-4o's tokenizer; Anthropic does not publish Claude's, so treat
+// this as a close proxy. Vendored under vendor/tiktoken — no npm, no network.
 
 import fs from "node:fs";
 import path from "node:path";

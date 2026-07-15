@@ -39,6 +39,10 @@ cd apps/site && npm run build                 # site CI gate — must exit 0
 
 # Seed + verify the team demo (then see examples/team-demo/RUNBOOK.md)
 npm run demo:verify
+
+# Mac app (Electron shell over the engine + console) — see apps/desktop/CLAUDE.md
+cd apps/desktop && npm install && npm run dev
+cd apps/desktop && npm run smoke      # headless boot + token-guard check
 ```
 
 ## Architecture
@@ -73,6 +77,7 @@ Key files:
 | `apps/okf-browser/` | OKF graph browser |
 | `apps/playground/` | Interactive playground: dependency-free HTTP server (`server.mjs`) over the engine + canvas/files/sources UI, merge resolver, per-source token budget. See `apps/playground/README.md`. |
 | `apps/console/` | React + Vite + TS web UI (ContextCake Console) — its own npm package with a build step, deployed to Cloudflare Pages. See `apps/console/README.md` + `apps/console/CLAUDE.md`. |
+| `apps/desktop/` | ContextCake for Mac: Electron shell — engine in the main process behind a token-guarded loopback service, console build as renderer, `contextcake` CLI shim, electron-updater. See `apps/desktop/CLAUDE.md` + `specs/contextcake-distribution/design.md`. |
 | `apps/site/` | Public product site (Astro + Starlight). Spec + boundaries: `specs/contextcake-site/`. Site deps live in `apps/site/package.json` only — the engine stays dependency-free. |
 | `specs/contextcake-packs/` | Public spec and private-repo template for ContextCake Packs, a separately sold product line whose paid content lives outside this public-bound engine repo. |
 | `docs/architecture/README.md` | Historical design spec (partially superseded — see note at top) |
@@ -83,6 +88,6 @@ Key files:
 - `apps/control-surface/signals.json` is generated — gitignored, produced by `ingest.mjs`.
 - Staleness is surfaced via per-section `conflicts[]` + last-updated dates (the shadow/hash subsystem was removed in the core re-arch; see `specs/contextcake-core/design.md`).
 - **The manifest is a trust boundary.** An `mcp` layer spawns `command` with `args` from the manifest — a manifest you did not author can run arbitrary commands as your user. Only point `--manifest` at configs you trust (same model as any MCP client config).
-- The engine (`packages/core/src/`) is dependency-free — plain Node.js built-ins only. Do not add npm dependencies without discussion. The exceptions are `apps/console/` and `apps/site/`, self-contained npm packages that never import from the engine — keep that boundary.
+- The engine (`packages/core/src/`) is dependency-free — plain Node.js built-ins only. Do not add npm dependencies without discussion. The exceptions are `apps/console/`, `apps/site/`, and `apps/desktop/` — self-contained npm packages. Console and site never import from the engine; the desktop app imports engine modules by path (one-way: app → engine, never the reverse) and must never cause a dependency to leak into `packages/core`.
 - `apps/console/` and `apps/site/` each have their own `package.json`, build, and tests; run their commands from that subdirectory, not the repo root. Console CI lives at `.github/workflows/console-*.yml`, path-filtered to `apps/console/**` (production deploys on `console-v*` tags).
 - Tests create temp directories and clean up with `trap`. Run from the repo root.

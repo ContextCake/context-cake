@@ -11,11 +11,11 @@ bash packages/core/tests/playground-test.sh
 
 ## Architecture
 
-- `server.mjs` is a dependency-free local HTTP server over the real core resolver.
+- `server.mjs` is a dependency-free local HTTP shell: it mounts the embeddable engine service (`packages/core/src/service.mjs` — read API, sources CRUD, `/console/` mount) and adds the playground-only file explorer/editor APIs and workbench static UI.
 - `app.js`, `index.html`, and `styles.css` are the browser UI for inspecting and editing local OKF bundles.
 - `manifest.json` points at `demo-layers/` for the default personal/team/company cascade.
-- `tokenize.mjs` and `vendor/` provide offline token counting and browser dependencies.
-- The server imports `packages/core/src/resolver.mjs` and `packages/core/src/sources/index.mjs` directly.
+- `vendor/` holds vendored browser dependencies; token counting lives in the engine (`packages/core/src/tokenize.mjs` + its vendored tokenizer).
+- The server imports `packages/core/src/service.mjs` directly (which in turn uses `resolver.mjs` and `sources/index.mjs`).
 
 ## Gotchas
 

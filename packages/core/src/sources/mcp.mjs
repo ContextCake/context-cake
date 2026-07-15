@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
-export function createMcpSource({ name, level, command, args = [] }) {
+export function createMcpSource({ name, level, command, args = [], respawnCooldownMs = 3000 }) {
   let child = null;
   let rl = null;
   let nextId = 1;
@@ -13,17 +13,26 @@ export function createMcpSource({ name, level, command, args = [] }) {
   let closed = false;
   const pending = new Map();
   let startError = null;
+  let lastSpawnAt = 0;
 
   // Reject every in-flight request immediately so a dead/unreachable source
   // degrades instantly instead of waiting for each request's timeout.
-  function failAll(e) {
-    startError = startError || e;
+  function rejectPending(e) {
     for (const [, p] of pending) { clearTimeout(p.timer); p.reject(e); }
     pending.clear();
   }
 
   function ensureStarted() {
-    if (closed || child || startError) return;
+    if (closed || child) return;
+    // A source that spawned then died must be able to come back — the service
+    // now holds one adapter set across many reads, so a one-time crash can't be
+    // allowed to kill the source for the process's lifetime. Stay degraded only
+    // for a short cooldown after the last spawn (so a single burst read doesn't
+    // respawn-storm a genuinely broken child), then allow a fresh attempt.
+    if (startError && Date.now() - lastSpawnAt < respawnCooldownMs) return;
+    startError = null;
+    ready = null;
+    lastSpawnAt = Date.now();
     try {
       child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"] });
     } catch (e) {
@@ -32,11 +41,18 @@ export function createMcpSource({ name, level, command, args = [] }) {
     }
     // spawn() defers failures to async events: a missing binary fires "error";
     // a process that starts then dies (missing script, crash, clean exit) fires
-    // "exit". Either way the child can no longer answer, so fail every pending
-    // request now instead of waiting for timeouts. (On an intentional close()
-    // pending is already empty, so this is a harmless no-op.)
-    child.on("error", (e) => failAll(e));
-    child.on("exit", () => failAll(new Error(`MCP source "${name}" exited`)));
+    // "exit". Either way reject every pending request now instead of waiting for
+    // timeouts. On "exit" we also drop the child handle and clear rl/ready so the
+    // next access past the cooldown respawns rather than failing forever.
+    child.on("error", (e) => { startError = startError || e; rejectPending(e); });
+    child.on("exit", () => {
+      child = null;
+      if (rl) { try { rl.close(); } catch { /* already gone */ } rl = null; }
+      ready = null;
+      const e = new Error(`MCP source "${name}" exited`);
+      if (!closed) startError = e; // intentional close() → leave it closed
+      rejectPending(e);
+    });
     child.stdin.on("error", () => {}); // swallow EPIPE if the child is already gone
     rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     rl.on("line", (line) => {

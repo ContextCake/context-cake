@@ -24,10 +24,12 @@ extraResources:
     to: engine/cli
   - from: resources/bin
     to: bin
-  # Ship package.json at Resources root so the packaged CLI can read its
-  # version (cli.mjs resolves ../../package.json → Resources/package.json).
-  - from: package.json
-    to: package.json
+  # NOTE: do NOT add package.json as an extraResources entry. electron-builder
+  # adds every extraResources source to the asar exclude set, so shipping
+  # package.json here drops it from app.asar — Electron then can't resolve the
+  # app entry point and pack fails its asar sanity check. package.json ships
+  # inside app.asar (via the `files` globs above); `contextcake --version`
+  # degrades to "unknown" in the packaged CLI, which is best-effort by design.
 
 mac:
   category: public.app-category.developer-tools

@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react'
 import { useStore, type ViewId } from '../store'
-import { AccountPanel } from './AccountPanel'
 import { UpdatePill } from './UpdatePill'
 
 const NAV: Array<{ id: ViewId; label: string; icon: ReactNode }> = [
@@ -33,19 +32,22 @@ const NAV: Array<{ id: ViewId; label: string; icon: ReactNode }> = [
 
 /**
  * Left navigation sidebar: brand, vertical nav, and a pinned foot of utilities
- * (setup, Ask, theme, update settings). On mobile it becomes an off-canvas
+ * (setup, Ask, settings). On mobile it becomes an off-canvas
  * drawer — `onNavigate` lets the shell close it after a nav choice.
  */
 export function Sidebar({
   onReopenSetup,
   onConnectAgent,
+  onOpenSettings,
   onNavigate,
 }: {
   onReopenSetup?: () => void
   onConnectAgent?: () => void
+  onOpenSettings?: () => void
   onNavigate?: () => void
 }) {
   const { view, setView, openChat, signals, conflicts, mode } = useStore()
+  const desktop = Boolean(window.__CC_DESKTOP)
   const triageCount = signals.filter((s) => s.route === 'review_required').length
   const openConflicts = conflicts.filter((c) => c.status === 'open').length
   const badgeFor = (id: ViewId) => (id === 'triage' ? triageCount : id === 'conflicts' ? openConflicts : 0)
@@ -60,15 +62,6 @@ export function Sidebar({
           <div className="cc-brand-name">ContextCake</div>
           <div className="cc-brand-meta">Team knowledge</div>
         </div>
-      </div>
-
-      <div className="cc-mode-switch" role="group" aria-label="Mode">
-        <button type="button" className="cc-mode-btn" aria-current="true">Explore</button>
-        {mode === 'live' ? (
-          <a className="cc-mode-btn" href="/" title="Switch to Configure — set up sources and edit layers">Configure</a>
-        ) : (
-          <span className="cc-mode-btn" aria-disabled="true" title="Run ContextCake locally (npm run console:live) to configure sources">Configure</span>
-        )}
       </div>
 
       <nav className="cc-nav" aria-label="Explore navigation">
@@ -91,7 +84,6 @@ export function Sidebar({
       </nav>
 
       <div className="cc-sidebar-foot">
-        <AccountPanel />
         {onReopenSetup && (
           <button type="button" className="cc-setup-cta" onClick={onReopenSetup}>
             Finish setup
@@ -108,6 +100,16 @@ export function Sidebar({
           Ask ContextCake
         </button>
         <UpdatePill mode={mode} />
+        {mode === 'live' && !desktop && (
+          <a className="cc-configure-link" href="/">Configure sources</a>
+        )}
+        {onOpenSettings && (
+          <button type="button" className="cc-settings-cta" onClick={onOpenSettings}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
+            <span>Settings</span>
+            <kbd>⌘,</kbd>
+          </button>
+        )}
       </div>
     </aside>
   )

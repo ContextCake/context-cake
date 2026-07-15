@@ -8,7 +8,7 @@ import { useStore } from '../store'
 // ---- layout constants (world coordinates) ----
 const NODE_W = 214, NODE_H = 96
 const GHOST_W = 196, GHOST_H = 66
-const GAP_X = 66, START_X = 74
+const GAP_X = 28, START_X = 138, END_X = 24
 const LANE_TOP = 60, LANE_H = 196, LANE_GAP = 16
 const LANE_INNER = LANE_H - LANE_GAP
 const NODE_DY = 46, GHOST_DY = 62
@@ -23,9 +23,25 @@ const primaryLayer = (c: Concept): LayerId =>
 interface NodePos { c: Concept; x: number; y: number; conflict: boolean }
 interface GhostPos { key: string; parent: NodePos; layer: LayerId; value: string; x: number; y: number }
 
-function computeLayout(concepts: Concept[]) {
-  const nodes: NodePos[] = concepts.map((c, i) => {
-    const x = START_X + i * (NODE_W + GAP_X)
+export function computeLayout(concepts: Concept[]) {
+  // A concept occupies its winning lane plus every lane where it has a
+  // dissent card. Reuse a column whenever those occupied lanes do not overlap;
+  // this keeps sparse cascades compact without allowing cards to collide.
+  const columnLayers: Array<Set<LayerId>> = []
+  const nodes: NodePos[] = concepts.map((c) => {
+    const occupied = new Set<LayerId>([primaryLayer(c)])
+    for (const section of c.sections) {
+      for (const dissent of section.dissents ?? []) occupied.add(dissent.layer)
+    }
+    let column = columnLayers.findIndex((layersInColumn) =>
+      Array.from(occupied).every((layer) => !layersInColumn.has(layer)))
+    if (column === -1) {
+      column = columnLayers.length
+      columnLayers.push(new Set())
+    }
+    for (const layer of occupied) columnLayers[column].add(layer)
+
+    const x = START_X + column * (NODE_W + GAP_X)
     const y = laneY(laneIndex(primaryLayer(c))) + NODE_DY
     return { c, x, y, conflict: c.sections.some((s) => (s.dissents?.length ?? 0) > 0) }
   })
@@ -43,7 +59,8 @@ function computeLayout(concepts: Concept[]) {
       }
     }
   }
-  const worldW = START_X + concepts.length * (NODE_W + GAP_X)
+  const columns = Math.max(1, columnLayers.length)
+  const worldW = START_X + columns * NODE_W + Math.max(0, columns - 1) * GAP_X + END_X
   const worldH = laneY(LANE_ORDER.length - 1) + LANE_H
   return { nodes, ghosts, worldW, worldH }
 }
@@ -54,7 +71,7 @@ function edgePath(x1: number, y1: number, x2: number, y2: number) {
   return `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`
 }
 
-export function Canvas() {
+export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: boolean }) {
   const { setSelConcept, setSelConflict, setView, conflicts, concepts } = useStore()
   // Memoized: pan/zoom re-renders every pointermove — don't re-lay-out for those.
   const { nodes, ghosts, worldW, worldH } = useMemo(() => computeLayout(concepts), [concepts])
@@ -136,11 +153,11 @@ export function Canvas() {
 
   // Escape closes the node slide-over.
   useEffect(() => {
-    if (!openId) return
+    if (!openId || keyboardSuspended) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenId(null) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [openId])
+  }, [keyboardSuspended, openId])
   const zoom = (dir: number) => setViewT((v) => {
     const el = wrapRef.current!, px = el.clientWidth / 2, py = el.clientHeight / 2
     const next = Math.min(2, Math.max(0.4, v.scale * (dir > 0 ? 1.2 : 1 / 1.2)))

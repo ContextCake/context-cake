@@ -5,7 +5,7 @@ import { useStore } from '../store'
 const SUGGESTIONS = ['What database do we use?', 'How do we handle on-call?']
 const MCP_CONFIG_CMD = 'claude mcp add contextcake -- node mcp-server.mjs --manifest layers.json'
 
-export function ChatPanel({ onConnectAgent }: { onConnectAgent?: () => void }) {
+export function ChatPanel({ keyboardSuspended = false, onConnectAgent }: { keyboardSuspended?: boolean; onConnectAgent?: () => void }) {
   const { chatMessages, chatBusy, chatInput, setChatInput, closeChat, send } = useStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -47,11 +47,12 @@ export function ChatPanel({ onConnectAgent }: { onConnectAgent?: () => void }) {
 
   // Focus the composer on open, and let Escape close the panel.
   useEffect(() => {
+    if (keyboardSuspended) return
     inputRef.current?.focus()
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeChat() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [closeChat])
+  }, [closeChat, keyboardSuspended])
 
   return (
     <div>

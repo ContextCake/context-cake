@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
 import { C, css, MONO } from './theme'
 import { Sidebar } from './components/Sidebar'
@@ -11,6 +11,7 @@ import { Concepts } from './views/Concepts'
 import { ChatPanel } from './components/ChatPanel'
 import { SetupWizard } from './components/SetupWizard'
 import { ConnectAgentDialog } from './components/ConnectAgentDialog'
+import { SettingsView } from './components/SettingsView'
 import type { LiveErrorKind } from './api'
 
 const ERROR_COPY: Record<LiveErrorKind, (msg: string) => string> = {
@@ -65,7 +66,10 @@ export function App() {
   // after a source is added and `sources.length` flips away from zero.
   const [wizardOpen, setWizardOpen] = useState<boolean | undefined>(undefined)
   const [connectOpen, setConnectOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [sourceSetupComplete, setSourceSetupComplete] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const settingsOpener = useRef<HTMLElement | null>(null)
 
   const needsSetup = mode === 'live' && !loading && !error && sources.length === 0
   const isDesktop = typeof window !== 'undefined' && Boolean(window.__CC_DESKTOP)
@@ -84,20 +88,59 @@ export function App() {
     }
     setConnectOpen(true)
   }
+  const openSettings = () => {
+    settingsOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setDrawerOpen(false)
+    setSettingsOpen(true)
+  }
+  const closeSettings = () => {
+    const opener = settingsOpener.current
+    setSettingsOpen(false)
+    window.requestAnimationFrame(() => {
+      const candidates = [
+        opener,
+        document.querySelector<HTMLElement>('.cc-settings-cta'),
+        document.querySelector<HTMLElement>('.cc-menu-btn'),
+      ]
+      candidates.find((candidate) => {
+        if (!candidate?.isConnected) return false
+        if (!candidate.matches('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')) return false
+        const rect = candidate.getBoundingClientRect()
+        const hasNoLayout = rect.width === 0 && rect.height === 0
+        const visible = hasNoLayout || (rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 && rect.left < window.innerWidth && rect.top < window.innerHeight)
+        if (visible) candidate.focus()
+        return visible
+      })
+      settingsOpener.current = null
+    })
+  }
 
   // Mobile off-canvas nav drawer (inert on desktop, where the sidebar is static).
-  const [drawerOpen, setDrawerOpen] = useState(false)
   const closeDrawer = () => setDrawerOpen(false)
   useEffect(() => {
-    if (!drawerOpen) return
+    if (!drawerOpen || settingsOpen) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawerOpen(false) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [drawerOpen])
+  }, [drawerOpen, settingsOpen])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (view !== 'triage' || chatOpen) return
+      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+        e.preventDefault()
+        if (!showWizard && !connectOpen) openSettings()
+      } else if (e.key === 'Escape' && settingsOpen) {
+        e.preventDefault()
+        closeSettings()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [connectOpen, settingsOpen, showWizard])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (settingsOpen || view !== 'triage' || chatOpen) return
       // Leave browser/OS chords (⌘S, Ctrl+D, Alt+…) alone.
       if (e.metaKey || e.ctrlKey || e.altKey) return
       const tag = ((e.target as HTMLElement)?.tagName || '').toLowerCase()
@@ -109,7 +152,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [view, chatOpen, route])
+  }, [settingsOpen, view, chatOpen, route])
 
   // The wizard's own reload() (step 6, Success) briefly flips `loading` true.
   // SetupWizard is rendered once, at a single stable position in the tree
@@ -128,6 +171,7 @@ export function App() {
           <Sidebar
             onReopenSetup={needsSetup ? reopenWizard : undefined}
             onConnectAgent={isDesktop && !needsSetup ? openConnect : undefined}
+            onOpenSettings={openSettings}
             onNavigate={closeDrawer}
           />
           <div className="cc-content">
@@ -143,7 +187,7 @@ export function App() {
             )}
             {view === 'canvas' ? (
               <main className="cc-main cc-main-canvas">
-                <Canvas />
+                <Canvas keyboardSuspended={settingsOpen} />
               </main>
             ) : (
               <main className="cc-main">
@@ -155,14 +199,15 @@ export function App() {
             )}
           </div>
         </div>
-        {chatOpen && <ChatPanel onConnectAgent={isDesktop ? openConnect : undefined} />}
+        {chatOpen && <ChatPanel keyboardSuspended={settingsOpen} onConnectAgent={isDesktop ? openConnect : undefined} />}
       </div>
     )
   }
 
   return (
     <>
-      {body}
+      <div className="cc-app-layer" aria-hidden={settingsOpen || undefined} inert={settingsOpen || undefined}>{body}</div>
+      {settingsOpen && <SettingsView appMode={mode} onClose={closeSettings} />}
       {showWizard && <SetupWizard onClose={closeWizard} onConnectAgent={isDesktop ? () => {
         setSourceSetupComplete(true)
         setWizardOpen(false)

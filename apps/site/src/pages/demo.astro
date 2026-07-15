@@ -9,50 +9,45 @@ const demoUrl = '/demo-app/index.html';
 
 const narrativePoints = [
 	{
-		title: 'The answer keeps its source',
-		body: 'The console shows a working answer without pretending every part came from the same place. Policy, team practice, and local judgment stay legible.',
+		title: 'Source, intact',
+		body: 'Each effective value names its layer and date.',
 	},
 	{
-		title: 'Disagreement stays visible',
-		body: 'When one layer overrides another, the losing view does not vanish into edit history. It stays attached with its layer and date.',
+		title: 'Dissent, intact',
+		body: 'Overrides do not erase the alternative view.',
 	},
 	{
-		title: 'The full workflow is intact',
-		body: 'This is the real console surface, hosted inside the main site, with overview, triage, conflicts, concept detail, and the grounded assistant.',
+		title: 'Workflow, intact',
+		body: 'Browse concepts, conflicts, and guidance in one place.',
 	},
 ];
 ---
 
 <Base
 	title="ContextCake demo"
-	description="See the ContextCake console in context, with a clearer explanation of what the resolved view is proving."
+	description="Explore a resolved ContextCake decision with its sources and disagreement intact."
 >
 	<main class="demo-page">
 		<section class="hero">
 			<div class="hero-copy">
 				<p class="eyebrow">Demo</p>
-				<h1>See how one team decision resolves without flattening the disagreement.</h1>
+				<h1>One decision.<br />The whole context.</h1>
 				<p class="lede">
-					The surface below is the actual ContextCake console. Every value in it is real
-					<code>resolver.mjs</code> output over the demo layers, generated at build time —
-					not hand-authored. It is showing one problem well: how company policy, team
-					practice, and local judgment can resolve into a usable answer without hiding where
-					each part came from.
+					The live console resolves the demo layers at build time. Trace the effective answer,
+					its source, and any disagreement.
 				</p>
 				<div class="actions">
-					<a class="cta primary" href="#demo-stage">Try the live console</a>
-					<a class="cta" href="/docs/getting-started/first-cascade">Walk the first cascade</a>
-					<a class="cta" href="/install">Install ContextCake</a>
+					<a class="cta primary" href="#demo-stage">Explore the console</a>
+					<a class="cta" href="/docs/getting-started/first-cascade">First cascade</a>
 				</div>
 			</div>
 
 			<aside class="scenario" aria-label="Demo framing">
 				<p class="scenario-label">What to look for</p>
-				<h2>One decision, three layers, one working view.</h2>
+				<h2>Three layers.<br />One usable answer.</h2>
 				<p>
-					Start on the canvas or conflicts view. The point is not the interface chrome. The
-					point is that the console keeps the winning answer, the dissent, and the provenance
-					in the same place.
+					Company policy, team practice, and local judgment resolve section by section. Source
+					and dissent stay in view.
 				</p>
 			</aside>
 		</section>
@@ -111,8 +106,8 @@ const narrativePoints = [
 		</section>
 
 		<section class="signals">
-			<p class="eyebrow">What to notice</p>
-			<h2>The demo should answer three questions quickly.</h2>
+			<p class="eyebrow">Inside the console</p>
+			<h2>Three things to notice.</h2>
 			<div class="signal-grid">
 				{narrativePoints.map((point) => (
 					<article class="signal">

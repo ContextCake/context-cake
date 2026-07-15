@@ -36,7 +36,15 @@ const NAV: Array<{ id: ViewId; label: string; icon: ReactNode }> = [
  * (setup, Ask, theme, update settings). On mobile it becomes an off-canvas
  * drawer — `onNavigate` lets the shell close it after a nav choice.
  */
-export function Sidebar({ onReopenSetup, onNavigate }: { onReopenSetup?: () => void; onNavigate?: () => void }) {
+export function Sidebar({
+  onReopenSetup,
+  onConnectAgent,
+  onNavigate,
+}: {
+  onReopenSetup?: () => void
+  onConnectAgent?: () => void
+  onNavigate?: () => void
+}) {
   const { view, setView, openChat, signals, conflicts, mode } = useStore()
   const triageCount = signals.filter((s) => s.route === 'review_required').length
   const openConflicts = conflicts.filter((c) => c.status === 'open').length
@@ -87,6 +95,12 @@ export function Sidebar({ onReopenSetup, onNavigate }: { onReopenSetup?: () => v
         {onReopenSetup && (
           <button type="button" className="cc-setup-cta" onClick={onReopenSetup}>
             Finish setup
+          </button>
+        )}
+        {onConnectAgent && (
+          <button type="button" className="cc-connect-cta" onClick={onConnectAgent}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 12h8M12 8v8" /><rect x="3" y="4" width="18" height="16" rx="3" /></svg>
+            Connect an agent
           </button>
         )}
         <button className="cc-ask-button" onClick={openChat}>

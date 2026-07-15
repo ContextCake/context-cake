@@ -12,3 +12,13 @@ export function isEngineOrigin(url, engineOrigin) {
     return false
   }
 }
+
+/** True only for IPC sent by the app's sole window while it is on the engine origin. */
+export function isTrustedIpcSender(event, trustedWebContents, engineOrigin) {
+  const frameUrl = event?.senderFrame?.url || event?.sender?.getURL?.() || ''
+  return Boolean(
+    trustedWebContents
+    && event?.sender === trustedWebContents
+    && isEngineOrigin(frameUrl, engineOrigin),
+  )
+}

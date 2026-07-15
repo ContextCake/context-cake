@@ -12,6 +12,7 @@
     "dev": "npm run renderer && electron .",
     "test": "node --test test/*.test.mjs",
     "test:navigation": "node scripts/navigation-test.mjs",
+    "test:cli-status": "node scripts/cli-status-test.mjs",
     "smoke": "CC_SMOKE=1 electron .",
     "smoke:bootfail": "node scripts/smoke-bootfail.mjs",
     "supabase:config": "node scripts/generate-supabase-config.mjs",

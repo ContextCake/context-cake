@@ -64,6 +64,16 @@ if ! grep -q '"name":"contextcake"' <<<"$responses"; then
   exit 1
 fi
 
+if ! grep -q '"instructions":"Consult ContextCake before answering project-specific questions.' <<<"$responses"; then
+  echo "Missing MCP server instructions" >&2
+  exit 1
+fi
+
+if ! grep -q '"readOnlyHint":true' <<<"$responses"; then
+  echo "Missing read-only MCP tool annotations" >&2
+  exit 1
+fi
+
 if ! grep -q 'scratch/auth-notes' <<<"$responses"; then
   echo "Search did not return promoted concept" >&2
   exit 1

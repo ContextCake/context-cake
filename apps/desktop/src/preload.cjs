@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   // Initial, non-PII snapshot. The live state (including optional email) is
   // delivered through __CC_AUTH so it never appears in process arguments.
   authState: { signedIn: arg('cc-signed-in') === '1' },
+  cli: {
+    getStatus: () => ipcRenderer.invoke('contextcake:cli-status'),
+    install: () => ipcRenderer.invoke('contextcake:cli-install'),
+  },
 })
 
 function subscribe(channel, cb) {

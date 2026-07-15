@@ -30,6 +30,18 @@ if (layers.length === 0) {
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
 const serverInfo = { name: "contextcake", version: "0.1.0" };
+const serverInstructions = [
+  "Consult ContextCake before answering project-specific questions.",
+  "Start with list_concepts or search, then read the relevant resolved concept.",
+  "Treat sourceLayer as precedence rather than certainty, preserve provenance, and surface conflicting guidance with its layers instead of silently reconciling it.",
+  "All ContextCake tools are read-only.",
+].join(" ");
+const readOnlyAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
 
 const tools = [
   {
@@ -43,6 +55,7 @@ const tools = [
       },
       required: ["query"],
     },
+    annotations: readOnlyAnnotations,
   },
   {
     name: "read_file",
@@ -55,6 +68,7 @@ const tools = [
       },
       required: ["concept_id"],
     },
+    annotations: readOnlyAnnotations,
   },
   {
     name: "list_concepts",
@@ -65,6 +79,7 @@ const tools = [
         type: { type: "string", description: "Optional OKF type filter (effective type)." },
       },
     },
+    annotations: readOnlyAnnotations,
   },
   {
     name: "get_links",
@@ -76,6 +91,7 @@ const tools = [
       },
       required: ["concept_id"],
     },
+    annotations: readOnlyAnnotations,
   },
 ];
 
@@ -109,6 +125,7 @@ async function handleMessage(message) {
         protocolVersion: params.protocolVersion ?? "2025-06-18",
         capabilities: { tools: {} },
         serverInfo,
+        instructions: serverInstructions,
       },
     };
   }

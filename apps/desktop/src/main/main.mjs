@@ -18,7 +18,8 @@ import {
 } from './settings-sync.mjs'
 import { loadSupabaseConfig } from './supabase-config.mjs'
 import { initUpdater } from './updater.mjs'
-import { isEngineOrigin } from './navigation.mjs'
+import { isEngineOrigin, isTrustedIpcSender } from './navigation.mjs'
+import { getCliStatus, installCli } from './cli-install.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -244,10 +245,6 @@ async function syncAfterSignIn() {
   }
 }
 
-function trustedServiceUrl(rawUrl) {
-  try { return service && new URL(rawUrl).origin === service.origin } catch { return false }
-}
-
 function openExternalHttps(rawUrl) {
   try {
     const url = new URL(rawUrl)
@@ -256,10 +253,16 @@ function openExternalHttps(rawUrl) {
 }
 
 function assertTrustedIpc(event) {
-  const frameUrl = event.senderFrame?.url || event.sender?.getURL?.() || ''
-  if (!win || event.sender !== win.webContents || !trustedServiceUrl(frameUrl)) {
+  if (!win || !service || !isTrustedIpcSender(event, win.webContents, service.origin)) {
     throw new Error('Untrusted IPC sender.')
   }
+}
+
+function handleTrustedIpc(channel, callback) {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedIpc(event)
+    return callback(...args)
+  })
 }
 
 async function handleDeepLink(url) {
@@ -275,10 +278,7 @@ async function handleDeepLink(url) {
 }
 
 function registerAccountIpc() {
-  const handle = (channel, callback) => ipcMain.handle(channel, (event, ...args) => {
-    assertTrustedIpc(event)
-    return callback(...args)
-  })
+  const handle = handleTrustedIpc
 
   handle('auth:get-state', currentAuthState)
   handle('auth:sign-in', (provider) => {
@@ -367,6 +367,12 @@ async function initializeAccounts() {
     await handleDeepLink(url)
   }
 }
+
+// Fixed, argument-free IPC only. The sandboxed renderer can inspect or invoke
+// ContextCake's own CLI installer; it cannot execute arbitrary processes or
+// choose filesystem paths.
+handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
+handleTrustedIpc('contextcake:cli-install', () => installCli(win, { showSuccess: false }))
 
 async function createWindow() {
   service ??= await startEngineService()

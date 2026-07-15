@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { isEngineOrigin } from '../src/main/navigation.mjs'
+import { isEngineOrigin, isTrustedIpcSender } from '../src/main/navigation.mjs'
 
 const origin = 'http://127.0.0.1:4317'
 
@@ -9,4 +9,14 @@ assert.equal(isEngineOrigin(`http://127.0.0.1:4317@attacker.example/`, origin), 
 assert.equal(isEngineOrigin('https://127.0.0.1:4317/console/', origin), false)
 assert.equal(isEngineOrigin('not a URL', origin), false)
 
-console.log('navigation test passed (exact engine origin only)')
+const trustedWebContents = { getURL: () => `${origin}/console/` }
+assert.equal(isTrustedIpcSender({ sender: trustedWebContents }, trustedWebContents, origin), true)
+assert.equal(isTrustedIpcSender({
+  sender: trustedWebContents,
+  senderFrame: { url: 'https://attacker.example/' },
+}, trustedWebContents, origin), false)
+assert.equal(isTrustedIpcSender({
+  sender: { getURL: () => `${origin}/console/` },
+}, trustedWebContents, origin), false)
+
+console.log('navigation test passed (exact engine origin and trusted IPC sender only)')

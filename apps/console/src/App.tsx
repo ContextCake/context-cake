@@ -10,6 +10,7 @@ import { Conflicts } from './views/Conflicts'
 import { Concepts } from './views/Concepts'
 import { ChatPanel } from './components/ChatPanel'
 import { SetupWizard } from './components/SetupWizard'
+import { ConnectAgentDialog } from './components/ConnectAgentDialog'
 import type { LiveErrorKind } from './api'
 
 const ERROR_COPY: Record<LiveErrorKind, (msg: string) => string> = {
@@ -63,8 +64,11 @@ export function App() {
   // from `needsSetup` so the wizard's own Success step stays visible even
   // after a source is added and `sources.length` flips away from zero.
   const [wizardOpen, setWizardOpen] = useState<boolean | undefined>(undefined)
+  const [connectOpen, setConnectOpen] = useState(false)
+  const [sourceSetupComplete, setSourceSetupComplete] = useState(false)
 
   const needsSetup = mode === 'live' && !loading && !error && sources.length === 0
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.__CC_DESKTOP)
 
   useEffect(() => {
     if (needsSetup && wizardOpen === undefined) setWizardOpen(true)
@@ -73,6 +77,13 @@ export function App() {
   const showWizard = wizardOpen === true
   const closeWizard = () => setWizardOpen(false)
   const reopenWizard = () => setWizardOpen(true)
+  const openConnect = () => {
+    if (sources.length === 0 && !sourceSetupComplete) {
+      setWizardOpen(true)
+      return
+    }
+    setConnectOpen(true)
+  }
 
   // Mobile off-canvas nav drawer (inert on desktop, where the sidebar is static).
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -116,6 +127,7 @@ export function App() {
         <div className="cc-shell-inner">
           <Sidebar
             onReopenSetup={needsSetup ? reopenWizard : undefined}
+            onConnectAgent={isDesktop && !needsSetup ? openConnect : undefined}
             onNavigate={closeDrawer}
           />
           <div className="cc-content">
@@ -143,7 +155,7 @@ export function App() {
             )}
           </div>
         </div>
-        {chatOpen && <ChatPanel />}
+        {chatOpen && <ChatPanel onConnectAgent={isDesktop ? openConnect : undefined} />}
       </div>
     )
   }
@@ -151,7 +163,18 @@ export function App() {
   return (
     <>
       {body}
-      {showWizard && <SetupWizard onClose={closeWizard} />}
+      {showWizard && <SetupWizard onClose={closeWizard} onConnectAgent={isDesktop ? () => {
+        setSourceSetupComplete(true)
+        setWizardOpen(false)
+        setConnectOpen(true)
+      } : undefined} />}
+      {connectOpen && (
+        <ConnectAgentDialog
+          hasSources={sources.length > 0 || sourceSetupComplete}
+          onClose={() => setConnectOpen(false)}
+          onOpenSetup={reopenWizard}
+        />
+      )}
     </>
   )
 }

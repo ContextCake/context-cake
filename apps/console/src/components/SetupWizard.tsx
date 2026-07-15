@@ -82,7 +82,7 @@ function btnDisabled(): React.CSSProperties {
   return css(`padding:9px 16px; background:${C.neutralFill}; border:1px solid ${C.line}; border-radius:9px; cursor:not-allowed; font:inherit; font-weight:600; font-size:12.5px; color:${C.faint};`)
 }
 
-export function SetupWizard({ onClose }: { onClose: () => void }) {
+export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; onConnectAgent?: () => void }) {
   const { reload } = useStore()
   const [stepIdx, setStepIdx] = useState(0)
   const step = STEPS[stepIdx]
@@ -402,7 +402,12 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
             title="You're set up"
             subtitle="Your cascade is live."
             footer={(
-              <button type="button" style={{ marginLeft: 'auto', ...btnPrimary() }} onClick={onClose}>Done</button>
+              <div style={css('display:flex; justify-content:flex-end; gap:8px; width:100%;')}>
+                <button type="button" style={btnGhost()} onClick={onClose}>Done</button>
+                {onConnectAgent && added.length > 0 && (
+                  <button type="button" style={btnPrimary()} onClick={() => { onClose(); onConnectAgent() }}>Connect an agent</button>
+                )}
+              </div>
             )}
           >
             {successConcept ? (

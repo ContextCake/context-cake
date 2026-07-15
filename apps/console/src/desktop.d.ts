@@ -17,6 +17,13 @@ type SettingsSyncState = {
   overwritten?: boolean
 }
 
+type CliStatus = 'installed' | 'missing' | 'stale' | 'conflict' | 'blocked' | 'development'
+
+interface CliResult {
+  status: CliStatus
+  message: string
+}
+
 declare global {
   interface Window {
     __CC_DESKTOP?: {
@@ -26,6 +33,11 @@ declare global {
       version: string
       /** Initial auth snapshot; subscribe through __CC_AUTH for live state. */
       authState: DesktopAuthState
+      /** Fixed native operations for ContextCake's own command-line tool. */
+      cli: {
+        getStatus: () => Promise<CliResult>
+        install: () => Promise<CliResult>
+      }
     }
     __CC_AUTH?: {
       getState(): Promise<DesktopAuthState>

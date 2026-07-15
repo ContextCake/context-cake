@@ -5,12 +5,12 @@ import { useStore } from '../store'
 const SUGGESTIONS = ['What database do we use?', 'How do we handle on-call?']
 const MCP_CONFIG_CMD = 'claude mcp add contextcake -- node mcp-server.mjs --manifest layers.json'
 
-export function ChatPanel() {
+export function ChatPanel({ onConnectAgent }: { onConnectAgent?: () => void }) {
   const { chatMessages, chatBusy, chatInput, setChatInput, closeChat, send } = useStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle')
-  const copyTimer = useRef<ReturnType<typeof setTimeout>>()
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const copyMcpConfig = () => {
     const settle = (state: 'copied' | 'failed') => {
@@ -27,6 +27,15 @@ export function ChatPanel() {
     navigator.clipboard.writeText(MCP_CONFIG_CMD)
       .then(() => settle('copied'))
       .catch(() => settle('failed'))
+  }
+
+  const connectAgent = () => {
+    if (!onConnectAgent) {
+      copyMcpConfig()
+      return
+    }
+    closeChat()
+    onConnectAgent()
   }
 
   useEffect(() => () => clearTimeout(copyTimer.current), [])
@@ -58,11 +67,11 @@ export function ChatPanel() {
           </div>
           <button
             className="cc-h-eae"
-            onClick={copyMcpConfig}
-            title="Copy the command to connect a real agent"
+            onClick={connectAgent}
+            title={onConnectAgent ? 'Choose an AI client and connect ContextCake' : 'Copy the command to connect a real agent'}
             style={css(`display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid ${C.line}; background:transparent; border-radius:7px; cursor:pointer; font:inherit; font-family:${MONO}; font-size:10.5px; color:${C.caption};`)}
           >
-            {copied === 'copied' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy MCP config'}
+            {onConnectAgent ? 'Connect an agent' : copied === 'copied' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy MCP config'}
           </button>
           <button className="cc-h-eae" onClick={closeChat} aria-label="Close chat" style={css('display:grid; place-items:center; width:30px; height:30px; border:none; background:transparent; border-radius:7px; cursor:pointer; color:#57564F;')}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
@@ -93,7 +102,7 @@ export function ChatPanel() {
                     <div style={css('margin-top:9px; padding-top:9px; border-top:1px solid #EAE7DD; font-size:11.5px; color:#7A5A28; line-height:1.45;')}>{m.note}</div>
                   )}
                   {m.canned && (
-                    <div style={css(`margin-top:9px; padding-top:9px; border-top:1px solid #EAE7DD; font-family:${MONO}; font-size:10.5px; color:#8A8A82; letter-spacing:0.01em;`)}>Sample answer — connect an agent (Copy MCP config) for real ones</div>
+                    <div style={css(`margin-top:9px; padding-top:9px; border-top:1px solid #EAE7DD; font-family:${MONO}; font-size:10.5px; color:#8A8A82; letter-spacing:0.01em;`)}>Sample answer — {onConnectAgent ? 'connect an agent for live answers' : 'connect an agent (Copy MCP config) for real ones'}</div>
                   )}
                 </div>
               </div>

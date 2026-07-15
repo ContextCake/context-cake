@@ -41,6 +41,5 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   `CONFIG_DIR` in `src/cli/cli.mjs`. They resolve the same `userData` dir the
   app writes and the CLI reads — a mismatch breaks `contextcake mcp`. The smoke
   test asserts `userData=ContextCake`.
-- **Known gaps tracked as follow-ups** (not blocking merge): no `build/icon.icns`
-  yet (first DMG would carry the stock Electron icon); the updater reads the
+- **Known gaps tracked as follow-ups** (not blocking merge): the updater reads the
   repo-wide GitHub "latest" release (see the comment in `updater.mjs`).

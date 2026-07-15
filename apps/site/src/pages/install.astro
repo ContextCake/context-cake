@@ -35,7 +35,7 @@ const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/r
 		<CodeBlock
 			lang="bash"
 			code={`mkdir contextcake
-tar -xzf contextcake.tar.gz -C contextcake --strip-components=1
+tar -xzf ContextCake-context-cake-*.tar.gz -C contextcake --strip-components=1
 cd contextcake`}
 		/>
 
@@ -102,7 +102,7 @@ cd context-cake`}
 			Registry supply-chain attacks have repeatedly hit AI and agent tooling. Compromised
 			maintainer accounts shipping credential-stealing <code>postinstall</code> payloads
 			to thousands of downstreams. A knowledge engine that your agents read from should
-			have a supply chain you can audit: a tagged release archive is small, inspectable,
+			have a supply chain you can audit: a source archive is small, inspectable,
 			and runnable as plain Node.js.
 		</p>
 	</main>

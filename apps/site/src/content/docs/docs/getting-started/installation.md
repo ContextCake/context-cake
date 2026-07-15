@@ -1,9 +1,9 @@
 ---
 title: Installation
-description: Install from a versioned release archive and run the bundled demo in a few minutes.
+description: Download the current source archive and run the bundled demo in a few minutes.
 ---
 
-ContextCake installs from a **versioned release archive**. The engine is
+ContextCake installs from a **direct source archive**. The engine is
 dependency-free: there is no `npm install` step, no install scripts execute, and
 nothing is fetched after you unpack the archive.
 
@@ -13,20 +13,21 @@ local setup path.
 
 ## Prerequisites
 
-- `gh` for the terminal path, or a browser for manual download
+- A browser to download the source archive
 - Node.js ≥ 18
 
 ## Download
 
+Download the [ContextCake source archive](https://github.com/ContextCake/context-cake/archive/refs/heads/main.tar.gz), then unpack it:
+
 ```bash
-gh release download --repo ContextCake/context-cake --archive=tar.gz --output contextcake.tar.gz
 mkdir contextcake
-tar -xzf contextcake.tar.gz -C contextcake --strip-components=1
+tar -xzf ContextCake-context-cake-*.tar.gz -C contextcake --strip-components=1
 cd contextcake
 ```
 
-You can also download the source archive from the
-[latest ContextCake release](https://github.com/ContextCake/context-cake/releases/latest).
+GitHub names each downloaded archive with the source commit, so the unpack command
+uses its generated filename pattern.
 
 ## Verify
 
@@ -40,7 +41,7 @@ node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/p
 The JSON output shows the effective merge: `contributors` lists each layer with its
 last-updated date, every section carries the `sourceLayer` that won it, and sections
 where layers disagree carry a `conflicts` array with the dissenting layers' content
-and dates — surfaced, not hidden.
+and dates, surfaced rather than hidden.
 
 To run the full test suite (requires `bash`):
 
@@ -67,16 +68,16 @@ git clone https://github.com/ContextCake/context-cake.git
 cd context-cake
 ```
 
-## Why a release archive?
+## Why a source archive?
 
 Package registries have repeatedly shipped compromised AI/agent tooling through
 hijacked maintainer accounts and `postinstall` payloads. A knowledge engine your
-agents read from should have a supply chain you can audit: a tagged archive is
+agents read from should have a supply chain you can audit: a source archive is
 small, inspectable, and runnable as plain Node.js.
 
 ## Next
 
-- [Your first cascade](/docs/getting-started/first-cascade) — build your own layers
-- [Connect an agent (MCP)](/docs/getting-started/connect-an-agent) — wire it into Claude
-- [The trust boundary](/docs/concepts/trust-boundary) — read this before pointing a
+- [Your first cascade](/docs/getting-started/first-cascade): build your own layers
+- [Connect an agent (MCP)](/docs/getting-started/connect-an-agent): wire it into Claude
+- [The trust boundary](/docs/concepts/trust-boundary): read this before pointing a
   manifest at sources you didn't write

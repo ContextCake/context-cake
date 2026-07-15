@@ -37,6 +37,45 @@ async function syncSource(name: string): Promise<void> {
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
 }
 
+/** Split a user-provided command without invoking a shell. */
+export function parseCommandLine(value: string): string[] {
+  const parts: string[] = []
+  let current = ''
+  let quote: "'" | '"' | null = null
+  let escaping = false
+  let started = false
+
+  for (const char of value.trim()) {
+    if (escaping) {
+      current += char
+      escaping = false
+      started = true
+    } else if (char === '\\' && quote !== "'") {
+      escaping = true
+      started = true
+    } else if (quote) {
+      if (char === quote) quote = null
+      else current += char
+    } else if (char === '"' || char === "'") {
+      quote = char
+      started = true
+    } else if (/\s/.test(char)) {
+      if (started) {
+        parts.push(current)
+        current = ''
+        started = false
+      }
+    } else {
+      current += char
+      started = true
+    }
+  }
+
+  if (escaping || quote) throw new Error('The server command has an unfinished quote or escape.')
+  if (started) parts.push(current)
+  return parts
+}
+
 function StepShell({
   title, subtitle, children, footer, stepIndex,
 }: {
@@ -153,8 +192,8 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
   const [teamErr, setTeamErr] = useState<string | null>(null)
   const [teamBusy, setTeamBusy] = useState(false)
 
-  const [mcpCommand, setMcpCommand] = useState('')
-  const [mcpArgs, setMcpArgs] = useState('')
+  const [mcpExpanded, setMcpExpanded] = useState(false)
+  const [mcpCommandLine, setMcpCommandLine] = useState('')
   const [mcpTrusted, setMcpTrusted] = useState(false)
   const [mcpErr, setMcpErr] = useState<string | null>(null)
   const [mcpBusy, setMcpBusy] = useState(false)
@@ -217,14 +256,21 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
   const skipTeam = () => { setTeamErr(null); goNext() }
 
   const submitCompany = async () => {
-    if (!mcpCommand.trim()) { setMcpErr('Provide a command.'); return }
     if (!mcpTrusted) return
+    let parts: string[]
+    try {
+      parts = parseCommandLine(mcpCommandLine)
+    } catch (e) {
+      setMcpErr(e instanceof Error ? e.message : String(e))
+      return
+    }
+    if (parts.length === 0) { setMcpErr('Paste the server command your organization provided.'); return }
     setMcpBusy(true)
     setMcpErr(null)
     try {
-      const args = mcpArgs.trim()
-      await postSource({ kind: 'mcp', name: 'company', level: 0, command: mcpCommand.trim(), args })
-      setAdded((prev) => [...prev, { kind: 'mcp', name: 'company', level: 0, detail: `${mcpCommand.trim()} ${args}`.trim() }])
+      const [command, ...args] = parts
+      await postSource({ kind: 'mcp', name: 'company', level: 0, command, args })
+      setAdded((prev) => [...prev, { kind: 'mcp', name: 'company', level: 0, detail: mcpCommandLine.trim() }])
       goNext()
     } catch (e) {
       setMcpErr(e instanceof Error ? e.message : String(e))
@@ -365,51 +411,59 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
         {step === 'company' && (
           <StepShell
             stepIndex={3}
-            title="Company layer (optional, MCP)"
-            subtitle="Company knowledge served by a foreign MCP source — a command that runs locally and is translated to OKF at read time."
+            title="Company knowledge (optional)"
+            subtitle="Connect this only if your organization already gave you an MCP server command. You can safely skip it and add one later."
           >
-            <div style={css(`padding:12px 14px; border-radius:10px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:12.5px; color:${C.amberText}; line-height:1.55;`)}>
-              An MCP source runs a command on your machine every time the cascade resolves. Only add servers you trust — a manifest you didn't author can run arbitrary code as you.
-            </div>
-            <div>
-              <label htmlFor="wiz-mcp-command" style={fieldLabelStyle()}>Command</label>
-              <input
-                id="wiz-mcp-command"
-                style={inputStyle()}
-                value={mcpCommand}
-                onChange={(e) => setMcpCommand(e.target.value)}
-                placeholder="node"
-                autoComplete="off"
-              />
-            </div>
-            <div>
-              <label htmlFor="wiz-mcp-args" style={fieldLabelStyle()}>Arguments</label>
-              <input
-                id="wiz-mcp-args"
-                style={inputStyle()}
-                value={mcpArgs}
-                onChange={(e) => setMcpArgs(e.target.value)}
-                placeholder="examples/mock-mcp-source/server.mjs"
-                autoComplete="off"
-              />
-            </div>
-            <label style={css(`display:flex; align-items:center; gap:8px; font-size:12.5px; color:${C.body}; cursor:pointer;`)}>
-              <input type="checkbox" checked={mcpTrusted} onChange={(e) => setMcpTrusted(e.target.checked)} />
-              I trust this command
-            </label>
-            {mcpErr && <p style={css('margin:0; font-size:12px; color:var(--cc-amber-text);')}>{mcpErr}</p>}
+            {!mcpExpanded ? (
+              <div style={css(`display:flex; flex-direction:column; align-items:flex-start; gap:9px; padding:14px 15px; border-radius:10px; background:${C.surface}; border:1px solid ${C.line};`)}>
+                <strong style={css(`font-size:13px; color:${C.ink};`)}>Already have a company MCP server?</strong>
+                <span style={css(`font-size:12.5px; line-height:1.5; color:${C.caption};`)}>
+                  Your IT or platform team should provide a command to start it. If that doesn't sound familiar, skip this step.
+                </span>
+                <button type="button" style={btnGhost()} onClick={() => setMcpExpanded(true)}>Connect an MCP server</button>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label htmlFor="wiz-mcp-command" style={fieldLabelStyle()}>Server command</label>
+                  <input
+                    id="wiz-mcp-command"
+                    style={inputStyle()}
+                    value={mcpCommandLine}
+                    onChange={(e) => { setMcpCommandLine(e.target.value); setMcpErr(null) }}
+                    placeholder="npx -y @your-company/context-mcp"
+                    autoComplete="off"
+                    aria-describedby="wiz-mcp-command-help"
+                    autoFocus
+                  />
+                  <p id="wiz-mcp-command-help" style={css(`margin:6px 0 0; font-size:11.5px; line-height:1.45; color:${C.caption};`)}>
+                    Paste the complete command exactly as it was provided to you.
+                  </p>
+                </div>
+                <div style={css(`padding:10px 12px; border-radius:9px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; color:${C.amberText}; line-height:1.5;`)}>
+                  This command runs locally with your Mac user permissions.
+                </div>
+                <label style={css(`display:flex; align-items:center; gap:8px; min-height:32px; font-size:12.5px; color:${C.body}; cursor:pointer;`)}>
+                  <input type="checkbox" checked={mcpTrusted} onChange={(e) => setMcpTrusted(e.target.checked)} />
+                  I received this command from a source I trust
+                </label>
+              </>
+            )}
+            {mcpErr && <p role="alert" style={css('margin:0; font-size:12px; color:var(--cc-amber-text);')}>{mcpErr}</p>}
             <div style={css('display:flex; align-items:center; justify-content:space-between; margin-top:4px;')}>
               <button type="button" style={btnGhost()} onClick={goBack}>Back</button>
               <div style={css('display:flex; gap:8px;')}>
-                <button type="button" style={btnGhost()} onClick={skipCompany}>Skip</button>
-                <button
-                  type="button"
-                  style={(mcpBusy || !mcpTrusted) ? btnDisabled() : btnPrimary()}
-                  disabled={mcpBusy || !mcpTrusted}
-                  onClick={submitCompany}
-                >
-                  {mcpBusy ? 'Adding…' : 'Add'}
-                </button>
+                <button type="button" style={mcpExpanded ? btnGhost() : btnPrimary()} onClick={skipCompany}>Skip for now</button>
+                {mcpExpanded && (
+                  <button
+                    type="button"
+                    style={(mcpBusy || !mcpTrusted || !mcpCommandLine.trim()) ? btnDisabled() : btnPrimary()}
+                    disabled={mcpBusy || !mcpTrusted || !mcpCommandLine.trim()}
+                    onClick={submitCompany}
+                  >
+                    {mcpBusy ? 'Connecting…' : 'Connect server'}
+                  </button>
+                )}
               </div>
             </div>
           </StepShell>

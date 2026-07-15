@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SetupWizard } from './SetupWizard'
+import { parseCommandLine, SetupWizard } from './SetupWizard'
 
 const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), reload: vi.fn() }))
 
@@ -16,6 +16,16 @@ function button(label: string): HTMLButtonElement {
   const match = Array.from(container.querySelectorAll('button')).find((item) => item.textContent?.trim() === label)
   if (!match) throw new Error(`Button not found: ${label}`)
   return match
+}
+
+async function enter(selector: string, value: string) {
+  const input = container.querySelector<HTMLInputElement>(selector)
+  await act(async () => {
+    if (!input) throw new Error(`Input not found: ${selector}`)
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    setter?.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
 }
 
 beforeEach(() => {
@@ -39,6 +49,23 @@ afterEach(async () => {
 })
 
 describe('SetupWizard connection handoff', () => {
+  it('keeps advanced MCP fields hidden until the user chooses to connect a server', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/contextcake-personal')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+
+    expect(container.querySelector('#wiz-mcp-command')).toBeNull()
+    expect(button('Skip for now')).toBeTruthy()
+    await act(async () => button('Connect an MCP server').click())
+    const command = container.querySelector<HTMLInputElement>('#wiz-mcp-command')
+    expect(command).toBeTruthy()
+    expect(document.activeElement).toBe(command)
+    expect(button('Connect server').disabled).toBe(true)
+  })
+
   it('uses the native folder browser when the desktop bridge is available', async () => {
     const chooseFolder = vi.fn().mockResolvedValue('/Users/person/ContextCake/personal')
     window.__CC_DESKTOP = {
@@ -67,21 +94,30 @@ describe('SetupWizard connection handoff', () => {
     await act(async () => root.render(<SetupWizard onClose={onClose} onConnectAgent={onConnectAgent} />))
 
     await act(async () => button('Get started').click())
-    const path = container.querySelector<HTMLInputElement>('#wiz-personal-path')
-    await act(async () => {
-      if (!path) throw new Error('Personal path input missing')
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-      setter?.call(path, '/tmp/contextcake-personal')
-      path.dispatchEvent(new Event('input', { bubbles: true }))
-    })
+    await enter('#wiz-personal-path', '/tmp/contextcake-personal')
     await act(async () => button('Next').click())
     await act(async () => button('Skip').click())
-    await act(async () => button('Skip').click())
+    await act(async () => button('Skip for now').click())
     await act(async () => button('Finish').click())
 
     expect(button('Connect an agent')).toBeTruthy()
     await act(async () => button('Connect an agent').click())
     expect(onClose).toHaveBeenCalledOnce()
     expect(onConnectAgent).toHaveBeenCalledOnce()
+  })
+})
+
+describe('parseCommandLine', () => {
+  it('splits a complete command without invoking a shell', () => {
+    expect(parseCommandLine('npx -y "@company/context mcp" --stdio')).toEqual([
+      'npx', '-y', '@company/context mcp', '--stdio',
+    ])
+    expect(parseCommandLine("node '/Users/person/My Server/server.mjs'")).toEqual([
+      'node', '/Users/person/My Server/server.mjs',
+    ])
+  })
+
+  it('rejects unfinished quoting instead of changing command meaning', () => {
+    expect(() => parseCommandLine('npx "unfinished')).toThrow(/unfinished quote or escape/)
   })
 })

@@ -10,13 +10,16 @@ import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/700.css';
 import '../styles/tokens.css';
 import Icon from '../components/Icon.astro';
+import appIconUrl from '../../../../assets/brand/contextcake-app-icon.svg?url';
 
 interface Props {
 	title: string;
 	description: string;
+	tone?: 'dark' | 'paper';
 }
 
-const { title, description } = Astro.props;
+const { title, description, tone = 'dark' } = Astro.props;
+const initialTheme = tone === 'paper' ? 'light' : 'dark';
 
 // Absolute URLs for canonical + OpenGraph (Astro.site = https://contextcake.com).
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
@@ -25,7 +28,7 @@ const ogImage = new URL('/og.png', Astro.site).href;
 const repoUrl = 'https://github.com/ContextCake/context-cake';
 const year = new Date().getFullYear();
 
-// Footer navigation — every href is a real route (marketing pages + Starlight docs).
+// Footer navigation: every href is a real route (marketing pages + Starlight docs).
 const footerColumns = [
 	{
 		heading: 'Product',
@@ -58,7 +61,7 @@ const footerColumns = [
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" data-cc-theme={initialTheme}>
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -78,10 +81,27 @@ const footerColumns = [
 			<meta name="twitter:description" content={description} />
 			<meta name="twitter:image" content={ogImage} />
 	</head>
-	<body>
+	<body class:list={[`theme-${tone}`]} data-default-theme={initialTheme}>
+		<script is:inline>
+			const themeStorageKey = 'contextcake-site-theme';
+			const siteBody = document.body;
+			const savedTheme = (() => {
+				try {
+					return localStorage.getItem(themeStorageKey);
+				} catch {
+					return null;
+				}
+			})();
+			const initialSiteTheme = savedTheme === 'light' || savedTheme === 'dark'
+				? savedTheme
+				: siteBody.dataset.defaultTheme;
+			document.documentElement.dataset.ccTheme = initialSiteTheme;
+			siteBody.classList.toggle('theme-paper', initialSiteTheme === 'light');
+			siteBody.classList.toggle('theme-dark', initialSiteTheme === 'dark');
+		</script>
 		<header class="nav">
 			<a href="/" class="brand" aria-label="ContextCake home">
-				<img class="brand-mark" src="/contextcake-app-icon.svg" alt="" width="42" height="42" />
+				<img class="brand-mark" src={appIconUrl} alt="" width="42" height="42" />
 				<span>ContextCake</span>
 			</a>
 			<nav aria-label="Main">
@@ -91,19 +111,47 @@ const footerColumns = [
 				<a href="/install">Install</a>
 				<a href="https://github.com/ContextCake/context-cake">GitHub</a>
 			</nav>
+			<button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" title="Switch to dark mode">
+				<Icon name="moon" size={18} class="theme-toggle__moon" />
+				<Icon name="sun" size={18} class="theme-toggle__sun" />
+				<span class="sr-only">Switch theme</span>
+			</button>
 		</header>
+		<script is:inline>
+			const themeToggle = document.querySelector('[data-theme-toggle]');
+			const applySiteTheme = (theme, persist = false) => {
+				document.documentElement.dataset.ccTheme = theme;
+				siteBody.classList.toggle('theme-paper', theme === 'light');
+				siteBody.classList.toggle('theme-dark', theme === 'dark');
+				themeToggle?.setAttribute('aria-pressed', String(theme === 'dark'));
+				const nextTheme = theme === 'dark' ? 'light' : 'dark';
+				themeToggle?.setAttribute('aria-label', `Switch to ${nextTheme} mode`);
+				themeToggle?.setAttribute('title', `Switch to ${nextTheme} mode`);
+				if (persist) {
+					try {
+						localStorage.setItem(themeStorageKey, theme);
+					} catch {
+						// A blocked storage area should not prevent a local theme preference.
+					}
+				}
+			};
+			applySiteTheme(initialSiteTheme);
+			themeToggle?.addEventListener('click', () => {
+				applySiteTheme(document.documentElement.dataset.ccTheme === 'dark' ? 'light' : 'dark', true);
+			});
+		</script>
 		<slot />
 		<footer class="footer">
 			<div class="footer-inner">
 				<div class="footer-top">
 					<div class="footer-brand">
 						<a href="/" class="footer-logo" aria-label="ContextCake home">
-							<img class="brand-mark" src="/contextcake-app-icon.svg" alt="" width="36" height="36" />
+							<img class="brand-mark" src={appIconUrl} alt="" width="36" height="36" />
 							<span>ContextCake</span>
 						</a>
 						<p class="footer-tagline">
 							Working context for AI teams. Policy, team practice, and local judgment
-							resolve into one answer — with every source and disagreement still attached.
+							resolve into one answer, with every source and disagreement still attached.
 						</p>
 						<a class="footer-repo" href={repoUrl} rel="noreferrer">
 							<Icon name="github" size={17} strokeWidth={2} />
@@ -145,6 +193,23 @@ const footerColumns = [
 		color: var(--cc-text-body);
 		font-family: var(--cc-font-body);
 		line-height: 1.6;
+	}
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+	:global(body.theme-paper) {
+		color-scheme: light;
+	}
+	:global(body.theme-dark) {
+		color-scheme: dark;
 	}
 	:global(body::before) {
 		content: '';
@@ -237,6 +302,33 @@ const footerColumns = [
 	.nav nav a:hover {
 		background: rgba(243, 239, 230, 0.08);
 		color: var(--cc-text);
+	}
+	.theme-toggle {
+		display: inline-grid;
+		place-items: center;
+		flex: none;
+		width: 2.75rem;
+		height: 2.75rem;
+		padding: 0;
+		border: 1px solid var(--cc-border);
+		border-radius: 50%;
+		background: var(--cc-surface-soft);
+		color: var(--cc-text);
+		cursor: pointer;
+		transition: background var(--cc-transition), border-color var(--cc-transition), color var(--cc-transition);
+	}
+	.theme-toggle:hover {
+		border-color: var(--cc-border-strong);
+		background: rgba(243, 239, 230, 0.1);
+	}
+	.theme-toggle__sun {
+		display: none;
+	}
+	:global(html[data-cc-theme='dark']) .theme-toggle__sun {
+		display: block;
+	}
+	:global(html[data-cc-theme='dark']) .theme-toggle__moon {
+		display: none;
 	}
 	.footer {
 		position: relative;
@@ -364,6 +456,142 @@ const footerColumns = [
 		.footer-nav {
 			grid-template-columns: 1fr 1fr;
 			gap: 1.75rem;
+		}
+	}
+
+	/* Paper marketing variant: the Console's warm default theme, carried into
+	   the homepage without changing the dark install/docs-adjacent pages. */
+	:global(body.theme-paper) {
+		/* Re-map the semantic dark tokens too. Individual page components use
+		   these tokens directly, so a surface-only override leaves pale text
+		   stranded on a light background. */
+		--cc-canvas: #f4f3ea;
+		--cc-surface: rgba(255, 253, 246, 0.9);
+		--cc-surface-solid: #fffdf6;
+		--cc-surface-raised: #fffdf6;
+		--cc-surface-soft: rgba(21, 25, 23, 0.055);
+		--cc-border: rgba(61, 76, 68, 0.12);
+		--cc-border-strong: rgba(61, 76, 68, 0.2);
+		--cc-text: #151917;
+		--cc-text-body: #313a35;
+		--cc-text-muted: #56615a;
+		--cc-text-faint: #69716b;
+		--cc-cta: #151917;
+		--cc-cta-hover: #313a35;
+		--cc-on-cta: #fffdf6;
+		--cc-shadow-panel: 0 18px 55px rgba(47, 44, 35, 0.08);
+		background: var(--cc-page);
+		color: var(--cc-ink-body);
+	}
+	:global(body.theme-paper::before) {
+		background-image:
+			linear-gradient(var(--cc-paper-line) 1px, transparent 1px),
+			linear-gradient(90deg, var(--cc-paper-line) 1px, transparent 1px);
+		background-size: 32px 32px;
+		opacity: 0.28;
+		mask-image: linear-gradient(to bottom, var(--cc-canvas), transparent 44%);
+	}
+	:global(body.theme-paper h1),
+	:global(body.theme-paper h2),
+	:global(body.theme-paper h3),
+	:global(body.theme-paper a) {
+		color: var(--cc-ink);
+	}
+	:global(body.theme-paper :focus-visible) {
+		outline-color: var(--cc-ink);
+	}
+	.theme-paper .nav {
+		max-width: 88rem;
+		margin: 0 auto;
+		padding: 1rem 1.5rem;
+		background: transparent;
+		border: 0;
+		border-bottom: 1px solid var(--cc-paper-line);
+		border-radius: 0;
+		box-shadow: none;
+		backdrop-filter: none;
+	}
+	.theme-paper .brand,
+	.theme-paper .nav nav a {
+		color: var(--cc-ink);
+	}
+	.theme-paper .nav nav {
+		background: transparent;
+	}
+	.theme-paper .nav nav a:hover {
+		background: var(--cc-paper-soft);
+		color: var(--cc-ink);
+	}
+	.theme-paper .theme-toggle {
+		border-color: var(--cc-paper-line);
+		background: var(--cc-paper-soft);
+		color: var(--cc-ink);
+	}
+	.theme-paper .theme-toggle:hover {
+		border-color: var(--cc-paper-line-strong);
+		background: var(--cc-paper-line);
+	}
+	.theme-paper .footer {
+		margin-top: 0;
+		background: var(--cc-paper);
+		border-top-color: var(--cc-paper-line);
+	}
+	.theme-paper .footer-top {
+		border-bottom-color: var(--cc-paper-line);
+	}
+	.theme-paper .footer-logo,
+	.theme-paper .footer-col a,
+	.theme-paper .footer-repo {
+		color: var(--cc-ink);
+	}
+	.theme-paper .footer-tagline,
+	.theme-paper .footer-heading,
+	.theme-paper .footer-bottom,
+	.theme-paper .footer-motto {
+		color: var(--cc-ink-muted);
+	}
+	.theme-paper .footer-repo {
+		background: var(--cc-paper-soft);
+		border-color: var(--cc-paper-line);
+	}
+	.theme-paper .footer-repo:hover {
+		background: var(--cc-paper-line);
+		border-color: var(--cc-paper-line-strong);
+	}
+	@media (max-width: 480px) {
+		.theme-paper .nav {
+			flex-wrap: nowrap;
+			margin: 0;
+			padding: 0.65rem 0.8rem;
+			border-radius: 0;
+		}
+		.theme-paper .brand {
+			gap: 0.4rem;
+			font-size: 0.92rem;
+		}
+		.theme-paper .brand-mark {
+			width: 2.15rem;
+			height: 2.15rem;
+			border-radius: 0.62rem;
+		}
+		.theme-paper .nav nav {
+			width: auto;
+			flex-wrap: nowrap;
+			gap: 0;
+			padding: 0;
+		}
+		.theme-paper .nav nav a {
+			min-height: 32px;
+			padding-inline: 0.38rem;
+			font-size: 0.82rem;
+		}
+		.theme-paper .theme-toggle {
+			width: 2.75rem;
+			height: 2.75rem;
+		}
+		.theme-paper .nav nav a:nth-child(1),
+		.theme-paper .nav nav a:nth-child(4) {
+			display: none;
 		}
 	}
 </style>

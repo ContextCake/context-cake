@@ -1,0 +1,31 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#242622"/>
+      <stop offset="1" stop-color="#141612"/>
+    </linearGradient>
+    <linearGradient id="personal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e6ba62"/>
+      <stop offset="1" stop-color="#c89539"/>
+    </linearGradient>
+    <linearGradient id="team" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9bccb2"/>
+      <stop offset="1" stop-color="#75ae91"/>
+    </linearGradient>
+    <linearGradient id="company" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9cc5d8"/>
+      <stop offset="1" stop-color="#739fb8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-35%" width="140%" height="170%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#ground)"/>
+  <ellipse cx="512" cy="748" rx="292" ry="34" fill="#050605" opacity="0.4" filter="url(#shadow)"/>
+  <rect x="190" y="590" width="644" height="154" rx="58" fill="url(#company)"/>
+  <rect x="246" y="432" width="532" height="138" rx="54" fill="url(#team)"/>
+  <rect x="314" y="292" width="396" height="120" rx="50" fill="url(#personal)"/>
+  <path d="M248 456h528" stroke="#d9f0e3" stroke-opacity="0.12" stroke-width="5" stroke-linecap="round"/>
+  <path d="M192 615h640" stroke="#e0f0f7" stroke-opacity="0.12" stroke-width="5" stroke-linecap="round"/>
+  <rect x="100.75" y="100.75" width="822.5" height="822.5" rx="184.25" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5"/>
+</svg>

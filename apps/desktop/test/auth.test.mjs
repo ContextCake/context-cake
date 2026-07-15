@@ -193,12 +193,13 @@ test('a refresh that completes after its timeout cannot restore the session', as
     user: { id: 'user-1', email: 'person@example.com' },
   }
   let listener = () => {}
+  const opened = []
   const manager = createAuthManager({
     supabaseUrl: 'https://example.supabase.co',
     supabaseKey: 'publishable-key',
     configDir,
     safeStorage: fakeSafeStorage(),
-    openExternal: async () => {},
+    openExternal: async (url) => { opened.push(url) },
     refreshLeewayMs: 0,
     refreshTimeoutMs: 5,
     createClientImpl: (_url, _key, options) => {
@@ -210,6 +211,10 @@ test('a refresh that completes after its timeout cannot restore the session', as
             return { data: { subscription: { unsubscribe() {} } } }
           },
           getSession: async () => ({ data: { session: initialSession }, error: null }),
+          signInWithOAuth: async () => {
+            options.auth.storage.setItem('supabase.pkce.verifier', 'new-verifier')
+            return { data: { url: 'https://example.supabase.co/auth/v1/authorize' }, error: null }
+          },
           refreshSession: async () => new Promise((resolve) => {
             setTimeout(() => {
               const lateSession = {
@@ -239,14 +244,194 @@ test('a refresh that completes after its timeout cannot restore the session', as
       }
     })
   })
+  const canceledSignIn = manager.signInWithGitHub()
+  manager.cancelSignIn()
   await new Promise((resolve) => setTimeout(resolve, 50))
 
+  assert.deepEqual(await canceledSignIn, { opened: false })
+  assert.deepEqual(opened, [])
   assert.deepEqual(manager.getState(), {
     available: true,
     signedIn: false,
     notice: 'Your session expired. Sign in again to resume settings sync.',
   })
   assert.equal(fs.existsSync(path.join(configDir, 'session.enc')), false)
+})
+
+test('a late bootstrap refresh cannot persist or restore a session', async (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-late-bootstrap-'))
+  t.after(() => fs.rmSync(configDir, { recursive: true, force: true }))
+  let listener = () => {}
+  const manager = createAuthManager({
+    supabaseUrl: 'https://example.supabase.co',
+    supabaseKey: 'publishable-key',
+    configDir,
+    safeStorage: fakeSafeStorage(),
+    openExternal: async () => {},
+    bootstrapTimeoutMs: 5,
+    createClientImpl: (_url, _key, options) => {
+      assert.equal(options.auth.skipAutoInitialize, true)
+      return {
+        auth: {
+          onAuthStateChange: (callback) => {
+            listener = callback
+            return { data: { subscription: { unsubscribe() {} } } }
+          },
+          initialize: async () => new Promise((resolve) => {
+            setTimeout(() => {
+              const lateSession = {
+                access_token: 'late-bootstrap-access',
+                refresh_token: 'late-bootstrap-refresh',
+                user: { id: 'user-1', email: 'person@example.com' },
+              }
+              options.auth.storage.setItem('supabase.session', JSON.stringify(lateSession))
+              listener('INITIAL_SESSION', lateSession)
+              resolve({ error: null })
+            }, 30)
+          }),
+          getSession: async () => {
+            assert.fail('getSession must not run after initialization times out')
+          },
+        },
+      }
+    },
+  })
+  t.after(() => manager.close())
+
+  assert.deepEqual(await manager.initialize(), { available: true, signedIn: false })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual(manager.getState(), { available: true, signedIn: false })
+  assert.equal(fs.existsSync(path.join(configDir, 'session.enc')), false)
+})
+
+test('sign-out wins over a refresh that ignores abort and completes later', async (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-refresh-signout-'))
+  t.after(() => fs.rmSync(configDir, { recursive: true, force: true }))
+  const initialSession = {
+    expires_at: (Date.now() + 20) / 1000,
+    user: { id: 'user-1', email: 'person@example.com' },
+  }
+  let listener = () => {}
+  const manager = createAuthManager({
+    supabaseUrl: 'https://example.supabase.co',
+    supabaseKey: 'publishable-key',
+    configDir,
+    safeStorage: fakeSafeStorage(),
+    openExternal: async () => {},
+    refreshLeewayMs: 0,
+    refreshTimeoutMs: 100,
+    createClientImpl: (_url, _key, options) => {
+      options.auth.storage.setItem('supabase.session', JSON.stringify(initialSession))
+      return {
+        auth: {
+          onAuthStateChange: (callback) => {
+            listener = callback
+            return { data: { subscription: { unsubscribe() {} } } }
+          },
+          getSession: async () => ({ data: { session: initialSession }, error: null }),
+          refreshSession: async () => new Promise((resolve) => {
+            setTimeout(() => {
+              const lateSession = { ...initialSession, expires_at: (Date.now() + 60_000) / 1000 }
+              options.auth.storage.setItem('supabase.session', JSON.stringify(lateSession))
+              listener('TOKEN_REFRESHED', lateSession)
+              resolve({ data: { session: lateSession }, error: null })
+            }, 40)
+          }),
+          signOut: async () => {
+            listener('SIGNED_OUT', null)
+            return { error: null }
+          },
+        },
+      }
+    },
+  })
+  t.after(() => manager.close())
+
+  assert.equal((await manager.initialize()).signedIn, true)
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  await manager.signOut()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual(manager.getState(), { available: true, signedIn: false })
+  assert.equal(fs.existsSync(path.join(configDir, 'session.enc')), false)
+})
+
+test('a never-settling stale refresh does not block a new sign-in', async (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-stalled-refresh-'))
+  t.after(() => fs.rmSync(configDir, { recursive: true, force: true }))
+  const initialSession = {
+    expires_at: (Date.now() + 20) / 1000,
+    user: { id: 'user-1', email: 'person@example.com' },
+  }
+  const opened = []
+  const manager = createAuthManager({
+    supabaseUrl: 'https://example.supabase.co',
+    supabaseKey: 'publishable-key',
+    configDir,
+    safeStorage: fakeSafeStorage(),
+    openExternal: async (url) => { opened.push(url) },
+    refreshLeewayMs: 0,
+    refreshTimeoutMs: 5,
+    createClientImpl: (_url, _key, options) => ({
+      auth: {
+        onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+        getSession: async () => ({ data: { session: initialSession }, error: null }),
+        refreshSession: async () => new Promise(() => {}),
+        signInWithOAuth: async () => {
+          options.auth.storage.setItem('supabase.pkce.verifier', 'fresh-verifier')
+          return { data: { url: 'https://example.supabase.co/auth/v1/authorize' }, error: null }
+        },
+      },
+    }),
+  })
+  t.after(() => manager.close())
+
+  assert.equal((await manager.initialize()).signedIn, true)
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('refresh timeout event did not arrive')), 500)
+    manager.on('session-changed', (state) => {
+      if (!state.signedIn && state.notice) {
+        clearTimeout(timeout)
+        resolve()
+      }
+    })
+  })
+  assert.deepEqual(await manager.signInWithGitHub(), { opened: true })
+  assert.deepEqual(opened, ['https://example.supabase.co/auth/v1/authorize'])
+  manager.cancelSignIn()
+  assert.equal(fs.existsSync(path.join(configDir, 'session.enc')), false)
+})
+
+test('a duplicate sign-in does not invalidate the active OAuth attempt', async (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-duplicate-signin-'))
+  t.after(() => fs.rmSync(configDir, { recursive: true, force: true }))
+  const opened = []
+  let finishProvider
+  const manager = createAuthManager({
+    supabaseUrl: 'https://example.supabase.co',
+    supabaseKey: 'publishable-key',
+    configDir,
+    safeStorage: fakeSafeStorage(),
+    openExternal: async (url) => { opened.push(url) },
+    createClientImpl: (_url, _key, options) => ({
+      auth: {
+        onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+        getSession: async () => ({ data: { session: null }, error: null }),
+        signInWithOAuth: async () => {
+          options.auth.storage.setItem('supabase.pkce.verifier', 'active-verifier')
+          return new Promise((resolve) => { finishProvider = resolve })
+        },
+      },
+    }),
+  })
+  t.after(() => manager.close())
+
+  await manager.initialize()
+  const first = manager.signInWithGitHub()
+  await assert.rejects(manager.signInWithGitHub(), /already in progress/)
+  finishProvider({ data: { url: 'https://example.supabase.co/auth/v1/authorize' }, error: null })
+  assert.deepEqual(await first, { opened: true })
+  assert.deepEqual(opened, ['https://example.supabase.co/auth/v1/authorize'])
+  manager.cancelSignIn()
 })
 
 test('sign-out clears the encrypted local session even when Supabase is offline', async (t) => {

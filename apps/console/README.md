@@ -40,12 +40,17 @@ playground/service command documented in the repository instructions.
 - **Canvas** lays concepts into Company, Team, and Personal lanes. Columns are
   reused when their occupied lanes do not collide, keeping sparse cascades
   compact. Pan, zoom, fit, concept detail, and dissent links remain available.
-- **Overview** summarizes sources, concepts, conflicts, and recent activity.
-- **Queue** routes review, stored, and discarded signals; S/R/D shortcuts apply
-  when no modal surface owns the keyboard.
-- **Resolve** compares dissenting layers and applies the selected resolution.
+- **Overview** summarizes live sources, concepts, and conflicts. Recent activity
+  is demo-only until the engine exposes an activity API.
+- **Queue** demonstrates review, stored, and discarded signal routing in demo
+  mode; live/Desktop mode has no signal API yet and is read-only.
+- **Resolve** compares live dissenting layers. Resolution mutations currently
+  apply only in demo mode; live/Desktop mode is read-only.
 - **Concepts** shows the effective concept with per-section provenance.
-- **Ask ContextCake** answers from the resolved cascade and cites its layers.
+- **Ask ContextCake** uses the resolved cascade when a compatible
+  `window.claude.complete` harness bridge is present. Otherwise it returns a
+  visibly labeled sample answer; Electron does not currently provide that
+  completion bridge.
 - **Settings** opens from the sidebar or Cmd/Ctrl-comma. General holds theme and
   update preferences; Account holds optional desktop GitHub sign-in, sync state,
   sign-out, and self-service deletion.

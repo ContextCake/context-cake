@@ -103,8 +103,8 @@ stays demo-only) · email/password auth (never, see §7).
   off Supabase.
 - 🚫 **Never:** email/password or any custom credential store; integration
   tokens or context content server-side; secrets in the repository; absolute
-  paths, email addresses, or intentionally supplied personal data in the synced
-  blob; auth in the web demo console.
+  paths, email addresses, or recognized credential/context patterns in the
+  synced blob; auth in the web demo console.
 
 ## 8. For the implementing agent
 

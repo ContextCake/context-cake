@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -13,10 +14,9 @@ const OAUTH_STATE_TTL_MS = 10 * 60 * 1000
  * resulting session. Encrypt the complete adapter payload with Electron's
  * safeStorage so neither value ever lands on disk as plaintext.
  */
-export function createEncryptedStorage({ configDir, safeStorage }) {
+export function createEncryptedStorage({ configDir, safeStorage, canWrite = () => true }) {
   const file = path.join(configDir, 'session.enc')
   const memory = new Map()
-  let writesSuspended = false
 
   const encryptionAvailable = () => {
     try { return safeStorage?.isEncryptionAvailable() === true } catch { return false }
@@ -63,23 +63,17 @@ export function createEncryptedStorage({ configDir, safeStorage }) {
       return typeof value === 'string' ? value : null
     },
     setItem(key, value) {
-      if (writesSuspended) return
+      if (!canWrite()) return
       writeMap({ ...readMap(), [key]: value })
     },
     removeItem(key) {
+      if (!canWrite()) return
       const next = readMap()
       delete next[key]
       if (Object.keys(next).length === 0) clear()
       else writeMap(next)
     },
     clear,
-    suspendWrites() {
-      writesSuspended = true
-      clear()
-    },
-    resumeWrites() {
-      writesSuspended = false
-    },
   }
 }
 
@@ -107,13 +101,18 @@ export function createAuthManager({
   refreshLeewayMs = 60_000,
 } = {}) {
   const events = new EventEmitter()
-  const storage = createEncryptedStorage({ configDir, safeStorage })
+  const authOperation = new AsyncLocalStorage()
+  const storage = createEncryptedStorage({
+    configDir,
+    safeStorage,
+    canWrite: () => authOperation.getStore()?.stale !== true,
+  })
   const available = Boolean(supabaseUrl && supabaseKey)
   let activeRefresh = null
-  let refreshDrain = Promise.resolve()
+  let signInIntent = 0
   const projectOrigin = available ? new URL(supabaseUrl).origin : ''
   const fetchWithRefreshAbort = (input, init = {}) => {
-    const controller = activeRefresh?.controller
+    const controller = authOperation.getStore()?.controller
     if (!controller) return fetchImpl(input, init)
     try {
       const rawUrl = typeof input === 'string' || input instanceof URL ? input : input.url
@@ -140,6 +139,9 @@ export function createAuthManager({
           // our own bounded timer so an auth outage can never stall startup.
           autoRefreshToken: false,
           detectSessionInUrl: false,
+          // Supabase otherwise starts initialization in createClient(), before
+          // we can attach the timeout/stale-operation quarantine below.
+          skipAutoInitialize: true,
           storage,
         },
       })
@@ -168,42 +170,55 @@ export function createAuthManager({
     refreshTimer = null
   }
 
+  function createRefreshAttempt() {
+    return { controller: new AbortController(), stale: false }
+  }
+
+  function invalidateRefresh(attempt) {
+    if (!attempt) return
+    attempt.stale = true
+    attempt.controller.abort()
+  }
+
+  function runRefreshOperation(attempt, operation) {
+    return Promise.resolve().then(() => authOperation.run(attempt, operation))
+  }
+
+  function trackRefreshAttempt(attempt, request) {
+    activeRefresh = attempt
+    request.finally(() => {
+      if (activeRefresh === attempt) activeRefresh = null
+    }).catch(() => {})
+  }
+
   function scheduleRefresh(session) {
     clearRefreshTimer()
     if (!client || !session?.expires_at) return
     const delay = Math.max(10, (session.expires_at * 1000) - Date.now() - refreshLeewayMs)
     refreshTimer = setTimeout(async () => {
       refreshTimer = null
-      const attempt = { controller: new AbortController(), stale: false }
-      activeRefresh = attempt
-      const refreshRequest = Promise.resolve().then(() => client.auth.refreshSession())
-      // Keep session writes fenced until a stale refresh drains. New OAuth
-      // attempts wait for this promise so an old token response can never
-      // overwrite a newer PKCE verifier or session.
-      const drain = refreshRequest.catch(() => {}).finally(() => {
-        if (attempt.stale) storage.clear()
-        if (activeRefresh === attempt) activeRefresh = null
-        storage.resumeWrites()
-      })
-      refreshDrain = drain
+      const attempt = createRefreshAttempt()
+      const refreshRequest = runRefreshOperation(attempt, () => client.auth.refreshSession())
+      trackRefreshAttempt(attempt, refreshRequest)
       try {
         const { data, error } = await withTimeout(
           refreshRequest,
           refreshTimeoutMs,
           'Session refresh timed out.',
           () => {
-            attempt.stale = true
-            storage.suspendWrites()
-            attempt.controller.abort()
+            invalidateRefresh(attempt)
+            storage.clear()
           },
         )
         if (error) throw error
+        if (attempt.stale) return
         currentSession = data?.session ?? null
         if (!currentSession) throw new Error('Session refresh returned no session.')
         notice = ''
         emitState()
         scheduleRefresh(currentSession)
       } catch {
+        invalidateRefresh(attempt)
         currentSession = null
         notice = 'Your session expired. Sign in again to resume settings sync.'
         storage.clear()
@@ -217,6 +232,11 @@ export function createAuthManager({
     if (!client) return publicState(false, null)
     try {
       const result = client.auth.onAuthStateChange((event, session) => {
+        if (authOperation.getStore()?.stale) return
+        // initialize() is deliberately run and committed below. Owning the
+        // initial commit here prevents an out-of-band or duplicate event from
+        // restoring a session after the bounded bootstrap has failed.
+        if (event === 'INITIAL_SESSION') return
         // Manual refreshes are committed from refreshSession's returned value
         // above. Ignoring this duplicate event also prevents a timed-out
         // request from restoring currentSession after its deadline.
@@ -227,12 +247,25 @@ export function createAuthManager({
         emitState()
       })
       subscription = result?.data?.subscription ?? null
+      const attempt = createRefreshAttempt()
+      const restoreRequest = runRefreshOperation(attempt, async () => {
+        const initialized = await client.auth.initialize?.()
+        if (initialized?.error) return { data: { session: null }, error: initialized.error }
+        if (attempt.stale) return { data: { session: null }, error: null }
+        return client.auth.getSession()
+      })
+      trackRefreshAttempt(attempt, restoreRequest)
       const { data, error } = await withTimeout(
-        client.auth.getSession(),
+        restoreRequest,
         bootstrapTimeoutMs,
         'Session restore timed out.',
+        () => {
+          invalidateRefresh(attempt)
+          storage.clear()
+        },
       )
       if (error) throw error
+      if (attempt.stale) return publicState(true, null, notice)
       currentSession = data?.session ?? null
       scheduleRefresh(currentSession)
     } catch {
@@ -244,14 +277,13 @@ export function createAuthManager({
 
   async function signIn() {
     if (!client) throw new Error('Account sign-in is not configured in this build.')
-    await refreshDrain
-
     const pending = (() => {
       try { return JSON.parse(storage.getItem(OAUTH_STATE_KEY)) } catch { return null }
     })()
     if (pending?.value && Number.isFinite(pending.createdAt) && Date.now() - pending.createdAt < OAUTH_STATE_TTL_MS) {
       throw new Error('A sign-in is already in progress.')
     }
+    const intent = ++signInIntent
     const state = crypto.randomBytes(32).toString('base64url')
     storage.setItem(OAUTH_STATE_KEY, JSON.stringify({ value: state, createdAt: Date.now() }))
     const redirectTo = `${CALLBACK_URL}?state=${encodeURIComponent(state)}`
@@ -262,6 +294,7 @@ export function createAuthManager({
       })
       if (error) throw error
       if (!data?.url) throw new Error('The authentication provider did not return a sign-in URL.')
+      if (intent !== signInIntent) return { opened: false }
       const authUrl = new URL(data.url)
       const projectOrigin = new URL(supabaseUrl).origin
       if (authUrl.protocol !== 'https:' || authUrl.origin !== projectOrigin) {
@@ -270,7 +303,7 @@ export function createAuthManager({
       await openExternal(authUrl.toString())
       return { opened: true }
     } catch (err) {
-      storage.removeItem(OAUTH_STATE_KEY)
+      if (intent === signInIntent) storage.removeItem(OAUTH_STATE_KEY)
       throw err
     }
   }
@@ -323,15 +356,18 @@ export function createAuthManager({
   }
 
   function cancelSignIn() {
-    storage.removeItem(OAUTH_STATE_KEY)
+    signInIntent += 1
+    // While signed out, the adapter contains only the pending OAuth state and
+    // PKCE verifier. Clear both so Cancel never leaves an orphaned verifier.
+    if (currentSession) storage.removeItem(OAUTH_STATE_KEY)
+    else storage.clear()
     return publicState(available, currentSession, notice)
   }
 
   async function signOut() {
+    signInIntent += 1
     if (activeRefresh) {
-      activeRefresh.stale = true
-      storage.suspendWrites()
-      activeRefresh.controller.abort()
+      invalidateRefresh(activeRefresh)
     }
     try {
       if (client) {
@@ -354,11 +390,10 @@ export function createAuthManager({
   }
 
   function close() {
+    signInIntent += 1
     clearRefreshTimer()
     if (activeRefresh) {
-      activeRefresh.stale = true
-      storage.suspendWrites()
-      activeRefresh.controller.abort()
+      invalidateRefresh(activeRefresh)
     }
     subscription?.unsubscribe?.()
     subscription = null

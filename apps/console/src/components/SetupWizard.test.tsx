@@ -25,6 +25,7 @@ beforeEach(() => {
   root = createRoot(container)
   mocks.apiFetch.mockReset()
   mocks.reload.mockReset()
+  delete window.__CC_DESKTOP
   mocks.apiFetch.mockImplementation(async (url: string) => new Response(
     JSON.stringify(url === '/api/graph' ? { concepts: [{ id: 'systems/app' }] } : {}),
     { status: 200, headers: { 'content-type': 'application/json' } },
@@ -33,10 +34,33 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  delete window.__CC_DESKTOP
   container.remove()
 })
 
 describe('SetupWizard connection handoff', () => {
+  it('uses the native folder browser when the desktop bridge is available', async () => {
+    const chooseFolder = vi.fn().mockResolvedValue('/Users/person/ContextCake/personal')
+    window.__CC_DESKTOP = {
+      token: 'test',
+      version: '0.1.0',
+      authState: { signedIn: false },
+      chooseFolder,
+      cli: {
+        getStatus: vi.fn().mockResolvedValue({ status: 'installed', message: 'CLI is installed.' }),
+        install: vi.fn().mockResolvedValue({ status: 'installed', message: 'CLI is installed.' }),
+      },
+    }
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await act(async () => button('Choose…').click())
+
+    expect(chooseFolder).toHaveBeenCalledOnce()
+    expect(container.querySelector<HTMLInputElement>('#wiz-personal-path')?.value)
+      .toBe('/Users/person/ContextCake/personal')
+  })
+
   it('makes Connect an agent the primary next action after a source is added', async () => {
     const onClose = vi.fn()
     const onConnectAgent = vi.fn()

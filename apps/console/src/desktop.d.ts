@@ -33,6 +33,8 @@ declare global {
       version: string
       /** Initial auth snapshot; subscribe through __CC_AUTH for live state. */
       authState: DesktopAuthState
+      /** Open the native macOS directory picker. Null means the user canceled. */
+      chooseFolder?: () => Promise<string | null>
       /** Fixed native operations for ContextCake's own command-line tool. */
       cli: {
         getStatus: () => Promise<CliResult>

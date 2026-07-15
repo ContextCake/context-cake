@@ -31,7 +31,7 @@ npm run dist       # DMG + zip in dist/ (ad-hoc signed until release secrets exi
 | `src/main/settings-sync.mjs` | Owner-scoped settings sync with path/secret scrub-and-reject checks |
 | `src/main/updater.mjs` | electron-updater against GitHub Releases (`app-v*`), settings-gated |
 | `src/main/cli-install.mjs` | Symlinks the CLI shim into `/usr/local/bin` |
-| `src/preload.cjs` | Sandboxed bridges: launch metadata in `window.__CC_DESKTOP`; auth/settings IPC in `window.__CC_AUTH` |
+| `src/preload.cjs` | Sandboxed bridges: launch metadata, native folder picker, and CLI actions in `window.__CC_DESKTOP`; auth/settings IPC in `window.__CC_AUTH` |
 | `src/cli/cli.mjs` | `contextcake` dispatcher over the bundled engine entrypoints |
 | `resources/bin/contextcake` | Shell shim installed for the CLI |
 | `electron-builder.yml` | Packaging: DMG/zip, arm64, hardened runtime, protocols |

@@ -82,6 +82,61 @@ function btnDisabled(): React.CSSProperties {
   return css(`padding:9px 16px; background:${C.neutralFill}; border:1px solid ${C.line}; border-radius:9px; cursor:not-allowed; font:inherit; font-weight:600; font-size:12.5px; color:${C.faint};`)
 }
 
+function FolderPathField({
+  id, value, placeholder, label, onChange, onError,
+}: {
+  id: string
+  value: string
+  placeholder: string
+  label: string
+  onChange: (value: string) => void
+  onError: (message: string | null) => void
+}) {
+  const chooseFolder = window.__CC_DESKTOP?.chooseFolder
+  const [choosing, setChoosing] = useState(false)
+
+  const browse = async () => {
+    if (!chooseFolder) return
+    setChoosing(true)
+    onError(null)
+    try {
+      const selected = await chooseFolder()
+      if (selected) onChange(selected)
+    } catch {
+      onError('The folder browser could not open. You can still paste a folder path.')
+    } finally {
+      setChoosing(false)
+    }
+  }
+
+  return (
+    <div>
+      <label htmlFor={id} style={fieldLabelStyle()}>{label}</label>
+      <div style={css('display:flex; align-items:stretch; gap:8px;')}>
+        <input
+          id={id}
+          style={{ ...inputStyle(), flex: '1 1 auto', minWidth: 0, width: 'auto' }}
+          value={value}
+          onChange={(e) => { onChange(e.target.value); onError(null) }}
+          placeholder={placeholder}
+          autoComplete="off"
+        />
+        {chooseFolder && (
+          <button
+            type="button"
+            style={choosing ? btnDisabled() : btnGhost()}
+            disabled={choosing}
+            onClick={browse}
+            aria-label={`Choose ${label.toLowerCase()}`}
+          >
+            {choosing ? 'Opening…' : 'Choose…'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; onConnectAgent?: () => void }) {
   const { reload } = useStore()
   const [stepIdx, setStepIdx] = useState(0)
@@ -232,14 +287,13 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
             subtitle="A local folder of OKF markdown that only you read. This is required — it's the minimum to get a working cascade."
           >
             <div>
-              <label htmlFor="wiz-personal-path" style={fieldLabelStyle()}>Folder path</label>
-              <input
+              <FolderPathField
                 id="wiz-personal-path"
-                style={inputStyle()}
+                label="Folder"
                 value={personalPath}
-                onChange={(e) => setPersonalPath(e.target.value)}
-                placeholder="/Users/you/kb-personal"
-                autoComplete="off"
+                onChange={setPersonalPath}
+                onError={setPersonalErr}
+                placeholder="Choose a folder or paste its path"
               />
               {personalErr && <p style={css('margin:8px 0 0; font-size:12px; color:var(--cc-amber-text);')}>{personalErr}</p>}
             </div>
@@ -274,17 +328,14 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
               >GitHub repo</button>
             </div>
             {teamKind === 'local' ? (
-              <div>
-                <label htmlFor="wiz-team-path" style={fieldLabelStyle()}>Folder path</label>
-                <input
-                  id="wiz-team-path"
-                  style={inputStyle()}
-                  value={teamPath}
-                  onChange={(e) => setTeamPath(e.target.value)}
-                  placeholder="/Users/you/kb-shared"
-                  autoComplete="off"
-                />
-              </div>
+              <FolderPathField
+                id="wiz-team-path"
+                label="Folder"
+                value={teamPath}
+                onChange={setTeamPath}
+                onError={setTeamErr}
+                placeholder="Choose a folder or paste its path"
+              />
             ) : (
               <div>
                 <label htmlFor="wiz-team-repo" style={fieldLabelStyle()}>Repository</label>

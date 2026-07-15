@@ -368,11 +368,19 @@ async function initializeAccounts() {
   }
 }
 
-// Fixed, argument-free IPC only. The sandboxed renderer can inspect or invoke
-// ContextCake's own CLI installer; it cannot execute arbitrary processes or
-// choose filesystem paths.
+// Native shell IPC is fixed-purpose and protected by the same exact-window,
+// exact-origin check as account IPC. The renderer cannot execute arbitrary
+// processes or select a path without the user approving the native panel.
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
 handleTrustedIpc('contextcake:cli-install', () => installCli(win, { showSuccess: false }))
+handleTrustedIpc('contextcake:choose-folder', async () => {
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Choose a ContextCake folder',
+    buttonLabel: 'Choose Folder',
+    properties: ['openDirectory', 'createDirectory'],
+  })
+  return result.canceled ? null : (result.filePaths[0] ?? null)
+})
 
 async function createWindow() {
   service ??= await startEngineService()

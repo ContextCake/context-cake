@@ -58,39 +58,41 @@ configured retention and are not necessarily removed with the account.
 
 ## Supabase account setup
 
-1. Install the Supabase CLI and Docker, then authenticate. From the repository root,
-   generate a migration from `supabase/schemas/user_settings.sql` and test the complete
-   migration history locally:
+1. Start Docker. From the repository root, use the pinned CLI version to test the
+   committed migration, schema lint, and database advisors locally:
 
    ```bash
-   supabase login
-   supabase start
-   supabase db diff -f user_settings
-   supabase db reset
-   supabase db lint --level warning
+   npx --yes supabase@2.109.1 start
+   npx --yes supabase@2.109.1 db reset --local --no-seed
+   npx --yes supabase@2.109.1 db lint --local --level warning --fail-on warning
+   npx --yes supabase@2.109.1 db advisors --local --type all --level info --fail-on warn
+   npx --yes supabase@2.109.1 stop
    ```
 
-   Review and commit the generated file under `supabase/migrations/`. Declarative diffs
-   may omit schema/table/function privileges, so compare its `grant` and `revoke`
-   statements with the schema before deployment. Then link and deploy deliberately:
+   When changing `supabase/schemas/`, generate a new migration with
+   `npx --yes supabase@2.109.1 db diff -f <name>`, review it, and commit it under
+   `supabase/migrations/`. Declarative diffs may omit schema/table/function privileges,
+   so compare its `grant` and `revoke` statements with the schema.
+2. Authenticate, link the hosted project, and deploy deliberately:
 
    ```bash
-   supabase link --project-ref <project-ref>
-   supabase db push --dry-run
-   supabase db push
+   npx --yes supabase@2.109.1 login
+   npx --yes supabase@2.109.1 link --project-ref <project-ref>
+   npx --yes supabase@2.109.1 db push --dry-run
+   npx --yes supabase@2.109.1 db push
    ```
    Run the Database advisors in the Dashboard after deploying.
-2. Create GitHub and Google OAuth applications, using Supabase's provider callback
+3. Create GitHub and Google OAuth applications, using Supabase's provider callback
    `https://<project-ref>.supabase.co/auth/v1/callback`, then add their client
    credentials under **Authentication → Providers**.
-3. Add `contextcake://auth/callback` to **Authentication → URL Configuration →
+4. Add `contextcake://auth/callback` to **Authentication → URL Configuration →
    Redirect URLs**.
-4. For local UI development, export `SUPABASE_URL` and `SUPABASE_ANON_KEY`, then run
+5. For local UI development, export `SUPABASE_URL` and `SUPABASE_ANON_KEY`, then run
    `npm run dev`. Browser OAuth cannot return to the unpackaged dev process because
    macOS registers the custom protocol for packaged apps only. Test the full sign-in
    callback with `npm run pack`, then launch the generated `.app`. The key must be
    `sb_publishable_*` or a legacy `anon` JWT; the build rejects privileged keys.
-5. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as GitHub Actions secrets
+6. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as GitHub Actions secrets
    before packaging a release.
 
 ## Release

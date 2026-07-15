@@ -7,6 +7,7 @@ create table public.user_settings (
 alter table public.user_settings enable row level security;
 
 revoke all on table public.user_settings from anon;
+revoke all on table public.user_settings from authenticated;
 grant select, insert, update, delete on table public.user_settings to authenticated;
 
 create policy "Users read their own settings"

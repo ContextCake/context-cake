@@ -289,10 +289,18 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 
 <style>
 	.home {
+		--home-ink: var(--cc-ink);
+		--home-body: var(--cc-ink-body);
+		--home-muted: var(--cc-ink-muted);
 		position: relative;
 		z-index: 0;
 		overflow: hidden;
-		color: var(--cc-ink-body);
+		color: var(--home-body);
+	}
+	:global(body.theme-dark) .home {
+		--home-ink: var(--cc-text);
+		--home-body: var(--cc-text-body);
+		--home-muted: var(--cc-text-muted);
 	}
 	.home h1,
 	.home h2,
@@ -325,10 +333,10 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 		display: flex;
 		align-items: center;
 		gap: 0.6rem;
-		color: var(--cc-ink-muted);
+		color: var(--home-muted);
 	}
 	.eyebrow span {
-		color: var(--cc-ink);
+		color: var(--home-ink);
 	}
 	.eyebrow::before {
 		content: '';
@@ -337,7 +345,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 		background: linear-gradient(90deg, var(--cc-layer-personal) 0 33%, var(--cc-layer-team) 33% 66%, var(--cc-layer-company) 66%);
 	}
 	.section-number {
-		color: var(--cc-ink-muted);
+		color: var(--home-muted);
 	}
 
 	/* Hero: large editorial promise next to the actual product surface. */
@@ -363,7 +371,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 		text-wrap: balance;
 	}
 	.hero h1 em {
-		color: var(--cc-ink-muted);
+		color: var(--home-muted);
 		font-style: normal;
 		font-weight: 400;
 	}
@@ -427,7 +435,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 		font-weight: 700;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
-		color: var(--cc-ink-muted);
+		color: var(--home-muted);
 	}
 	.download-meta span {
 		display: inline-flex;
@@ -507,7 +515,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 		font-family: var(--cc-font-mono);
 		font-size: 0.68rem;
 		font-weight: 700;
-		color: var(--cc-ink-body);
+		color: var(--home-body);
 	}
 	.principle-copy h3 {
 		margin-bottom: 0.5rem;
@@ -518,7 +526,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 		max-width: 38rem;
 		margin-bottom: 0;
 		line-height: 1.6;
-		color: var(--cc-ink-muted);
+		color: var(--home-muted);
 	}
 	.principle-mark {
 		display: flex;
@@ -798,10 +806,10 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 	.capabilities article p {
 		font-size: 0.9rem;
 		line-height: 1.55;
-		color: var(--cc-ink-muted);
+		color: var(--home-muted);
 	}
 	.capabilities article > svg {
-		color: var(--cc-ink-body);
+		color: var(--home-body);
 	}
 
 	.closing {

@@ -10,7 +10,7 @@ export function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle')
-  const copyTimer = useRef<ReturnType<typeof setTimeout>>()
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const copyMcpConfig = () => {
     const settle = (state: 'copied' | 'failed') => {

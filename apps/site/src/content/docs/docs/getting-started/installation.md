@@ -3,9 +3,11 @@ title: Installation
 description: Download the current source archive and run the bundled demo in a few minutes.
 ---
 
-ContextCake installs from a **direct source archive**. The engine is
-dependency-free: there is no `npm install` step, no install scripts execute, and
-the resolver quickstart fetches nothing after you unpack the archive.
+ContextCake runs directly from **versioned source**. The recommended route is a
+verified source archive; shallow Git and GitHub CLI checkouts are available when
+you already use source-control tooling. The engine is dependency-free: there is
+no `npm install` step, no install scripts execute, and the resolver quickstart
+fetches nothing after the source is on your machine.
 
 If you are still evaluating whether the model fits your team, start with the
 [demo](/demo) or [the docs overview](/docs) and come back here when you want the
@@ -13,12 +15,49 @@ local setup path.
 
 ## Prerequisites
 
-- A browser to download the source archive
 - Node.js ≥ 18
+- One download route: a browser, `curl`, GitHub CLI, or Git
 
-## Download
+## Choose a route
 
-Download the versioned [ContextCake `console-v0.2.0` source archive](https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz), then unpack it:
+Every route below is pinned to the same `console-v0.2.0` source. Use the archive
+when you want the smallest inspectable download, or a shallow Git checkout when
+you already work with source-control tools.
+
+### Terminal download (recommended)
+
+On macOS, Linux, or WSL:
+
+```bash
+curl --fail --location https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz \\
+  --output context-cake-console-v0.2.0.tar.gz
+```
+
+You can also [download the same archive in your browser](https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz).
+
+### GitHub CLI
+
+If you already use `gh`, create a shallow checkout at the same tag:
+
+```bash
+gh repo clone ContextCake/context-cake contextcake -- \\
+  --branch console-v0.2.0 --depth 1
+cd contextcake
+```
+
+### Git
+
+```bash
+git clone --branch console-v0.2.0 --depth 1 \\
+  https://github.com/ContextCake/context-cake.git contextcake
+cd contextcake
+```
+
+Git and GitHub CLI users can skip directly to [Verify the resolver](#verify-the-resolver).
+
+## Verify and unpack the archive
+
+If you downloaded the archive with curl or your browser, verify it before unpacking:
 
 ```bash
 printf '%s  %s\n' '013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253' 'context-cake-console-v0.2.0.tar.gz' | shasum -a 256 --check &&
@@ -31,7 +70,7 @@ These commands pin the setup to the `console-v0.2.0` tag instead of following th
 latest source checkout, and stop before extraction if the downloaded bytes do not
 match the published SHA-256.
 
-## Verify
+## Verify the resolver
 
 Resolve a concept from the bundled three-layer demo, where the layers deliberately
 disagree:
@@ -80,6 +119,11 @@ Package registries have repeatedly shipped compromised AI/agent tooling through
 hijacked maintainer accounts and `postinstall` payloads. A knowledge engine your
 agents read from should have a supply chain you can audit: a source archive is
 small, inspectable, and runnable as plain Node.js.
+
+There is no npm global install today. A signed macOS app and Homebrew cask belong
+to the packaged distribution track and will be documented only after their real
+artifacts are published. Windows users should use the terminal route in WSL until
+a native Windows package is tested and signed.
 
 ## Next
 

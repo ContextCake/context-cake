@@ -15,6 +15,12 @@ const tagUrl = `https://github.com/ContextCake/context-cake/tree/${tag}`;
 
 const terminalDownload = `curl --fail --location ${sourceDownloadUrl} \\
   --output ${archiveName}`;
+const githubCliCheckout = `gh repo clone ContextCake/context-cake contextcake -- \\
+  --branch ${tag} --depth 1
+cd contextcake`;
+const gitCheckout = `git clone --branch ${tag} --depth 1 \\
+  https://github.com/ContextCake/context-cake.git contextcake
+cd contextcake`;
 const unpackCommand = `printf '%s  %s\\n' '${archiveSha256}' '${archiveName}' | shasum -a 256 --check &&
 mkdir contextcake &&
 tar -xzf ${archiveName} -C contextcake --strip-components=1 &&
@@ -63,11 +69,14 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 					your agent.
 				</p>
 				<div class="hero-actions" aria-label="Install actions">
-					<a class="button button--primary" href={sourceDownloadUrl} download>
+					<a class="button button--primary" href="#download">
+						<span class="prompt-mark" aria-hidden="true">$</span>
+						Choose an install method
+					</a>
+					<a class="button button--quiet" href={sourceDownloadUrl} download>
 						<Icon name="download" size={18} />
 						Download {tag}
 					</a>
-					<a class="button button--quiet" href="#quickstart">Use the terminal</a>
 				</div>
 				<ul class="hero-facts" aria-label="Install requirements">
 					<li>Node.js 18+</li>
@@ -84,7 +93,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				<ol>
 					<li style="--step-color: var(--cc-layer-company)">
 						<span>01</span>
-						<div><strong>Download</strong><small>One versioned source archive</small></div>
+						<div><strong>Choose a route</strong><small>Archive, GitHub CLI, or Git</small></div>
 					</li>
 					<li style="--step-color: var(--cc-layer-team)">
 						<span>02</span>
@@ -111,7 +120,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				<p>Quickstart</p>
 				<h2 id="quickstart-title">Get it running</h2>
 				<nav aria-label="Install steps">
-					<a href="#download"><span>01</span> Get the archive</a>
+					<a href="#download"><span>01</span> Get ContextCake</a>
 					<a href="#unpack"><span>02</span> Verify and unpack</a>
 					<a href="#resolve"><span>03</span> Prove it works</a>
 					<a href="#connect"><span>04</span> Connect an agent</a>
@@ -128,35 +137,58 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 						<span>01</span>
 						<div>
 							<p>Choose a route</p>
-							<h2>Get the archive</h2>
+							<h2>Get ContextCake</h2>
 						</div>
 					</header>
 					<p class="step-intro">
-						Both routes fetch the exact same tagged source. The browser route needs no extra
-						tooling; the terminal route keeps the whole setup copyable.
+						Choose how you want to get the same tagged source. Archive routes preserve an
+						explicit checksum step; Git routes are convenient when you already use source tools.
 					</p>
 					<div class="route-grid">
-						<section class="route route--recommended" aria-labelledby="browser-route-title">
+						<section class="route route--recommended" aria-labelledby="terminal-route-title">
 							<div class="route-topline">
 								<span class="route-badge">Recommended</span>
+								<span class="route-platform">macOS · Linux · WSL</span>
+							</div>
+							<h3 id="terminal-route-title">Terminal with curl</h3>
+							<p>Fastest for a local evaluation. Download the universal source archive, then verify it in Step 2.</p>
+							<CodeBlock lang="bash" code={terminalDownload} label="Download tagged source" copy />
+							<small>Continue to Step 2 · checksum verification required</small>
+						</section>
+
+						<section class="route" aria-labelledby="browser-route-title">
+							<div class="route-topline">
+								<span class="route-badge route-badge--quiet">No CLI required</span>
 								<Icon name="download" size={18} />
 							</div>
 							<h3 id="browser-route-title">Browser download</h3>
-							<p>Best when you want the simplest path and plan to inspect the files before running them.</p>
+							<p>Download the same universal archive directly, then use your terminal only to verify and run it.</p>
 							<a class="route-action" href={sourceDownloadUrl} download>
 								Download .tar.gz <Icon name="chevron-down" size={16} />
 							</a>
 							<small>{archiveName} · SHA-256 {archiveSha256.slice(0, 8)}…{archiveSha256.slice(-8)}</small>
 						</section>
 
-						<section class="route" aria-labelledby="terminal-route-title">
+						<section class="route" aria-labelledby="github-route-title">
 							<div class="route-topline">
-								<span class="route-badge route-badge--quiet">Terminal</span>
-								<span class="prompt-mark" aria-hidden="true">$</span>
+								<span class="route-badge route-badge--quiet">GitHub CLI</span>
+								<span class="route-platform">Pinned checkout</span>
 							</div>
-							<h3 id="terminal-route-title">Download with curl</h3>
-							<p>Best for a repeatable setup or a machine where you already live in the shell.</p>
-							<CodeBlock lang="bash" code={terminalDownload} label="Download" copy />
+							<h3 id="github-route-title">Clone with <code>gh</code></h3>
+							<p>For GitHub CLI users who want the tagged source plus a shallow repository checkout.</p>
+							<CodeBlock lang="bash" code={githubCliCheckout} label="Clone tagged source" copy />
+							<small>Skip Step 2 · continue with the first run</small>
+						</section>
+
+						<section class="route" aria-labelledby="git-route-title">
+							<div class="route-topline">
+								<span class="route-badge route-badge--quiet">Git</span>
+								<span class="route-platform">Pinned checkout</span>
+							</div>
+							<h3 id="git-route-title">Clone with Git</h3>
+							<p>For contributors, auditors, and anyone who wants familiar source-control tooling.</p>
+							<CodeBlock lang="bash" code={gitCheckout} label="Clone tagged source" copy />
+							<small>Skip Step 2 · continue with the first run</small>
 						</section>
 					</div>
 				</article>
@@ -170,8 +202,9 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 						</div>
 					</header>
 					<p class="step-intro">
-						Check the archive against the published SHA-256, then create one local folder and
-						enter it. There are no install scripts and no package tree to fetch.
+						If you chose curl or the browser download, check the archive against the published
+						SHA-256, then unpack it into one local folder. Git and GitHub CLI users can skip
+						this step because their checkout is already ready.
 					</p>
 					<CodeBlock lang="bash" code={unpackCommand} label="Verify, unpack, and enter" copy />
 				</article>
@@ -238,13 +271,14 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 			</div>
 		</section>
 
-		<section class="channels" aria-labelledby="channels-title">
+		<section class="channels" id="channels" aria-labelledby="channels-title">
 			<div class="section-heading">
-				<p>More install paths</p>
-				<h2 id="channels-title">Modern channels, when the artifacts are ready.</h2>
+				<p>Package managers and apps</p>
+				<h2 id="channels-title">The next distribution layer.</h2>
 				<span>
-					The archive stays the working path today. These options move into the primary
-					flow only after their real release artifacts are published and verified.
+					Modern developer tools usually add native apps, package managers, and platform
+					installers. ContextCake will only list a command once its artifact is published,
+					signed where appropriate, and independently verifiable.
 				</span>
 			</div>
 			<div class="channel-grid">
@@ -261,10 +295,16 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 					<small>The cask will install the same verified application artifact.</small>
 				</article>
 				<article>
-					<div><Icon name="send" size={20} /><span>Planned</span></div>
-					<h3>MCP bundle</h3>
-					<p>A one-click route for supported MCP clients, backed by the same local engine.</p>
-					<small>No separate or reduced ContextCake implementation.</small>
+					<div><Icon name="dashboard" size={20} /><span>Use WSL today</span></div>
+					<h3>Windows</h3>
+					<p>The terminal route works in WSL today. A native Windows installer waits for a tested, signed artifact.</p>
+					<small>No unverified PowerShell bootstrap command.</small>
+				</article>
+				<article>
+					<div><Icon name="shield" size={20} /><span>Not offered</span></div>
+					<h3>npm global install</h3>
+					<p>The engine has zero runtime dependencies and intentionally avoids registry install scripts.</p>
+					<small>Use the archive or a pinned Git checkout instead.</small>
 				</article>
 			</div>
 		</section>
@@ -658,6 +698,14 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		gap: 1rem;
 		color: var(--cc-layer-team);
 	}
+	.route-platform {
+		color: var(--cc-text-faint);
+		font-family: var(--cc-font-mono);
+		font-size: 0.62rem;
+		letter-spacing: 0.04em;
+		text-align: right;
+		text-transform: uppercase;
+	}
 	.route-badge {
 		padding: 0.25rem 0.5rem;
 		border-radius: 999px;
@@ -680,6 +728,10 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 	.route h3 {
 		margin: 1.2rem 0 0.5rem;
 		font-size: 1.3rem;
+	}
+	.route h3 code {
+		font-family: var(--cc-font-mono);
+		font-size: 0.92em;
 	}
 	.route p {
 		margin: 0 0 1.2rem;
@@ -854,15 +906,14 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 	}
 	.channel-grid {
 		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		border-top: 1px solid var(--cc-border);
-		border-bottom: 1px solid var(--cc-border);
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1px;
+		border: 1px solid var(--cc-border);
+		background: var(--cc-border);
 	}
 	.channel-grid article {
 		padding: 1.75rem;
-	}
-	.channel-grid article + article {
-		border-left: 1px solid var(--cc-border);
+		background: var(--cc-canvas);
 	}
 	.channel-grid article > div {
 		display: flex;
@@ -982,11 +1033,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 			max-width: 28rem;
 		}
 		.channel-grid {
-			grid-template-columns: 1fr;
-		}
-		.channel-grid article + article {
-			border-top: 1px solid var(--cc-border);
-			border-left: 0;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 		.channel-grid p {
 			min-height: 0;
@@ -1009,6 +1056,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 			padding: 4rem 0;
 		}
 		.route-grid,
+		.channel-grid,
 		.section-heading,
 		.trust {
 			grid-template-columns: 1fr;

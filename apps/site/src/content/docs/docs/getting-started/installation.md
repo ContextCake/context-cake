@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Download the current source archive and run the bundled demo in a few minutes.
+description: Choose a versioned ContextCake source route and run the bundled demo in a few minutes.
 ---
 
 ContextCake runs directly from **versioned source**. The recommended route is a
@@ -20,7 +20,7 @@ local setup path.
 
 ## Choose a route
 
-Every route below is pinned to the same `console-v0.2.0` source. Use the archive
+Every route below targets the same `console-v0.2.0` source tag. Use the archive
 when you want the smallest inspectable download, or a shallow Git checkout when
 you already work with source-control tools.
 
@@ -66,7 +66,7 @@ tar -xzf context-cake-console-v0.2.0.tar.gz -C contextcake --strip-components=1 
 cd contextcake
 ```
 
-These commands pin the setup to the `console-v0.2.0` tag instead of following the
+These commands target the `console-v0.2.0` tag instead of following the
 latest source checkout, and stop before extraction if the downloaded bytes do not
 match the published SHA-256.
 

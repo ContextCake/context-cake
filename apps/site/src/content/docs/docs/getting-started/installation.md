@@ -5,7 +5,7 @@ description: Download the current source archive and run the bundled demo in a f
 
 ContextCake installs from a **direct source archive**. The engine is
 dependency-free: there is no `npm install` step, no install scripts execute, and
-nothing is fetched after you unpack the archive.
+the resolver quickstart fetches nothing after you unpack the archive.
 
 If you are still evaluating whether the model fits your team, start with the
 [demo](/demo) or [the docs overview](/docs) and come back here when you want the
@@ -21,13 +21,15 @@ local setup path.
 Download the versioned [ContextCake `console-v0.2.0` source archive](https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz), then unpack it:
 
 ```bash
-mkdir contextcake
-tar -xzf context-cake-console-v0.2.0.tar.gz -C contextcake --strip-components=1
+printf '%s  %s\n' '013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253' 'context-cake-console-v0.2.0.tar.gz' | shasum -a 256 --check &&
+mkdir contextcake &&
+tar -xzf context-cake-console-v0.2.0.tar.gz -C contextcake --strip-components=1 &&
 cd contextcake
 ```
 
-This tag is immutable: the archive and the commands above always refer to the same
-released source.
+These commands pin the setup to the `console-v0.2.0` tag instead of following the
+latest source checkout, and stop before extraction if the downloaded bytes do not
+match the published SHA-256.
 
 ## Verify
 
@@ -66,7 +68,11 @@ your own fork:
 ```bash
 git clone https://github.com/ContextCake/context-cake.git
 cd context-cake
+node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db
 ```
+
+The current source tree uses `apps/playground/manifest.json`; the versioned archive
+above predates the monorepo layout and uses `playground/manifest.json`.
 
 ## Why a source archive?
 

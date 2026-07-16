@@ -9,13 +9,15 @@ import demo from '../data/demo-cascade.json';
 const version = '0.2.0';
 const tag = `console-v${version}`;
 const archiveName = `context-cake-${tag}.tar.gz`;
+const archiveSha256 = '013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253';
 const sourceDownloadUrl = `https://github.com/ContextCake/context-cake/archive/refs/tags/${tag}.tar.gz`;
 const tagUrl = `https://github.com/ContextCake/context-cake/tree/${tag}`;
 
 const terminalDownload = `curl --fail --location ${sourceDownloadUrl} \\
   --output ${archiveName}`;
-const unpackCommand = `mkdir contextcake
-tar -xzf ${archiveName} -C contextcake --strip-components=1
+const unpackCommand = `printf '%s  %s\\n' '${archiveSha256}' '${archiveName}' | shasum -a 256 --check &&
+mkdir contextcake &&
+tar -xzf ${archiveName} -C contextcake --strip-components=1 &&
 cd contextcake`;
 const resolveCommand = 'node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db';
 const connectCommand = `claude mcp add contextcake -- \\
@@ -82,11 +84,11 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				<ol>
 					<li style="--step-color: var(--cc-layer-company)">
 						<span>01</span>
-						<div><strong>Download</strong><small>One pinned source archive</small></div>
+						<div><strong>Download</strong><small>One versioned source archive</small></div>
 					</li>
 					<li style="--step-color: var(--cc-layer-team)">
 						<span>02</span>
-						<div><strong>Unpack</strong><small>One local, removable folder</small></div>
+						<div><strong>Verify + unpack</strong><small>SHA-256, then one local folder</small></div>
 					</li>
 					<li style="--step-color: var(--cc-layer-team)">
 						<span>03</span>
@@ -110,7 +112,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				<h2 id="quickstart-title">Get it running</h2>
 				<nav aria-label="Install steps">
 					<a href="#download"><span>01</span> Get the archive</a>
-					<a href="#unpack"><span>02</span> Unpack it</a>
+					<a href="#unpack"><span>02</span> Verify and unpack</a>
 					<a href="#resolve"><span>03</span> Prove it works</a>
 					<a href="#connect"><span>04</span> Connect an agent</a>
 				</nav>
@@ -144,7 +146,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 							<a class="route-action" href={sourceDownloadUrl} download>
 								Download .tar.gz <Icon name="chevron-down" size={16} />
 							</a>
-							<small>{archiveName}</small>
+							<small>{archiveName} · SHA-256 {archiveSha256.slice(0, 8)}…{archiveSha256.slice(-8)}</small>
 						</section>
 
 						<section class="route" aria-labelledby="terminal-route-title">
@@ -164,13 +166,14 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 						<span>02</span>
 						<div>
 							<p>Keep it contained</p>
-							<h2>Unpack it</h2>
+							<h2>Verify and unpack it</h2>
 						</div>
 					</header>
 					<p class="step-intro">
-						Create one local folder and enter it. There are no install scripts and no package tree to fetch.
+						Check the archive against the published SHA-256, then create one local folder and
+						enter it. There are no install scripts and no package tree to fetch.
 					</p>
-					<CodeBlock lang="bash" code={unpackCommand} label="Unpack and enter" copy />
+					<CodeBlock lang="bash" code={unpackCommand} label="Verify, unpack, and enter" copy />
 				</article>
 
 				<article class="install-step" id="resolve">
@@ -275,7 +278,8 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				<p>
 					Package registries are convenient, but they also add maintainer accounts,
 					transitive dependencies, and lifecycle scripts to the trust chain. The current
-					archive is deliberately smaller: pinned source, plain Node.js, and no
+					archive is deliberately smaller: versioned source with a published checksum,
+					plain Node.js, and no
 					<code>postinstall</code> step.
 				</p>
 				<p class="boundary-note">
@@ -288,10 +292,13 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				</div>
 				<details>
 					<summary>Need a source checkout instead?</summary>
-					<p>Use Git when you want history, a fork, or a contribution workflow.</p>
+					<p>
+						Use Git when you want history, a fork, or a contribution workflow. The current
+						source tree keeps the demo manifest under <code>apps/playground/</code>.
+					</p>
 					<CodeBlock
 						lang="bash"
-						code={`git clone https://github.com/ContextCake/context-cake.git\ncd context-cake`}
+						code={`git clone https://github.com/ContextCake/context-cake.git\ncd context-cake\nnode resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db`}
 						label="Clone for development"
 						copy
 					/>

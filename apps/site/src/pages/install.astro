@@ -1,154 +1,1127 @@
 ---
-// Install page: spec.md "Install (/install)".
+// Install page: the public archive-first path plus truthful status for the
+// native/package-manager channels owned by the distribution spec.
 import Base from '../layouts/Base.astro';
 import CodeBlock from '../components/CodeBlock.astro';
+import Icon from '../components/Icon.astro';
+import demo from '../data/demo-cascade.json';
 
-const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz';
+const version = '0.2.0';
+const tag = `console-v${version}`;
+const archiveName = `context-cake-${tag}.tar.gz`;
+const archiveSha256 = '013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253';
+const sourceDownloadUrl = `https://github.com/ContextCake/context-cake/archive/refs/tags/${tag}.tar.gz`;
+const tagUrl = `https://github.com/ContextCake/context-cake/tree/${tag}`;
+
+const terminalDownload = `curl --fail --location ${sourceDownloadUrl} \\
+  --output ${archiveName}`;
+const githubCliCheckout = `gh repo clone ContextCake/context-cake contextcake -- \\
+  --branch ${tag} --depth 1
+cd contextcake`;
+const gitCheckout = `git clone --branch ${tag} --depth 1 \\
+  https://github.com/ContextCake/context-cake.git contextcake
+cd contextcake`;
+const unpackCommand = `printf '%s  %s\\n' '${archiveSha256}' '${archiveName}' | shasum -a 256 --check &&
+mkdir contextcake &&
+tar -xzf ${archiveName} -C contextcake --strip-components=1 &&
+cd contextcake`;
+const resolveCommand = 'node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db';
+const connectCommand = `claude mcp add contextcake -- \\
+  node "$PWD/mcp-server.mjs" \\
+  --manifest "$PWD/playground/manifest.json"`;
+
+const demoConceptId = 'decisions/primary-db';
+const primaryDb = demo.concepts.find((concept) => concept.id === demoConceptId);
+if (!primaryDb) throw new Error(`Install demo concept ${demoConceptId} is missing`);
+
+const resolvedChoice = primaryDb.sections.find(
+	(section) => section.key === 'choice' && !section.suppressed,
+);
+if (!resolvedChoice) throw new Error('Install demo choice section is missing');
+
+const conflict = resolvedChoice.conflicts?.[0];
+const summarize = (value: string, limit = 110) => {
+	const oneLine = value.replace(/\s+/g, ' ').trim();
+	return oneLine.length > limit ? `${oneLine.slice(0, limit).trimEnd()}…` : oneLine;
+};
+const dateFormatter = new Intl.DateTimeFormat('en-US', {
+	month: 'short',
+	day: 'numeric',
+	year: 'numeric',
+	timeZone: 'UTC',
+});
+const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:00Z`));
 ---
 
 <Base
+	tone="dark"
 	title="Install ContextCake"
-	description="Install ContextCake from a source archive. Plain Node.js ≥ 18, no dependency install step."
+	description="Download ContextCake, verify the resolver, and connect your first AI agent in a few minutes."
 >
-	<main>
-		<h1>Install</h1>
+	<main class="install-page">
+		<section class="install-hero" aria-labelledby="install-title">
+			<div class="hero-copy">
+				<p class="eyebrow"><span>Install</span> · {tag}</p>
+				<h1 id="install-title">From download to a sourced answer in five minutes.</h1>
+				<p class="lede">
+					ContextCake runs on plain Node.js with zero runtime dependencies. Download one
+					versioned archive, resolve the bundled example, then connect the same engine to
+					your agent.
+				</p>
+				<div class="hero-actions" aria-label="Install actions">
+					<a class="button button--primary" href="#download">
+						<span class="prompt-mark" aria-hidden="true">$</span>
+						Choose an install method
+					</a>
+					<a class="button button--quiet" href={sourceDownloadUrl} download>
+						<Icon name="download" size={18} />
+						Download {tag}
+					</a>
+				</div>
+				<ul class="hero-facts" aria-label="Install requirements">
+					<li>Node.js 18+</li>
+					<li>macOS, Linux, or WSL</li>
+					<li>No <code>npm install</code></li>
+				</ul>
+			</div>
 
-		<p class="lede">
-			Install ContextCake from a <strong>direct source archive</strong>. The engine has
-			zero runtime dependencies: after you unpack it, there is no <code>npm install</code>{' '}
-			step, no install scripts, and no transitive package tree to trust.
-		</p>
+			<figure class="install-map" aria-label="ContextCake setup path">
+				<div class="map-header">
+					<span>Setup path</span>
+					<span class="map-status"><i></i> 4 steps</span>
+				</div>
+				<ol>
+					<li style="--step-color: var(--cc-layer-company)">
+						<span>01</span>
+						<div><strong>Choose a route</strong><small>Archive, GitHub CLI, or Git</small></div>
+					</li>
+					<li style="--step-color: var(--cc-layer-team)">
+						<span>02</span>
+						<div><strong>Verify + unpack</strong><small>SHA-256, then one local folder</small></div>
+					</li>
+					<li style="--step-color: var(--cc-layer-team)">
+						<span>03</span>
+						<div><strong>Resolve</strong><small>See provenance and conflicts</small></div>
+					</li>
+					<li style="--step-color: var(--cc-layer-personal)">
+						<span>04</span>
+						<div><strong>Connect</strong><small>Serve the same graph over MCP</small></div>
+					</li>
+				</ol>
+				<figcaption>
+					<span>Program files</span>
+					<strong>Local and inspectable</strong>
+				</figcaption>
+			</figure>
+		</section>
 
-		<h2>Prerequisites</h2>
-		<ul>
-			<li>A browser to download the source archive</li>
-			<li>Node.js ≥ 18</li>
-		</ul>
+		<section class="quickstart" id="quickstart" aria-labelledby="quickstart-title">
+			<aside class="quickstart-nav">
+				<p>Quickstart</p>
+				<h2 id="quickstart-title">Get it running</h2>
+				<nav aria-label="Install steps">
+					<a href="#download"><span>01</span> Get ContextCake</a>
+					<a href="#unpack"><span>02</span> Verify and unpack</a>
+					<a href="#resolve"><span>03</span> Prove it works</a>
+					<a href="#connect"><span>04</span> Connect an agent</a>
+				</nav>
+				<div class="local-note">
+					<Icon name="shield" size={17} />
+					<p><strong>Nothing installs globally.</strong> Delete the folder and ContextCake is gone.</p>
+				</div>
+			</aside>
 
-		<h2>1. Download the source archive</h2>
-		<a class="download-link" href={sourceDownloadUrl} download>Download ContextCake (.tar.gz)</a>
-		<p>
-			This downloads the versioned <code>console-v0.2.0</code> source archive directly from
-			ContextCake's GitHub repository.
-		</p>
+			<div class="steps">
+				<article class="install-step" id="download">
+					<header class="step-heading">
+						<span>01</span>
+						<div>
+							<p>Choose a route</p>
+							<h2>Get ContextCake</h2>
+						</div>
+					</header>
+					<p class="step-intro">
+						Choose how you want to get the same tagged source. Archive routes preserve an
+						explicit checksum step; Git routes are convenient when you already use source tools.
+					</p>
+					<div class="route-grid">
+						<section class="route route--recommended" aria-labelledby="terminal-route-title">
+							<div class="route-topline">
+								<span class="route-badge">Recommended</span>
+								<span class="route-platform">macOS · Linux · WSL</span>
+							</div>
+							<h3 id="terminal-route-title">Terminal with curl</h3>
+							<p>Fastest for a local evaluation. Download the universal source archive, then verify it in Step 2.</p>
+							<CodeBlock lang="bash" code={terminalDownload} label="Download tagged source" copy />
+							<small>Continue to Step 2 · checksum verification required</small>
+						</section>
 
-		<h2>2. Unpack it</h2>
-		<CodeBlock
-			lang="bash"
-			code={`mkdir contextcake
-	tar -xzf context-cake-console-v0.2.0.tar.gz -C contextcake --strip-components=1
-cd contextcake`}
-		/>
+						<section class="route" aria-labelledby="browser-route-title">
+							<div class="route-topline">
+								<span class="route-badge route-badge--quiet">No CLI required</span>
+								<Icon name="download" size={18} />
+							</div>
+							<h3 id="browser-route-title">Browser download</h3>
+							<p>Download the same universal archive directly, then use your terminal only to verify and run it.</p>
+							<a class="route-action" href={sourceDownloadUrl} download>
+								Download .tar.gz <Icon name="chevron-down" size={16} />
+							</a>
+							<small>{archiveName} · SHA-256 {archiveSha256.slice(0, 8)}…{archiveSha256.slice(-8)}</small>
+						</section>
 
-		<h2>3. Resolve your first concept</h2>
-		<p>
-			The repo ships a tiny three-layer demo bundle. Resolve a concept where the layers
-			disagree and watch the merge, with provenance and conflicts included:
-		</p>
-		<CodeBlock
-			lang="bash"
-			code={`node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db`}
-		/>
-		<p>
-			You'll get JSON: each section tagged with the layer that won it, and a{' '}
-			<code>conflicts</code> array where the losing layers dissent, with dates.
-		</p>
+						<section class="route" aria-labelledby="github-route-title">
+							<div class="route-topline">
+								<span class="route-badge route-badge--quiet">GitHub CLI</span>
+								<span class="route-platform">Tagged checkout</span>
+							</div>
+							<h3 id="github-route-title">Clone with <code>gh</code></h3>
+							<p>For GitHub CLI users who want the tagged source plus a shallow repository checkout.</p>
+							<CodeBlock lang="bash" code={githubCliCheckout} label="Clone tagged source" copy />
+							<small>Skip Step 2 · continue with the first run</small>
+						</section>
 
-		<h2>4. Serve it to an agent</h2>
-		<p>Start the MCP server against the same demo bundle:</p>
-		<CodeBlock
-			lang="bash"
-			code={`node mcp-server.mjs --manifest apps/playground/manifest.json`}
-		/>
-		<p>Or register it with an MCP client (Claude Code shown):</p>
-		<CodeBlock
-			lang="bash"
-			code={`claude mcp add contextcake -- node /path/to/context-cake/mcp-server.mjs --manifest /path/to/context-cake/apps/playground/manifest.json`}
-		/>
-		<p>
-			From here, point the manifest at your own layers. See{' '}
-			<a href="/docs/getting-started/first-cascade">Your first cascade</a> and{' '}
-			<a href="/docs/getting-started/connect-an-agent">Connect an agent</a>.
-		</p>
+						<section class="route" aria-labelledby="git-route-title">
+							<div class="route-topline">
+								<span class="route-badge route-badge--quiet">Git</span>
+								<span class="route-platform">Tagged checkout</span>
+							</div>
+							<h3 id="git-route-title">Clone with Git</h3>
+							<p>For contributors, auditors, and anyone who wants familiar source-control tooling.</p>
+							<CodeBlock lang="bash" code={gitCheckout} label="Clone tagged source" copy />
+							<small>Skip Step 2 · continue with the first run</small>
+						</section>
+					</div>
+				</article>
 
-		<h2>Optional: explore visually</h2>
-		<CodeBlock lang="bash" code={`npm run playground   # http://127.0.0.1:8790`} />
-		<p>
-			The playground is a local canvas over the same engine: sources, live merges, and
-			an N-way conflict resolver. (It runs from the clone too: its libraries are vendored
-			in the repo, not fetched.)
-		</p>
+				<article class="install-step" id="unpack">
+					<header class="step-heading">
+						<span>02</span>
+						<div>
+							<p>Keep it contained</p>
+							<h2>Verify and unpack it</h2>
+						</div>
+					</header>
+					<p class="step-intro">
+						If you chose curl or the browser download, check the archive against the published
+						SHA-256, then unpack it into one local folder. Git and GitHub CLI users can skip
+						this step because their checkout is already ready.
+					</p>
+					<CodeBlock lang="bash" code={unpackCommand} label="Verify, unpack, and enter" copy />
+				</article>
 
-		<h2>Source checkout</h2>
-		<p>
-			Use a git checkout when you want to inspect history, contribute changes, or pin your
-			own fork:
-		</p>
-		<CodeBlock
-			lang="bash"
-			code={`git clone https://github.com/ContextCake/context-cake.git
-cd context-cake`}
-		/>
+				<article class="install-step" id="resolve">
+					<header class="step-heading">
+						<span>03</span>
+						<div>
+							<p>First run</p>
+							<h2>Prove the resolver works</h2>
+						</div>
+					</header>
+					<p class="step-intro">
+						Resolve a bundled concept where three layers disagree. The command prints the
+						effective answer, its source, and the dated dissent that remains attached.
+					</p>
+					<CodeBlock lang="bash" code={resolveCommand} label="Resolve the demo" copy />
 
-		<h2>A note on trust</h2>
-		<p>
-			The manifest is a trust boundary: a layer with <code>"source": "mcp"</code> spawns
-			the command it names, as your user. Only point ContextCake at manifests you wrote
-			or trust. The same rule applies to any MCP client config.{' '}
-			<a href="/docs/concepts/trust-boundary">Read the details</a>.
-		</p>
+					<figure class="result-preview" aria-labelledby="result-title">
+						<div class="result-header">
+							<div>
+								<span>Visible output</span>
+								<h3 id="result-title">decisions/primary-db</h3>
+							</div>
+							<span class="result-status"><i></i> resolved</span>
+						</div>
+						<div class="result-row" style="--result-color: var(--cc-layer-personal)">
+							<span class="result-swatch" aria-hidden="true"></span>
+							<div><small>Effective choice</small><strong>{summarize(resolvedChoice.content)}</strong></div>
+							<code>{resolvedChoice.sourceLayer} · {formatDate(resolvedChoice.sourceUpdated)}</code>
+						</div>
+						{conflict && (
+							<div class="conflict-row">
+								<Icon name="alert" size={16} />
+								<div><small>Conflict preserved</small><span>{summarize(conflict.content, 86)}</span></div>
+								<code>{conflict.layer} · {formatDate(conflict.updated)}</code>
+							</div>
+						)}
+						<figcaption>Generated at build time from the same demo bundle the command resolves.</figcaption>
+					</figure>
+				</article>
 
-		<h2>Why a source archive?</h2>
-		<p>
-			Registry supply-chain attacks have repeatedly hit AI and agent tooling. Compromised
-			maintainer accounts shipping credential-stealing <code>postinstall</code> payloads
-			to thousands of downstreams. A knowledge engine that your agents read from should
-			have a supply chain you can audit: a source archive is small, inspectable,
-			and runnable as plain Node.js.
-		</p>
+				<article class="install-step" id="connect">
+					<header class="step-heading">
+						<span>04</span>
+						<div>
+							<p>Use the graph</p>
+							<h2>Connect an agent</h2>
+						</div>
+					</header>
+					<p class="step-intro">
+						Register the same engine with an MCP client. Claude Code is shown; the
+						<a href="/docs/getting-started/connect-an-agent">agent connection guide</a> covers other clients.
+					</p>
+					<CodeBlock lang="bash" code={connectCommand} label="Claude Code" copy />
+					<div class="next-actions">
+						<div>
+							<strong>Prefer a visual check?</strong>
+							<span>Run the local playground at <code>http://127.0.0.1:8790</code>.</span>
+						</div>
+						<CodeBlock lang="bash" code="npm run playground" label="Local playground" copy />
+					</div>
+				</article>
+			</div>
+		</section>
+
+		<section class="channels" id="channels" aria-labelledby="channels-title">
+			<div class="section-heading">
+				<p>Package managers and apps</p>
+				<h2 id="channels-title">The next distribution layer.</h2>
+				<span>
+					Modern developer tools usually add native apps, package managers, and platform
+					installers. ContextCake will only list a command once its artifact is published,
+					signed where appropriate, and independently verifiable.
+				</span>
+			</div>
+			<div class="channel-grid">
+				<article>
+					<div><Icon name="dashboard" size={20} /><span>Coming next</span></div>
+					<h3>ContextCake for Mac</h3>
+					<p>A signed, notarized app with guided setup, automatic updates, and an optional CLI.</p>
+					<small>Appears here with the first signed <code>app-v*</code> release.</small>
+				</article>
+				<article>
+					<div><Icon name="download" size={20} /><span>Planned</span></div>
+					<h3>Homebrew</h3>
+					<p>A familiar managed install for Mac users who want clean upgrades and removal.</p>
+					<small>The cask will install the same verified application artifact.</small>
+				</article>
+				<article>
+					<div><Icon name="dashboard" size={20} /><span>Use WSL today</span></div>
+					<h3>Windows</h3>
+					<p>The terminal route works in WSL today. A native Windows installer waits for a tested, signed artifact.</p>
+					<small>No unverified PowerShell bootstrap command.</small>
+				</article>
+				<article>
+					<div><Icon name="shield" size={20} /><span>Not offered</span></div>
+					<h3>npm global install</h3>
+					<p>The engine has zero runtime dependencies and intentionally avoids registry install scripts.</p>
+					<small>Use the archive or a tagged Git checkout instead.</small>
+				</article>
+			</div>
+		</section>
+
+		<section class="trust" aria-labelledby="trust-title">
+			<div>
+				<p>Why this path</p>
+				<h2 id="trust-title">An install you can inspect.</h2>
+			</div>
+			<div class="trust-copy">
+				<p>
+					Package registries are convenient, but they also add maintainer accounts,
+					transitive dependencies, and lifecycle scripts to the trust chain. The current
+					archive is deliberately smaller: versioned source with a published checksum,
+					plain Node.js, and no
+					<code>postinstall</code> step.
+				</p>
+				<p class="boundary-note">
+					<Icon name="alert" size={18} />
+					<span><strong>The manifest is still a trust boundary.</strong> An MCP source can run the command it names as your user. Only use manifests you wrote or trust.</span>
+				</p>
+				<div class="trust-links">
+					<a href="/docs/concepts/trust-boundary">Read the trust model</a>
+					<a href={tagUrl}>Inspect {tag} on GitHub <Icon name="external-link" size={15} /></a>
+				</div>
+				<details>
+					<summary>Need a source checkout instead?</summary>
+					<p>
+						Use Git when you want history, a fork, or a contribution workflow. The current
+						source tree keeps the demo manifest under <code>apps/playground/</code>.
+					</p>
+					<CodeBlock
+						lang="bash"
+						code={`git clone https://github.com/ContextCake/context-cake.git\ncd context-cake\nnode resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db`}
+						label="Clone for development"
+						copy
+					/>
+				</details>
+			</div>
+		</section>
 	</main>
 </Base>
 
 <style>
-	main {
-		max-width: 46rem;
+	.install-page {
+		position: relative;
+		z-index: 0;
+		max-width: 76rem;
 		margin: 0 auto;
-		padding: 3rem 1.5rem;
+		padding: 5.5rem 1.5rem 0;
 	}
-	.lede {
-		font-size: 1.1rem;
+	.install-hero {
+		display: grid;
+		grid-template-columns: minmax(0, 1.08fr) minmax(22rem, 0.72fr);
+		align-items: center;
+		gap: 4rem;
+		min-height: 34rem;
+		padding-bottom: 6rem;
 	}
-	h2 {
-		margin-top: 2.5rem;
-		font-size: 1.25rem;
-	}
-	code {
+	.eyebrow,
+	.quickstart-nav > p,
+	.section-heading > p,
+	.trust > div:first-child > p,
+	.step-heading p {
+		margin: 0;
+		color: var(--cc-text-muted);
 		font-family: var(--cc-font-mono);
+		font-size: 0.72rem;
+		font-weight: 700;
+		letter-spacing: 0.11em;
+		text-transform: uppercase;
 	}
-	p code, li code {
-		background: var(--cc-surface);
-		border: 1px solid var(--cc-border);
-		border-radius: 4px;
-		padding: 0.1rem 0.35rem;
-		font-size: 0.9em;
-	}
-	a {
+	.eyebrow span {
 		color: var(--cc-layer-team);
 	}
-	.download-link {
+	h1 {
+		max-width: 13ch;
+		margin: 1.2rem 0 1.35rem;
+		font-size: clamp(3rem, 6vw, 5.75rem);
+		line-height: 0.95;
+		letter-spacing: -0.055em;
+	}
+	.lede {
+		max-width: 39rem;
+		margin: 0;
+		color: var(--cc-text-body);
+		font-size: clamp(1.05rem, 1.5vw, 1.2rem);
+		line-height: 1.65;
+	}
+	.hero-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 2rem;
+	}
+	.button {
 		display: inline-flex;
 		align-items: center;
-		min-height: 44px;
-		padding: 0.65rem 1rem;
-		border: 1px solid var(--cc-cta);
+		justify-content: center;
+		gap: 0.55rem;
+		min-height: 2.9rem;
+		padding: 0.2rem 1.15rem;
+		border: 1px solid var(--cc-border-strong);
 		border-radius: 999px;
-		background: var(--cc-cta);
-		color: var(--cc-on-cta);
 		font-family: var(--cc-font-heading);
 		font-weight: 700;
 		text-decoration: none;
+		transition:
+			background var(--cc-transition),
+			border-color var(--cc-transition),
+			color var(--cc-transition);
 	}
-	.download-link:hover {
+	.button--primary {
+		border-color: var(--cc-cta);
+		background: var(--cc-cta);
+		color: var(--cc-on-cta);
+	}
+	.button--primary:hover {
+		border-color: var(--cc-cta-hover);
 		background: var(--cc-cta-hover);
+	}
+	:global(body.theme-paper) .button--primary,
+	:global(body.theme-paper) .route-action {
+		color: var(--cc-on-cta);
+	}
+	.button--quiet {
+		background: var(--cc-surface-soft);
+		color: var(--cc-text-body);
+	}
+	.button--quiet:hover {
+		background: color-mix(in srgb, var(--cc-layer-team) 10%, var(--cc-surface));
+		color: var(--cc-text);
+	}
+	.hero-facts {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 1.4rem;
+		margin: 1.5rem 0 0;
+		padding: 0;
+		list-style: none;
+		color: var(--cc-text-muted);
+		font-family: var(--cc-font-mono);
+		font-size: 0.75rem;
+	}
+	.hero-facts li {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+	}
+	.hero-facts li::before {
+		content: '';
+		width: 0.35rem;
+		height: 0.35rem;
+		border-radius: 50%;
+		background: var(--cc-layer-team);
+	}
+	.hero-facts code,
+	.channel-grid code {
+		font-family: inherit;
+	}
+	.install-map {
+		margin: 0;
+		padding: 1rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-xl);
+		background: var(--cc-surface);
+		box-shadow: var(--cc-shadow-panel);
+		backdrop-filter: blur(18px);
+	}
+	.map-header,
+	.install-map figcaption,
+	.result-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	.map-header {
+		padding: 0.3rem 0.35rem 0.95rem;
+		border-bottom: 1px solid var(--cc-border);
+		color: var(--cc-text-muted);
+		font-family: var(--cc-font-mono);
+		font-size: 0.72rem;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+	.map-status,
+	.result-status {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+	}
+	.map-status i,
+	.result-status i {
+		width: 0.45rem;
+		height: 0.45rem;
+		border-radius: 50%;
+		background: var(--cc-layer-team);
+		box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--cc-layer-team) 14%, transparent);
+	}
+	.install-map ol {
+		display: grid;
+		gap: 0.6rem;
+		margin: 0;
+		padding: 1rem 0;
+		list-style: none;
+	}
+	.install-map li {
+		display: grid;
+		grid-template-columns: 3rem minmax(0, 1fr);
+		align-items: center;
+		gap: 0.8rem;
+		padding: 1rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: var(--cc-surface-soft);
+	}
+	.install-map li > span {
+		display: grid;
+		place-items: center;
+		width: 2.5rem;
+		height: 2.5rem;
+		border-radius: var(--cc-radius-sm);
+		background: color-mix(in srgb, var(--step-color) 15%, var(--cc-surface-solid));
+		color: var(--step-color);
+		font-family: var(--cc-font-mono);
+		font-size: 0.72rem;
+		font-weight: 700;
+	}
+	.install-map li div {
+		display: grid;
+		gap: 0.1rem;
+	}
+	.install-map li strong {
+		color: var(--cc-text);
+	}
+	.install-map li small {
+		color: var(--cc-text-muted);
+	}
+	.install-map figcaption {
+		padding: 0.85rem 0.35rem 0.2rem;
+		font-family: var(--cc-font-mono);
+		font-size: 0.72rem;
+	}
+	.install-map figcaption span {
+		color: var(--cc-text-muted);
+	}
+	.install-map figcaption strong {
+		color: var(--cc-layer-team);
+		font-weight: 500;
+	}
+	.quickstart {
+		display: grid;
+		grid-template-columns: 15rem minmax(0, 1fr);
+		gap: 4.5rem;
+		padding: 5.5rem 0;
+		border-top: 1px solid var(--cc-border);
+	}
+	.quickstart-nav {
+		position: sticky;
+		top: 2rem;
+		align-self: start;
+	}
+	.quickstart-nav h2 {
+		margin: 0.55rem 0 1.5rem;
+		font-size: 1.8rem;
+		letter-spacing: -0.03em;
+	}
+	.quickstart-nav nav {
+		display: grid;
+		gap: 0.1rem;
+	}
+	.quickstart-nav nav a {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		min-height: 2.75rem;
+		padding: 0 0.6rem;
+		border-radius: var(--cc-radius-sm);
+		color: var(--cc-text-body);
+		font-size: 0.9rem;
+		text-decoration: none;
+		transition: background var(--cc-transition), color var(--cc-transition);
+	}
+	.quickstart-nav nav a:hover {
+		background: var(--cc-surface-soft);
+		color: var(--cc-text);
+	}
+	.quickstart-nav nav span {
+		color: var(--cc-text-faint);
+		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+	}
+	.local-note {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 0.65rem;
+		margin-top: 1.75rem;
+		padding-top: 1.25rem;
+		border-top: 1px solid var(--cc-border);
+		color: var(--cc-layer-team);
+	}
+	.local-note p {
+		margin: 0;
+		color: var(--cc-text-muted);
+		font-size: 0.82rem;
+		line-height: 1.5;
+	}
+	.local-note strong {
+		display: block;
+		color: var(--cc-text-body);
+	}
+	.steps {
+		min-width: 0;
+		container: install-steps / inline-size;
+	}
+	.install-step {
+		scroll-margin-top: 2rem;
+		padding: 0 0 5.5rem;
+	}
+	.install-step + .install-step {
+		padding-top: 0.5rem;
+		border-top: 1px solid var(--cc-border);
+	}
+	.step-heading {
+		display: grid;
+		grid-template-columns: 3rem minmax(0, 1fr);
+		align-items: center;
+		gap: 1rem;
+		padding-top: 2.2rem;
+	}
+	.install-step:first-child .step-heading {
+		padding-top: 0;
+	}
+	.step-heading > span {
+		display: grid;
+		place-items: center;
+		width: 3rem;
+		height: 3rem;
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-layer-team) 12%, var(--cc-surface));
+		color: var(--cc-layer-team);
+		font-family: var(--cc-font-mono);
+		font-size: 0.74rem;
+		font-weight: 700;
+	}
+	.step-heading h2 {
+		margin: 0.15rem 0 0;
+		font-size: clamp(1.8rem, 3vw, 2.5rem);
+		line-height: 1.1;
+		letter-spacing: -0.035em;
+	}
+	.step-intro {
+		max-width: 43rem;
+		margin: 1.25rem 0 1.5rem 4rem;
+		color: var(--cc-text-body);
+		line-height: 1.7;
+	}
+	.step-intro a,
+	.trust-links a {
+		color: var(--cc-layer-team);
+	}
+	.install-step > :global(.code-block),
+	.result-preview,
+	.next-actions {
+		margin-left: 4rem;
+	}
+	.route-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1rem;
+		margin-left: 4rem;
+	}
+	.route {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		padding: 1.25rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-lg);
+		background: var(--cc-surface-soft);
+	}
+	.route--recommended {
+		border-color: color-mix(in srgb, var(--cc-layer-team) 48%, var(--cc-border));
+		background: color-mix(in srgb, var(--cc-layer-team) 6%, var(--cc-surface));
+	}
+	.route-topline {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		color: var(--cc-layer-team);
+	}
+	.route-platform {
+		color: var(--cc-text-faint);
+		font-family: var(--cc-font-mono);
+		font-size: 0.62rem;
+		letter-spacing: 0.04em;
+		text-align: right;
+		text-transform: uppercase;
+	}
+	.route-badge {
+		padding: 0.25rem 0.5rem;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--cc-layer-team) 14%, transparent);
+		color: var(--cc-layer-team);
+		font-family: var(--cc-font-mono);
+		font-size: 0.65rem;
+		font-weight: 700;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
+	}
+	.route-badge--quiet {
+		background: var(--cc-surface-soft);
+		color: var(--cc-text-muted);
+	}
+	.prompt-mark {
+		font-family: var(--cc-font-mono);
+		font-weight: 700;
+	}
+	.route h3 {
+		margin: 1.2rem 0 0.5rem;
+		font-size: 1.3rem;
+	}
+	.route h3 code {
+		font-family: var(--cc-font-mono);
+		font-size: 0.92em;
+	}
+	.route p {
+		margin: 0 0 1.2rem;
+		color: var(--cc-text-muted);
+		font-size: 0.9rem;
+		line-height: 1.6;
+	}
+	.route-action {
+		display: inline-flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		min-height: 2.75rem;
+		margin-top: auto;
+		padding: 0 0.9rem;
+		border-radius: var(--cc-radius-sm);
+		background: var(--cc-cta);
+		color: var(--cc-on-cta);
+		font-weight: 700;
+		text-decoration: none;
+	}
+	.route-action:hover {
+		background: var(--cc-cta-hover);
+	}
+	.route > small {
+		margin-top: 0.75rem;
+		color: var(--cc-text-faint);
+		font-family: var(--cc-font-mono);
+		font-size: 0.65rem;
+		overflow-wrap: anywhere;
+	}
+	.route :global(.code-block) {
+		margin-top: auto;
+	}
+	.result-preview {
+		margin-top: 1rem;
+		padding: 1rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-lg);
+		background: var(--cc-surface-soft);
+	}
+	.result-header {
+		padding: 0.25rem 0.2rem 1rem;
+	}
+	.result-header div {
+		display: grid;
+		gap: 0.12rem;
+	}
+	.result-header span,
+	.result-header h3,
+	.result-row code,
+	.conflict-row code {
+		font-family: var(--cc-font-mono);
+	}
+	.result-header span {
+		color: var(--cc-text-muted);
+		font-size: 0.66rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+	.result-header h3 {
+		margin: 0;
+		font-size: 0.88rem;
+		letter-spacing: 0;
+	}
+	.result-row,
+	.conflict-row {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 0.85rem;
+		padding: 1rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-md);
+		background: var(--cc-surface-solid);
+	}
+	.result-swatch {
+		width: 0.7rem;
+		height: 2.5rem;
+		border-radius: 999px;
+		background: var(--result-color);
+	}
+	.result-row div,
+	.conflict-row div {
+		display: grid;
+		gap: 0.18rem;
+	}
+	.result-row small,
+	.conflict-row small {
+		color: var(--cc-text-muted);
+		font-family: var(--cc-font-mono);
+		font-size: 0.62rem;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
+	}
+	.result-row strong {
+		color: var(--cc-text);
+		font-size: 0.9rem;
+		font-weight: 500;
+	}
+	.result-row code,
+	.conflict-row code {
+		color: var(--cc-text-muted);
+		font-size: 0.65rem;
+		white-space: nowrap;
+	}
+	.conflict-row {
+		margin-top: 0.55rem;
+		border-color: color-mix(in srgb, var(--cc-conflict) 30%, var(--cc-border));
+		color: var(--cc-conflict);
+	}
+	.conflict-row span {
+		color: var(--cc-text-body);
+		font-size: 0.82rem;
+	}
+	.result-preview figcaption {
+		margin-top: 0.8rem;
+		color: var(--cc-text-faint);
+		font-family: var(--cc-font-mono);
+		font-size: 0.65rem;
+	}
+	.next-actions {
+		display: grid;
+		grid-template-columns: minmax(12rem, 0.65fr) minmax(0, 1fr);
+		align-items: center;
+		gap: 1rem;
+		margin-top: 1rem;
+		padding: 1rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-lg);
+		background: var(--cc-surface-soft);
+	}
+	.next-actions > div {
+		display: grid;
+		gap: 0.18rem;
+	}
+	.next-actions strong {
+		color: var(--cc-text);
+	}
+	.next-actions span {
+		color: var(--cc-text-muted);
+		font-size: 0.84rem;
+	}
+	.next-actions code,
+	.trust code {
+		font-family: var(--cc-font-mono);
+	}
+	.channels {
+		padding: 5.5rem 0;
+		border-top: 1px solid var(--cc-border);
+	}
+	.section-heading {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.7fr);
+		gap: 0.5rem 3rem;
+		align-items: end;
+		margin-bottom: 2.5rem;
+	}
+	.section-heading > p {
+		grid-column: 1 / -1;
+	}
+	.section-heading h2 {
+		max-width: 18ch;
+		margin: 0;
+		font-size: clamp(2.3rem, 4.5vw, 4.2rem);
+		line-height: 1;
+		letter-spacing: -0.05em;
+	}
+	.section-heading > span {
+		color: var(--cc-text-muted);
+		line-height: 1.7;
+	}
+	.channel-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1px;
+		border: 1px solid var(--cc-border);
+		background: var(--cc-border);
+	}
+	.channel-grid article {
+		padding: 1.75rem;
+		background: var(--cc-canvas);
+	}
+	.channel-grid article > div {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		color: var(--cc-layer-team);
+	}
+	.channel-grid article > div span {
+		font-family: var(--cc-font-mono);
+		font-size: 0.65rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+	.channel-grid h3 {
+		margin: 2.3rem 0 0.55rem;
+		font-size: 1.35rem;
+	}
+	.channel-grid p {
+		min-height: 4.5rem;
+		margin: 0 0 1.25rem;
+		color: var(--cc-text-body);
+		font-size: 0.92rem;
+		line-height: 1.6;
+	}
+	.channel-grid small {
+		color: var(--cc-text-muted);
+		font-size: 0.76rem;
+		line-height: 1.5;
+	}
+	.trust {
+		display: grid;
+		grid-template-columns: minmax(15rem, 0.75fr) minmax(0, 1.25fr);
+		gap: 4rem;
+		padding: 5.5rem 0 1rem;
+		border-top: 1px solid var(--cc-border);
+	}
+	.trust h2 {
+		max-width: 9ch;
+		margin: 0.5rem 0 0;
+		font-size: clamp(2.5rem, 5vw, 4.5rem);
+		line-height: 1;
+		letter-spacing: -0.05em;
+	}
+	.trust-copy > p:first-child {
+		margin: 0;
+		font-size: 1.05rem;
+		line-height: 1.75;
+	}
+	.boundary-note {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 0.8rem;
+		margin: 1.75rem 0;
+		padding: 1rem;
+		border: 1px solid color-mix(in srgb, var(--cc-conflict) 32%, var(--cc-border));
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-conflict) 6%, var(--cc-surface));
+		color: var(--cc-conflict);
+	}
+	.boundary-note span {
+		color: var(--cc-text-body);
+		font-size: 0.9rem;
+	}
+	.boundary-note strong {
+		color: var(--cc-text);
+	}
+	.trust-links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.6rem 1.25rem;
+	}
+	.trust-links a {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		min-height: 2.75rem;
+		font-weight: 600;
+	}
+	details {
+		margin-top: 1.5rem;
+		padding-top: 1.5rem;
+		border-top: 1px solid var(--cc-border);
+	}
+	summary {
+		min-height: 2.75rem;
+		color: var(--cc-text);
+		font-weight: 700;
+		cursor: pointer;
+	}
+	details p {
+		color: var(--cc-text-muted);
+	}
+	@container install-steps (max-width: 42rem) {
+		.route-grid {
+			grid-template-columns: 1fr;
+		}
+	}
+	@media (max-width: 980px) {
+		.install-hero {
+			grid-template-columns: 1fr;
+			gap: 2.5rem;
+		}
+		.install-map {
+			max-width: 36rem;
+		}
+		.quickstart {
+			grid-template-columns: 1fr;
+			gap: 3rem;
+		}
+		.quickstart-nav {
+			position: static;
+		}
+		.quickstart-nav nav {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+		.local-note {
+			max-width: 28rem;
+		}
+		.channel-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+		.channel-grid p {
+			min-height: 0;
+		}
+	}
+	@media (max-width: 720px) {
+		.install-page {
+			padding: 4rem 1rem 0;
+		}
+		.install-hero {
+			min-height: auto;
+			padding-bottom: 4rem;
+		}
+		h1 {
+			font-size: clamp(2.8rem, 14vw, 4.4rem);
+		}
+		.quickstart,
+		.channels,
+		.trust {
+			padding: 4rem 0;
+		}
+		.route-grid,
+		.channel-grid,
+		.section-heading,
+		.trust {
+			grid-template-columns: 1fr;
+		}
+		.route-grid,
+		.step-intro,
+		.install-step > :global(.code-block),
+		.result-preview,
+		.next-actions {
+			margin-left: 0;
+		}
+		.next-actions {
+			grid-template-columns: 1fr;
+		}
+		.result-row,
+		.conflict-row {
+			grid-template-columns: auto minmax(0, 1fr);
+		}
+		.result-row code,
+		.conflict-row code {
+			grid-column: 2;
+		}
+		.section-heading > span {
+			margin-top: 1rem;
+		}
+		.trust {
+			gap: 2rem;
+		}
+		.trust h2 {
+			max-width: 12ch;
+		}
+	}
+	@media (max-width: 480px) {
+		.hero-actions,
+		.hero-actions .button {
+			width: 100%;
+		}
+		.hero-facts {
+			flex-direction: column;
+		}
+		.install-map {
+			padding: 0.75rem;
+		}
+		.quickstart-nav nav {
+			grid-template-columns: 1fr;
+		}
+		.step-heading {
+			grid-template-columns: 2.7rem minmax(0, 1fr);
+		}
+		.step-heading > span {
+			width: 2.7rem;
+			height: 2.7rem;
+		}
+		.route {
+			padding: 1rem;
+		}
+		.result-header {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.button,
+		.quickstart-nav nav a {
+			transition: none;
+		}
 	}
 </style>

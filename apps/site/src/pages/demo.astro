@@ -9,32 +9,32 @@ const demoUrl = '/demo-app/index.html';
 
 const narrativePoints = [
 	{
-		title: 'Source, intact',
-		body: 'Each effective value names its layer and date.',
+		title: 'A source for each section',
+		body: 'Each selected value shows the layer it came from and the date of that source.',
 	},
 	{
-		title: 'Dissent, intact',
-		body: 'Overrides do not erase the alternative view.',
+		title: 'The other answer stays visible',
+		body: 'An override does not erase the value it replaced.',
 	},
 	{
-		title: 'Workflow, intact',
-		body: 'Browse concepts, conflicts, and guidance in one place.',
+		title: 'One place to inspect both',
+		body: 'Browse resolved concepts and their conflicts in the same interface.',
 	},
 ];
 ---
 
 <Base
 	title="ContextCake demo"
-	description="Explore a resolved ContextCake decision with its sources and disagreement intact."
+	description="See how ContextCake resolves company, team, and personal layers while keeping sources and disagreements visible."
 >
 	<main class="demo-page">
 		<section class="hero">
 			<div class="hero-copy">
 				<p class="eyebrow">Demo</p>
-				<h1>One decision.<br />The whole context.</h1>
+				<h1>See how three layers become one answer.</h1>
 				<p class="lede">
-					The live console resolves the demo layers at build time. Trace the effective answer,
-					its source, and any disagreement.
+					This demo combines company policy, team practice, and a personal note. Open the
+					result to see which layer supplied each section and where another layer disagreed.
 				</p>
 				<div class="actions">
 					<a class="cta primary" href="#demo-stage">Explore the console</a>
@@ -44,7 +44,7 @@ const narrativePoints = [
 
 			<aside class="scenario" aria-label="Demo framing">
 				<p class="scenario-label">What to look for</p>
-				<h2>Three layers.<br />One usable answer.</h2>
+				<h2>Company, team, and personal layers.</h2>
 				<p>
 					Company policy, team practice, and local judgment resolve section by section. Source
 					and dissent stay in view.
@@ -107,7 +107,7 @@ const narrativePoints = [
 
 		<section class="signals">
 			<p class="eyebrow">Inside the console</p>
-			<h2>Three things to notice.</h2>
+			<h2>What to check in the result.</h2>
 			<div class="signal-grid">
 				{narrativePoints.map((point) => (
 					<article class="signal">

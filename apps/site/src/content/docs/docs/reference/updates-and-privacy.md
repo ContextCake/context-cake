@@ -102,6 +102,11 @@ cascading settings row; local ContextCake files and settings are left untouched.
 Supabase-managed operational and audit logs follow the project's configured retention
 and are not necessarily removed when the account is deleted.
 
+Installed Pack files, local overlays, checksums, and the manifest's local Pack-version
+registry are also excluded from settings sync. A Pack-managed layer can contribute its
+Pack identity and active version as ordinary configuration metadata, while its absolute
+path is scrubbed exactly like every other local source path.
+
 ## Related
 
 - [The trust boundary](/docs/concepts/trust-boundary) — the one place ContextCake

@@ -34,6 +34,7 @@ const COMMANDS = {
   ingest: { entry: 'ingest.mjs', manifest: false, blurb: 'classify repo events into signals' },
   write: { entry: 'write.mjs', manifest: true, blurb: 'write captured signals into a layer' },
   promote: { entry: 'promote.mjs', manifest: false, blurb: 'promote a concept up one layer' },
+  pack: { entry: 'pack-cli.mjs', manifest: false, blurb: 'inspect, install, update, and roll back local Packs' },
 }
 
 function usage() {
@@ -78,6 +79,14 @@ if (command.manifest && !args.includes('--manifest') && !args.includes('--person
     process.exit(1)
   }
   args.unshift('--manifest', DEFAULT_MANIFEST)
+}
+if (cmd === 'pack' && !['inspect', 'help', '--help', '-h'].includes(args[0]) && !args.includes('--manifest')) {
+  if (!fs.existsSync(DEFAULT_MANIFEST)) {
+    console.error(`contextcake: no manifest at ${DEFAULT_MANIFEST}`)
+    console.error('Open the ContextCake app to run first-time setup, or pass --manifest.')
+    process.exit(1)
+  }
+  args.splice(1, 0, '--manifest', DEFAULT_MANIFEST)
 }
 
 const child = spawn(process.execPath, [path.join(engineSrc(), command.entry), ...args], {

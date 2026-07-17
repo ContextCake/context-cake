@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contextcake.com/schemas/pack-v1.json",
+  "title": "ContextCake Pack manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "name",
+    "version",
+    "creator",
+    "license",
+    "hero_workflow",
+    "sample_files",
+    "changelog",
+    "supported_surfaces",
+    "update_policy",
+    "source_disclosures",
+    "rights",
+    "freshness",
+    "permissions",
+    "compatibility",
+    "review",
+    "artifact"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "name": { "type": "string", "minLength": 1 },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "hero_workflow": { "type": "string", "minLength": 1 },
+    "sample_files": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.(?:md|txt|json|ya?ml)$" }
+    },
+    "changelog": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.md$" },
+    "creator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "url"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "format": "uri", "pattern": "^https://" }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["model", "terms_url"],
+      "properties": {
+        "model": { "enum": ["free", "personal-and-team"] },
+        "identifier": { "type": "string" },
+        "personal_price_usd": { "type": "integer", "minimum": 0 },
+        "team_price_usd": { "type": "integer", "minimum": 0 },
+        "team_seats": { "type": "integer", "minimum": 1 },
+        "terms_url": { "type": "string", "format": "uri", "pattern": "^https://" }
+      }
+    },
+    "supported_surfaces": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "update_policy": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["cadence", "base_purchase", "corrections", "editorial_updates"],
+      "properties": {
+        "cadence": { "type": "string", "minLength": 1 },
+        "base_purchase": { "const": "perpetual" },
+        "corrections": { "const": "included" },
+        "editorial_updates": { "enum": ["included", "optional-subscription"] }
+      }
+    },
+    "source_disclosures": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attested", "disclosure"],
+      "properties": {
+        "attested": { "const": true },
+        "disclosure": { "type": "string", "minLength": 1 }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewed_at"],
+      "properties": {
+        "reviewed_at": { "type": "string", "format": "date" },
+        "review_interval_days": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_only", "executable_code", "network_access", "credentials"],
+      "properties": {
+        "content_only": { "const": true },
+        "executable_code": { "const": false },
+        "network_access": { "const": false },
+        "credentials": { "const": false }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["contextcake", "pack_contract"],
+      "properties": {
+        "contextcake": { "type": "string", "minLength": 1 },
+        "pack_contract": { "const": "1" }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reviewed_by", "reviewed_at"],
+      "properties": {
+        "status": { "enum": ["first-party", "approved"] },
+        "reviewed_by": { "type": "string", "minLength": 1 },
+        "reviewed_at": { "type": "string", "format": "date" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checksum_algorithm", "checksum_scope", "checksum"],
+      "properties": {
+        "checksum_algorithm": { "const": "sha256" },
+        "checksum_scope": {
+          "const": "canonical-content-tree",
+          "description": "SHA-256 over sorted relative file paths and bytes, with PACK.yaml artifact.checksum normalized to pending-release. Archive transport hashes may be distributed separately."
+        },
+        "checksum": {
+          "type": "string",
+          "pattern": "^(pending-release|sha256:[a-f0-9]{64})$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "license": { "properties": { "model": { "const": "personal-and-team" } } } }
+      },
+      "then": {
+        "properties": {
+          "license": {
+            "required": ["personal_price_usd", "team_price_usd", "team_seats"],
+            "properties": { "team_seats": { "const": 5 } },
+            "oneOf": [
+              { "properties": { "personal_price_usd": { "const": 19 }, "team_price_usd": { "const": 49 } } },
+              { "properties": { "personal_price_usd": { "const": 49 }, "team_price_usd": { "const": 129 } } },
+              { "properties": { "personal_price_usd": { "const": 99 }, "team_price_usd": { "const": 249 } } },
+              { "properties": { "personal_price_usd": { "const": 149 }, "team_price_usd": { "const": 399 } } }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

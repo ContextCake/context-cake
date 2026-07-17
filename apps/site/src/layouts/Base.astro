@@ -18,8 +18,10 @@ interface Props {
 	tone?: 'dark' | 'paper';
 }
 
-const { title, description, tone = 'dark' } = Astro.props;
-const initialTheme = tone === 'paper' ? 'light' : 'dark';
+const { title, description } = Astro.props;
+// Dark is the product default on every marketing route. A visitor can still
+// opt into light mode, and that explicit preference remains local to them.
+const initialTheme = 'dark';
 const isHome = Astro.url.pathname === '/';
 
 // Absolute URLs for canonical + OpenGraph (Astro.site = https://contextcake.com).
@@ -36,6 +38,8 @@ const footerColumns = [
 		links: [
 			{ label: 'Demo', href: '/demo' },
 			{ label: 'Packs', href: '/packs' },
+			{ label: 'Pricing', href: '/pricing' },
+			{ label: 'Create a Pack', href: '/creators' },
 			{ label: 'Install', href: '/install' },
 			{ label: 'Changelog', href: '/changelog' },
 		],
@@ -82,7 +86,7 @@ const footerColumns = [
 			<meta name="twitter:description" content={description} />
 			<meta name="twitter:image" content={ogImage} />
 	</head>
-	<body class:list={[`theme-${tone}`]} data-default-theme={initialTheme}>
+	<body class="theme-dark" data-default-theme={initialTheme}>
 		<script is:inline>
 			const themeStorageKey = 'contextcake-site-theme';
 			const siteBody = document.body;
@@ -107,12 +111,13 @@ const footerColumns = [
 			</a>
 			<nav aria-label="Main">
 				<a href="/packs">Packs</a>
+				<a href="/pricing">Pricing</a>
 				<a href="/docs">Docs</a>
 				<a href="/demo">Demo</a>
 				<a href="/install">Install</a>
 				<a href="https://github.com/ContextCake/context-cake">GitHub</a>
 			</nav>
-			<button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" title="Switch to dark mode">
+			<button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode" title="Switch to light mode">
 				<Icon name="moon" size={18} class="theme-toggle__moon" />
 				<Icon name="sun" size={18} class="theme-toggle__sun" />
 				<span class="sr-only">Switch theme</span>
@@ -151,8 +156,8 @@ const footerColumns = [
 							<span>ContextCake</span>
 						</a>
 						<p class="footer-tagline">
-							Working context for AI teams. Policy, team practice, and local judgment
-							resolve into one answer, with every source and disagreement still attached.
+							Keep company rules, team practices, and personal notes in separate layers.
+							ContextCake resolves them without hiding the source or disagreement.
 						</p>
 						<a class="footer-repo" href={repoUrl} rel="noreferrer">
 							<Icon name="github" size={17} strokeWidth={2} />
@@ -176,7 +181,7 @@ const footerColumns = [
 					<p class="footer-legal">
 						© {year} ContextCake · Open source, MIT licensed
 					</p>
-					<p class="footer-motto">Conflicts surfaced, not hidden.</p>
+					<p class="footer-motto">Sources and disagreements stay visible.</p>
 				</div>
 			</div>
 		</footer>
@@ -594,8 +599,9 @@ const footerColumns = [
 			width: 2.75rem;
 			height: 2.75rem;
 		}
-		.theme-paper .nav nav a:nth-child(1),
-		.theme-paper .nav nav a:nth-child(4) {
+		.theme-paper .nav nav a:nth-child(4),
+		.theme-paper .nav nav a:nth-child(5),
+		.theme-paper .nav nav a:nth-child(6) {
 			display: none;
 		}
 	}

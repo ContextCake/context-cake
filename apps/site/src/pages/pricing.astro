@@ -1,0 +1,183 @@
+---
+import Base from '../layouts/Base.astro';
+import { applicationPlans, packPriceBands, planComparison } from '../data/commerce';
+
+const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz';
+const faqs = [
+	['Does Free expire or limit my local context?', 'No. Local sources, layers, profiles, resolution, MCP access, and Pack authoring remain available without an account or subscription.'],
+	['Do I need Pro to buy or install a Pack?', 'No. Packs are separate products. A Free user can install any free Pack or Pack they purchase.'],
+	['What happens if I cancel Pack updates?', 'You stop receiving future editorial releases. Every Pack version already delivered remains yours to keep and use.'],
+	['Why can’t I subscribe yet?', 'Pro and Team stay marked Coming soon until their sync, update, history, and governance features are production-ready.'],
+];
+---
+
+<Base
+	tone="paper"
+	title="ContextCake pricing | Local stays free"
+	description="ContextCake is free for local use. Paid plans will add device sync, managed Pack updates, and team controls."
+>
+	<main class="pricing-page">
+		<section class="pricing-hero" aria-labelledby="pricing-title">
+			<div>
+				<p class="eyebrow">Pricing</p>
+				<h1 id="pricing-title">Use ContextCake locally for free.</h1>
+				<p class="lede">The local engine stays free. Paid plans will cover device sync, managed updates, and team controls.</p>
+				<div class="hero-actions">
+					<a class="button primary" href={sourceDownloadUrl} download>Download free</a>
+					<a class="button secondary" href="/packs">Browse Packs</a>
+				</div>
+			</div>
+			<aside class="pricing-rule" aria-label="The pricing rule">
+				<span>One rule</span>
+				<strong>Packs are sold separately.</strong>
+				<p>You can buy and install them on Free. Ending a subscription does not disable files already on your computer.</p>
+			</aside>
+		</section>
+
+		<section class="tiers" aria-labelledby="tiers-title">
+			<div class="section-heading">
+				<p class="eyebrow">Application plans</p>
+				<h2 id="tiers-title">Free covers local use. Paid plans add management.</h2>
+			</div>
+			<div class="tier-ledger">
+				{applicationPlans.map((plan, index) => (
+					<article class={`tier tier--${plan.stripe}`}>
+						<div class="tier-index" aria-hidden="true">0{index + 1}</div>
+						<div class="tier-name">
+							<p>{plan.status}</p>
+							<h3>{plan.name}</h3>
+							<span>{plan.summary}</span>
+						</div>
+						<div class="tier-price">
+							<strong>{plan.price}</strong>
+							<span>{plan.annual}</span>
+						</div>
+						<ul>
+							{plan.features.map((feature) => <li>{feature}</li>)}
+						</ul>
+						{plan.id === 'free' ? (
+							<a class="tier-action" href={sourceDownloadUrl} download>Download ContextCake</a>
+						) : (
+							<span class="tier-action unavailable">Coming soon</span>
+						)}
+					</article>
+				))}
+			</div>
+		</section>
+
+		<section class="comparison" aria-labelledby="compare-title">
+			<div class="section-heading compact">
+				<p class="eyebrow">What changes</p>
+				<h2 id="compare-title">What each plan adds.</h2>
+			</div>
+			<div class="table-scroll" tabindex="0" aria-label="Scrollable plan comparison">
+				<table>
+					<thead><tr><th>Capability</th><th>Free</th><th>Pro</th><th>Team</th></tr></thead>
+					<tbody>{planComparison.map((row) => <tr>{row.map((cell, index) => index === 0 ? <th scope="row">{cell}</th> : <td>{cell}</td>)}</tr>)}</tbody>
+				</table>
+			</div>
+		</section>
+
+		<section class="pack-economics" aria-labelledby="pack-pricing-title">
+			<div class="section-heading">
+				<p class="eyebrow">Pack pricing</p>
+				<h2 id="pack-pricing-title">Buy a Pack once. Subscribe only if you want new releases.</h2>
+				<p>The version you buy is yours to keep. An optional update subscription adds later modules, examples, and editorial changes.</p>
+			</div>
+			<div class="band-list">
+				{packPriceBands.map((band) => (
+					<div class="price-band">
+						<div><strong>{band.depth}</strong><span>{band.description}</span></div>
+						<dl><div><dt>Personal</dt><dd>{band.personal}</dd></div><div><dt>Team · 5 users</dt><dd>{band.team}</dd></div></dl>
+					</div>
+				))}
+			</div>
+			<div class="pack-notes">
+				<p><strong>Updates:</strong> suggested personal prices are $5, $9, or $19 per month.</p>
+				<p><strong>Corrections:</strong> safety, compatibility, and broken-link fixes remain available to base purchasers.</p>
+			</div>
+		</section>
+
+		<section class="privacy" aria-labelledby="privacy-title">
+			<p class="eyebrow">Privacy boundary</p>
+			<h2 id="privacy-title">What syncs, and what stays on your computer.</h2>
+			<p>Your account can sync identity, entitlements, preferences, and limited configuration metadata. Context files, local overlays, credentials, absolute paths, and executable integration details stay local.</p>
+		</section>
+
+		<section class="faq" aria-labelledby="faq-title">
+			<div class="section-heading compact"><p class="eyebrow">Questions</p><h2 id="faq-title">Billing and access.</h2></div>
+			<div>{faqs.map(([question, answer]) => <details><summary>{question}</summary><p>{answer}</p></details>)}</div>
+		</section>
+	</main>
+</Base>
+
+<style>
+	.pricing-page { max-width: 88rem; margin: 0 auto; padding: 0 clamp(1.25rem, 4vw, 4rem) 6rem; color: var(--cc-text-body); }
+	.pricing-hero { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.65fr); gap: clamp(2rem, 5vw, 5rem); align-items: end; min-height: 30rem; padding: clamp(3.5rem, 6vw, 5.5rem) 0; border-bottom: 1px solid var(--cc-border-strong); }
+	.eyebrow { margin: 0 0 1rem; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+	h1, h2, h3, p { letter-spacing: 0; }
+	h1 { max-width: 13ch; margin: 0; color: var(--cc-text); font-size: clamp(2.9rem, 5vw, 5.25rem); line-height: 0.94; letter-spacing: -0.05em; }
+	.lede { max-width: 43rem; margin: 1.5rem 0 0; font-size: clamp(1.15rem, 1.8vw, 1.6rem); line-height: 1.45; }
+	.hero-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2rem; }
+	.button, .tier-action { display: inline-flex; align-items: center; justify-content: center; min-height: 3rem; padding: 0 1.15rem; border: 1px solid var(--cc-border-strong); color: var(--cc-text); font-weight: 700; text-decoration: none; transition: background var(--cc-transition), color var(--cc-transition), border-color var(--cc-transition); }
+	.button.primary { background: var(--cc-text); color: var(--cc-surface-solid); border-color: var(--cc-text); }
+	.button.primary:hover { background: var(--cc-text-body); }
+	.button.secondary:hover { background: var(--cc-surface-soft); }
+	.pricing-rule { padding: 1.5rem 0 0 1.5rem; border-top: 0.35rem solid var(--cc-layer-personal); border-left: 1px solid var(--cc-border); }
+	.pricing-rule span { color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.72rem; text-transform: uppercase; }
+	.pricing-rule strong { display: block; margin-top: 1.5rem; color: var(--cc-text); font-size: 1.55rem; line-height: 1.15; }
+	.pricing-rule p { margin: 0.75rem 0 0; line-height: 1.6; }
+	.tiers, .comparison, .pack-economics, .faq { padding-top: 6rem; }
+	.section-heading { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 1.5rem 3rem; align-items: end; margin-bottom: 2.5rem; }
+	.section-heading .eyebrow { grid-column: 1 / -1; margin-bottom: -0.75rem; }
+	.section-heading h2 { max-width: 18ch; margin: 0; color: var(--cc-text); font-size: clamp(1.9rem, 3vw, 3.6rem); line-height: 1; letter-spacing: -0.04em; }
+	.section-heading > p:last-child { max-width: 48rem; margin: 0; font-size: 1.05rem; line-height: 1.6; }
+	.section-heading.compact { grid-template-columns: 1fr; align-items: start; }
+	.tier-ledger { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+	.tier { --stripe: var(--cc-layer-personal); position: relative; display: flex; min-width: 0; flex-direction: column; padding: 1.6rem; overflow: hidden; background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); }
+	.tier::before { content: ''; position: absolute; inset: 0 0 auto; height: 0.3rem; background: var(--stripe); }
+	.tier:first-child { background: var(--cc-surface-raised); border-color: var(--cc-border-strong); }
+	.tier--team { --stripe: var(--cc-layer-team); }
+	.tier--company { --stripe: var(--cc-layer-company); }
+	.tier-index { margin-bottom: 1.6rem; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.75rem; }
+	.tier-name p { margin: 0 0 0.5rem; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.68rem; font-weight: 700; text-transform: uppercase; }
+	.tier-name h3 { margin: 0; color: var(--cc-text); font-size: 2.3rem; line-height: 1; }
+	.tier-name span { display: block; min-height: 4.5em; margin-top: 0.7rem; line-height: 1.5; }
+	.tier-price { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--cc-border); }
+	.tier-price strong { display: block; color: var(--cc-text); font-size: 1.55rem; }
+	.tier-price span { display: block; margin-top: 0.35rem; color: var(--cc-text-muted); font-size: 0.82rem; }
+	.tier ul { flex: 1; margin: 1.5rem 0; padding: 0; list-style: none; }
+	.tier li { position: relative; margin-bottom: 0.55rem; padding-left: 1rem; }
+	.tier li::before { content: ''; position: absolute; left: 0; top: 0.65em; width: 0.35rem; height: 0.35rem; background: var(--stripe); }
+	.tier-action { width: 100%; min-width: 0; box-sizing: border-box; font-size: 0.86rem; }
+	.tier-action:not(.unavailable):hover { background: var(--cc-text); color: var(--cc-surface-solid); }
+	.tier-action.unavailable { color: var(--cc-text-muted); background: var(--cc-surface-soft); }
+	.table-scroll { overflow-x: auto; border: 1px solid var(--cc-border-strong); }
+	table { width: 100%; min-width: 48rem; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+	th, td { padding: 1rem 1.1rem; border-bottom: 1px solid var(--cc-border); text-align: left; }
+	thead th { color: var(--cc-text); font-family: var(--cc-font-mono); font-size: 0.75rem; text-transform: uppercase; }
+	tbody th { color: var(--cc-text); font-weight: 600; }
+	.price-band { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2rem; align-items: center; padding: 1.35rem 0; border-top: 1px solid var(--cc-border-strong); }
+	.price-band:last-child { border-bottom: 1px solid var(--cc-border-strong); }
+	.price-band strong, .price-band span { display: block; }
+	.price-band strong { color: var(--cc-text); font-size: 1.2rem; }
+	.price-band span { margin-top: 0.3rem; color: var(--cc-text-muted); }
+	.price-band dl { display: grid; grid-template-columns: repeat(2, 8.5rem); gap: 1.25rem; margin: 0; }
+	.price-band dl div { padding-left: 0.9rem; border-left: 0.28rem solid var(--cc-layer-team); }
+	.price-band dl div:last-child { border-left-color: var(--cc-layer-company); }
+	.price-band dt { color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.68rem; text-transform: uppercase; }
+	.price-band dd { margin: 0.25rem 0 0; color: var(--cc-text); font-size: 1.25rem; font-weight: 700; }
+	.pack-notes { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1.5rem; }
+	.pack-notes p { margin: 0; padding-left: 1rem; border-left: 1px solid var(--cc-border-strong); }
+	.privacy { margin-top: 6rem; padding: clamp(2rem, 5vw, 5rem); background: var(--cc-inverse-surface); color: var(--cc-inverse-body); }
+	.privacy .eyebrow { color: var(--cc-layer-team); }
+	.privacy h2 { max-width: 18ch; margin: 0; color: var(--cc-inverse-text); font-size: clamp(2rem, 3vw, 3.5rem); line-height: 1; }
+	.privacy > p:last-child { max-width: 60rem; margin: 1.5rem 0 0; font-size: 1.1rem; line-height: 1.65; }
+	.faq > div:last-child { border-top: 1px solid var(--cc-border-strong); }
+	details { border-bottom: 1px solid var(--cc-border-strong); }
+	summary { padding: 1.3rem 0; color: var(--cc-text); font-size: 1.05rem; font-weight: 700; cursor: pointer; }
+	details p { max-width: 60rem; margin: 0 0 1.3rem; }
+	@media (max-width: 1120px) { .pricing-hero, .section-heading { grid-template-columns: 1fr; } }
+	@media (max-width: 860px) { .tier-ledger { grid-template-columns: 1fr; } .tier-name span { min-height: 0; } }
+	@media (max-width: 620px) { .pricing-hero { min-height: auto; padding-block: 3rem; } h1 { font-size: clamp(2.65rem, 11vw, 3.75rem); } .price-band { grid-template-columns: 1fr; } .price-band dl { grid-template-columns: 1fr 1fr; } .pack-notes { grid-template-columns: 1fr; } }
+</style>

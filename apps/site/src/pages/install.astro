@@ -14,9 +14,8 @@ const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/r
 		<h1>Install</h1>
 
 		<p class="lede">
-			Install ContextCake from a <strong>direct source archive</strong>. The engine has
-			zero runtime dependencies: after you unpack it, there is no <code>npm install</code>{' '}
-			step, no install scripts, and no transitive package tree to trust.
+			Download the source archive and unpack it. The engine runs on Node.js without an{' '}
+			<code>npm install</code> step, install scripts, or runtime packages.
 		</p>
 
 		<h2>Prerequisites</h2>
@@ -42,16 +41,16 @@ cd contextcake`}
 
 		<h2>3. Resolve your first concept</h2>
 		<p>
-			The repo ships a tiny three-layer demo bundle. Resolve a concept where the layers
-			disagree and watch the merge, with provenance and conflicts included:
+			The archive includes a small three-layer example. This command resolves one concept
+			and returns the selected values, their sources, and any conflicts:
 		</p>
 		<CodeBlock
 			lang="bash"
 			code={`node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db`}
 		/>
 		<p>
-			You'll get JSON: each section tagged with the layer that won it, and a{' '}
-			<code>conflicts</code> array where the losing layers dissent, with dates.
+			The JSON response identifies the layer used for each section. Other values appear in
+			the <code>conflicts</code> array with their source dates.
 		</p>
 
 		<h2>4. Serve it to an agent</h2>
@@ -74,9 +73,8 @@ cd contextcake`}
 		<h2>Optional: explore visually</h2>
 		<CodeBlock lang="bash" code={`npm run playground   # http://127.0.0.1:8790`} />
 		<p>
-			The playground is a local canvas over the same engine: sources, live merges, and
-			an N-way conflict resolver. (It runs from the clone too: its libraries are vendored
-			in the repo, not fetched.)
+			The playground shows the same sources, resolved values, and conflicts in a browser.
+			Its libraries are included in the archive, so it does not fetch them at runtime.
 		</p>
 
 		<h2>Source checkout</h2>
@@ -100,11 +98,10 @@ cd context-cake`}
 
 		<h2>Why a source archive?</h2>
 		<p>
-			Registry supply-chain attacks have repeatedly hit AI and agent tooling. Compromised
-			maintainer accounts shipping credential-stealing <code>postinstall</code> payloads
-			to thousands of downstreams. A knowledge engine that your agents read from should
-			have a supply chain you can audit: a source archive is small, inspectable,
-			and runnable as plain Node.js.
+			A source archive keeps the initial trust decision small. You can inspect the code you
+			are about to run, and there is no registry install step or transitive runtime package
+			tree. ContextCake still requires care around manifests, because an MCP source can run
+			the command named in that manifest.
 		</p>
 	</main>
 </Base>

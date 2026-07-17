@@ -69,6 +69,33 @@ test('prepareSyncPayload allowlists metadata and rejects credentials or context'
   )
 })
 
+test('Pack files and local registry stay out of sync while identity metadata is safe', () => {
+  const manifest = {
+    packs: {
+      contextcake: {
+        installedVersions: [{ version: '0.1.0', checksum: 'sha256:local-only' }],
+      },
+    },
+    sources: [{
+      name: 'pack-contextcake',
+      level: 0,
+      source: 'okf-local',
+      path: '/Users/dana/Library/Application Support/ContextCake/packs/contextcake/0.1.0',
+      origin: 'pack:contextcake@0.1.0',
+    }],
+  }
+  assert.deepEqual(selectSyncSettings(manifest), { sources: manifest.sources })
+  assert.deepEqual(prepareSyncPayload(manifest), {
+    sources: [{
+      name: 'pack-contextcake',
+      level: 0,
+      source: 'okf-local',
+      path: { __scrubbed: 'path' },
+      origin: 'pack:contextcake@0.1.0',
+    }],
+  })
+})
+
 test('embedded paths and path-shaped object keys are scrubbed or rejected', () => {
   assert.deepEqual(prepareSyncPayload({ sources: [{ name: 'team', path: './team', args: ['--config=/Users/dana/private.json'] }] }), {
     sources: [{ name: 'team', path: { __scrubbed: 'path' }, args: { __scrubbed: 'execution' } }],

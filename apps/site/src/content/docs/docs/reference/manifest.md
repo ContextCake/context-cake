@@ -20,7 +20,9 @@ what order they take precedence, and where each layer's knowledge comes from.
 }
 ```
 
-The top-level object has one key, `layers`: an ordered array of layer objects.
+The main top-level key is `layers`, an ordered array of layer objects. The local Pack
+manager may also maintain a `packs` registry of installed versions and assignments. That
+registry is bookkeeping for rollback; the resolver reads only the explicit layer entries.
 
 | Field | Required | Applies to | Meaning |
 |-------|----------|------------|---------|
@@ -91,6 +93,26 @@ author can therefore execute arbitrary commands as your user the moment you reso
 against it. Treat the manifest the way you treat any MCP client config: only point
 `--manifest` at files you trust. Read [The trust boundary](/docs/concepts/trust-boundary)
 before pointing a manifest at sources you didn't write.
+
+## Pack-managed layers
+
+A Pack installed with `pack.mjs` is an ordinary `okf-local` base layer with an `origin`
+that records the Pack identity and active version:
+
+```json
+{
+  "name": "pack-contextcake",
+  "level": 0,
+  "source": "okf-local",
+  "path": "packs/contextcake/0.1.0",
+  "origin": "pack:contextcake@0.1.0"
+}
+```
+
+Do not edit installed Pack directories. Put personal or team changes in a separate,
+higher-precedence layer. Updates switch only the Pack-managed layer path; rollback points
+it at a retained version; removal detaches it. None of those operations overwrite or
+delete another layer.
 
 ## The bundled demo manifest
 

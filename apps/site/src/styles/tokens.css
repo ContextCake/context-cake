@@ -41,6 +41,14 @@
   --cc-cta-hover: #f3efe6;
   --cc-on-cta: #11130f;
 
+  /* Fixed inverse panels used inside either theme. These do not get remapped
+   * by the light-theme semantic overrides in Base.astro. */
+  --cc-inverse-surface: #1e1f1c;
+  --cc-inverse-text: #f3efe6;
+  --cc-inverse-body: #d2ccc0;
+  --cc-inverse-cta: #e8e0d0;
+  --cc-inverse-on-cta: #11130f;
+
   /* Shape and elevation */
   --cc-radius-sm: 10px;
   --cc-radius-md: 16px;

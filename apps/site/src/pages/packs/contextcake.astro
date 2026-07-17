@@ -11,15 +11,10 @@ const explorer = await loadPackExplorer(packRoot, 'contextcake');
 const fileCount = explorer.files.length;
 const folderCount = explorer.treeEntries.filter((entry) => entry.kind === 'dir').length;
 
-// Checkout infrastructure is kept but dormant — live payments are deferred while the pack
-// ships as a free preview. To start selling: fill these links and set paymentsLive = true.
-const LEMONSQUEEZY_BASE_PACK_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_BASE_PACK';
-const paymentsLive = false;
-
 const fitRows = [
-	['Good fit', 'Developers — and their AI agents — adopting or building on ContextCake.'],
+	['Good fit', 'Developers and AI agents adopting or extending ContextCake.'],
 	['Not for', 'Readers who just want the marketing overview; the rest of the site covers that.'],
-	['Delivery', 'Plain markdown files first, with Claude Code plugin packaging.'],
+	['Delivery', 'A complete Markdown Pack you can read and edit. Free forever.'],
 ];
 
 const valuePoints = [
@@ -30,10 +25,10 @@ const valuePoints = [
 ];
 
 const quickFacts = [
-	['Files', `${fileCount} source files`],
-	['Folders', `${folderCount} directories`],
-	['Format', 'Markdown first'],
-	['Accuracy', 'Current model only'],
+	['Creator', 'ContextCake'],
+	['License', 'Free · MIT'],
+	['Reviewed', 'July 17, 2026'],
+	['Permissions', 'Content only'],
 ];
 
 const featuredFiles = [
@@ -41,31 +36,32 @@ const featuredFiles = [
 	{ label: 'What it is', path: 'overview/what-is-contextcake.md' },
 	{ label: 'Layers', path: 'architecture/layers-and-precedence.md' },
 	{ label: 'Install', path: 'getting-started/installation.md' },
+	{ label: 'Changelog', path: 'updates/CHANGELOG.md' },
 ];
 
 const workflowSteps = [
-	['01', 'Understand', 'What ContextCake is, the layer cake, and how higher layers win per section — the mental model in a few files.'],
+	['01', 'Understand', 'Learn what ContextCake stores, how the layers work, and why resolution happens section by section.'],
 	['02', 'Install', 'Get the dependency-free engine running on Node 18+ and resolve your first cascade.'],
-	['03', 'Write a layer', 'Author OKF concepts — frontmatter plus anchored sections — that team and personal layers can override.'],
+	['03', 'Write a layer', 'Create OKF concepts with frontmatter and anchored sections that other layers can override.'],
 	['04', 'Connect an agent', 'Run the MCP server and point Claude, Cursor, or any MCP client at the resolved graph.'],
 ];
 
 const insideRows = [
-	['Understand the architecture fast', 'Federated storage, the resolver, section merge, and provenance — explained for someone adopting it, not just skimming marketing.'],
-	['Get an agent productive', 'Tool guides plus an MCP walkthrough so Claude, Cursor, or Copilot can use ContextCake in your repo from real context.'],
+	['Understand the architecture', 'Read how federated storage, the resolver, section merges, and provenance work together.'],
+	['Connect an agent', 'Follow the MCP walkthrough or a tool-specific guide to use ContextCake in your repository.'],
 	['Copy real examples', 'A full OKF concept, a working layers.json, and a resolved read_file payload with surfaced conflicts.'],
-	['Avoid the sharp edges', 'The nuances that bite: precedence and recency, the manifest trust boundary, conflicts-not-hidden, the dependency-free rule.'],
+	['Avoid common mistakes', 'Check precedence, recency, the manifest trust boundary, conflict handling, and the dependency-free core.'],
 ];
 
 const useCases = [
-	['Adopting ContextCake', 'Wiring ContextCake into a repo and wanting your agent to actually know how it works.'],
+	['Adopting ContextCake', 'Add ContextCake to a repository and give your agent an accurate reference for the setup.'],
 	['Onboarding a teammate', 'Someone new needs the architecture and conventions without reading the whole codebase.'],
-	['Building on the engine', 'Extending sources, the resolver, or the MCP server, and needing the model precise.'],
+	['Building on the engine', 'Extend sources, the resolver, or the MCP server with the architecture close at hand.'],
 	['Explaining it to an AI tool', 'ChatGPT, Cursor, or Copilot should answer ContextCake questions accurately, not from stale guesses.'],
 ];
 
 const compatRows = [
-	['Plain files', 'Markdown you can open, read, and edit anywhere. This is the baseline — no tool required.'],
+	['Plain files', 'Open and edit the Markdown in any text editor. No additional tool is required.'],
 	['Claude Code', 'Add the ContextCake MCP server, or point Claude at the pack files.'],
 	['ChatGPT', 'Upload the files as project or knowledge files, then reference them in prompts.'],
 	['Cursor & Copilot', 'Keep the files in your repo so the assistant reads them as working context.'],
@@ -74,40 +70,39 @@ const compatRows = [
 const faqs = [
 	{
 		q: 'Is this just the ContextCake docs?',
-		a: 'It overlaps, but it is packaged as portable context files an AI agent can pull into your project — not a website to browse. Same facts, agent-ready.',
+		a: 'The facts overlap with the documentation, but the Pack keeps them in files that can live inside a project and travel with an AI agent.',
 	},
 	{
 		q: 'Do I need this to use ContextCake?',
-		a: 'No. The engine is free and dependency-free. This pack gives your assistant the full, accurate context so it can help you wire ContextCake in faster.',
+		a: 'No. The engine works without this Pack. The Pack gives your assistant a local reference for setup, architecture, and common mistakes.',
 	},
 	{
 		q: 'Is it accurate to the current version?',
-		a: 'Yes — it is distilled from the current design spec and docs, and it drops the superseded bits (no shadow-drift subsystem, no Group layer).',
+		a: 'It was reviewed on July 17, 2026 against the current design spec and docs. Every release keeps a visible freshness date and changelog so you can make that judgment before installing.',
 	},
 	{
 		q: 'What becomes paid later?',
-		a: 'The base pack stays free. Curated updates and additional packs are the future paid tiers.',
+		a: 'Not this Pack. ContextCake Pro will charge for managed sync and updates, and other professional Packs may be separate purchases. Pro is never required to install a Pack.',
 	},
 ];
 ---
 
 <Base
 	title="ContextCake Context Pack"
-	description="A portable, agent-ready context pack about ContextCake itself — architecture, OKF, the resolver, MCP tools, install, and the sharp edges — so your AI assistant can actually help you use it."
+	description="A free ContextCake Pack covering setup, architecture, OKF, the resolver, MCP tools, examples, and common mistakes."
 >
 	<main class="pack-page">
 		<section class="hero" aria-labelledby="hero-title">
 			<div class="hero-copy">
 				<p class="eyebrow">ContextCake Pack</p>
-				<h1 id="hero-title">Everything your agent needs to use ContextCake.</h1>
+				<h1 id="hero-title">Keep the ContextCake reference inside your project.</h1>
 				<p class="lede">
-					Drop this pack into your project so your AI assistant understands ContextCake —
-					the architecture, the OKF format, the resolver, the MCP tools — and can actually
-					help you wire it in, instead of guessing.
+					This free Pack covers the architecture, OKF format, resolver, MCP tools, setup,
+					and examples. Put the files in your project so your assistant can reference them.
 				</p>
 				<div class="hero-actions" aria-label="Primary actions">
 					<a class="button primary" href="#explorer">Read the pack free</a>
-					<a class="button" href="#pricing">What’s coming</a>
+					<a class="button" href="#availability">License &amp; updates</a>
 				</div>
 				<dl class="quick-facts" aria-label="Pack quick facts">
 					{quickFacts.map(([term, body]) => (
@@ -138,12 +133,12 @@ const faqs = [
 		<section class="workflow" aria-labelledby="workflow-title">
 			<div class="section-head">
 				<div>
-					<p class="eyebrow">The arc</p>
-					<h2 id="workflow-title">From zero to connected.</h2>
+					<p class="eyebrow">Suggested order</p>
+					<h2 id="workflow-title">Read the model, run it, then connect an agent.</h2>
 				</div>
 				<p>
-					The pack is ordered the way you actually adopt ContextCake — understand it, run
-					it, author for it, then hand it to your agent.
+					The files start with the layer model, move through installation and authoring,
+					and finish with the MCP connection.
 				</p>
 			</div>
 			<ol class="workflow-grid" aria-label="The adoption arc">
@@ -161,11 +156,11 @@ const faqs = [
 			<div class="section-head">
 				<div>
 					<p class="eyebrow">Look inside</p>
-					<h2 id="explorer-title">Open the pack.</h2>
+					<h2 id="explorer-title">Read every file.</h2>
 				</div>
 				<p>
-					File tree on the left, rendered markdown on the right — toggle to source any time.
-					Start with the featured files for the quick read.
+					Choose a file from the tree and switch between rendered Markdown and source.
+					The featured files cover the shortest path through the Pack.
 				</p>
 			</div>
 			<PackExplorer
@@ -182,7 +177,7 @@ const faqs = [
 				<div class="section-head compact-head">
 					<div>
 						<p class="eyebrow">Use it for</p>
-						<h2 id="pack-uses-title">When it earns its place.</h2>
+						<h2 id="pack-uses-title">Where this Pack helps.</h2>
 					</div>
 				</div>
 				<div class="case-grid">
@@ -199,7 +194,7 @@ const faqs = [
 				<div class="section-head compact-head">
 					<div>
 						<p class="eyebrow">What’s inside</p>
-						<h2 id="inside-title">What you get out of it.</h2>
+						<h2 id="inside-title">What the Pack covers.</h2>
 					</div>
 				</div>
 				<dl class="inside-list">
@@ -213,29 +208,28 @@ const faqs = [
 			</div>
 		</section>
 
-		<section id="pricing" class="pricing" aria-labelledby="pricing-title">
+		<section id="availability" class="pricing" aria-labelledby="pricing-title">
 			<div class="section-head">
 				<div>
-					<p class="eyebrow">{paymentsLive ? 'Pricing' : 'Early access'}</p>
-					<h2 id="pricing-title">{paymentsLive ? 'Buy once. Update if you want.' : 'Free while it’s in preview.'}</h2>
+					<p class="eyebrow">Availability</p>
+					<h2 id="pricing-title">Free to read, install, and keep.</h2>
 				</div>
 				<p>
-					{paymentsLive
-						? 'The base pack is a one-time purchase you keep. Updates are a separate, optional monthly subscription.'
-						: 'The full pack is free to read right now. Curated updates and more packs are on the way as paid add-ons — this pack stays free.'}
+					This first-party Pack and its corrections stay free. Other professional Packs are
+					separate products; buying or installing one will never require Pro.
 				</p>
 			</div>
 
 			<div class="plan-grid">
 				<article class="plan plan-primary">
-					<p class="card-label">The pack</p>
+					<p class="card-label">Free Pack</p>
 					<p class="price">
 						<span class="price-amount">Free</span>
-						<span class="price-suffix">in preview</span>
+						<span class="price-suffix">forever</span>
 					</p>
-					<p class="cadence">Read the whole thing, no signup.</p>
+					<p class="cadence">Full Pack · corrections included · no account</p>
 					<h3>ContextCake Context Pack</h3>
-					<p class="plan-body">The full pack — overview, architecture, getting-started, use cases, examples, and nuances — free to read right now. Open the explorer above.</p>
+					<p class="plan-body">All {fileCount} files across {folderCount} directories, with its source disclosure, rights attestation, permission declaration, freshness date, and changelog visible before use.</p>
 					<a class="button primary" href="#explorer">Read the full pack</a>
 				</article>
 				<article class="plan">
@@ -244,26 +238,21 @@ const faqs = [
 						<span class="price-amount">More</span>
 						<span class="price-suffix">packs, later</span>
 					</p>
-					<p class="cadence">Curated updates and additional profession packs.</p>
-					<h3>Updates and more packs</h3>
-					<p class="plan-body">When paid tiers open, this pack stays free. You’d only pay for ongoing curated updates and additional packs.</p>
-					<span class="button coming-soon" aria-disabled="true">Coming soon</span>
+					<p class="cadence">Separately licensed professional workflow Packs.</p>
+					<h3>Additional Packs</h3>
+					<p class="plan-body">Buy once and retain every delivered version. Optional editorial update subscriptions stop future releases when canceled; they never disable files you already received.</p>
+					<a class="button" href="/packs">Browse Packs</a>
 				</article>
 			</div>
 
-			{!paymentsLive && (
-				<p class="pricing-note">
-					No checkout yet — the pack is free to read while it’s in preview. Paid updates and
-					more packs are coming.
-				</p>
-			)}
+			<p class="pricing-note">No checkout is attached to this Pack. Its content, license, file tree, sample files, and changelog are available above.</p>
 		</section>
 
 		<section class="compatibility" aria-labelledby="compat-title">
 			<div class="section-head compact-head">
 				<div>
 					<p class="eyebrow">Works with your tools</p>
-					<h2 id="compat-title">Plain files first. Everything else is a bonus.</h2>
+					<h2 id="compat-title">Use the files directly or through your preferred tool.</h2>
 				</div>
 			</div>
 			<dl class="compat-grid">
@@ -280,7 +269,7 @@ const faqs = [
 			<div class="section-head">
 				<div>
 					<p class="eyebrow">FAQ</p>
-					<h2 id="faq-title">Before you ask.</h2>
+					<h2 id="faq-title">Common questions.</h2>
 				</div>
 			</div>
 			<div class="faq-list">
@@ -295,10 +284,10 @@ const faqs = [
 
 		<section class="credibility" aria-label="About ContextCake">
 			<p>
-				The ContextCake context pack is made by <strong>ContextCake</strong>, the context
-				layer that keeps team knowledge consistent across AI tools.
+				Made and reviewed by <strong>ContextCake</strong>. Pack Contract v1 · content only ·
+				no scripts, network access, credentials, or hidden services.
 			</p>
-			<a class="view-link" href="/">Learn about ContextCake</a>
+			<a class="view-link" href="/pricing">See app pricing</a>
 		</section>
 	</main>
 </Base>

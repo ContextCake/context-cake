@@ -1,0 +1,135 @@
+---
+import Base from '../layouts/Base.astro';
+import { foundingCreator, packPriceBands } from '../data/commerce';
+
+const applicationHref = 'mailto:creators@contextcake.com?subject=ContextCake%20founding%20creator%20application&body=Name%3A%0AProfessional%20field%3A%0AWorkflow%20I%20want%20to%20package%3A%0AMaterials%20I%20own%20or%20can%20license%3A%0A';
+const reviewSteps = [
+	['01', 'Shape the workflow', 'Define the recurring professional job, the buyer, and the result the Pack should help produce.'],
+	['02', 'Prove the rights', 'Identify what you created, what is licensed, and what must stay out because it belongs to an employer, client, student, or publisher.'],
+	['03', 'Build the Pack', 'Use the standard file contract for workflows, rules, templates, examples, tool guides, local overlays, and updates.'],
+	['04', 'Review and publish', 'ContextCake validates the manifest and files, reviews usefulness and safety, then publishes the approved Pack in the curated catalog.'],
+];
+---
+
+<Base
+	tone="paper"
+	title="Create ContextCake Packs | Founding Creator Program"
+	description="Package a professional workflow you own as a ContextCake Pack that other people can inspect and install."
+>
+	<main class="creator-page">
+		<section class="creator-hero" aria-labelledby="creator-title">
+			<div class="hero-copy">
+				<p class="eyebrow">Founding Creator Program</p>
+				<h1 id="creator-title">Package a workflow you already teach.</h1>
+				<p class="lede">If you own the checklists, templates, examples, and reference material behind a repeatable job, you can publish them as a Pack people can inspect and install.</p>
+				<div class="hero-actions"><a class="button primary" href={applicationHref}>Apply as a founding creator</a><a class="button" href="/packs">See current Packs</a></div>
+			</div>
+			<aside class="founding-share" aria-label="Founding creator revenue share">
+				<p>Founding share</p>
+				<strong>{foundingCreator.launchShare}</strong>
+				<span>of product revenue for your {foundingCreator.launchPeriod}</span>
+				<small>First {foundingCreator.limit} approved creators · {foundingCreator.standardShare} after the founding period</small>
+			</aside>
+		</section>
+
+		<section class="creator-thesis" aria-labelledby="thesis-title">
+			<p class="eyebrow">What you are selling</p>
+			<h2 id="thesis-title">A useful Pack solves one repeatable job.</h2>
+			<div class="thesis-columns">
+				<p>Do not try to fit an entire profession into one Pack. Start with a job people repeat: what they need to clarify, which rules apply, what a good result contains, and how they check it.</p>
+				<p>Buyers can inspect the files, install them across tools, and keep their own organization-specific rules in a separate local layer that survives your updates.</p>
+			</div>
+		</section>
+
+		<section class="review-flow" aria-labelledby="review-title">
+			<div class="section-heading"><p class="eyebrow">Review process</p><h2 id="review-title">We review every Pack before it is listed.</h2></div>
+			<ol>{reviewSteps.map(([number, title, body]) => <li><span>{number}</span><div><h3>{title}</h3><p>{body}</p></div></li>)}</ol>
+		</section>
+
+		<section class="creator-economics" aria-labelledby="economics-title">
+			<div class="section-heading split">
+				<div><p class="eyebrow">Pricing</p><h2 id="economics-title">Choose the scope. We will agree on a price.</h2></div>
+				<p>Publishing is free. Buyers purchase a perpetual base Pack; you may also offer optional editorial updates when the subject genuinely changes.</p>
+			</div>
+			<div class="economics-table">
+				<div class="table-head"><span>Pack depth</span><span>Personal</span><span>Team · 5 users</span></div>
+				{packPriceBands.map((band) => <div class="table-row"><div><strong>{band.depth}</strong><small>{band.description}</small></div><span>{band.personal}</span><span>{band.team}</span></div>)}
+			</div>
+			<div class="payout-note"><strong>How payout works during the pilot</strong><p>ContextCake uses its merchant-of-record checkout and sends manual royalty statements. Automated multi-vendor payouts wait until the catalog has real volume and the legal, tax, refund, and dispute model has been reviewed.</p></div>
+		</section>
+
+		<section class="trust-boundary" aria-labelledby="trust-title">
+			<div><p class="eyebrow">Content rules</p><h2 id="trust-title">What a Pack can contain.</h2></div>
+			<div class="trust-list">
+				<p><strong>Allowed at launch</strong><span>Markdown and OKF, templates, examples, reference material, metadata, and declarative skill instructions.</span></p>
+				<p><strong>Not allowed</strong><span>Executable scripts, bundled MCP servers, hidden network calls, credential requirements, or escaping symlinks.</span></p>
+				<p><strong>You must own it</strong><span>No employer manuals, client material, student data, or copied commercial training content without documented rights.</span></p>
+				<p><strong>High-stakes guidance</strong><span>Substantive legal, medical, and financial advice waits for credential, jurisdiction, citation, and freshness review.</span></p>
+			</div>
+		</section>
+
+		<section class="apply" aria-labelledby="apply-title">
+			<p class="eyebrow">Start with one workflow</p>
+			<h2 id="apply-title">Start with the workflow people already ask you about.</h2>
+			<p>Tell us who does the work, what they repeat, which materials you own, and how the Pack would save them time.</p>
+			<a class="button primary" href={applicationHref}>Apply as a founding creator</a>
+		</section>
+	</main>
+</Base>
+
+<style>
+	.creator-page { max-width: 88rem; margin: 0 auto; padding: 0 clamp(1.25rem, 4vw, 4rem) 6rem; color: var(--cc-text-body); }
+	.eyebrow { margin: 0 0 1rem; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+	h1, h2, h3, p { letter-spacing: 0; }
+	.creator-hero { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(18rem, 0.55fr); gap: clamp(2.5rem, 5vw, 5.5rem); align-items: end; min-height: 33rem; padding: clamp(3.5rem, 6vw, 5.5rem) 0; border-bottom: 1px solid var(--cc-border-strong); }
+	h1 { max-width: 16ch; margin: 0; color: var(--cc-text); font-size: clamp(2.8rem, 4.8vw, 5.25rem); line-height: 0.96; letter-spacing: -0.05em; }
+	.lede { max-width: 48rem; margin: 1.5rem 0 0; font-size: clamp(1.15rem, 1.7vw, 1.5rem); line-height: 1.5; }
+	.hero-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2rem; }
+	.button { display: inline-flex; align-items: center; justify-content: center; min-height: 3rem; padding: 0 1.15rem; border: 1px solid var(--cc-border-strong); color: var(--cc-text); font-weight: 700; text-decoration: none; transition: background var(--cc-transition), color var(--cc-transition), border-color var(--cc-transition); }
+	.button.primary { border-color: var(--cc-text); background: var(--cc-text); color: var(--cc-surface-solid); }
+	.button.primary:hover { background: var(--cc-text-body); }
+	.button:not(.primary):hover { background: var(--cc-surface-soft); }
+	.founding-share { padding: 1.5rem 0 0 1.5rem; border-top: 0.4rem solid var(--cc-layer-personal); border-left: 1px solid var(--cc-border); }
+	.founding-share p { margin: 0; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.72rem; text-transform: uppercase; }
+	.founding-share strong { display: block; margin-top: 0.6rem; color: var(--cc-text); font-size: clamp(3.75rem, 6vw, 6rem); line-height: 0.9; letter-spacing: -0.07em; }
+	.founding-share span, .founding-share small { display: block; }
+	.founding-share span { margin-top: 1rem; color: var(--cc-text); font-size: 1.2rem; line-height: 1.3; }
+	.founding-share small { margin-top: 1.5rem; color: var(--cc-text-muted); line-height: 1.5; }
+	.creator-thesis { padding: 7rem 0; }
+	.creator-thesis h2, .section-heading h2, .apply h2 { max-width: 19ch; margin: 0; color: var(--cc-text); font-size: clamp(2rem, 3.2vw, 3.75rem); line-height: 1; letter-spacing: -0.04em; }
+	.thesis-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; margin: 3rem 0 0 25%; }
+	.thesis-columns p { margin: 0; font-size: 1.08rem; line-height: 1.7; }
+	.review-flow, .creator-economics, .trust-boundary { padding: 6rem 0; border-top: 1px solid var(--cc-border-strong); }
+	.section-heading { margin-bottom: 3rem; }
+	.section-heading.split { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: end; }
+	.section-heading.split > p { margin: 0; font-size: 1.05rem; line-height: 1.65; }
+	.review-flow ol { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--cc-border-strong); }
+	.review-flow li { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: 1.5rem; padding: 1.6rem 0; border-bottom: 1px solid var(--cc-border-strong); }
+	.review-flow li > span { padding-top: 0.25rem; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.75rem; border-top: 0.3rem solid var(--cc-layer-team); }
+	.review-flow h3 { margin: 0; color: var(--cc-text); font-size: 1.5rem; }
+	.review-flow p { max-width: 60rem; margin: 0.4rem 0 0; line-height: 1.65; }
+	.economics-table { border-top: 1px solid var(--cc-border-strong); }
+	.table-head, .table-row { display: grid; grid-template-columns: minmax(0, 1fr) 9rem 9rem; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--cc-border-strong); }
+	.table-head { color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
+	.table-row { align-items: center; }
+	.table-row strong, .table-row small { display: block; }
+	.table-row strong { color: var(--cc-text); font-size: 1.15rem; }
+	.table-row small { margin-top: 0.25rem; color: var(--cc-text-muted); }
+	.table-row > span { color: var(--cc-text); font-size: 1.2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+	.payout-note { display: grid; grid-template-columns: 15rem 1fr; gap: 2rem; margin-top: 2rem; padding: 1.5rem; border-left: 0.35rem solid var(--cc-layer-personal); background: var(--cc-surface-soft); }
+	.payout-note strong { color: var(--cc-text); }
+	.payout-note p { margin: 0; }
+	.trust-boundary { display: grid; grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr); gap: 4rem; }
+	.trust-boundary h2 { max-width: 12ch; margin: 0; color: var(--cc-text); font-size: clamp(2.2rem, 4vw, 4.2rem); line-height: 0.95; }
+	.trust-list { border-top: 1px solid var(--cc-border-strong); }
+	.trust-list p { display: grid; grid-template-columns: 11rem 1fr; gap: 1.5rem; margin: 0; padding: 1.25rem 0; border-bottom: 1px solid var(--cc-border-strong); }
+	.trust-list strong { color: var(--cc-text); }
+	.trust-list span { line-height: 1.6; }
+	.apply { margin-top: 2rem; padding: clamp(2.5rem, 6vw, 6rem); background: var(--cc-inverse-surface); color: var(--cc-inverse-body); }
+	.apply .eyebrow { color: var(--cc-layer-team); }
+	.apply h2 { color: var(--cc-inverse-text); }
+	.apply > p:not(.eyebrow) { max-width: 54rem; margin: 1.5rem 0 2rem; font-size: 1.1rem; line-height: 1.65; }
+	.apply .button.primary { border-color: var(--cc-inverse-cta); background: var(--cc-inverse-cta); color: var(--cc-inverse-on-cta); }
+	@media (max-width: 820px) { .creator-hero, .section-heading.split, .trust-boundary { grid-template-columns: 1fr; } .thesis-columns { margin-left: 0; } }
+	@media (max-width: 620px) { .creator-hero { min-height: auto; padding-block: 3rem; } h1 { font-size: clamp(2.55rem, 10.5vw, 3.65rem); } .thesis-columns { grid-template-columns: 1fr; gap: 1.5rem; } .table-head, .table-row { grid-template-columns: minmax(0, 1fr) 5rem 5rem; font-size: 0.9rem; } .payout-note, .trust-list p { grid-template-columns: 1fr; gap: 0.5rem; } }
+</style>

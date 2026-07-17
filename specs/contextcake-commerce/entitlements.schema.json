@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contextcake.com/schemas/entitlements-v1.json",
+  "title": "ContextCake entitlement snapshot",
+  "description": "Identity and commerce metadata only. Context content, credentials, local overlays, and filesystem paths are prohibited by the closed object shapes.",
+  "type": "object",
+  "required": ["schemaVersion", "subject", "entitlements"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "subject": {
+      "type": "object",
+      "required": ["type", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["user", "organization"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "entitlements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entitlement" }
+    }
+  },
+  "$defs": {
+    "common": {
+      "type": "object",
+      "required": ["id", "type", "status", "productId", "grantedAt"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "type": { "enum": ["application_plan", "pack_license", "pack_update_subscription"] },
+        "status": { "enum": ["active", "canceled", "expired", "refunded"] },
+        "productId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "grantedAt": { "type": "string", "format": "date-time" },
+        "endsAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "applicationPlan": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["type", "plan"],
+          "additionalProperties": false,
+          "properties": {
+            "id": true,
+            "type": { "const": "application_plan" },
+            "status": true,
+            "productId": true,
+            "grantedAt": true,
+            "endsAt": true,
+            "plan": { "enum": ["free", "pro", "team"] },
+            "organizationId": { "type": ["string", "null"], "maxLength": 200 },
+            "seats": { "type": "integer", "minimum": 1 }
+          }
+        }
+      ]
+    },
+    "packLicense": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["type", "license", "perpetualVersion"],
+          "additionalProperties": false,
+          "properties": {
+            "id": true,
+            "type": { "const": "pack_license" },
+            "status": true,
+            "productId": true,
+            "grantedAt": true,
+            "endsAt": true,
+            "license": { "enum": ["personal", "team"] },
+            "seats": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "perpetualVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$" }
+          }
+        }
+      ]
+    },
+    "packUpdates": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["type", "license"],
+          "additionalProperties": false,
+          "properties": {
+            "id": true,
+            "type": { "const": "pack_update_subscription" },
+            "status": true,
+            "productId": true,
+            "grantedAt": true,
+            "endsAt": true,
+            "license": { "enum": ["personal", "team"] }
+          }
+        }
+      ]
+    },
+    "entitlement": {
+      "oneOf": [
+        { "$ref": "#/$defs/applicationPlan" },
+        { "$ref": "#/$defs/packLicense" },
+        { "$ref": "#/$defs/packUpdates" }
+      ]
+    }
+  }
+}

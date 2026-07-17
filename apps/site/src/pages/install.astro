@@ -66,22 +66,17 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				<p class="eyebrow"><span>Install</span> · {tag}</p>
 				<h1 id="install-title">From download to a sourced answer in five minutes.</h1>
 				<p class="lede">
-					ContextCake runs on plain Node.js with zero runtime dependencies. Download one
-					versioned archive, resolve the bundled example, then connect the same engine to
-					your agent.
+					Start with the signed Mac app for the fastest local setup. If you need source,
+					Linux, WSL, or a Git-based workflow, the other routes below keep the same engine
+					inspectable.
 				</p>
 				<div class="hero-actions" aria-label="Install actions">
 					<a class="button button--primary" href={appDownloadUrl} download>
 						<Icon name="download" size={18} />
 						Download the Mac app
 					</a>
-					<a class="button button--primary" href="#download">
-						<span class="prompt-mark" aria-hidden="true">$</span>
-						Choose an install method
-					</a>
-					<a class="button button--quiet" href={sourceDownloadUrl} download>
-						<Icon name="download" size={18} />
-						Download {tag}
+					<a class="hero-install-link" href="#download">
+						Other installation options <span aria-hidden="true">→</span>
 					</a>
 				</div>
 				<ul class="hero-facts" aria-label="Install requirements">
@@ -461,6 +456,27 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 	.button--quiet:hover {
 		background: color-mix(in srgb, var(--cc-layer-team) 10%, var(--cc-surface));
 		color: var(--cc-text);
+	}
+	.hero-install-link {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		min-height: 2.9rem;
+		padding: 0.2rem 0.15rem;
+		border-bottom: 1px solid color-mix(in srgb, var(--cc-text-muted) 52%, transparent);
+		color: var(--cc-text-muted);
+		font-family: var(--cc-font-heading);
+		font-weight: 700;
+		text-decoration: none;
+		transition: border-color var(--cc-transition), color var(--cc-transition);
+	}
+	.hero-install-link:hover {
+		border-color: var(--cc-layer-team);
+		color: var(--cc-text);
+	}
+	.hero-install-link:focus-visible {
+		outline: 2px solid var(--cc-layer-team);
+		outline-offset: 4px;
 	}
 	.hero-facts {
 		display: flex;

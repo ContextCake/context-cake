@@ -164,14 +164,18 @@ function step() {
     send({jsonrpc:'2.0',id:6,method:'tools/call',params:{name:'read_file',arguments:{concept_id:confirm.id}}});
   }
   else if (state === 5) {
-    console.log(JSON.stringify({
+    const result = JSON.stringify({
       confirm: JSON.parse(responses[2].result.content[0].text),
       finds: JSON.parse(responses[3].result.content[0].text),
       news: JSON.parse(responses[4].result.content[0].text),
       read: JSON.parse(responses[5].result.content[0].text),
-    }));
-    p.kill();
-    setTimeout(() => process.exit(0), 200); // let the server flush telemetry on SIGTERM
+    });
+    // Shut the server down cleanly (stdin end) and only print once it has
+    // fully exited — this reaps any in-flight git child so the test reads a
+    // quiescent telemetry file (no concurrent working-tree rewrite).
+    p.on('exit', () => { console.log(result); process.exit(0); });
+    p.stdin.end();
+    setTimeout(() => { p.kill('SIGKILL'); }, 3000); // fallback if it lingers
   }
 }
 send({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18'}});

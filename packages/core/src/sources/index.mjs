@@ -1,13 +1,16 @@
 // Builds source adapters from a manifest. Each layer declares a `source`
 // ("okf-local" default, "files", or "mcp"). Paths/commands resolve relative to
 // the manifest's own directory. An optional per-layer `cache` block
-// ({"ttlSeconds": N, "dir": "..."}) wraps the adapter with withCache.
+// ({"ttlSeconds": N, "dir": "..."}) wraps the adapter with withCache. An
+// optional `git` block wraps it again with withGitSync — outermost, so reads
+// hit the pull gate before the cache and a real pull invalidates it.
 
 import path from "node:path";
 import { createOkfLocalSource } from "./okf-local.mjs";
 import { createFilesSource } from "./files.mjs";
 import { createMcpSource } from "./mcp.mjs";
 import { withCache } from "./cache.mjs";
+import { withGitSync } from "./git-sync.mjs";
 
 export function buildSources(manifest, manifestDir) {
   return (manifest.layers ?? []).map((layer) => {
@@ -31,6 +34,13 @@ export function buildSources(manifest, manifestDir) {
       source = withCache(source, {
         ...(layer.cache.ttlSeconds != null ? { ttlMs: Number(layer.cache.ttlSeconds) * 1000 } : {}),
         cacheDir: layer.cache.dir ? path.resolve(manifestDir, layer.cache.dir) : null,
+      });
+    }
+    if (layer.git) {
+      source = withGitSync(source, {
+        root: path.resolve(manifestDir, layer.path),
+        pullTtlMs: (Number(layer.git.pullTtlSeconds ?? 90)) * 1000,
+        retentionDays: Number(layer.git.retentionDays ?? 14),
       });
     }
     return source;

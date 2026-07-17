@@ -18,6 +18,10 @@ export function withGitSync(source, { root, pullTtlMs = 90000, retentionDays = 1
   async function maybePull(force = false) {
     if (!force && now() - lastPulledAt < pullTtlMs) return;
     const result = await pull(root);
+    // Only advance the TTL clock when a pull actually ran. A lock-contention
+    // skip must not suppress the next pull for a full TTL (which would let
+    // reads serve stale well beyond the intended window under write pressure).
+    if (result.skipped) return;
     lastPulledAt = now();
     if (result.changed) source.sync?.();
   }

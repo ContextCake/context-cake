@@ -100,7 +100,11 @@ function readTelemetry(liveRoot) {
 function computeMetrics(events) {
   const confirms = events.filter((e) => e.event === "confirm");
   const promotes = events.filter((e) => e.event === "promote");
-  const reuses = events.filter((e) => (e.event === "read" || e.event === "search_hit") && String(e.concept ?? "").startsWith("captures/"));
+  // Reuse = a teammate actually OPENING a capture (read), not merely having it
+  // surface in their find_captures results (search_hit is an impression, not
+  // reuse) — counting impressions would inflate cross-brain hits.
+  const reuses = events.filter((e) => e.event === "read" && String(e.concept ?? "").startsWith("captures/"));
+  const impressions = events.filter((e) => e.event === "search_hit" && String(e.concept ?? "").startsWith("captures/")).length;
 
   const confirmByConcept = new Map();
   for (const c of confirms) {
@@ -133,6 +137,7 @@ function computeMetrics(events) {
 
   return {
     crossBrainHits,
+    crossBrainImpressions: impressions,
     captureVolumeByWeek: volumeByWeek,
     medianTimeToFirstReuseHours: median(reuseHours),
     reviewThroughput: {

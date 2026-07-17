@@ -15,6 +15,7 @@ import { resolveConcept } from "./resolver.mjs";
 import { buildSources } from "./sources/index.mjs";
 import { isTraversal } from "./sources/okf-local.mjs";
 import { resolveLiveLayer } from "./sources/git-sync.mjs";
+import { commitPaths, push } from "./sources/git-core.mjs";
 import { stageCapture, confirmCapture, resolveAuthor } from "./capture.mjs";
 import { slugify } from "./classify-context.mjs";
 
@@ -51,7 +52,10 @@ const serverInstructions = [
   args.capture
     ? "Read tools are read-only. log_capture stages a team capture and returns a preview; call confirm_capture only after the user explicitly approves sharing."
     : "All tools are read-only.",
-].join(" ");
+  args.telemetry
+    ? "Tool usage is recorded as content-free telemetry (concept ids and enums only, never prompts or content)."
+    : null,
+].filter(Boolean).join(" ");
 const readOnlyAnnotations = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -200,6 +204,14 @@ rl.on("line", async (line) => {
   }
 });
 
+// On stdin close (session end) flush accumulated telemetry to the shared repo.
+// Fire-and-forget: the pending promise keeps the loop alive until the git op
+// finishes, then the process exits naturally (no forced exit that could cut
+// off an in-flight response).
+rl.on("close", () => {
+  if (args.telemetry) void commitAndPushTelemetry();
+});
+
 async function handleMessage(message) {
   const { id, method, params = {} } = message;
 
@@ -257,7 +269,10 @@ async function findCaptures({ query, kinds = null, limit = 10 }) {
       const base = scoreText(tokens, [id, frontmatter.title ?? "", "", "", sectionText]);
       if (base <= 0) continue;
       const capturedAt = frontmatter.captured ?? null;
-      const ageDays = capturedAt ? Math.max(0, (Date.now() - new Date(capturedAt).getTime()) / DAY_MS) : 0;
+      const capturedTime = capturedAt ? new Date(capturedAt).getTime() : NaN;
+      // An unparseable `captured` must not poison scoring with NaN (which makes
+      // the sort unstable). Treat it as age 0 (freshest) — it still surfaces.
+      const ageDays = Number.isNaN(capturedTime) ? 0 : Math.max(0, (Date.now() - capturedTime) / DAY_MS);
       rows.push({
         id,
         title: frontmatter.title ?? null,
@@ -342,8 +357,10 @@ async function confirmCaptureTool({ token }) {
 // telemetry files ride along only in confirm/promote commits and explicit
 // sync, never a commit-per-read.
 
+const MAX_TELEMETRY_EVENTS = 10000; // per-session cap: a read-heavy session can't grow the log without bound
 let telemetryUser = null;
 let telemetryWritten = false;
+let telemetryCount = 0;
 
 if (args.telemetry && liveLayer) {
   try {
@@ -358,7 +375,7 @@ function telemetryRel() {
 }
 
 function emitTelemetry(fields) {
-  if (!telemetryUser) return;
+  if (!telemetryUser || telemetryCount >= MAX_TELEMETRY_EVENTS) return;
   const line = JSON.stringify({
     ts: new Date().toISOString(),
     user: telemetryUser,
@@ -370,6 +387,7 @@ function emitTelemetry(fields) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.appendFileSync(target, `${line}\n`);
     telemetryWritten = true;
+    telemetryCount += 1;
   } catch {
     // telemetry must never break a tool call
   }
@@ -377,6 +395,22 @@ function emitTelemetry(fields) {
 
 function flushTelemetry() {
   return telemetryUser && telemetryWritten ? [telemetryRel()] : [];
+}
+
+// Commit + push accumulated telemetry at session end. Without this, a session
+// that only reads/searches (never confirms a capture of its own) would never
+// push its telemetry — so consumer reuse, the exact signal the feature
+// measures, would be lost from the shared repo. Best-effort: nothing-to-commit
+// or offline is fine.
+async function commitAndPushTelemetry() {
+  const rels = flushTelemetry();
+  if (rels.length === 0) return;
+  try {
+    await commitPaths(liveLayer.root, rels, "chore: telemetry", { author: telemetryUser });
+    await push(liveLayer.root);
+  } catch {
+    // already committed at confirm-time, nothing new, or offline — all fine
+  }
 }
 
 // ---- tools ----------------------------------------------------------------

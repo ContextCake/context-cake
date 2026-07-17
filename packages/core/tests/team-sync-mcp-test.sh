@@ -220,6 +220,27 @@ for (const s of ['POST /hooks', 'Raise client timeout', 'SingleStore']) {
 }
 " || fail "telemetry schema / content-free invariant"
 
+# ---- F8: a read-only telemetry session pushes its telemetry on session end ------
+# A consumer who only reads (never confirms) must still get their reuse
+# telemetry committed + pushed, else cross-brain metrics under-count.
+rm -rf "$live/telemetry"; ( cd "$live" && git rm -r --quiet --cached --ignore-unmatch telemetry 2>/dev/null; git commit -q --allow-empty -m "reset telemetry" && git push -q )
+node -e "
+const { spawn } = require('child_process');
+const p = spawn('node', ['$server','--telemetry','--harness','reader','--manifest','$tmpdir/m.json']);
+let buf=''; const responses=[]; let state=0;
+const send=(o)=>p.stdin.write(JSON.stringify(o)+'\n');
+p.stdout.on('data', d => { buf+=d; let i; while((i=buf.indexOf('\n'))!==-1){ const l=buf.slice(0,i); buf=buf.slice(i+1); if(l.trim()) responses.push(JSON.parse(l)); step(); } });
+function step(){
+  if(state===0){ state=1; send({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'read_file',arguments:{concept_id:'captures/investigation/bob--old-webhook-timeout-fix'}}}); }
+  else if(state===1){ state=2; p.stdin.end(); } // session end -> should flush telemetry to git
+}
+p.on('exit', ()=>process.exit(0));
+send({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18'}});
+setTimeout(()=>{ console.error('reader session timeout'); process.exit(1); }, 20000);
+" || fail "read-only telemetry session should run and exit"
+( cd "$live" && git log --oneline | grep 'chore: telemetry' > /dev/null ) || fail "F8: read-only session must commit telemetry on session end"
+[ -z "$(cd "$live" && git log --oneline @{u}.. 2>/dev/null)" ] || fail "F8: session-end telemetry must be pushed, not left queued"
+
 # ---- telemetry off → no files; tools still work -----------------------------------
 rm -rf "$live/telemetry"
 out="$(rpc --manifest "$tmpdir/m.json" -- '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_captures","arguments":{"query":"webhook"}}}')"

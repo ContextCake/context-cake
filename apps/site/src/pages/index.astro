@@ -51,7 +51,6 @@ const storyBands = ['choice', 'rationale', 'analytics', 'ownership']
 
 const choiceConflict = byKey.choice?.conflicts?.[0] ?? null;
 const appDownloadUrl = 'https://github.com/ContextCake/context-cake/releases/download/app-v0.1.0/ContextCake-0.1.0-arm64.dmg';
-const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz';
 
 const principles = [
 	{
@@ -130,7 +129,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 						<Icon name="download" size={18} />
 						Download the Mac app
 					</a>
-					<a class="text-link" href={sourceDownloadUrl} download>Download the source archive</a>
+					<a class="text-link" href="/install/">Other installation options</a>
 					<a class="button button--quiet" href="/demo">Open the live demo</a>
 					<a class="text-link" href="/docs">Read the docs</a>
 				</div>
@@ -269,7 +268,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 						<Icon name="download" size={18} />
 						Download the Mac app
 					</a>
-					<a class="text-link" href={sourceDownloadUrl} download>Download the source archive →</a>
+					<a class="text-link" href="/install/">Other installation options →</a>
 					<a class="text-link" href="/docs/getting-started/first-cascade">Build your first cascade →</a>
 				</div>
 			</div>

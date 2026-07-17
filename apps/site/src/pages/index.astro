@@ -50,6 +50,7 @@ const storyBands = ['choice', 'rationale', 'analytics', 'ownership']
 	}));
 
 const choiceConflict = byKey.choice?.conflicts?.[0] ?? null;
+const appDownloadUrl = 'https://github.com/ContextCake/context-cake/releases/download/app-v0.1.0/ContextCake-0.1.0-arm64.dmg';
 const sourceDownloadUrl = 'https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz';
 
 const principles = [
@@ -125,18 +126,18 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 					date, and disagreement.
 				</p>
 				<div class="hero-actions" aria-label="Get started">
-					<a class="button button--primary button--download" href={sourceDownloadUrl} download>
+					<a class="button button--primary button--download" href={appDownloadUrl} download>
 						<Icon name="download" size={18} />
-						Download ContextCake
+						Download the Mac app
 					</a>
+					<a class="text-link" href={sourceDownloadUrl} download>Download the source archive</a>
 					<a class="button button--quiet" href="/demo">Open the live demo</a>
 					<a class="text-link" href="/docs">Read the docs</a>
 				</div>
 				<div class="download-meta" aria-label="Download details">
-					<span><i aria-hidden="true"></i>Versioned source archive</span>
-					<span>.tar.gz</span>
-					<span>Node 18+</span>
-					<span>Zero runtime dependencies</span>
+					<span><i aria-hidden="true"></i>Signed + notarized</span>
+					<span>macOS · Apple silicon</span>
+					<span>DMG · 0.1.0</span>
 				</div>
 			</div>
 
@@ -260,28 +261,28 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links'];
 				<p class="section-number">Start with the engine</p>
 				<h2 id="closing-title">Give your agent<br />the whole story.</h2>
 				<p>
-					Download the inspectable source archive, run the included cascade, then replace the
-					demo layers with your own. The signed Mac app is the zero-terminal path now being
-					prepared for its first public release.
+					Download the signed Mac app for the zero-terminal path, or use the inspectable source
+					archive when you want to run the engine directly.
 				</p>
 				<div class="closing-actions">
-					<a class="button button--primary button--download" href={sourceDownloadUrl} download>
+					<a class="button button--primary button--download" href={appDownloadUrl} download>
 						<Icon name="download" size={18} />
-						Download ContextCake
+						Download the Mac app
 					</a>
+					<a class="text-link" href={sourceDownloadUrl} download>Download the source archive →</a>
 					<a class="text-link" href="/docs/getting-started/first-cascade">Build your first cascade →</a>
 				</div>
 			</div>
 			<div class="closing-download">
-				<p>Developer download · source archive</p>
-				<a class="download-file" href={sourceDownloadUrl} download>
+				<p>Mac download · signed + notarized</p>
+				<a class="download-file" href={appDownloadUrl} download>
 					<span>
-						<strong>ContextCake source</strong>
-						<small>console-v0.2.0 · .tar.gz</small>
+						<strong>ContextCake for Mac</strong>
+						<small>app-v0.1.0 · Apple silicon · .dmg</small>
 					</span>
 					<Icon name="download" size={24} />
 				</a>
-				<span>No package install. No lifecycle scripts. No transitive runtime tree.</span>
+				<span>Drag to Applications, then open. Source archive remains available on the install page.</span>
 			</div>
 		</section>
 	</main>

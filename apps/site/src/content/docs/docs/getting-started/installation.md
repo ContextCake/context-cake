@@ -3,7 +3,7 @@ title: Installation
 description: Choose a versioned ContextCake source route and run the bundled demo in a few minutes.
 ---
 
-ContextCake runs directly from **versioned source**. The recommended route is a
+The fastest way to try ContextCake on macOS is the signed, notarized app. ContextCake also runs directly from **versioned source**. The recommended source route is a
 verified source archive; shallow Git and GitHub CLI checkouts are available when
 you already use source-control tooling. The engine is dependency-free: there is
 no `npm install` step, no install scripts execute, and the resolver quickstart
@@ -13,7 +13,14 @@ If you are still evaluating whether the model fits your team, start with the
 [demo](/demo) or [the docs overview](/docs) and come back here when you want the
 local setup path.
 
-## Prerequisites
+## macOS app (Apple silicon)
+
+Download [ContextCake 0.1.0 for Mac](https://github.com/ContextCake/context-cake/releases/download/app-v0.1.0/ContextCake-0.1.0-arm64.dmg), open the DMG, and drag ContextCake to Applications. Open it from Applications; macOS may ask you to confirm the first launch.
+
+After sign-in, choose **Install Command Line Tool…** from the app menu if you
+want the `contextcake` command available in Terminal. The [release page](https://github.com/ContextCake/context-cake/releases/tag/app-v0.1.0) contains the matching ZIP and checksums.
+
+## Prerequisites for the source route
 
 - Node.js ≥ 18
 - One download route: a browser, `curl`, GitHub CLI, or Git

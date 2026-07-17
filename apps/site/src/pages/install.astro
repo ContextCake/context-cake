@@ -12,6 +12,8 @@ const archiveName = `context-cake-${tag}.tar.gz`;
 const archiveSha256 = '013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253';
 const sourceDownloadUrl = `https://github.com/ContextCake/context-cake/archive/refs/tags/${tag}.tar.gz`;
 const tagUrl = `https://github.com/ContextCake/context-cake/tree/${tag}`;
+const appDownloadUrl = 'https://github.com/ContextCake/context-cake/releases/download/app-v0.1.0/ContextCake-0.1.0-arm64.dmg';
+const appReleaseUrl = 'https://github.com/ContextCake/context-cake/releases/tag/app-v0.1.0';
 
 const terminalDownload = `curl --fail --location ${sourceDownloadUrl} \\
   --output ${archiveName}`;
@@ -69,6 +71,10 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 					your agent.
 				</p>
 				<div class="hero-actions" aria-label="Install actions">
+					<a class="button button--primary" href={appDownloadUrl} download>
+						<Icon name="download" size={18} />
+						Download the Mac app
+					</a>
 					<a class="button button--primary" href="#download">
 						<span class="prompt-mark" aria-hidden="true">$</span>
 						Choose an install method
@@ -79,7 +85,8 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 					</a>
 				</div>
 				<ul class="hero-facts" aria-label="Install requirements">
-					<li>Node.js 18+</li>
+					<li>Signed Mac app · Apple silicon</li>
+					<li>Node.js 18+ for source</li>
 					<li>macOS, Linux, or WSL</li>
 					<li>No <code>npm install</code></li>
 				</ul>
@@ -271,6 +278,23 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 			</div>
 		</section>
 
+		<section class="channels channels--available" id="mac-app" aria-labelledby="mac-app-title">
+			<div class="section-heading">
+				<p>Native app · app-v0.1.0</p>
+				<h2 id="mac-app-title">A zero-terminal path for Mac.</h2>
+				<span>The Apple-silicon DMG is signed, notarized, and ready to drag into Applications.</span>
+			</div>
+			<div class="channel-grid">
+				<article>
+					<div><Icon name="dashboard" size={20} /><span>Available now</span></div>
+					<h3>ContextCake for Mac</h3>
+					<p>Open the DMG, move ContextCake to Applications, and sign in. Install the optional CLI from the app menu.</p>
+					<a class="route-action" href={appDownloadUrl} download>Download the DMG <Icon name="download" size={16} /></a>
+					<small><a href={appReleaseUrl}>Release notes and checksums</a> · Apple silicon</small>
+				</article>
+			</div>
+		</section>
+
 		<section class="channels" id="channels" aria-labelledby="channels-title">
 			<div class="section-heading">
 				<p>Package managers and apps</p>
@@ -285,8 +309,8 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				<article>
 					<div><Icon name="dashboard" size={20} /><span>Coming next</span></div>
 					<h3>ContextCake for Mac</h3>
-					<p>A signed, notarized app with guided setup, automatic updates, and an optional CLI.</p>
-					<small>Appears here with the first signed <code>app-v*</code> release.</small>
+					<p>The signed release is available above. This section remains the roadmap for future universal builds and update channels.</p>
+					<small>Current artifact: Apple-silicon DMG.</small>
 				</article>
 				<article>
 					<div><Icon name="download" size={20} /><span>Planned</span></div>

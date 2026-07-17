@@ -213,6 +213,13 @@ node write.mjs \
 
 Read the [capture/write-path guide](https://contextcake.com/docs/guides/capture-write-path) and [promotion guide](https://contextcake.com/docs/guides/promoting-concepts).
 
+**Team sync (shared working memory):** agent sessions can capture
+investigations, decisions, gotchas, and artifacts into a git-backed live
+layer that every teammate's harness reads within ~2 minutes — two-phase
+show-before-share, 14-day decay unless promoted through review, and
+content-free reuse telemetry. See the
+[team-sync pack](examples/team-sync-pack/README.md) for setup.
+
 ## Project surfaces
 
 | Surface | Purpose | Start here |

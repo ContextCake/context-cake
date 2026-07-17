@@ -282,7 +282,7 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
-    } else if (arg === "--dry-run" || arg === "--print-git") {
+    } else if (arg === "--dry-run" || arg === "--print-git" || arg === "--telemetry") {
       parsed[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
       parsed[arg.slice(2)] = argv[index + 1];

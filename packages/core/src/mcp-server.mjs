@@ -335,45 +335,48 @@ async function confirmCaptureTool({ token }) {
 }
 
 // ---- telemetry (content-free by invariant: ids and enums only, never text) ----
+//
+// Events append synchronously to the local per-author NDJSON — O_APPEND, one
+// line per event, so concurrent same-author processes interleave safely at
+// line granularity and nothing is lost on crash. The GIT cadence stays lazy:
+// telemetry files ride along only in confirm/promote commits and explicit
+// sync, never a commit-per-read.
 
 let telemetryUser = null;
-let telemetryBuffer = [];
+let telemetryWritten = false;
 
 if (args.telemetry && liveLayer) {
   try {
     telemetryUser = await resolveAuthor({ root: liveLayer.root, profileName: liveLayer.profileName });
-    const timer = setInterval(flushTelemetry, 60000);
-    timer.unref();
-    process.on("exit", flushTelemetry);
-    process.on("SIGTERM", () => { flushTelemetry(); process.exit(0); });
-    process.on("SIGINT", () => { flushTelemetry(); process.exit(0); });
   } catch (error) {
     console.error(`contextcake: telemetry disabled — ${error.message}`);
   }
 }
 
+function telemetryRel() {
+  return path.join("telemetry", slugify(telemetryUser), `${new Date().toISOString().slice(0, 7)}.ndjson`);
+}
+
 function emitTelemetry(fields) {
   if (!telemetryUser) return;
-  telemetryBuffer.push(JSON.stringify({
+  const line = JSON.stringify({
     ts: new Date().toISOString(),
     user: telemetryUser,
     harness: args.harness ?? process.env.CONTEXTCAKE_HARNESS ?? "unknown",
     ...fields,
-  }));
+  });
+  try {
+    const target = path.join(liveLayer.root, telemetryRel());
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.appendFileSync(target, `${line}\n`);
+    telemetryWritten = true;
+  } catch {
+    // telemetry must never break a tool call
+  }
 }
 
 function flushTelemetry() {
-  if (!telemetryUser || telemetryBuffer.length === 0) return [];
-  const rel = path.join("telemetry", slugify(telemetryUser), `${new Date().toISOString().slice(0, 7)}.ndjson`);
-  try {
-    const target = path.join(liveLayer.root, rel);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.appendFileSync(target, `${telemetryBuffer.join("\n")}\n`);
-    telemetryBuffer = [];
-    return [rel];
-  } catch {
-    return []; // telemetry must never break a tool call
-  }
+  return telemetryUser && telemetryWritten ? [telemetryRel()] : [];
 }
 
 // ---- tools ----------------------------------------------------------------

@@ -139,9 +139,11 @@ The MCP server is the chokepoint: when telemetry is enabled it records
 
 Events append to per-author monthly NDJSON:
 `telemetry/<author>/<YYYY-MM>.ndjson` in the live-layer repo — append-only per
-author, so no merge conflicts, same trust boundary as captures. Flushes are
-lazy (piggyback on capture pushes, else hourly) because metric latency is
-irrelevant; a lost buffer on crash is acceptable by design.
+author, so no merge conflicts, same trust boundary as captures. Each event
+appends synchronously to the local file (O_APPEND line writes — crash-safe,
+concurrency-safe at line granularity); the **git** cadence stays lazy —
+telemetry rides along in confirm/promote commits and explicit sync, never a
+commit-per-read.
 
 Control surface aggregates across author files: **cross-brain hits** (reads of
 a concept captured by a different person), capture volume, time-to-first-reuse,

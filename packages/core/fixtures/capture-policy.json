@@ -1,6 +1,6 @@
 {
   "version": "0.1.0",
-  "description": "Routing policy for agent-session captures. Valid kinds carry their kind as a label (weight 3), so a plain valid capture defaults to team_candidate; review keywords force the warning path; ignore keywords veto scratch work. The local route is intentionally unreachable for valid kinds — the human confirm is the final gate.",
+  "description": "Routing policy for agent-session captures. Valid kinds carry their kind as a label (weight 3), so a plain valid capture defaults to team_candidate; review keywords force the warning path. Because the kind label sets a team-candidate baseline, ignore requires the scratch signals to outweigh it (multiple ignore keywords / a no-context label) — clear scratch work is filtered, but a single stray keyword is not enough to auto-reject. The local route is intentionally unreachable for valid kinds; the human show-before-share confirm is the final gate.",
   "routes": {
     "ignore": {
       "description": "Scratch or throwaway session output that should not become shared context."

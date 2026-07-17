@@ -26,12 +26,14 @@ membership IS the trust decision.
 
 ## 2. Each teammate: manifest + identity
 
-Add the live layer to your `layers.json` (exactly one layer may be `live`):
+Add the live layer to your `layers.json` (exactly one layer may be `live`).
+Manifest `path` values are resolved relative to the manifest file and are
+**not** tilde-expanded — use an absolute path, not `~/…`:
 
 ```json
 { "layers": [
-  { "name": "team",      "level": 2, "source": "okf-local", "path": "~/kb-team" },
-  { "name": "team-live", "level": 1, "source": "okf-local", "path": "~/kb-live",
+  { "name": "team",      "level": 2, "source": "okf-local", "path": "/Users/you/kb-team" },
+  { "name": "team-live", "level": 1, "source": "okf-local", "path": "/Users/you/kb-live",
     "live": true,
     "git": { "pullTtlSeconds": 90, "retentionDays": 14 },
     "cache": { "ttlSeconds": 60 } }

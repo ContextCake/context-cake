@@ -73,6 +73,6 @@ policy when they conflict.
 ## Next
 
 - [MCP tools reference](/docs/reference/mcp-tools) — full input/output schemas
-  for all four tools
+  for the read tools (and the capture tools behind `--capture`)
 - [The trust boundary](/docs/concepts/trust-boundary) — what spawning an `mcp`
   layer's command means for the machine running the server

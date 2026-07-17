@@ -99,9 +99,12 @@ when the integrations profiles work lands.
 
 - **Pull:** TTL-gated (default 90s) `git pull --ff-only --quiet` before reads.
   Multiple harness processes run engines over the same working tree
-  concurrently, so pulls are guarded by an advisory lockfile (pid + timestamp,
-  stale after 30s) next to the repo; on contention, skip the pull and serve
-  the current tree — staleness stays bounded by the TTL.
+  concurrently, so every git mutation is guarded by an advisory `.contextcake.lock`
+  (pid + timestamp, JSON, inside the repo root; stale after 120s, stolen
+  atomically via rename); on contention a reader skips the pull and serves the
+  current tree — staleness stays bounded by the TTL. All of this lives in
+  `git-core.mjs`, which `git-sync.mjs` (the `withGitSync` wrapper) and the
+  capture/promote paths call — nothing runs git against a live root directly.
 - **Push:** `confirm_capture` commits and pushes. On failure: retry as
   `git pull --rebase` then push; still failing → the capture remains committed
   locally, flagged queued, and is retried on the next capture or explicit
@@ -134,8 +137,9 @@ The 2-minute propagation target (spec §4) falls out: push-on-confirm plus a
 ## 6. Telemetry
 
 The MCP server is the chokepoint: when telemetry is enabled it records
-`{ts, user, harness, event, concept, layer, kind}` for `read`, `capture`,
-`promote`, `search_hit` — never prompts, transcripts, or capture bodies.
+`{ts, user, harness, event, concept, layer, captureKind}` for `read`,
+`search_hit`, `capture`, `confirm`, and `promote` — never prompts,
+transcripts, or capture bodies.
 
 Events append to per-author monthly NDJSON:
 `telemetry/<author>/<YYYY-MM>.ndjson` in the live-layer repo — append-only per
@@ -156,7 +160,8 @@ else fully functional (spec §4).
 | Piece | Where | What |
 |---|---|---|
 | `capture.mjs` | `packages/core/src/` | schema validation, classifier hookup, credential scan, staging, two-phase confirm, commit+push |
-| `git-sync.mjs` | `packages/core/src/sources/` | `withGitSync` wrapper: TTL pull, lockfile, push-with-rebase-retry, queue |
+| `git-core.mjs` | `packages/core/src/sources/` | locked git mutation coordinator: advisory lock, pathspec commit, push-with-rebase-retry + offline queue, URL-scrubbed errors |
+| `git-sync.mjs` | `packages/core/src/sources/` | `withGitSync` wrapper (TTL pull, decay filter, sync) + `resolveLiveLayer` manifest contract |
 | MCP tools | `mcp-server.mjs` | `find_captures`, `whats_new`; `log_capture` + `confirm_capture` behind capture flag; read-event telemetry |
 | Decay filter | resolver/okf-local read path | retention window on `captured` frontmatter |
 | Promotion | `promote.mjs` + control surface | live → curated per-kind targets, two-step via `_review/promotions/` |

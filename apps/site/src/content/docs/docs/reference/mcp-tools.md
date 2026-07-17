@@ -1,6 +1,6 @@
 ---
 title: MCP tools
-description: search, read_file, list_concepts, get_links — request and response shapes.
+description: search, read_file, list_concepts, get_links, find_captures, whats_new — request and response shapes.
 ---
 
 `mcp-server.mjs` is a stdio MCP server that exposes the resolved cascade to AI
@@ -8,7 +8,9 @@ agents as one effective, read-time OKF graph. Reads resolve through the same
 section/field merge as the CLI — level precedence, provenance, per-section
 conflicts — over every source in the manifest.
 
-## The four tools
+## The read tools
+
+The default server exposes six read-only tools:
 
 | Tool | What it does |
 |------|--------------|
@@ -16,6 +18,18 @@ conflicts — over every source in the manifest.
 | `read_file` | Returns the resolved effective concept — section merge + provenance + per-section conflicts. Pass `layer` for a raw single-layer read. |
 | `list_concepts` | All effective concept IDs with their contributing layers |
 | `get_links` | Outgoing and incoming links, resolved against the effective graph |
+| `find_captures` | Search recent team captures (unreviewed session findings: investigations, decisions, gotchas, artifacts), ranked by relevance × recency; each hit carries author, age, kind, and review status. Optional `kinds` filter. |
+| `whats_new` | Captures and curated-concept changes since a `since` timestamp — session-start orientation |
+
+## Capture tools (with `--capture`)
+
+Running `mcp-server.mjs --capture` (team sync) adds two write tools — the
+default server stays read-only. Both feed the two-phase show-before-share flow:
+
+| Tool | What it does |
+|------|--------------|
+| `log_capture` | Validates a capture, scans for credentials, and returns a rendered preview plus a single-use staging token. Nothing is shared yet. |
+| `confirm_capture` | Commits and shares a staged capture — call only after the user has seen the preview and approved. |
 
 ## search
 

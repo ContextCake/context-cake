@@ -33,5 +33,5 @@ node write.mjs --signals apps/control-surface/signals.json --manifest layers.jso
 - `npm test` includes a playground test that binds `127.0.0.1`; it may need a less restricted local environment than some sandboxes.
 - Fixtures are committed. Generated dashboard data belongs under `apps/control-surface/signals.json` (and `team-activity.json`) and is ignored.
 - Live-layer git mutations go through `git-core.mjs` (`.contextcake.lock` serializes concurrent harness processes) — never spawn git directly against a live root.
-- `mcp-server.mjs` treats `--capture`/`--telemetry` as boolean flags; every other `--flag` consumes a value. The no-flag tool surface must stay byte-identical to `fixtures/mcp-tools-baseline.json`.
+- `mcp-server.mjs` treats `--capture`/`--telemetry` as boolean flags; every other `--flag` consumes a value. The no-flag surface is 6 read-only tools; the original four must stay byte-identical to `fixtures/mcp-tools-baseline.json` (`find_captures`/`whats_new` are additional always-on read tools), and `--capture` adds `log_capture`/`confirm_capture`.
 - Telemetry NDJSON is content-free by invariant: `{ts,user,harness,event,concept,layer,captureKind}` — ids and enums, never section text. The team-sync test greps fixture content against the telemetry dir to enforce this.

@@ -5,8 +5,8 @@
 ```bash
 # Run all tests
 npm test
-# or directly:
-bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/playground-test.sh
+# or directly (mirrors the npm test chain):
+bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/git-sync-test.sh && bash packages/core/tests/capture-test.sh && bash packages/core/tests/team-sync-mcp-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh
 
 # Run the MCP server (cascade mode)
 node mcp-server.mjs --manifest layers.json
@@ -80,7 +80,7 @@ Key files:
 | `packages/core/src/sources/git-sync.mjs` | withGitSync wrapper (TTL-gated pull, 14-day capture decay, sync() lands queued pushes) + `resolveLiveLayer` manifest contract |
 | `packages/core/src/capture.mjs` | Session captures: 4-kind schema validation, credential hard-reject, capture-policy routing, two-phase stage/confirm (show-before-share) |
 | `packages/core/src/team-activity.mjs` | Aggregates live-layer captures + telemetry NDJSON into control-surface feed and reuse metrics (cross-brain hits) |
-| `packages/core/fixtures/capture-policy.json` | Routing policy for agent-session captures (kinds → team_candidate; review keywords warn; scratch keywords reject) |
+| `packages/core/fixtures/capture-policy.json` | Routing policy for agent-session captures (kinds → team_candidate; review keywords warn; dominant scratch signals → ignore) |
 | `examples/team-sync-pack/` | Capture pack: Claude Code plugin (skill + Stop-hook nudge), Cursor rules, Copilot snippet, operator runbook |
 | `packages/core/src/sources/index.mjs` | Source factory: builds adapters from a manifest (`okf-local` default, `files`, or `mcp`) |
 | `examples/mock-mcp-source/server.mjs` | Runnable non-OKF foreign MCP server for integration tests |
@@ -105,7 +105,7 @@ Key files:
 - Staleness is surfaced via per-section `conflicts[]` + last-updated dates (the shadow/hash subsystem was removed in the core re-arch; see `specs/contextcake-core/design.md`).
 - **The manifest is a trust boundary.** An `mcp` layer spawns `command` with `args` from the manifest — a manifest you did not author can run arbitrary commands as your user. Only point `--manifest` at configs you trust (same model as any MCP client config).
 - **The live layer's git repo is inside the team trust boundary.** Push access = the ability to inject unreviewed context into every teammate's agent; scope repo membership accordingly.
-- Capture tools (`log_capture`/`confirm_capture`) exist only behind `mcp-server.mjs --capture`; the default server remains read-only, byte-identical to the committed `fixtures/mcp-tools-baseline.json`. Telemetry (`--telemetry`) records concept ids and enums only — never content.
+- Capture tools (`log_capture`/`confirm_capture`) exist only behind `mcp-server.mjs --capture`. The default server exposes 6 read-only tools (the original `search`/`read_file`/`list_concepts`/`get_links` stay byte-identical to the committed `fixtures/mcp-tools-baseline.json`, plus always-on read-only `find_captures`/`whats_new`); `--capture` adds the two write tools for 8. Telemetry (`--telemetry`) records concept ids and enums only — never content.
 - All git mutations against a live root go through `git-core.mjs` (advisory `.contextcake.lock`, per-repo serialization) — never call git directly against a live layer from engine code.
 - The engine (`packages/core/src/`) is dependency-free — plain Node.js built-ins only. Do not add npm dependencies without discussion. The exceptions are `apps/console/`, `apps/site/`, and `apps/desktop/` — self-contained npm packages. Console and site never import from the engine; the desktop app imports engine modules by path (one-way: app → engine, never the reverse) and must never cause a dependency to leak into `packages/core`.
 - `apps/console/` and `apps/site/` each have their own `package.json`, build, and tests; run their commands from that subdirectory, not the repo root. Console CI lives at `.github/workflows/console-*.yml`, path-filtered to `apps/console/**` (production deploys on `console-v*` tags).

@@ -133,8 +133,10 @@ The server exposes a small, read-focused interface:
 | `read_file` | Read the effective concept, including section provenance and conflicts; pass `layer` for the raw source concept. |
 | `list_concepts` | Discover effective concept IDs, optionally filtered by type. |
 | `get_links` | Traverse incoming and outgoing links in the effective graph. |
+| `find_captures` | Search recent team captures (investigations, decisions, gotchas, artifacts), ranked by relevance and recency. |
+| `whats_new` | List captures and curated-concept changes since a timestamp. |
 
-See the [agent connection guide](https://contextcake.com/docs/getting-started/connect-an-agent) and complete [MCP tools reference](https://contextcake.com/docs/reference/mcp-tools).
+With `--capture`, two write tools are added — `log_capture` (stage a capture, returns a preview) and `confirm_capture` (share it after the user approves). See the [agent connection guide](https://contextcake.com/docs/getting-started/connect-an-agent) and complete [MCP tools reference](https://contextcake.com/docs/reference/mcp-tools).
 
 > [!CAUTION]
 > A manifest is a trust boundary. An `mcp` source may start the `command` named in that manifest with your user privileges. Only run manifests and configure sources you trust. Read the [trust-boundary guide](https://contextcake.com/docs/concepts/trust-boundary) before connecting external sources.

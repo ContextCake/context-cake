@@ -266,4 +266,36 @@ if (!Array.isArray(r.feed) || r.feed.length < 2) throw new Error('feed should li
 if (!r.feed.some(f => f.archived)) throw new Error('decayed capture should appear flagged archived');
 " || fail "team-activity metrics" "$out"
 
-echo "team-sync mcp test passed (surface/flags/two-phase/ranking/banner/telemetry/activity)"
+# ---- capture pack smoke ---------------------------------------------------------
+pack="$repo_root/examples/team-sync-pack"
+node -e "
+const fs = require('fs');
+const plugin = JSON.parse(fs.readFileSync('$pack/claude-code/.claude-plugin/plugin.json', 'utf8'));
+if (!plugin.name || !plugin.description) throw new Error('plugin.json missing name/description');
+JSON.parse(fs.readFileSync('$pack/claude-code/hooks/hooks.json', 'utf8'));
+for (const f of ['claude-code/skills/team-sync/SKILL.md','cursor/team-sync.mdc','copilot/AGENTS-snippet.md','README.md']) {
+  if (!fs.existsSync('$pack/' + f)) throw new Error('pack file missing: ' + f);
+}
+" || fail "pack structure"
+
+nudge="$pack/claude-code/hooks/stop-nudge.mjs"
+out="$(echo '{"stop_hook_active":true}' | node "$nudge")"
+[ -z "$out" ] || fail "stop_hook_active must allow silently" "$out"
+cat > "$tmpdir/transcript-worthy.jsonl" <<'EOF'
+{"role":"assistant","content":"I found the root cause: the webhook client timeout was 5s."}
+EOF
+out="$(printf '{"stop_hook_active":false,"transcript_path":"%s"}' "$tmpdir/transcript-worthy.jsonl" | node "$nudge")"
+grep -q '"decision":"block"' <<<"$out" || fail "capture-worthy transcript should nudge" "$out"
+cat > "$tmpdir/transcript-logged.jsonl" <<'EOF'
+{"role":"assistant","content":"I found the root cause and shared it."}
+{"role":"assistant","content":"tool_use: log_capture"}
+EOF
+out="$(printf '{"stop_hook_active":false,"transcript_path":"%s"}' "$tmpdir/transcript-logged.jsonl" | node "$nudge")"
+[ -z "$out" ] || fail "already-logged session must not nudge" "$out"
+cat > "$tmpdir/transcript-plain.jsonl" <<'EOF'
+{"role":"assistant","content":"Renamed the variable as requested."}
+EOF
+out="$(printf '{"stop_hook_active":false,"transcript_path":"%s"}' "$tmpdir/transcript-plain.jsonl" | node "$nudge")"
+[ -z "$out" ] || fail "plain session must not nudge" "$out"
+
+echo "team-sync mcp test passed (surface/flags/two-phase/ranking/banner/telemetry/activity/pack)"

@@ -16,6 +16,10 @@ it activates when the `paymentsLive` flag flips.
 **Primary target:** small in-house data and analytics teams
 **Depends on:** `specs/contextcake-core/design.md` and `specs/contextcake-site/`
 
+**Commercial model:** `specs/contextcake-commerce/spec.md` is authoritative for application
+tiers, Pack price bands, creator economics, entitlements, and the curated-catalog rollout.
+This document remains authoritative for Pack content structure and first-party packaging.
+
 ---
 
 ## 1. Problem Statement

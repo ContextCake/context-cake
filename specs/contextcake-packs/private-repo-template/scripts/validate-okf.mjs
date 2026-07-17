@@ -24,6 +24,7 @@ const errors = [];
 if (!fs.existsSync(packRoot)) {
   errors.push(`${path.relative(repoRoot, packRoot)}: pack root does not exist`);
 } else {
+  validatePackTrustContract();
   for (const filePath of walkMarkdown(packRoot)) {
     const rel = toPosix(path.relative(packRoot, filePath));
     if (excluded.has(rel)) continue;
@@ -69,6 +70,145 @@ function validateVersionMatch() {
   if (packVersion && plugin.version && packVersion !== plugin.version) {
     errors.push(`version mismatch: PACK.yaml has ${packVersion}, plugin.json has ${plugin.version}`);
   }
+}
+
+function validatePackTrustContract() {
+  const packYamlPath = path.join(packRoot, "PACK.yaml");
+  if (!fs.existsSync(packYamlPath)) {
+    errors.push("PACK.yaml: required pack manifest is missing");
+    return;
+  }
+  const manifest = fs.readFileSync(packYamlPath, "utf8");
+  const requiredScalars = [
+    ["id"],
+    ["name"],
+    ["version"],
+    ["hero_workflow"],
+    ["changelog"],
+    ["creator", "name"],
+    ["creator", "url"],
+    ["license", "model"],
+    ["license", "terms_url"],
+    ["update_policy", "cadence"],
+    ["update_policy", "base_purchase"],
+    ["update_policy", "corrections"],
+    ["update_policy", "editorial_updates"],
+    ["rights", "attested"],
+    ["rights", "disclosure"],
+    ["freshness", "reviewed_at"],
+    ["permissions", "content_only"],
+    ["permissions", "executable_code"],
+    ["permissions", "network_access"],
+    ["permissions", "credentials"],
+    ["compatibility", "contextcake"],
+    ["compatibility", "pack_contract"],
+    ["review", "status"],
+    ["review", "reviewed_by"],
+    ["review", "reviewed_at"],
+    ["artifact", "checksum_algorithm"],
+    ["artifact", "checksum_scope"],
+    ["artifact", "checksum"],
+  ];
+  for (const yamlPath of requiredScalars) {
+    if (readYamlPath(manifest, yamlPath) === null) {
+      errors.push(`PACK.yaml: missing required field "${yamlPath.join(".")}"`);
+    }
+  }
+  if (!hasYamlListItems(manifest, "supported_surfaces")) {
+    errors.push('PACK.yaml: "supported_surfaces" must contain at least one item');
+  }
+  if (!hasYamlListItems(manifest, "source_disclosures")) {
+    errors.push('PACK.yaml: "source_disclosures" must contain at least one item');
+  }
+  if (!hasYamlListItems(manifest, "sample_files")) {
+    errors.push('PACK.yaml: "sample_files" must contain at least one item');
+  }
+
+  expectYamlValue(manifest, ["rights", "attested"], "true");
+  expectYamlValue(manifest, ["permissions", "content_only"], "true");
+  expectYamlValue(manifest, ["permissions", "executable_code"], "false");
+  expectYamlValue(manifest, ["permissions", "network_access"], "false");
+  expectYamlValue(manifest, ["permissions", "credentials"], "false");
+  expectYamlValue(manifest, ["compatibility", "pack_contract"], "1");
+  expectYamlValue(manifest, ["artifact", "checksum_algorithm"], "sha256");
+  expectYamlValue(manifest, ["artifact", "checksum_scope"], "canonical-content-tree");
+
+  const checksum = readYamlPath(manifest, ["artifact", "checksum"]);
+  if (checksum && checksum !== "pending-release" && !/^sha256:[a-f0-9]{64}$/.test(checksum)) {
+    errors.push('PACK.yaml: "artifact.checksum" must be pending-release or sha256:<64 lowercase hex characters>');
+  }
+
+  const entries = walkEntries(packRoot);
+  const filePaths = new Set(entries.filter((entry) => entry.stat.isFile()).map((entry) => toPosix(path.relative(packRoot, entry.path))));
+  const sampleFiles = readYamlList(manifest, "sample_files");
+  for (const sample of sampleFiles) {
+    if (!filePaths.has(sample)) errors.push(`PACK.yaml: sample file does not exist: ${sample}`);
+  }
+  const changelog = readYamlPath(manifest, ["changelog"]);
+  if (changelog && !filePaths.has(changelog)) errors.push(`PACK.yaml: changelog does not exist: ${changelog}`);
+
+  for (const entry of entries) {
+    const rel = toPosix(path.relative(packRoot, entry.path));
+    if (entry.stat.isSymbolicLink()) {
+      errors.push(`${rel}: symlinks are not allowed in a curated Pack`);
+      continue;
+    }
+    if (!entry.stat.isFile()) continue;
+    const extension = path.extname(entry.path).toLowerCase();
+    if (![".md", ".yaml", ".yml", ".json", ".txt"].includes(extension)) {
+      errors.push(`${rel}: curated Packs may contain only Markdown, YAML, JSON, or text files`);
+    }
+  }
+}
+
+function expectYamlValue(content, yamlPath, expected) {
+  const value = readYamlPath(content, yamlPath);
+  if (value !== null && value !== expected) {
+    errors.push(`PACK.yaml: "${yamlPath.join(".")}" must be ${expected}`);
+  }
+}
+
+function readYamlPath(content, yamlPath) {
+  const stack = [];
+  for (const rawLine of content.split(/\r?\n/)) {
+    if (!rawLine.trim() || rawLine.trimStart().startsWith("#") || rawLine.trimStart().startsWith("- ")) continue;
+    const match = rawLine.match(/^(\s*)([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!match) continue;
+    const indent = match[1].length;
+    const depth = Math.floor(indent / 2);
+    stack.length = depth;
+    stack[depth] = match[2];
+    const currentPath = stack.slice(0, depth + 1);
+    if (currentPath.length === yamlPath.length && currentPath.every((part, index) => part === yamlPath[index])) {
+      const value = match[3].trim();
+      return value ? parseYamlScalar(value) : null;
+    }
+  }
+  return null;
+}
+
+function hasYamlListItems(content, key) {
+  const lines = content.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === `${key}:`);
+  if (start === -1) return false;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^[^\s]/.test(lines[index])) break;
+    if (/^\s{2}-\s+\S/.test(lines[index])) return true;
+  }
+  return false;
+}
+
+function readYamlList(content, key) {
+  const lines = content.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === `${key}:`);
+  if (start === -1) return [];
+  const values = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^[^\s]/.test(lines[index])) break;
+    const item = lines[index].match(/^\s{2}-\s+(.+)$/);
+    if (item) values.push(parseYamlScalar(item[1].trim()));
+  }
+  return values;
 }
 
 function parseFrontmatter(content) {
@@ -120,6 +260,22 @@ function walkMarkdown(root) {
     }
   }
   return files.sort();
+}
+
+function walkEntries(root) {
+  const entries = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const name of fs.readdirSync(current)) {
+      if (name === "node_modules") continue;
+      const fullPath = path.join(current, name);
+      const stat = fs.lstatSync(fullPath);
+      entries.push({ path: fullPath, stat });
+      if (stat.isDirectory()) stack.push(fullPath);
+    }
+  }
+  return entries;
 }
 
 function toPosix(value) {

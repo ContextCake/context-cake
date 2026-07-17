@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: Flags and output shapes for resolver, ingest, write, promote, and mcp-server.
+description: Flags and output shapes for resolver, Packs, ingest, write, promote, and mcp-server.
 ---
 
 Every tool is a standalone Node.js script run with `node <tool>.mjs`. The engine is
@@ -87,6 +87,39 @@ node ingest.mjs --events packages/core/fixtures/mock-events.json --out apps/cont
 The output feeds [write.mjs](#writemjs) and the control-surface dashboard. See
 [The capture write path](/docs/guides/capture-write-path).
 
+## pack.mjs
+
+Inspects, installs, updates, rolls back, and detaches content-only ContextCake Packs.
+This is a local Free-tier workflow: no account or subscription is required. Installed
+versions are immutable, and `remove` detaches the Pack layer without deleting the files.
+
+```bash
+node pack.mjs inspect <directory> [--checksum sha256:...]
+node pack.mjs install <directory> --manifest <file> [--packs-dir <directory>] [--profile <id>] [--level <n>] [--checksum sha256:...]
+node pack.mjs update <directory> --manifest <file> [--packs-dir <directory>] [--profile <id>] [--checksum sha256:...]
+node pack.mjs update <directory> --manifest <file> --apply [--packs-dir <directory>] [--profile <id>] [--level <n>] [--checksum sha256:...]
+node pack.mjs list --manifest <file>
+node pack.mjs rollback <id> --manifest <file> [--packs-dir <directory>] [--profile <id>] [--version <semver>]
+node pack.mjs remove <id> --manifest <file> [--profile <id>]
+```
+
+`inspect` checks `PACK.yaml`, its creator/license/rights/freshness metadata, the
+content-only permission declaration, file types, size limits, symlinks, and the Pack's
+SHA-256 tree checksum. `install` repeats those checks, copies the release to a versioned
+Pack store next to the manifest, and adds an explicit `okf-local` base layer. `update`
+first returns a non-mutating file-level diff; repeat it with `--apply` to retain and switch
+to the candidate version. Use `--packs-dir` to choose a different local store and
+`--level` to choose precedence.
+
+```bash
+node pack.mjs inspect ./my-pack
+node pack.mjs install ./my-pack --manifest ~/Library/Application\ Support/ContextCake/manifest.json --level 0
+node pack.mjs rollback my-pack --manifest ~/Library/Application\ Support/ContextCake/manifest.json
+```
+
+The packaged `contextcake` CLI exposes the same commands under `contextcake pack` and
+defaults the manifest to the desktop app's local manifest.
+
 ## write.mjs
 
 Writes captured OKF concepts from an ingest `signals.json` into a target layer
@@ -165,3 +198,4 @@ node classify-context.mjs --demo
 - [layers.json manifest](/docs/reference/manifest) — the file every `--manifest` flag points at
 - [MCP tools](/docs/reference/mcp-tools) — what `mcp-server.mjs` exposes
 - [Override syntax](/docs/reference/override-syntax) — controlling the merge from frontmatter
+- [ContextCake Packs](/packs) — inspect the public catalog and complete file structures

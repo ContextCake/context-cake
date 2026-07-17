@@ -1,398 +1,181 @@
 ---
 import Base from '../../layouts/Base.astro';
 import CodeBlock from '../../components/CodeBlock.astro';
+import { catalogPacks } from '../../data/commerce';
+
+const structurePreview = `profession-pack/
+├── START-HERE.md
+├── PACK.yaml
+├── overview/
+├── workflows/
+├── policies-and-rules/
+├── templates/
+├── examples/
+├── tool-guides/
+├── local-overlay/
+└── updates/CHANGELOG.md`;
 
 const packSections = [
-	['overview/', 'What ContextCake is, the problem it solves, and the mental model.'],
-	['architecture/', 'Federated storage, the resolver, section merge, conflicts, OKF, and the MCP server.'],
-	['getting-started/', 'Install, resolve your first cascade, write a layer, connect an agent.'],
-	['use-cases/', 'Multi-layer context, foreign MCP graphs, and capturing or promoting knowledge.'],
-	['examples/', 'A real OKF concept, a working layers.json, and a resolved read_file payload.'],
-	['nuances/', 'The sharp edges: precedence, the trust boundary, conflicts-not-hidden.'],
-	['tool-guides/', 'Use the pack with Claude Code, ChatGPT, Cursor, and Copilot.'],
+	['Start and overview', 'Who the Pack is for, which job it covers, and where to begin.'],
+	['Workflows and rules', 'The actual method: decisions, guardrails, source-of-truth rules, and validation habits.'],
+	['Templates and examples', 'Files you can reuse, plus a completed example for comparison.'],
+	['Tool guides', 'Use the same material with ContextCake, ChatGPT, Claude, Cursor, and Copilot.'],
+	['Local overlay', 'Keep organization-specific exceptions outside the installed Pack so an update cannot overwrite them.'],
+	['Updates', 'A changelog and merge notes for each version.'],
 ];
-
-const featuredPack = {
-	name: 'ContextCake Context Pack',
-	href: '/packs/contextcake',
-	status: 'Free preview',
-	summary:
-		'Everything an AI agent needs to actually use ContextCake in your project — architecture, OKF, resolver, MCP, install, and the sharp edges.',
-	bestFor: 'Developers adopting or building on ContextCake who want their AI assistant to know how it works.',
-	benefits: [
-		'Understand the architecture fast',
-		'Get an agent productive with the MCP server',
-		'Read the full pack free while it’s in preview',
-	],
-	includes: ['Overview + mental model', 'Architecture deep-dive', 'Getting-started guides', 'Real examples', 'Nuances & gotchas'],
-	formats: ['Plain markdown files', 'Claude Code plugin', 'OKF-compatible structure'],
-};
-
-const heroPoints = [
-	'Use the same pack across Claude, ChatGPT, Cursor, Copilot, and plain docs',
-	'Inspect the files instead of guessing what is inside',
-	'Give your AI assistant accurate context, not guesses',
-];
-
-const structurePreview = `contextcake/
-├── overview/
-├── architecture/
-├── getting-started/
-├── use-cases/
-├── examples/
-├── nuances/
-└── tool-guides/`;
 ---
 
 <Base
-	title="ContextCake Packs - structured context packs"
-	description="Browse ContextCake Packs: structured, inspectable knowledge bundles built as OKF-compatible markdown for real team workflows."
+	tone="paper"
+	title="ContextCake Packs | inspect and install professional workflows"
+	description="Browse workflow Packs with visible files, creators, sources, permissions, licenses, and update policies."
 >
 	<main class="packs-index">
 		<section class="hero" aria-labelledby="packs-title">
 			<div class="hero-copy">
 				<p class="eyebrow">ContextCake Packs</p>
-				<h1 id="packs-title">Ready-made files for teams that already use AI at work.</h1>
-				<p class="lede">
-					Each pack bundles the context a team keeps re-explaining in chat: concepts,
-					architecture, guides, and worked examples. You can inspect every file before you
-					rely on it, and reuse the same material across tools.
-				</p>
-				<ul class="hero-points" aria-label="Pack benefits">
-					{heroPoints.map((item) => <li>{item}</li>)}
-				</ul>
+				<h1 id="packs-title">Install a workflow you can inspect.</h1>
+				<p class="lede">A Pack is a folder of methods, rules, templates, examples, and references. Read the files, install the Pack, then keep your own changes in a separate local layer.</p>
 				<div class="hero-actions">
-					<a class="view-link hero-link" href={featuredPack.href}>Read it free</a>
-					<a class="view-link hero-link hero-link-secondary" href="#structure">See the file layout</a>
+					<a class="button primary" href="#catalog">Browse current Packs</a>
+					<a class="button" href="/creators">Create a Pack</a>
 				</div>
+				<ul class="proof-line" aria-label="Pack guarantees">
+					<li>Inspect the files</li><li>See who made it</li><li>Review every update</li>
+				</ul>
 			</div>
-			<aside class="hero-panel" aria-label="How packs are structured">
-				<p class="panel-label">Open knowledge format</p>
-				<p>
-					Pack content uses OKF-compatible markdown where that shape helps. The practical
-					bit: the files stay inspectable, referenceable, and easy to layer with local team
-					edits.
-				</p>
-				<a href="/docs/concepts/okf-bundles">Read the OKF bundle shape</a>
+			<aside class="hero-aside">
+				<p>What is in a Pack</p>
+				<strong>Methods, examples, and references stored as files.</strong>
+				<span>Each listing shows the creator, license, review date, permissions, supported tools, and update policy before installation.</span>
 			</aside>
 		</section>
 
-		<section class="catalog" aria-labelledby="catalog-title">
-			<div class="section-head">
-				<p class="eyebrow">Available pack</p>
-				<h2 id="catalog-title">Current pack</h2>
+		<section id="catalog" class="catalog" aria-labelledby="catalog-title">
+			<div class="section-heading">
+				<p class="eyebrow">Curated catalog</p>
+				<h2 id="catalog-title">The catalog starts with two Packs from ContextCake.</h2>
 			</div>
-
-			<article class="pack-card">
-				<div class="pack-mark" aria-hidden="true">
-					<span></span>
-					<span></span>
-					<span></span>
-				</div>
-				<div class="pack-copy">
-					<p class="status">{featuredPack.status}</p>
-					<h3>{featuredPack.name}</h3>
-					<p>{featuredPack.summary}</p>
-					<p class="best-for"><strong>Best for:</strong> {featuredPack.bestFor}</p>
-					<ul class="benefit-list" aria-label={`${featuredPack.name} benefits`}>
-						{featuredPack.benefits.map((item) => <li>{item}</li>)}
-					</ul>
-				</div>
-				<div class="pack-meta">
-					<div>
-						<p class="meta-label">Includes</p>
-						<ul>
-							{featuredPack.includes.map((item) => <li>{item}</li>)}
-						</ul>
-					</div>
-					<div>
-						<p class="meta-label">Formats</p>
-						<ul>
-							{featuredPack.formats.map((format) => <li>{format}</li>)}
-						</ul>
-					</div>
-					<a class="view-link" href={featuredPack.href}>Read the pack</a>
-				</div>
-			</article>
+			<div class="catalog-list">
+				{catalogPacks.map((pack, index) => (
+					<article class={`pack-row pack-row--${pack.accent}`}>
+						<div class="pack-number" aria-hidden="true">0{index + 1}</div>
+						<div class="pack-main">
+							<p class="status">{pack.status}</p>
+							<h3>{pack.name}</h3>
+							<p class="summary">{pack.summary}</p>
+							<p class="workflow"><strong>Intended workflow</strong><span>{pack.workflow}</span></p>
+							<a class="pack-link" href={pack.href}>Inspect this Pack</a>
+						</div>
+						<dl class="pack-facts">
+							<div><dt>Creator</dt><dd>{pack.creator}</dd></div>
+							<div><dt>License</dt><dd>{pack.price}<br />{pack.teamPrice}</dd></div>
+							<div><dt>Reviewed</dt><dd>{pack.reviewedAt}</dd></div>
+							<div><dt>Updates</dt><dd>{pack.updateCadence}</dd></div>
+						</dl>
+						<div class="formats"><span>Supported surfaces</span>{pack.formats.map((format) => <code>{format}</code>)}</div>
+					</article>
+				))}
+			</div>
+			<p class="catalog-note">Ratings will appear after the catalog has verified purchases. We will not seed them with internal reviews.</p>
 		</section>
 
 		<section class="structure" aria-labelledby="structure-title">
-			<div class="section-head compact">
-				<p class="eyebrow">Inside the pack</p>
-				<h2 id="structure-title">A shape an agent can navigate.</h2>
-				<p>
-					The structure is part of the product. A person can scan it quickly, and an AI tool
-					can navigate it without guessing.
-				</p>
+			<div class="section-heading split">
+				<div><p class="eyebrow">File structure</p><h2 id="structure-title">Every Pack follows the same layout.</h2></div>
+				<p>The standard folders make the workflow easy to browse and let ContextCake validate the manifest, source disclosures, local-overlay boundary, and changelog.</p>
 			</div>
 			<div class="structure-layout">
-				<div class="structure-preview">
-					<CodeBlock className="tree-preview" lang="text" code={structurePreview} />
-				</div>
-				<div class="structure-grid">
-					{packSections.map(([name, body]) => (
-						<article>
-							<h3>{name}</h3>
-							<p>{body}</p>
-						</article>
-					))}
-				</div>
+				<CodeBlock className="tree-preview" lang="text" code={structurePreview} />
+				<div class="section-list">{packSections.map(([title, body]) => <article><h3>{title}</h3><p>{body}</p></article>)}</div>
 			</div>
+		</section>
+
+		<section class="install-model" aria-labelledby="install-title">
+			<div>
+				<p class="eyebrow">How installation works</p>
+				<h2 id="install-title">Install the Pack. Keep your changes in a separate layer.</h2>
+			</div>
+			<ol>
+				<li><span>01</span><p><strong>Preview</strong>Inspect samples, permissions, sources, license, and changelog.</p></li>
+				<li><span>02</span><p><strong>Install</strong>ContextCake validates the manifest and artifact before adding an explicit base layer.</p></li>
+				<li><span>03</span><p><strong>Adapt</strong>Put team or personal exceptions in a separate higher-priority local layer.</p></li>
+				<li><span>04</span><p><strong>Update</strong>Read the diff, install it, or roll back. Your local layer is not replaced.</p></li>
+			</ol>
+		</section>
+
+		<section class="catalog-cta" aria-labelledby="creator-cta-title">
+			<div><p class="eyebrow">Founding Creator Program</p><h2 id="creator-cta-title">Already have a workflow people ask you to teach?</h2></div>
+			<div><p>Package a workflow you own and already teach. The first 20 approved creators keep 90% of product revenue for their first 12 months.</p><a class="button primary" href="/creators">See the creator program</a></div>
 		</section>
 	</main>
 </Base>
 
 <style>
-	.packs-index {
-		max-width: 76rem;
-		margin: 0 auto;
-		padding: 2.5rem 1.5rem 2rem;
-	}
-	.hero,
-	.pack-card {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
-		gap: 1.5rem;
-		align-items: start;
-	}
-	.hero {
-		padding: 0.75rem 0 2.5rem;
-		border-bottom: 1px solid var(--cc-border);
-	}
-	.eyebrow,
-	.status,
-	.panel-label,
-	.meta-label {
-		margin: 0 0 0.75rem;
-		color: var(--cc-layer-team);
-		font-family: var(--cc-font-mono);
-		font-size: 0.78rem;
-		font-weight: 700;
-		letter-spacing: 0;
-		text-transform: uppercase;
-	}
-	h1,
-	h2,
-	h3,
-	p {
-		letter-spacing: 0;
-	}
-	h1 {
-		max-width: 11ch;
-		margin: 0;
-		font-size: clamp(2.15rem, 3.3vw, 3.5rem);
-		line-height: 0.97;
-	}
-	.lede,
-	.hero-panel p,
-	.pack-copy p,
-	.section-head > p:last-child,
-	.structure-grid p {
-		color: var(--cc-text-body);
-		line-height: 1.62;
-	}
-	.lede {
-		max-width: 60ch;
-		margin: 1rem 0 0;
-		font-size: 1.1rem;
-	}
-	.hero-points,
-	.benefit-list,
-	.pack-meta ul {
-		margin: 1rem 0 0;
-		padding: 0;
-		list-style: none;
-	}
-	.hero-points,
-	.benefit-list {
-		display: grid;
-		gap: 0.55rem;
-	}
-	.hero-points li,
-	.benefit-list li,
-	.pack-meta li {
-		color: var(--cc-text-body);
-	}
-	.hero-points li::before,
-	.benefit-list li::before,
-	.pack-meta li::before {
-		content: '';
-		display: inline-block;
-		width: 0.5rem;
-		height: 0.5rem;
-		margin-right: 0.55rem;
-		border-radius: 2px;
-		background: var(--cc-layer-personal);
-		vertical-align: 0.08em;
-	}
-	.hero-panel,
-	.pack-meta {
-		padding: 1rem 1.05rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-md);
-		background: var(--cc-surface);
-		box-shadow: var(--cc-shadow-panel);
-	}
-	.hero-panel a,
-	.view-link {
-		color: var(--cc-text);
-		font-weight: 700;
-		text-decoration-thickness: 1px;
-		text-underline-offset: 0.24em;
-	}
-	.catalog,
-	.structure {
-		padding: 2.5rem 0 0;
-	}
-	.hero-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.8rem;
-		margin-top: 1.25rem;
-	}
-	.section-head {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr);
-		gap: 1.5rem;
-		align-items: end;
-		margin-bottom: 1.5rem;
-	}
-	.section-head.compact {
-		align-items: start;
-	}
-	.section-head .eyebrow {
-		grid-column: 1 / -1;
-		margin-bottom: -0.25rem;
-	}
-	.section-head h2 {
-		max-width: 11ch;
-		margin: 0;
-		font-size: clamp(1.55rem, 2.2vw, 2.25rem);
-		line-height: 1.03;
-	}
-	.section-head > p:last-child {
-		margin: 0;
-		font-size: 1rem;
-	}
-	.pack-card {
-		grid-template-columns: auto minmax(0, 1fr) minmax(15rem, 18rem);
-		padding: 1.1rem 0 1.25rem;
-		border-top: 1px solid var(--cc-border);
-		border-bottom: 1px solid var(--cc-border);
-	}
-	.pack-mark {
-		display: grid;
-		gap: 0.35rem;
-		width: 4.25rem;
-		padding-top: 0.3rem;
-	}
-	.pack-mark span {
-		display: block;
-		height: 0.82rem;
-		border-radius: 4px;
-	}
-	.pack-mark span:nth-child(1) {
-		margin-left: 0.85rem;
-		background: var(--cc-layer-personal);
-	}
-	.pack-mark span:nth-child(2) {
-		background: var(--cc-layer-team);
-	}
-	.pack-mark span:nth-child(3) {
-		margin-left: 0.4rem;
-		background: var(--cc-layer-company);
-	}
-	.pack-copy h3 {
-		margin: 0;
-		font-size: clamp(1.6rem, 3vw, 2.5rem);
-		line-height: 1;
-	}
-	.pack-copy p {
-		max-width: 56ch;
-		margin: 0.75rem 0 0;
-		font-size: 1rem;
-	}
-	.best-for {
-		margin-top: 0.9rem;
-	}
-	.meta-label {
-		color: var(--cc-layer-personal);
-	}
-	.view-link {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-height: 44px;
-		margin-top: 1.2rem;
-		padding: 0 1rem;
-		border: 1px solid var(--cc-cta);
-		border-radius: 6px;
-		background: var(--cc-cta);
-		color: var(--cc-on-cta);
-		text-decoration: none;
-	}
-	.hero-link {
-		margin-top: 0;
-	}
-	.hero-link-secondary {
-		border-color: var(--cc-border);
-		background: transparent;
-		color: var(--cc-text);
-	}
-	.structure-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 0.85rem;
-	}
-	.structure-layout {
-		display: grid;
-		grid-template-columns: minmax(17rem, 22rem) minmax(0, 1fr);
-		gap: 1rem;
-		align-items: start;
-	}
-	.structure-preview :global(.tree-preview .shiki) {
-		font-size: 0.92rem;
-		line-height: 1.55;
-	}
-	.structure-grid article {
-		padding: 1rem 0 1rem 1rem;
-		border-left: 2px solid color-mix(in srgb, var(--cc-layer-team) 40%, var(--cc-border));
-	}
-	.structure-grid h3 {
-		margin: 0 0 0.65rem;
-		color: var(--cc-text);
-		font-family: var(--cc-font-mono);
-		font-size: 0.92rem;
-	}
-	.structure-grid p {
-		margin: 0;
-		font-size: 0.97rem;
-	}
-	@media (max-width: 920px) {
-		.hero,
-		.section-head,
-		.pack-card {
-			grid-template-columns: 1fr;
-		}
-		.structure-layout {
-			grid-template-columns: 1fr;
-		}
-		.section-head .eyebrow {
-			margin-bottom: 0;
-		}
-		.structure-grid {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-	}
-	@media (max-width: 620px) {
-		.packs-index {
-			padding-top: 2rem;
-		}
-		.pack-card {
-			grid-template-columns: 1fr;
-		}
-		.structure-grid {
-			grid-template-columns: 1fr;
-		}
-	}
+	.packs-index { max-width: 88rem; margin: 0 auto; padding: 0 clamp(1.25rem, 4vw, 4rem) 6rem; color: var(--cc-text-body); }
+	.eyebrow, .status { margin: 0 0 1rem; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+	h1, h2, h3, p { letter-spacing: 0; }
+	.hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(18rem, 0.55fr); gap: clamp(2.5rem, 5vw, 5.5rem); align-items: end; min-height: 31rem; padding: clamp(3.5rem, 6vw, 5.5rem) 0; border-bottom: 1px solid var(--cc-border-strong); }
+	h1 { max-width: 12ch; margin: 0; color: var(--cc-text); font-size: clamp(2.9rem, 5vw, 5.25rem); line-height: 0.94; letter-spacing: -0.05em; }
+	.lede { max-width: 48rem; margin: 1.5rem 0 0; font-size: clamp(1.15rem, 1.8vw, 1.55rem); line-height: 1.5; }
+	.hero-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2rem; }
+	.button { display: inline-flex; align-items: center; justify-content: center; min-height: 3rem; padding: 0 1.15rem; border: 1px solid var(--cc-border-strong); color: var(--cc-text); font-weight: 700; text-decoration: none; transition: background var(--cc-transition), color var(--cc-transition), border-color var(--cc-transition); }
+	.button.primary { border-color: var(--cc-text); background: var(--cc-text); color: var(--cc-surface-solid); }
+	.button.primary:hover { background: var(--cc-text-body); }
+	.button:not(.primary):hover { background: var(--cc-surface-soft); }
+	.proof-line { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; margin: 2rem 0 0; padding: 0; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.72rem; list-style: none; text-transform: uppercase; }
+	.proof-line li::before { content: ''; display: inline-block; width: 0.45rem; height: 0.45rem; margin-right: 0.55rem; background: var(--cc-layer-team); }
+	.hero-aside { padding: 1.5rem 0 0 1.5rem; border-top: 0.4rem solid var(--cc-layer-team); border-left: 1px solid var(--cc-border); }
+	.hero-aside p { margin: 0; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.72rem; text-transform: uppercase; }
+	.hero-aside strong, .hero-aside span { display: block; }
+	.hero-aside strong { margin-top: 1.5rem; color: var(--cc-text); font-size: 1.6rem; line-height: 1.15; }
+	.hero-aside span { margin-top: 0.8rem; line-height: 1.65; }
+	.catalog, .structure, .install-model { padding-top: 7rem; }
+	.section-heading { margin-bottom: 3rem; }
+	.section-heading h2, .install-model h2, .catalog-cta h2 { max-width: 19ch; margin: 0; color: var(--cc-text); font-size: clamp(2rem, 3.2vw, 3.75rem); line-height: 1; letter-spacing: -0.04em; }
+	.section-heading.split { display: grid; grid-template-columns: 1fr 1fr; gap: 4rem; align-items: end; }
+	.section-heading.split > p { margin: 0; font-size: 1.05rem; line-height: 1.65; }
+	.catalog-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
+	.pack-row { --stripe: var(--cc-layer-team); display: grid; min-width: 0; grid-template-columns: 2.25rem minmax(0, 1fr); grid-template-areas: 'number main' 'number facts' 'number formats'; column-gap: 1.25rem; align-content: start; padding: 1.6rem; background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); }
+	.pack-row:focus-within { border-color: var(--cc-border-strong); }
+	.pack-row--personal { --stripe: var(--cc-layer-personal); }
+	.pack-number { grid-area: number; align-self: stretch; padding-top: 0.55rem; border-top: 0.3rem solid var(--stripe); color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.72rem; }
+	.pack-main { grid-area: main; }
+	.status { margin-bottom: 0.6rem; color: var(--cc-text-muted); }
+	.pack-main h3 { margin: 0; color: var(--cc-text); font-size: clamp(1.8rem, 3vw, 3rem); line-height: 1; }
+	.summary { max-width: 55rem; margin: 0.8rem 0 0; line-height: 1.65; }
+	.workflow { display: grid; grid-template-columns: 8rem 1fr; gap: 0.75rem; margin: 1rem 0 0; font-size: 0.94rem; }
+	.workflow strong { color: var(--cc-text); }
+	.pack-link { display: inline-flex; min-height: 2.75rem; align-items: center; margin-top: 1.2rem; color: var(--cc-text); font-weight: 700; text-underline-offset: 0.25em; }
+	.pack-facts { grid-area: facts; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; margin: 1.5rem 0 0; padding-top: 1rem; border-top: 1px solid var(--cc-border); }
+	.pack-facts div { min-width: 0; padding: 0.65rem 0; border-bottom: 1px solid var(--cc-border); }
+	.pack-facts div:first-child { padding-top: 0.65rem; }
+	.pack-facts dt, .formats > span { color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
+	.pack-facts dd { margin: 0.2rem 0 0; color: var(--cc-text); line-height: 1.45; }
+	.formats { grid-area: formats; display: flex; flex-wrap: wrap; align-content: start; gap: 0.45rem; margin-top: 1rem; }
+	.formats > span { width: 100%; margin-bottom: 0.3rem; }
+	.formats code { padding: 0.3rem 0.45rem; background: var(--cc-surface-soft); color: var(--cc-text); font-family: var(--cc-font-mono); font-size: 0.68rem; }
+	.catalog-note { margin: 1rem 0 0; color: var(--cc-text-muted); font-size: 0.9rem; }
+	.structure-layout { display: grid; grid-template-columns: minmax(20rem, 0.65fr) minmax(0, 1.35fr); gap: 3rem; align-items: start; }
+	.structure-layout :global(.tree-preview .shiki) { font-size: 0.88rem; line-height: 1.6; }
+	.section-list { border-top: 1px solid var(--cc-border-strong); }
+	.section-list article { display: grid; grid-template-columns: 11rem 1fr; gap: 1.5rem; padding: 1.1rem 0; border-bottom: 1px solid var(--cc-border-strong); }
+	.section-list h3, .section-list p { margin: 0; }
+	.section-list h3 { color: var(--cc-text); font-size: 1rem; }
+	.section-list p { line-height: 1.55; }
+	.install-model { display: grid; grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr); gap: 4rem; }
+	.install-model ol { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--cc-border-strong); }
+	.install-model li { display: grid; grid-template-columns: 3rem 1fr; gap: 1rem; padding: 1.15rem 0; border-bottom: 1px solid var(--cc-border-strong); }
+	.install-model li > span { padding-top: 0.25rem; color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.7rem; border-top: 0.3rem solid var(--cc-layer-company); }
+	.install-model li p, .install-model li strong { margin: 0; }
+	.install-model li strong { display: block; color: var(--cc-text); }
+	.catalog-cta { display: grid; grid-template-columns: 1fr 1fr; gap: 4rem; margin-top: 7rem; padding: clamp(2.5rem, 6vw, 6rem); background: var(--cc-inverse-surface); color: var(--cc-inverse-body); }
+	.catalog-cta .eyebrow { color: var(--cc-layer-personal); }
+	.catalog-cta h2 { color: var(--cc-inverse-text); }
+	.catalog-cta > div:last-child { align-self: end; }
+	.catalog-cta > div:last-child p { margin: 0 0 1.5rem; font-size: 1.08rem; line-height: 1.65; }
+	.catalog-cta .button.primary { border-color: var(--cc-inverse-cta); background: var(--cc-inverse-cta); color: var(--cc-inverse-on-cta); }
+	@media (max-width: 980px) { .hero, .section-heading.split, .structure-layout, .install-model, .catalog-cta { grid-template-columns: 1fr; } }
+	@media (max-width: 820px) { .catalog-list { grid-template-columns: 1fr; } }
+	@media (max-width: 640px) { .hero { min-height: auto; padding-block: 3rem; } h1 { font-size: clamp(2.65rem, 11vw, 3.75rem); } .pack-row { grid-template-columns: 2rem minmax(0, 1fr); padding: 1.25rem; } .pack-facts { grid-template-columns: 1fr; } .workflow, .section-list article { grid-template-columns: 1fr; gap: 0.35rem; } }
 </style>

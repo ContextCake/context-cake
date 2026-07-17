@@ -36,3 +36,5 @@ packs/data-analytics-team/skills/data-analytics-team-pack
 ```
 
 That root is both the Claude Code skill content directory and the source for the plain zip.
+The build copies only the allowlist, writes its canonical content-tree checksum into the
+staged `PACK.yaml`, and emits a separate `.sha256` sidecar for archive transport integrity.

@@ -1,8 +1,19 @@
 id: contextcake
 name: "ContextCake Context Pack"
 version: "0.1.0"
+creator:
+  name: "ContextCake"
+  url: "https://contextcake.com"
+license:
+  model: "free"
+  identifier: "MIT"
+  terms_url: "https://github.com/ContextCake/context-cake/blob/main/LICENSE"
 target_audience: "Developers (and their AI agents) adopting ContextCake in a project"
 hero_workflow: "understand ContextCake -> install -> write a layer -> connect an agent"
+sample_files:
+  - examples/okf-concept-example.md
+  - examples/layers-json-example.md
+changelog: updates/CHANGELOG.md
 update_cadence: "as the product evolves"
 supported_surfaces:
   - plain-files
@@ -23,4 +34,33 @@ included_modules:
   - examples
   - nuances
   - tool-guides
+update_policy:
+  cadence: "as the product evolves"
+  base_purchase: "perpetual"
+  corrections: "included"
+  editorial_updates: "included"
+source_disclosures:
+  - "First-party material distilled from the public ContextCake source, specifications, and documentation."
+rights:
+  attested: true
+  disclosure: "ContextCake owns or can distribute the included first-party material under the repository license."
+freshness:
+  reviewed_at: "2026-07-17"
+  review_interval_days: 90
+permissions:
+  content_only: true
+  executable_code: false
+  network_access: false
+  credentials: false
+compatibility:
+  contextcake: ">=0.1.0"
+  pack_contract: "1"
+review:
+  status: "first-party"
+  reviewed_by: "ContextCake"
+  reviewed_at: "2026-07-17"
+artifact:
+  checksum_algorithm: "sha256"
+  checksum_scope: "canonical-content-tree"
+  checksum: "pending-release"
 overlay_instructions: "Drop this pack into your project (or point your AI tool at it) so the agent has the full, accurate context to help you use ContextCake."

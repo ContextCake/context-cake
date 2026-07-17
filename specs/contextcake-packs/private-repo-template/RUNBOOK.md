@@ -36,7 +36,8 @@ customer their download + license key automatically.
 
 1. Bump `PACK.yaml` and `plugin.json` to the same version.
 2. `node scripts/validate-okf.mjs` and `bash scripts/validate-test.sh` pass.
-3. `node scripts/build-plain-zip.mjs` → `dist/data-analytics-team-pack-vX.Y.Z.zip`.
+3. `node scripts/build-plain-zip.mjs` → the versioned zip plus its archive `.sha256` sidecar;
+   confirm the staged Pack content checksum and archive checksum are both printed.
 4. Upload that zip as the base-pack (and updates) product file in Lemon Squeezy.
 5. Tag/release the same zip in this private GitHub repo as the internal source of truth.
 

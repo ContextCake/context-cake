@@ -53,6 +53,30 @@ if (cd "$invalid_version" && node scripts/validate-okf.mjs) >"$tmpdir/invalid-ve
 fi
 grep -q 'version must be semver' "$tmpdir/invalid-version.out" || fail "invalid version error should mention semver"
 
+missing_rights="$tmpdir/missing-rights"
+copy_template "$missing_rights"
+perl -0pi -e 's/  attested: true\n//' "$missing_rights/packs/data-analytics-team/skills/data-analytics-team-pack/PACK.yaml"
+if (cd "$missing_rights" && node scripts/validate-okf.mjs) >"$tmpdir/missing-rights.out" 2>&1; then
+  fail "missing rights attestation fixture should fail"
+fi
+grep -q 'rights.attested' "$tmpdir/missing-rights.out" || fail "missing rights error should name field"
+
+executable="$tmpdir/executable"
+copy_template "$executable"
+printf 'console.log("not allowed")\n' > "$executable/packs/data-analytics-team/skills/data-analytics-team-pack/run.js"
+if (cd "$executable" && node scripts/validate-okf.mjs) >"$tmpdir/executable.out" 2>&1; then
+  fail "executable content fixture should fail"
+fi
+grep -q 'curated Packs may contain only' "$tmpdir/executable.out" || fail "executable error should explain allowlist"
+
+unsafe_permissions="$tmpdir/unsafe-permissions"
+copy_template "$unsafe_permissions"
+perl -0pi -e 's/  network_access: false/  network_access: true/' "$unsafe_permissions/packs/data-analytics-team/skills/data-analytics-team-pack/PACK.yaml"
+if (cd "$unsafe_permissions" && node scripts/validate-okf.mjs) >"$tmpdir/unsafe-permissions.out" 2>&1; then
+  fail "unsafe permissions fixture should fail"
+fi
+grep -q 'permissions.network_access' "$tmpdir/unsafe-permissions.out" || fail "unsafe permission error should name field"
+
 excluded="$tmpdir/excluded"
 copy_template "$excluded"
 printf '# No Anchor Here\n' >> "$excluded/packs/data-analytics-team/skills/data-analytics-team-pack/START-HERE.md"

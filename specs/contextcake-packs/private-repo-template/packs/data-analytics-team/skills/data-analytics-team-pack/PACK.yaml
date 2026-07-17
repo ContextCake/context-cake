@@ -1,8 +1,21 @@
 id: data-analytics-team
 name: "ContextCake Pack: Data & Analytics Teams"
 version: "0.1.0"
+creator:
+  name: "ContextCake"
+  url: "https://contextcake.com"
+license:
+  model: "personal-and-team"
+  personal_price_usd: 99
+  team_price_usd: 249
+  team_seats: 5
+  terms_url: "https://contextcake.com/packs/data-analytics-teams#license"
 target_profession: "Data and analytics teams"
 hero_workflow: "stakeholder request -> clarified spec -> build and validate -> insight summary"
+sample_files:
+  - examples/worked-example-mrr-request.md
+  - templates/clarified-spec-template.md
+changelog: updates/CHANGELOG.md
 update_cadence: "monthly"
 supported_surfaces:
   - plain-files
@@ -23,4 +36,34 @@ included_modules:
   - prompt-guides
   - policies-and-rules
   - tool-guides
+update_policy:
+  cadence: "monthly"
+  base_purchase: "perpetual"
+  corrections: "included"
+  editorial_updates: "optional-subscription"
+  personal_monthly_usd: 9
+source_disclosures:
+  - "Original first-party workflows, templates, examples, and guidance authored for ContextCake."
+rights:
+  attested: true
+  disclosure: "ContextCake owns or can commercially distribute every included item."
+freshness:
+  reviewed_at: "2026-07-17"
+  review_interval_days: 90
+permissions:
+  content_only: true
+  executable_code: false
+  network_access: false
+  credentials: false
+compatibility:
+  contextcake: ">=0.1.0"
+  pack_contract: "1"
+review:
+  status: "first-party"
+  reviewed_by: "ContextCake"
+  reviewed_at: "2026-07-17"
+artifact:
+  checksum_algorithm: "sha256"
+  checksum_scope: "canonical-content-tree"
+  checksum: "pending-release"
 overlay_instructions: "Keep local team overrides outside the installed pack files."

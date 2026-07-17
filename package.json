@@ -4,7 +4,7 @@
   "description": "Federated team knowledge with cascading layer precedence — OKF-compatible, MCP-ready.",
   "type": "module",
   "scripts": {
-    "test": "bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/pack-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh",
+    "test": "bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/pack-test.sh && bash packages/core/tests/git-sync-test.sh && bash packages/core/tests/capture-test.sh && bash packages/core/tests/team-sync-mcp-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh",
     "mcp": "node mcp-server.mjs",
     "playground": "node apps/playground/server.mjs",
     "console:live": "npm --prefix apps/console run build:live && node apps/playground/server.mjs --console apps/console/dist",

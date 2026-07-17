@@ -1,0 +1,92 @@
+[
+  {
+    "name": "search",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Text to search for."
+        },
+        "limit": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum matches to return."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "read_file",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "concept_id": {
+          "type": "string",
+          "description": "Concept ID, e.g. decisions/primary-db."
+        },
+        "layer": {
+          "type": "string",
+          "description": "Optional layer name to read the raw, unmerged concept from that layer."
+        }
+      },
+      "required": [
+        "concept_id"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "list_concepts",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Optional OKF type filter (effective type)."
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "get_links",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "concept_id": {
+          "type": "string",
+          "description": "Concept ID, e.g. systems/auth-service."
+        }
+      },
+      "required": [
+        "concept_id"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  }
+]

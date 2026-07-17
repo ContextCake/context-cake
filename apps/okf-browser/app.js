@@ -159,7 +159,14 @@
     resourceEl.innerHTML = "";
     if (data.resource) {
       const link = document.createElement("a");
-      link.href = data.resource;
+      // data.resource shares the lower-trust origin of concept bodies; only make it
+      // a live link for safe schemes so a javascript:/data: URI can't execute on click.
+      const href = safeExternalHref(data.resource);
+      if (href) {
+        link.href = href;
+        link.target = "_blank";
+        link.rel = "noopener";
+      }
       link.textContent = data.resource;
       resourceEl.appendChild(link);
     } else {
@@ -212,6 +219,21 @@
     }
 
     cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1) }, { duration: 180 });
+  }
+
+  // Returns value if it's a safe hyperlink target (http/https/mailto or relative),
+  // otherwise null — gates an untrusted concept-resource URL before it becomes a
+  // clickable href, blocking javascript:/data: DOM-XSS.
+  function safeExternalHref(value) {
+    try {
+      const u = new URL(value, window.location.origin);
+      if (u.protocol === "http:" || u.protocol === "https:" || u.protocol === "mailto:") {
+        return value;
+      }
+    } catch (_) {
+      // not a parseable URL — fall through to null
+    }
+    return null;
   }
 
   function rewriteInternalLinks(root) {

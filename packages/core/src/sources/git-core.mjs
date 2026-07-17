@@ -13,7 +13,16 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 const LOCK_NAME = ".contextcake.lock"; // dotfile: invisible to walkMarkdown
-const LOCK_STALE_MS = 60000;
+const LOCK_STALE_MS = 120000; // must exceed a slow git op so a mid-push lock is not stolen
+const GIT_TIMEOUT_MS = 90000; // bound a hung git op (must stay < LOCK_STALE_MS)
+
+// Never let git block on an interactive credential/askpass prompt (would hang
+// the MCP server); fail fast instead. Timeout bounds a wedged network op.
+const GIT_OPTS = {
+  timeout: GIT_TIMEOUT_MS,
+  env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  maxBuffer: 16 * 1024 * 1024,
+};
 
 // Remote URLs (which may embed credentials) never surface to agents or logs.
 function scrub(text) {
@@ -22,7 +31,7 @@ function scrub(text) {
 
 export async function runGit(root, args, { allowFailure = false } = {}) {
   try {
-    const { stdout, stderr } = await execFileAsync("git", args, { cwd: root });
+    const { stdout, stderr } = await execFileAsync("git", args, { cwd: root, ...GIT_OPTS });
     return { ok: true, stdout: stdout.trim(), stderr: stderr.trim() };
   } catch (error) {
     if (allowFailure) {
@@ -49,26 +58,38 @@ function readLock(root) {
 }
 
 function lockIsStale(lock) {
-  if (!lock || typeof lock.ts !== "number") return true;
-  return Date.now() - lock.ts > LOCK_STALE_MS;
+  if (!lock || typeof lock.ts !== "number") return true; // corrupt/legacy → stealable
+  const age = Date.now() - lock.ts;
+  // Stale if older than the window, OR dated far in the future (clock skew or a
+  // .contextcake.lock that got committed and checked out) — otherwise a future
+  // ts would make the lock un-stealable forever.
+  return age > LOCK_STALE_MS || age < -LOCK_STALE_MS;
 }
 
 function tryAcquire(root, op) {
+  const payload = JSON.stringify({ pid: process.pid, ts: Date.now(), op });
   try {
-    fs.writeFileSync(lockPath(root), JSON.stringify({ pid: process.pid, ts: Date.now(), op }), { flag: "wx" });
+    fs.writeFileSync(lockPath(root), payload, { flag: "wx" });
     return true;
   } catch {
     const existing = readLock(root);
-    if (lockIsStale(existing)) {
-      try {
-        fs.rmSync(lockPath(root), { force: true });
-        fs.writeFileSync(lockPath(root), JSON.stringify({ pid: process.pid, ts: Date.now(), op }), { flag: "wx" });
-        return true;
-      } catch {
-        return false;
-      }
+    if (!lockIsStale(existing)) return false;
+    // Atomic steal: renaming the stale lock away is the compare-and-swap —
+    // only one racer can rename a given inode (the rest get ENOENT), so two
+    // processes can't both steal and double-acquire (the old rm+write could).
+    const parked = `${lockPath(root)}.${process.pid}.${Date.now()}.stale`;
+    try {
+      fs.renameSync(lockPath(root), parked);
+    } catch {
+      return false; // lost the steal race, or the lock changed under us
     }
-    return false;
+    fs.rmSync(parked, { force: true });
+    try {
+      fs.writeFileSync(lockPath(root), payload, { flag: "wx" });
+      return true;
+    } catch {
+      return false; // a fresh holder grabbed the freed lock; yield
+    }
   }
 }
 
@@ -122,7 +143,9 @@ export async function commitPaths(root, paths, message, { author = null, lockRet
   return withRepoLock(root, "commit", async () => {
     await runGit(root, ["add", "--", ...paths]);
     const ident = (await hasIdentity(root)) ? [] : identityArgs(author);
-    await runGit(root, [...ident, "commit", "-m", message]);
+    // Pathspec commit: commit ONLY these paths, so a pre-existing staged change
+    // (e.g. a prior failed op) can't be swept into this commit's message.
+    await runGit(root, [...ident, "commit", "-m", message, "--", ...paths]);
     return { committed: true };
   }, { lockRetryMs, lockRetries });
 }

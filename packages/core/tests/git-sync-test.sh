@@ -83,6 +83,45 @@ console.log(JSON.stringify(await pull('$alice')));
 grep -q '"skipped":true' <<<"$out" && fail "stale lock should be stolen, not skipped" "$out"
 [ -f "$alice/.contextcake.lock" ] && fail "lock should be released after steal"
 
+# ---- git-core: a future-dated lock is stale, not un-stealable (L3) -------------
+future="$(node -e 'console.log(Date.now() + 3600000)')"  # 1h in the future
+printf '{"pid":999999,"ts":%d,"op":"test"}' "$future" > "$alice/.contextcake.lock"
+out="$(node_run "
+import { pull } from '$core/sources/git-core.mjs';
+console.log(JSON.stringify(await pull('$alice')));
+")"
+grep -q '"skipped":true' <<<"$out" && fail "future-dated lock must be treated as stale" "$out"
+[ -f "$alice/.contextcake.lock" ] && fail "future-dated lock should be released after steal"
+
+# ---- git-core: concurrent stale-steal never double-acquires (F3) --------------
+# One parent forks two workers that race to steal the SAME stale lock while each
+# holds it briefly; exactly one must acquire, the other must see LockBusy.
+# Self-contained in node so no shell/grep/-x fragility affects the count.
+printf '{"pid":999998,"ts":1000,"op":"stale"}' > "$alice/.contextcake.lock"
+out="$(node --input-type=module -e "
+import { spawn } from 'node:child_process';
+const worker = \`
+import { withRepoLock } from '$core/sources/git-core.mjs';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+try { await withRepoLock('$alice', process.argv[1], async () => { await sleep(300); }, { lockRetryMs: 40, lockRetries: 3 }); process.stdout.write('WON'); }
+catch (e) { process.stdout.write(e.code ?? 'ERR'); }
+\`;
+function race(tag) {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, ['--input-type=module', '-e', worker, tag], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let buf = '';
+    p.stdout.on('data', (d) => { buf += d; });
+    p.on('exit', () => resolve(buf.trim() || 'NONE'));
+  });
+}
+console.log(JSON.stringify(await Promise.all([race('a'), race('b')])));
+")"
+wins="$(node -e "const r=JSON.parse(process.argv[1]); console.log(r.filter(x=>x==='WON').length)" "$out")"
+busy="$(node -e "const r=JSON.parse(process.argv[1]); console.log(r.filter(x=>x==='LockBusy').length)" "$out")"
+[ "$wins" = "1" ] || fail "concurrent stale-steal must yield exactly one winner" "$out"
+[ "$busy" = "1" ] || fail "the loser of a stale-steal race must see LockBusy" "$out"
+rm -f "$alice/.contextcake.lock"
+
 # ---- git-core: mutation on held lock errors LockBusy -------------------------
 printf '{"pid":%d,"ts":%d,"op":"test"}' "$$" "$(node -e 'console.log(Date.now())')" > "$alice/.contextcake.lock"
 out="$(node_run "

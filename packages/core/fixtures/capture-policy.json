@@ -1,0 +1,81 @@
+{
+  "version": "0.1.0",
+  "description": "Routing policy for agent-session captures. Valid kinds carry their kind as a label (weight 3), so a plain valid capture defaults to team_candidate; review keywords force the warning path; ignore keywords veto scratch work. The local route is intentionally unreachable for valid kinds — the human confirm is the final gate.",
+  "routes": {
+    "ignore": {
+      "description": "Scratch or throwaway session output that should not become shared context."
+    },
+    "local": {
+      "description": "Defined for parity with context-policy; unreachable for valid capture kinds by design."
+    },
+    "team_candidate": {
+      "description": "A valid capture, stageable for the human show-before-share confirm."
+    },
+    "review_required": {
+      "description": "Sensitive or consequential content — staged with an explicit review warning."
+    }
+  },
+  "reviewRequired": {
+    "keywords": [
+      "auth",
+      "authentication",
+      "authorization",
+      "credential",
+      "secret",
+      "token",
+      "api key",
+      "password",
+      "pii",
+      "privacy",
+      "customer data",
+      "payment",
+      "billing",
+      "soc2",
+      "hipaa",
+      "gdpr",
+      "incident",
+      "outage",
+      "postmortem",
+      "public api",
+      "breaking change",
+      "contract"
+    ],
+    "labels": [
+      "security",
+      "privacy",
+      "incident",
+      "breaking-change",
+      "api-contract",
+      "external-commitment"
+    ],
+    "paths": []
+  },
+  "teamCandidate": {
+    "keywords": [],
+    "labels": [
+      "investigation",
+      "decision",
+      "gotcha",
+      "artifact"
+    ],
+    "paths": []
+  },
+  "ignore": {
+    "keywords": [
+      "wip",
+      "scratch",
+      "throwaway",
+      "test-only",
+      "typo"
+    ],
+    "labels": [
+      "no-context"
+    ],
+    "paths": []
+  },
+  "thresholds": {
+    "repeatedQuestionCount": 3,
+    "highConfidence": 0.75,
+    "mediumConfidence": 0.5
+  }
+}

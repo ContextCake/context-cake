@@ -1,0 +1,8 @@
+{
+  "name": "contextcake-team-sync",
+  "description": "Team working memory over ContextCake: check teammates' captures before investigating, share your own after a resolution — always with an explicit preview-and-confirm step.",
+  "version": "0.1.0",
+  "author": {
+    "name": "ContextCake"
+  }
+}

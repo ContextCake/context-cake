@@ -2,8 +2,17 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { parseConcept } from "./sources/okf-local.mjs";
+import { commitPaths, push } from "./sources/git-core.mjs";
+import { appendFileInRoot, resolveAuthor, writeFileInRoot } from "./capture.mjs";
+import { slugify } from "./classify-context.mjs";
 
 const args = parseArgs(process.argv.slice(2));
+
+if (args["from-live"]) {
+  await runFromLive(args);
+  process.exit(0);
+}
 
 if (args.help || !args.personal || !args.shared || !args.file) {
   printHelp();
@@ -49,6 +58,144 @@ if (args["print-git"]) {
   console.log(`  git commit -m "docs: promote ${relativePath.replace(/\.md$/i, "")}"`);
   console.log("  git push -u origin HEAD");
   console.log("  gh pr create --fill");
+}
+
+// ---- live → curated promotion (two-step through _review/promotions/) --------
+//
+// Request: --from-live <live> --capture <id> --target <curated> [--dest <id>]
+//   stages a review entry; the live capture is untouched.
+// Approve: --from-live <live> --target <curated> --approve <review-file>
+//   writes the curated concept, verifies it is durable, and only then removes
+//   the review entry and the live capture. Re-running approve is idempotent.
+
+function kindDest(kind) {
+  return { decision: "decisions", investigation: "systems" }[kind] ?? null;
+}
+
+async function runFromLive(parsed) {
+  const liveRoot = path.resolve(parsed["from-live"]);
+  const curatedRoot = parsed.target ? path.resolve(parsed.target) : null;
+  if (!curatedRoot) throw new Error("--target <curated-root> is required");
+
+  if (parsed.approve) return approvePromotion(liveRoot, curatedRoot, path.resolve(parsed.approve), parsed);
+  if (parsed.capture) return requestPromotion(liveRoot, curatedRoot, parsed.capture, parsed);
+  throw new Error("Pass --capture <id> to request a promotion or --approve <review-file> to finalize one.");
+}
+
+function captureSlug(captureId) {
+  const base = path.posix.basename(captureId);
+  const sep = base.indexOf("--");
+  return sep === -1 ? base : base.slice(sep + 2);
+}
+
+function requestPromotion(liveRoot, curatedRoot, captureId, parsed) {
+  const sourcePath = safeJoin(liveRoot, `${captureId}.md`);
+  if (!fs.existsSync(sourcePath)) throw new Error(`Capture not found in live layer: ${captureId}`);
+  const raw = fs.readFileSync(sourcePath, "utf8");
+  const { frontmatter } = parseConcept(raw);
+
+  let dest = parsed.dest ?? null;
+  if (!dest) {
+    const prefix = kindDest(frontmatter.kind);
+    if (!prefix) throw new Error(`Kind "${frontmatter.kind}" has no default destination — pass --dest <concept-id>.`);
+    dest = `${prefix}/${captureSlug(captureId)}`;
+  }
+
+  const reviewRel = `_review/promotions/${slugify(path.posix.basename(dest))}.md`;
+  const staged = raw.replace(/^---\n/, `---\npromoteTo: ${dest}\npromotedFrom: ${captureId}\n`);
+  writeFileInRoot(curatedRoot, reviewRel, staged);
+  console.log(`Staged promotion request: ${reviewRel} -> ${dest}`);
+}
+
+async function approvePromotion(liveRoot, curatedRoot, reviewPath, parsed) {
+  if (!fs.existsSync(reviewPath)) throw new Error(`Review file not found: ${reviewPath}`);
+  const { frontmatter, sections } = parseConcept(fs.readFileSync(reviewPath, "utf8"));
+  const dest = frontmatter.promoteTo;
+  const captureId = frontmatter.promotedFrom;
+  if (!dest || !captureId) throw new Error("Review file is missing promoteTo/promotedFrom frontmatter.");
+
+  const destRel = `${dest}.md`;
+  const destPath = safeJoin(curatedRoot, destRel);
+
+  // Idempotent re-approve: a valid existing curated concept means the write
+  // already happened — do cleanup only, never duplicate.
+  const alreadyDurable = fs.existsSync(destPath) && isDurable(destPath);
+  if (!alreadyDurable) {
+    writeFileInRoot(curatedRoot, destRel, renderCurated(frontmatter, sections, dest));
+    if (!isDurable(destPath)) throw new Error(`Curated write failed verification: ${destRel}`);
+  }
+
+  // Only after the curated write is durable: remove review entry + live capture.
+  fs.rmSync(reviewPath, { force: true });
+  const livePath = safeJoin(liveRoot, `${captureId}.md`);
+  if (fs.existsSync(livePath)) {
+    const telemetryPath = parsed.telemetry
+      ? await emitPromoteEvent(liveRoot, captureId, frontmatter, dest)
+      : null;
+    fs.rmSync(livePath);
+    await commitPaths(
+      liveRoot,
+      [`${captureId}.md`, ...(telemetryPath ? [telemetryPath] : [])],
+      `chore: promote ${captureId} -> ${dest}`,
+    );
+    const pushed = await push(liveRoot);
+    if (pushed.queued) console.error("promote: live cleanup committed locally; push queued (run sync to retry)");
+  }
+  console.log(`Promoted ${captureId} -> ${dest}`);
+}
+
+function isDurable(filePath) {
+  try {
+    const parsed = parseConcept(fs.readFileSync(filePath, "utf8"));
+    return parsed.sections.length > 0 || Object.keys(parsed.frontmatter).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function renderCurated(frontmatter, sections, dest) {
+  const today = new Date().toISOString().slice(0, 10);
+  const lines = [
+    "---",
+    `type: ${inferCuratedType(dest)}`,
+    `title: ${frontmatter.title ?? path.posix.basename(dest)}`,
+    `updated: ${today}`,
+    "---",
+    "",
+    `# ${frontmatter.title ?? path.posix.basename(dest)}`,
+    "",
+    `> promoted from ${frontmatter.author ?? "unknown"}'s capture (${frontmatter.captured ?? "unknown date"})`,
+    "",
+  ];
+  for (const section of sections) {
+    if (!section.heading) continue;
+    lines.push(section.heading, "", section.lines.join("\n").trim(), "");
+  }
+  return lines.join("\n");
+}
+
+function inferCuratedType(dest) {
+  if (dest.startsWith("decisions/")) return "decision";
+  if (dest.startsWith("runbooks/")) return "runbook";
+  if (dest.startsWith("systems/")) return "system";
+  if (dest.startsWith("interfaces/")) return "interface";
+  return "context";
+}
+
+async function emitPromoteEvent(liveRoot, captureId, frontmatter, dest) {
+  try {
+    const user = await resolveAuthor({ root: liveRoot, profileName: null });
+    const relativePath = path.join("telemetry", slugify(user), `${new Date().toISOString().slice(0, 7)}.ndjson`);
+    const line = JSON.stringify({
+      ts: new Date().toISOString(), user, harness: "cli", event: "promote",
+      concept: captureId, layer: "live", captureKind: frontmatter.kind ?? null,
+    });
+    appendFileInRoot(liveRoot, relativePath, `${line}\n`);
+    return relativePath;
+  } catch {
+    // telemetry must never block a promotion
+    return null;
+  }
 }
 
 function rewritePersonalLinks(content, sourceRelativePath) {
@@ -138,7 +285,7 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
-    } else if (arg === "--dry-run" || arg === "--print-git") {
+    } else if (arg === "--dry-run" || arg === "--print-git" || arg === "--telemetry") {
       parsed[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
       parsed[arg.slice(2)] = argv[index + 1];

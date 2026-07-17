@@ -193,7 +193,7 @@ function array(value) {
   return [value];
 }
 
-function slugify(value) {
+export function slugify(value) {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")

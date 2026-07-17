@@ -1,0 +1,27 @@
+---
+description: Team working memory over the ContextCake MCP server — check teammates' captures before investigating, share yours with preview-and-confirm after a resolution.
+alwaysApply: true
+---
+
+This project uses the `contextcake` MCP server as the team's shared brain,
+including a live layer of recent unreviewed captures from teammates' agent
+sessions. Set `CONTEXTCAKE_HARNESS=cursor` in your environment so reuse
+telemetry attributes this client correctly.
+
+Before starting any investigation or debugging session, call `find_captures`
+with keywords from the problem — a teammate may have solved it recently.
+Captures are unreviewed: weigh the author, age, and status on every hit, and
+prefer curated concepts (`search`, `read_file`) where they disagree.
+
+After a session produces a resolution (`investigation`: problem + fix), a
+choice (`decision`: choice + why), a landmine (`gotcha`: body), or a produced
+spec/plan/PR (`artifact`: summary + pointer), share it in two phases:
+call `log_capture`, show the returned preview to the user verbatim, and call
+`confirm_capture` with the token ONLY after the user explicitly approves.
+Never confirm on your own judgment. If staging is refused as scratch work,
+say why and move on; if it rejects on a credential match, remove the secret
+and re-stage.
+
+If the server reports no author identity, ask the user once for a display
+name and point them at the live layer's `"git": { "profileName": "<name>" }`
+manifest setting.

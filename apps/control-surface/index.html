@@ -81,6 +81,36 @@
         <div id="queue" class="signal-list" aria-live="polite"></div>
       </section>
 
+      <section class="team-activity-panel panel" aria-labelledby="activityTitle" id="teamActivity" hidden>
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Team sync</p>
+            <h2 id="activityTitle">Live Captures &amp; Reuse</h2>
+          </div>
+          <span class="timestamp" id="activityGeneratedAt"></span>
+        </div>
+        <div class="command-strip" aria-label="Reuse metrics">
+          <div class="command-strip__item">
+            <span>Cross-brain hits</span>
+            <strong id="metricCrossBrain">0</strong>
+          </div>
+          <div class="command-strip__item">
+            <span>Captures shared</span>
+            <strong id="metricConfirmed">0</strong>
+          </div>
+          <div class="command-strip__item">
+            <span>Median reuse</span>
+            <strong id="metricReuse">—</strong>
+          </div>
+          <div class="command-strip__item">
+            <span>Promoted</span>
+            <strong id="metricPromoted">0</strong>
+          </div>
+        </div>
+        <div id="activityFeed" class="signal-list" aria-live="polite"></div>
+        <div id="pendingPromotions"></div>
+      </section>
+
       <aside class="decision-panel" aria-label="Decision detail">
         <article class="panel detail-card">
           <p class="eyebrow">Decision Surface</p>

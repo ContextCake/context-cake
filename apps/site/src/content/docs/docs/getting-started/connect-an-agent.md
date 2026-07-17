@@ -52,6 +52,8 @@ the same way: `command` is `node`, `args` are the script path and flags.
 | `read_file` | The resolved effective concept: merged sections, frontmatter, provenance, and per-section conflicts. Takes `concept_id`; pass `layer` to instead read one layer's raw, unmerged concept. |
 | `list_concepts` | Every effective concept ID across the cascade with its contributing layers. Takes an optional `type` filter. |
 | `get_links` | Outgoing and incoming links for a concept, resolved against the effective graph. Takes `concept_id`. |
+| `find_captures` | Recent, unreviewed teammate captures ranked by relevance and recency. Takes `query`, optional `kinds`, and optional `limit`. |
+| `whats_new` | Captures and curated-concept changes since a timestamp. Takes `since`. |
 
 ## Reading a resolved concept as an agent
 
@@ -73,6 +75,6 @@ policy when they conflict.
 ## Next
 
 - [MCP tools reference](/docs/reference/mcp-tools) — full input/output schemas
-  for all four tools
+  for the read tools (and the capture tools behind `--capture`)
 - [The trust boundary](/docs/concepts/trust-boundary) — what spawning an `mcp`
   layer's command means for the machine running the server

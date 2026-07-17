@@ -14,6 +14,10 @@ import readline from "node:readline";
 import { resolveConcept } from "./resolver.mjs";
 import { buildSources } from "./sources/index.mjs";
 import { isTraversal } from "./sources/okf-local.mjs";
+import { resolveLiveLayer } from "./sources/git-sync.mjs";
+import { commitPaths, push } from "./sources/git-core.mjs";
+import { appendFileInRoot, stageCapture, confirmCapture, resolveAuthor } from "./capture.mjs";
+import { slugify } from "./classify-context.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -28,14 +32,30 @@ if (layers.length === 0) {
   process.exit(1);
 }
 
+const liveLayer = args.manifest
+  ? resolveLiveLayer(JSON.parse(fs.readFileSync(args.manifest, "utf8")), path.dirname(args.manifest))
+  : null;
+if ((args.capture || args.telemetry) && !liveLayer) {
+  console.error(
+    "--capture/--telemetry require a live layer: mark exactly one okf-local layer with \"live\": true and a \"git\" block in the manifest.",
+  );
+  process.exit(1);
+}
+
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
 const serverInfo = { name: "contextcake", version: "0.1.0" };
 const serverInstructions = [
   "Consult ContextCake before answering project-specific questions.",
   "Start with list_concepts or search, then read the relevant resolved concept.",
   "Treat sourceLayer as precedence rather than certainty, preserve provenance, and surface conflicting guidance with its layers instead of silently reconciling it.",
-  "All ContextCake tools are read-only.",
-].join(" ");
+  "Check find_captures before starting an investigation — captures are unreviewed teammate findings; weigh author and date.",
+  args.capture
+    ? "Read tools are read-only. log_capture stages a team capture and returns a preview; call confirm_capture only after the user explicitly approves sharing."
+    : "All tools are read-only.",
+  args.telemetry
+    ? "Tool usage is recorded as content-free telemetry (concept ids and enums only, never prompts or content)."
+    : null,
+].filter(Boolean).join(" ");
 const readOnlyAnnotations = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -93,7 +113,140 @@ const tools = [
     },
     annotations: readOnlyAnnotations,
   },
+  {
+    name: "find_captures",
+    description: "Search recent team captures (unreviewed session findings: investigations, decisions, gotchas, artifacts), ranked by relevance and recency. Each hit carries author, age, kind, and review status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Text to search for." },
+        kinds: { type: "array", items: { type: "string" }, description: "Optional filter: investigation, decision, gotcha, artifact." },
+        limit: { type: "number", default: 10, description: "Maximum matches to return." },
+      },
+      required: ["query"],
+    },
+    annotations: readOnlyAnnotations,
+  },
+  {
+    name: "whats_new",
+    description: "List captures and curated-concept changes since a timestamp — session-start orientation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        since: { type: "string", description: "ISO-8601 timestamp." },
+      },
+      required: ["since"],
+    },
+    annotations: readOnlyAnnotations,
+  },
 ];
+
+const captureAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+};
+
+if (args.capture) {
+  tools_push_capture();
+}
+
+function tools_push_capture() {
+  tools.push(
+    {
+      name: "log_capture",
+      description: "Stage a team capture (investigation, decision, gotcha, or artifact) from this session. Validates, scans for credentials, and returns a rendered preview plus a staging token. Nothing is shared until confirm_capture.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          kind: { type: "string", description: "investigation | decision | gotcha | artifact" },
+          title: { type: "string", description: "Short, specific title." },
+          sections: { type: "object", description: "Kind sections, e.g. investigation: { problem, attempts, root-cause, fix }." },
+          confidence: { type: "string", description: "Optional: high | medium | low." },
+          links: { type: "array", items: { type: "string" }, description: "Related concept ids, issues, PRs." },
+        },
+        required: ["kind", "title", "sections"],
+      },
+      annotations: captureAnnotations,
+    },
+    {
+      name: "confirm_capture",
+      description: "Share a staged capture with the team. Call ONLY after the user has seen the preview and explicitly approved sharing.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          token: { type: "string", description: "Staging token from log_capture." },
+        },
+        required: ["token"],
+      },
+      annotations: captureAnnotations,
+    },
+  );
+}
+
+// ---- telemetry (content-free by invariant: ids and enums only, never text) ----
+//
+// Each event appends synchronously to the local per-author NDJSON (O_APPEND,
+// one line per event — crash-safe, concurrency-safe at line granularity). The
+// file stays UNTRACKED during the session and is committed once at session end
+// (a short pull TTL means read-triggered `git pull`s would otherwise race the
+// appends on a tracked file). Identity is resolved BEFORE readline starts
+// consuming stdin, so the very first tool call's event is never dropped.
+
+const MAX_TELEMETRY_EVENTS = 10000; // per-session cap: a read-heavy session can't grow the log without bound
+let telemetryUser = null;
+let telemetryWritten = false;
+let telemetryCount = 0;
+
+if (args.telemetry && liveLayer) {
+  try {
+    telemetryUser = await resolveAuthor({ root: liveLayer.root, profileName: liveLayer.profileName });
+  } catch (error) {
+    console.error(`contextcake: telemetry disabled — ${error.message}`);
+  }
+}
+
+function telemetryRel() {
+  return path.join("telemetry", slugify(telemetryUser), `${new Date().toISOString().slice(0, 7)}.ndjson`);
+}
+
+function emitTelemetry(fields) {
+  if (!telemetryUser || telemetryCount >= MAX_TELEMETRY_EVENTS) return;
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    user: telemetryUser,
+    harness: args.harness ?? process.env.CONTEXTCAKE_HARNESS ?? "unknown",
+    ...fields,
+  });
+  try {
+    appendFileInRoot(liveLayer.root, telemetryRel(), `${line}\n`);
+    telemetryWritten = true;
+    telemetryCount += 1;
+  } catch {
+    // telemetry must never break a tool call
+  }
+}
+
+function flushTelemetry() {
+  return telemetryUser && telemetryWritten ? [telemetryRel()] : [];
+}
+
+// Commit + push accumulated telemetry at session end. Without this, a session
+// that only reads/searches (never confirms a capture of its own) would never
+// push its telemetry — so consumer reuse, the exact signal the feature
+// measures, would be lost from the shared repo. Best-effort: nothing-to-commit
+// or offline is fine.
+async function commitAndPushTelemetry() {
+  const rels = flushTelemetry();
+  if (rels.length === 0) return;
+  try {
+    await commitPaths(liveLayer.root, rels, "chore: telemetry", { author: telemetryUser });
+    await push(liveLayer.root);
+  } catch {
+    // nothing new to commit, or offline — all fine
+  }
+}
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 
@@ -112,6 +265,14 @@ rl.on("line", async (line) => {
   } catch (error) {
     write({ jsonrpc: "2.0", id: message.id ?? null, error: { code: -32000, message: error.message } });
   }
+});
+
+// On stdin close (session end) flush accumulated telemetry to the shared repo.
+// Fire-and-forget: the pending promise keeps the loop alive until the git op
+// finishes, then the process exits naturally (no forced exit that could cut
+// off an in-flight response).
+rl.on("close", () => {
+  if (args.telemetry) void commitAndPushTelemetry();
 });
 
 async function handleMessage(message) {
@@ -143,7 +304,117 @@ async function callTool(name, toolArgs) {
   if (name === "read_file") return await readFileTool(toolArgs);
   if (name === "list_concepts") return await listConcepts(toolArgs);
   if (name === "get_links") return await getLinks(toolArgs);
+  if (name === "find_captures") return await findCaptures(toolArgs);
+  if (name === "whats_new") return await whatsNew(toolArgs);
+  if (args.capture && name === "log_capture") return await logCapture(toolArgs);
+  if (args.capture && name === "confirm_capture") return await confirmCaptureTool(toolArgs);
   throw new Error(`Unknown tool: ${name}`);
+}
+
+// ---- team-sync tools --------------------------------------------------------
+
+const DAY_MS = 86400000;
+
+async function findCaptures({ query, kinds = null, limit = 10 }) {
+  if (!query || typeof query !== "string") throw new Error("find_captures requires a non-empty query string");
+  const tokens = tokenize(query);
+  if (tokens.length === 0) throw new Error("find_captures query must contain at least one searchable token");
+
+  const rows = [];
+  for (const source of layers) {
+    for (const id of await source.listConceptIds()) {
+      if (!id.startsWith("captures/")) continue;
+      const entry = await source.loadConcept(id);
+      if (!entry) continue;
+      const { frontmatter, sections } = entry;
+      if (kinds && !kinds.includes(frontmatter.kind)) continue;
+      const sectionText = sections.map((s) => s.lines.join("\n")).join("\n");
+      const base = scoreText(tokens, [id, frontmatter.title ?? "", "", "", sectionText]);
+      if (base <= 0) continue;
+      const capturedAt = frontmatter.captured ?? null;
+      const capturedTime = capturedAt ? new Date(capturedAt).getTime() : NaN;
+      // An unparseable `captured` must not poison scoring with NaN (which makes
+      // the sort unstable). Treat it as age 0 (freshest) — it still surfaces.
+      const ageDays = Number.isNaN(capturedTime) ? 0 : Math.max(0, (Date.now() - capturedTime) / DAY_MS);
+      rows.push({
+        id,
+        title: frontmatter.title ?? null,
+        kind: frontmatter.kind ?? null,
+        author: frontmatter.author ?? null,
+        capturedAt,
+        ageDays: Math.round(ageDays * 10) / 10,
+        status: frontmatter.status ?? "unreviewed",
+        score: base * 2 ** (-ageDays / 7), // true 7-day half-life
+        snippet: makeSnippet(sectionText, tokens),
+        layer: source.name,
+      });
+    }
+  }
+
+  const result = rows
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+    .slice(0, Number(limit) || 10);
+  for (const row of result) emitTelemetry({ event: "search_hit", concept: row.id, layer: row.layer, captureKind: row.kind });
+  return result;
+}
+
+async function whatsNew({ since }) {
+  const sinceTime = new Date(since ?? "").getTime();
+  if (Number.isNaN(sinceTime)) throw new Error("whats_new requires an ISO-8601 `since` timestamp");
+
+  const captures = [];
+  const curated = [];
+  const seen = new Set();
+  for (const source of layers) {
+    for (const id of await source.listConceptIds()) {
+      if (seen.has(`${source.name}:${id}`)) continue;
+      seen.add(`${source.name}:${id}`);
+      const entry = await source.loadConcept(id);
+      if (!entry) continue;
+      if (id.startsWith("captures/")) {
+        const captured = new Date(entry.frontmatter.captured ?? "").getTime();
+        if (!Number.isNaN(captured) && captured >= sinceTime) {
+          captures.push({ id, kind: entry.frontmatter.kind ?? null, author: entry.frontmatter.author ?? null, captured: entry.frontmatter.captured, layer: source.name });
+        }
+      } else {
+        const updated = new Date(entry.frontmatter.updated ?? "").getTime();
+        if (!Number.isNaN(updated) && updated >= sinceTime) {
+          curated.push({ id, updated: entry.frontmatter.updated, layer: source.name });
+        }
+      }
+    }
+  }
+  return { captures, curated };
+}
+
+function captureContext() {
+  return {
+    root: liveLayer.root,
+    profileName: liveLayer.profileName,
+    retentionDays: liveLayer.retentionDays,
+  };
+}
+
+async function logCapture(toolArgs) {
+  const result = await stageCapture(toolArgs, captureContext());
+  if (result.staged) emitTelemetry({ event: "capture", concept: result.id, layer: liveLayer.name, captureKind: toolArgs.kind });
+  return result;
+}
+
+async function confirmCaptureTool({ token }) {
+  const result = await confirmCapture(token, {
+    ...captureContext(),
+    onEvent: ({ concept, captureKind }) => {
+      emitTelemetry({ event: "confirm", concept, layer: liveLayer.name, captureKind });
+      // Deliberately do NOT ride telemetry along on the capture commit: that
+      // makes the NDJSON git-tracked mid-session, and with a short pull TTL the
+      // subsequent read-triggered `git pull`s race the appendFileSync writes and
+      // rewrite the working-tree file. Telemetry stays untracked during the
+      // session and is committed once at session end (commitAndPushTelemetry).
+      return [];
+    },
+  });
+  return result;
 }
 
 // ---- tools ----------------------------------------------------------------
@@ -193,6 +464,7 @@ async function readFileTool({ concept_id, layer }) {
 
   const resolved = await resolveConcept(id, layers);
   if (!resolved) throw new Error(`Concept not found in any layer: ${id}`);
+  emitTelemetry({ event: "read", concept: id, layer: resolved.contributors[0]?.layer ?? null });
   return { ...resolved, markdown: assembleMarkdown(resolved) };
 }
 
@@ -348,7 +620,10 @@ function dedupeIncoming(rows) {
 
 function assembleMarkdown(resolved) {
   const fmLines = Object.entries(resolved.frontmatter).map(([k, v]) => `${k}: ${Array.isArray(v) ? `[${v.join(", ")}]` : v}`);
-  const front = `---\n${fmLines.join("\n")}\n---\n\n`;
+  const banner = resolved.frontmatter.status === "unreviewed"
+    ? `> ⚠ unreviewed capture from ${resolved.frontmatter.author ?? "unknown"}, ${resolved.frontmatter.captured ?? "?"} — decays after ${liveLayer?.retentionDays ?? 14} days unless promoted\n\n`
+    : "";
+  const front = `---\n${fmLines.join("\n")}\n---\n\n${banner}`;
   const bodyParts = resolved.sections
     .filter((s) => !s.suppressed)
     .map((s) => {
@@ -405,9 +680,11 @@ function isExternal(value) {
 
 function parseArgs(argv) {
   const parsed = {};
+  const booleanFlags = new Set(["capture", "telemetry"]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") parsed.help = true;
+    else if (arg.startsWith("--") && booleanFlags.has(arg.slice(2))) parsed[arg.slice(2)] = true;
     else if (arg.startsWith("--")) {
       parsed[arg.slice(2)] = argv[index + 1];
       index += 1;

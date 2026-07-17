@@ -145,9 +145,11 @@ Events append to per-author monthly NDJSON:
 `telemetry/<author>/<YYYY-MM>.ndjson` in the live-layer repo — append-only per
 author, so no merge conflicts, same trust boundary as captures. Each event
 appends synchronously to the local file (O_APPEND line writes — crash-safe,
-concurrency-safe at line granularity); the **git** cadence stays lazy —
-telemetry rides along in confirm/promote commits and explicit sync, never a
-commit-per-read.
+concurrency-safe at line granularity). The file stays **untracked during the
+session** — with a short pull TTL, read-triggered `git pull`s would otherwise
+race the appends on a tracked file — and is committed once at **session end**
+(and by `promote`), never commit-per-read. Author identity resolves before the
+server accepts any request, so the first event is never dropped.
 
 Control surface aggregates across author files: **cross-brain hits** (reads of
 a concept captured by a different person), capture volume, time-to-first-reuse,

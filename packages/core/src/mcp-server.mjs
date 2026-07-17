@@ -185,6 +185,71 @@ function tools_push_capture() {
   );
 }
 
+// ---- telemetry (content-free by invariant: ids and enums only, never text) ----
+//
+// Each event appends synchronously to the local per-author NDJSON (O_APPEND,
+// one line per event — crash-safe, concurrency-safe at line granularity). The
+// file stays UNTRACKED during the session and is committed once at session end
+// (a short pull TTL means read-triggered `git pull`s would otherwise race the
+// appends on a tracked file). Identity is resolved BEFORE readline starts
+// consuming stdin, so the very first tool call's event is never dropped.
+
+const MAX_TELEMETRY_EVENTS = 10000; // per-session cap: a read-heavy session can't grow the log without bound
+let telemetryUser = null;
+let telemetryWritten = false;
+let telemetryCount = 0;
+
+if (args.telemetry && liveLayer) {
+  try {
+    telemetryUser = await resolveAuthor({ root: liveLayer.root, profileName: liveLayer.profileName });
+  } catch (error) {
+    console.error(`contextcake: telemetry disabled — ${error.message}`);
+  }
+}
+
+function telemetryRel() {
+  return path.join("telemetry", slugify(telemetryUser), `${new Date().toISOString().slice(0, 7)}.ndjson`);
+}
+
+function emitTelemetry(fields) {
+  if (!telemetryUser || telemetryCount >= MAX_TELEMETRY_EVENTS) return;
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    user: telemetryUser,
+    harness: args.harness ?? process.env.CONTEXTCAKE_HARNESS ?? "unknown",
+    ...fields,
+  });
+  try {
+    const target = path.join(liveLayer.root, telemetryRel());
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.appendFileSync(target, `${line}\n`);
+    telemetryWritten = true;
+    telemetryCount += 1;
+  } catch {
+    // telemetry must never break a tool call
+  }
+}
+
+function flushTelemetry() {
+  return telemetryUser && telemetryWritten ? [telemetryRel()] : [];
+}
+
+// Commit + push accumulated telemetry at session end. Without this, a session
+// that only reads/searches (never confirms a capture of its own) would never
+// push its telemetry — so consumer reuse, the exact signal the feature
+// measures, would be lost from the shared repo. Best-effort: nothing-to-commit
+// or offline is fine.
+async function commitAndPushTelemetry() {
+  const rels = flushTelemetry();
+  if (rels.length === 0) return;
+  try {
+    await commitPaths(liveLayer.root, rels, "chore: telemetry", { author: telemetryUser });
+    await push(liveLayer.root);
+  } catch {
+    // nothing new to commit, or offline — all fine
+  }
+}
+
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 
 rl.on("line", async (line) => {
@@ -343,74 +408,15 @@ async function confirmCaptureTool({ token }) {
     ...captureContext(),
     onEvent: ({ concept, captureKind }) => {
       emitTelemetry({ event: "confirm", concept, layer: liveLayer.name, captureKind });
-      return flushTelemetry(); // relative paths for the confirm commit to include
+      // Deliberately do NOT ride telemetry along on the capture commit: that
+      // makes the NDJSON git-tracked mid-session, and with a short pull TTL the
+      // subsequent read-triggered `git pull`s race the appendFileSync writes and
+      // rewrite the working-tree file. Telemetry stays untracked during the
+      // session and is committed once at session end (commitAndPushTelemetry).
+      return [];
     },
   });
   return result;
-}
-
-// ---- telemetry (content-free by invariant: ids and enums only, never text) ----
-//
-// Events append synchronously to the local per-author NDJSON — O_APPEND, one
-// line per event, so concurrent same-author processes interleave safely at
-// line granularity and nothing is lost on crash. The GIT cadence stays lazy:
-// telemetry files ride along only in confirm/promote commits and explicit
-// sync, never a commit-per-read.
-
-const MAX_TELEMETRY_EVENTS = 10000; // per-session cap: a read-heavy session can't grow the log without bound
-let telemetryUser = null;
-let telemetryWritten = false;
-let telemetryCount = 0;
-
-if (args.telemetry && liveLayer) {
-  try {
-    telemetryUser = await resolveAuthor({ root: liveLayer.root, profileName: liveLayer.profileName });
-  } catch (error) {
-    console.error(`contextcake: telemetry disabled — ${error.message}`);
-  }
-}
-
-function telemetryRel() {
-  return path.join("telemetry", slugify(telemetryUser), `${new Date().toISOString().slice(0, 7)}.ndjson`);
-}
-
-function emitTelemetry(fields) {
-  if (!telemetryUser || telemetryCount >= MAX_TELEMETRY_EVENTS) return;
-  const line = JSON.stringify({
-    ts: new Date().toISOString(),
-    user: telemetryUser,
-    harness: args.harness ?? process.env.CONTEXTCAKE_HARNESS ?? "unknown",
-    ...fields,
-  });
-  try {
-    const target = path.join(liveLayer.root, telemetryRel());
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.appendFileSync(target, `${line}\n`);
-    telemetryWritten = true;
-    telemetryCount += 1;
-  } catch {
-    // telemetry must never break a tool call
-  }
-}
-
-function flushTelemetry() {
-  return telemetryUser && telemetryWritten ? [telemetryRel()] : [];
-}
-
-// Commit + push accumulated telemetry at session end. Without this, a session
-// that only reads/searches (never confirms a capture of its own) would never
-// push its telemetry — so consumer reuse, the exact signal the feature
-// measures, would be lost from the shared repo. Best-effort: nothing-to-commit
-// or offline is fine.
-async function commitAndPushTelemetry() {
-  const rels = flushTelemetry();
-  if (rels.length === 0) return;
-  try {
-    await commitPaths(liveLayer.root, rels, "chore: telemetry", { author: telemetryUser });
-    await push(liveLayer.root);
-  } catch {
-    // already committed at confirm-time, nothing new, or offline — all fine
-  }
 }
 
 // ---- tools ----------------------------------------------------------------

@@ -2,6 +2,12 @@ node_modules/
 .DS_Store
 *.log
 
+# Secrets — never commit (defense-in-depth; none tracked today)
+.env
+.env.*
+!.env.example
+.dev.vars
+
 # Generated dashboard data — produced by ingest.mjs + write.mjs, not authored
 apps/control-surface/signals.json
 apps/console/src/generated/

@@ -169,7 +169,8 @@ export function App() {
         <div className="cc-drawer-scrim" onClick={closeDrawer} aria-hidden="true" />
         <div className="cc-shell-inner">
           <Sidebar
-            onReopenSetup={needsSetup ? reopenWizard : undefined}
+            onReopenSetup={mode === 'live' ? reopenWizard : undefined}
+            sourceActionLabel={needsSetup ? 'Set up sources' : 'Add source'}
             onConnectAgent={isDesktop && !needsSetup ? openConnect : undefined}
             onOpenSettings={openSettings}
             onNavigate={closeDrawer}
@@ -208,7 +209,7 @@ export function App() {
     <>
       <div className="cc-app-layer" aria-hidden={settingsOpen || undefined} inert={settingsOpen || undefined}>{body}</div>
       {settingsOpen && <SettingsView appMode={mode} onClose={closeSettings} />}
-      {showWizard && <SetupWizard onClose={closeWizard} onConnectAgent={isDesktop ? () => {
+      {showWizard && <SetupWizard addingSource={sources.length > 0} onClose={closeWizard} onConnectAgent={isDesktop ? () => {
         setSourceSetupComplete(true)
         setWizardOpen(false)
         setConnectOpen(true)

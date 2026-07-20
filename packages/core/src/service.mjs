@@ -424,9 +424,14 @@ export function createEngineService({
     const level = Number.isFinite(+b.level) ? +b.level : 1;
 
     let layer;
-    if (b.kind === "local") {
+    if (b.kind === "local" || b.kind === "files") {
       if (!b.path) throw httpError(400, "Local source needs a path");
-      layer = { name, level, path: String(b.path) };
+      layer = {
+        name,
+        level,
+        path: String(b.path),
+        ...(b.kind === "files" ? { source: "files" } : {}),
+      };
     } else if (b.kind === "mcp") {
       if (!b.command) throw httpError(400, "MCP source needs a command");
       const args = Array.isArray(b.args) ? b.args.map(String) : String(b.args ?? "").split(/\s+/).filter(Boolean);

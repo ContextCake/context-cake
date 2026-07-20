@@ -63,11 +63,13 @@ const NAV: Array<{ id: ViewId; label: string; icon: ReactNode }> = [
  */
 export function Sidebar({
   onReopenSetup,
+  sourceActionLabel = 'Set up sources',
   onConnectAgent,
   onOpenSettings,
   onNavigate,
 }: {
   onReopenSetup?: () => void
+  sourceActionLabel?: string
   onConnectAgent?: () => void
   onOpenSettings?: () => void
   onNavigate?: () => void
@@ -213,9 +215,9 @@ export function Sidebar({
 
       <div className="cc-sidebar-foot">
         {onReopenSetup && (
-          <button type="button" className="cc-setup-cta" onClick={onReopenSetup} aria-label={sidebar.collapsed ? 'Finish setup' : undefined} title={actionTitle('Finish setup')}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 9.2 17 19 7" /></svg>
-            <span className="cc-sidebar-action-label">Finish setup</span>
+          <button type="button" className="cc-setup-cta" onClick={onReopenSetup} aria-label={sidebar.collapsed ? sourceActionLabel : undefined} title={actionTitle(sourceActionLabel)}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d={sourceActionLabel === 'Add source' ? 'M12 5v14M5 12h14' : 'M5 12.5 9.2 17 19 7'} /></svg>
+            <span className="cc-sidebar-action-label">{sourceActionLabel}</span>
           </button>
         )}
         {onConnectAgent && (

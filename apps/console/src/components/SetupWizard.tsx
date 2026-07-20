@@ -11,7 +11,7 @@ type StepId = 'welcome' | 'personal' | 'team' | 'company' | 'review' | 'success'
 const STEPS: StepId[] = ['welcome', 'personal', 'team', 'company', 'review', 'success']
 
 interface AddedLayer {
-  kind: 'local' | 'github' | 'mcp'
+  kind: 'files' | 'local' | 'github' | 'mcp'
   name: string
   level: number
   detail: string
@@ -23,10 +23,6 @@ async function postSource(body: Record<string, unknown>): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
-  // 409 = the source already exists — e.g. an earlier attempt added it but the
-  // follow-up sync failed. Treat as added so retrying the step proceeds to
-  // sync instead of wedging on the duplicate name.
-  if (res.status === 409) return
   const data = await res.json().catch(() => ({}) as { error?: string })
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
 }
@@ -176,17 +172,71 @@ function FolderPathField({
   )
 }
 
-export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; onConnectAgent?: () => void }) {
+function SourceKindChooser({
+  value, onChange,
+}: {
+  value: 'files' | 'local'
+  onChange: (value: 'files' | 'local') => void
+}) {
+  const choices: Array<{ value: 'files' | 'local'; title: string; detail: string }> = [
+    {
+      value: 'files',
+      title: 'Markdown folder',
+      detail: 'Recommended for repository docs, an Obsidian vault, or a Markdown wiki. ContextCake reads what is already there.',
+    },
+    {
+      value: 'local',
+      title: 'ContextCake folder',
+      detail: 'For a folder already authored as ContextCake / OKF content with structured frontmatter.',
+    },
+  ]
+
+  return (
+    <div role="radiogroup" aria-label="Folder format" style={css('display:grid; gap:8px;')}>
+      {choices.map((choice) => {
+        const selected = value === choice.value
+        return (
+          <button
+            key={choice.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onChange(choice.value)}
+            style={css(`display:grid; grid-template-columns:16px minmax(0,1fr); gap:10px; width:100%; padding:11px 12px; text-align:left; border-radius:10px; border:1px solid ${selected ? C.tealStroke : C.line}; background:${selected ? C.tealFill : C.surface}; color:${C.ink}; cursor:pointer; font:inherit;`)}
+          >
+            <span aria-hidden="true" style={css(`width:16px; height:16px; margin-top:1px; border-radius:999px; border:1px solid ${selected ? C.tealStrokeE : C.lineStrong}; background:${selected ? C.tealStrokeE : C.raised}; box-shadow:${selected ? `inset 0 0 0 4px ${C.tealFill}` : 'none'};`)} />
+            <span style={css('display:grid; gap:2px;')}>
+              <strong style={css(`font-size:12.5px; color:${C.ink};`)}>{choice.title}{choice.value === 'files' ? ' · recommended' : ''}</strong>
+              <span style={css(`font-size:11.5px; line-height:1.45; color:${C.caption};`)}>{choice.detail}</span>
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export function SetupWizard({
+  onClose,
+  onConnectAgent,
+  addingSource = false,
+}: {
+  onClose: () => void
+  onConnectAgent?: () => void
+  addingSource?: boolean
+}) {
   const { reload } = useStore()
   const [stepIdx, setStepIdx] = useState(0)
   const step = STEPS[stepIdx]
   const [added, setAdded] = useState<AddedLayer[]>([])
 
+  const [personalKind, setPersonalKind] = useState<'files' | 'local'>('files')
+  const [personalName, setPersonalName] = useState(addingSource ? '' : 'personal')
   const [personalPath, setPersonalPath] = useState('')
   const [personalErr, setPersonalErr] = useState<string | null>(null)
   const [personalBusy, setPersonalBusy] = useState(false)
 
-  const [teamKind, setTeamKind] = useState<'local' | 'github'>('local')
+  const [teamKind, setTeamKind] = useState<'files' | 'local' | 'github'>('files')
   const [teamPath, setTeamPath] = useState('')
   const [teamRepo, setTeamRepo] = useState('')
   const [teamErr, setTeamErr] = useState<string | null>(null)
@@ -217,15 +267,16 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
   const goBack = () => setStepIdx((i) => Math.max(i - 1, 0))
 
   const submitPersonal = async () => {
+    if (!personalName.trim()) { setPersonalErr('Give this source a short name, such as “Work notes”.'); return }
     if (!personalPath.trim()) { setPersonalErr('Provide a folder path.'); return }
     setPersonalBusy(true)
     setPersonalErr(null)
     try {
-      await postSource({ kind: 'local', name: 'personal', level: 3, path: personalPath.trim() })
-      setAdded((prev) => [...prev, { kind: 'local', name: 'personal', level: 3, detail: personalPath.trim() }])
+      await postSource({ kind: personalKind, name: personalName.trim(), level: 3, path: personalPath.trim() })
+      setAdded((prev) => [...prev, { kind: personalKind, name: personalName.trim(), level: 3, detail: personalPath.trim() }])
       goNext()
     } catch (e) {
-      setPersonalErr(e instanceof Error ? e.message : String(e))
+      setPersonalErr(e instanceof Error ? `${e.message} Choose a different source name and try again.` : String(e))
     } finally {
       setPersonalBusy(false)
     }
@@ -235,10 +286,10 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
     setTeamBusy(true)
     setTeamErr(null)
     try {
-      if (teamKind === 'local') {
+      if (teamKind === 'local' || teamKind === 'files') {
         if (!teamPath.trim()) { setTeamErr('Provide a folder path.'); setTeamBusy(false); return }
-        await postSource({ kind: 'local', name: 'team', level: 2, path: teamPath.trim() })
-        setAdded((prev) => [...prev, { kind: 'local', name: 'team', level: 2, detail: teamPath.trim() }])
+        await postSource({ kind: teamKind, name: 'team', level: 2, path: teamPath.trim() })
+        setAdded((prev) => [...prev, { kind: teamKind, name: 'team', level: 2, detail: teamPath.trim() }])
       } else {
         if (!teamRepo.trim()) { setTeamErr('Provide a repo as owner/name.'); setTeamBusy(false); return }
         await postSource({ kind: 'github', name: 'team', level: 2, repo: teamRepo.trim() })
@@ -311,17 +362,21 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
         {step === 'welcome' && (
           <StepShell
             stepIndex={0}
-            title="Welcome to ContextCake"
-            subtitle="ContextCake stitches your Company, Team, and Personal knowledge into one resolved cascade that agents can read. Let's configure at least a Personal layer to get started."
+            title={addingSource ? 'Add a source' : 'Welcome to ContextCake'}
+            subtitle={addingSource
+              ? 'Choose another local folder or knowledge service to add to your cascade.'
+              : 'Start with the knowledge you already use. ContextCake keeps each source separate, then resolves them together for you and your agents.'}
             footer={(
               <>
                 <button type="button" style={btnGhost()} onClick={onClose}>Skip</button>
-                <button type="button" style={btnPrimary()} onClick={goNext}>Get started</button>
+                <button type="button" style={btnPrimary()} onClick={goNext}>{addingSource ? 'Choose a source' : 'Get started'}</button>
               </>
             )}
           >
             <div style={css(`padding:12px 14px; border-radius:10px; background:${C.tealFill}; border:1px solid ${C.tealStroke}; font-size:12.5px; color:${C.tealText}; line-height:1.5;`)}>
-              You'll configure up to three layers: Personal (required), Team (optional), and Company (optional, MCP).
+              {addingSource
+                ? 'You can add a repository, Obsidian vault, wiki export, or a structured ContextCake folder without moving its files.'
+                : 'Start with a Markdown folder. You can add a team source or company MCP server later.'}
             </div>
           </StepShell>
         )}
@@ -329,13 +384,25 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
         {step === 'personal' && (
           <StepShell
             stepIndex={1}
-            title="Personal layer"
-            subtitle="A local folder of OKF markdown that only you read. This is required — it's the minimum to get a working cascade."
+            title={addingSource ? 'Choose a local source' : 'Add your first source'}
+            subtitle="Choose the kind of folder you already have. Markdown folders do not need to be converted before ContextCake can read them."
           >
+            <SourceKindChooser value={personalKind} onChange={setPersonalKind} />
+            <div>
+              <label htmlFor="wiz-personal-name" style={fieldLabelStyle()}>Source name</label>
+              <input
+                id="wiz-personal-name"
+                style={inputStyle()}
+                value={personalName}
+                onChange={(e) => { setPersonalName(e.target.value); setPersonalErr(null) }}
+                placeholder="e.g. Work notes"
+                autoComplete="off"
+              />
+            </div>
             <div>
               <FolderPathField
                 id="wiz-personal-path"
-                label="Folder"
+                label={personalKind === 'files' ? 'Markdown folder' : 'ContextCake folder'}
                 value={personalPath}
                 onChange={setPersonalPath}
                 onError={setPersonalErr}
@@ -358,25 +425,30 @@ export function SetupWizard({ onClose, onConnectAgent }: { onClose: () => void; 
         {step === 'team' && (
           <StepShell
             stepIndex={2}
-            title="Team layer (optional)"
-            subtitle="Shared knowledge for your team — a local folder or a GitHub repo."
+            title="Add a team source (optional)"
+            subtitle="Add another local folder now, or skip it. You can always use Add source from the sidebar later."
           >
             <div style={css('display:flex; gap:6px;')}>
               <button
                 type="button"
+                style={teamKind === 'files' ? btnPrimary() : btnGhost()}
+                onClick={() => setTeamKind('files')}
+              >Markdown folder</button>
+              <button
+                type="button"
                 style={teamKind === 'local' ? btnPrimary() : btnGhost()}
                 onClick={() => setTeamKind('local')}
-              >Local path</button>
+              >ContextCake folder</button>
               <button
                 type="button"
                 style={teamKind === 'github' ? btnPrimary() : btnGhost()}
                 onClick={() => setTeamKind('github')}
               >GitHub repo</button>
             </div>
-            {teamKind === 'local' ? (
+            {teamKind === 'local' || teamKind === 'files' ? (
               <FolderPathField
                 id="wiz-team-path"
-                label="Folder"
+                label={teamKind === 'files' ? 'Markdown folder' : 'ContextCake folder'}
                 value={teamPath}
                 onChange={setTeamPath}
                 onError={setTeamErr}

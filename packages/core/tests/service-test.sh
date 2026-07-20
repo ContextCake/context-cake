@@ -99,6 +99,12 @@ grep -q 'pendingSourcesOwnerUserId' "$TMP/manifest.json" && fail "configured sou
 N="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{process.stdout.write(String(JSON.parse(s).totals.sources))})')"
 [ "$N" = "2" ] && pass "reload picked up the new source" || fail "reload after add (sources=$N)"
 code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=b2")" "remove source"
+mkdir -p "$TMP/files"
+printf '# Existing Markdown\n\n## Notes\n\nNo frontmatter needed.\n' > "$TMP/files/notes.md"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"notes\",\"level\":2,\"path\":\"$TMP/files\"}" "$BASE/api/sources")" "add markdown folder source"
+grep -q '"source": "files"' "$TMP/manifest.json" && pass "markdown folder is persisted as files source" || fail "markdown folder source kind"
+curl -s "${AUTH[@]}" "$BASE/api/resolve?concept=notes" | grep -q 'No frontmatter needed' && pass "markdown folder resolves plain files" || fail "markdown folder resolve"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=notes")" "remove markdown folder source"
 
 echo "allowMutations: false (token unset)"
 code 200 "$(C "$BASE2/api/graph")" "reads work with no header when token unset"

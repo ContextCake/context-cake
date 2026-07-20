@@ -18,6 +18,12 @@ function button(label: string): HTMLButtonElement {
   return match
 }
 
+function sourceChoice(label: string): HTMLButtonElement {
+  const match = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="radio"]')).find((item) => item.textContent?.includes(label))
+  if (!match) throw new Error(`Source choice not found: ${label}`)
+  return match
+}
+
 async function enter(selector: string, value: string) {
   const input = container.querySelector<HTMLInputElement>(selector)
   await act(async () => {
@@ -49,6 +55,50 @@ afterEach(async () => {
 })
 
 describe('SetupWizard connection handoff', () => {
+  it('adds a repository, vault, or wiki folder as the Markdown source users expect', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    expect(container.textContent).toContain('Recommended for repository docs, an Obsidian vault, or a Markdown wiki')
+    expect(container.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toContain('Markdown folder')
+    await enter('#wiz-personal-path', '/tmp/work-vault')
+    await act(async () => button('Next').click())
+
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'personal', level: 3, path: '/tmp/work-vault' }),
+    }))
+  })
+
+  it('makes the structured ContextCake option deliberate rather than the default', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await act(async () => sourceChoice('ContextCake folder').click())
+    await enter('#wiz-personal-path', '/tmp/structured-context')
+    await act(async () => button('Next').click())
+
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'local', name: 'personal', level: 3, path: '/tmp/structured-context' }),
+    }))
+  })
+
+  it('asks for a human name when adding another source', async () => {
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    await act(async () => button('Choose a source').click())
+    await enter('#wiz-personal-path', '/tmp/repo-b')
+    await act(async () => button('Next').click())
+    expect(container.textContent).toContain('Give this source a short name')
+
+    await enter('#wiz-personal-name', 'Repo B')
+    await act(async () => button('Next').click())
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources', expect.objectContaining({
+      body: JSON.stringify({ kind: 'files', name: 'Repo B', level: 3, path: '/tmp/repo-b' }),
+    }))
+  })
+
   it('keeps advanced MCP fields hidden until the user chooses to connect a server', async () => {
     await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
 

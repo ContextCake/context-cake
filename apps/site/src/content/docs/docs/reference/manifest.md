@@ -28,8 +28,8 @@ registry is bookkeeping for rollback; the resolver reads only the explicit layer
 |-------|----------|------------|---------|
 | `name` | yes | all | Layer identifier. Used in provenance (`sourceLayer`, `contributors`) and as the `layer` argument to `read_file`. |
 | `level` | yes | all | Precedence. Higher wins per section. Personal is 3, Team is 2, Company is 0 by convention, but any integer works. |
-| `source` | no | all | `okf-local` (default when omitted) or `mcp`. |
-| `path` | for `okf-local` | `okf-local` | Directory of the OKF markdown bundle. |
+| `source` | no | all | `okf-local` (default when omitted), `files`, or `mcp`. |
+| `path` | for `okf-local` / `files` | `okf-local`, `files` | Directory of the OKF bundle or existing document folder. |
 | `command` | for `mcp` | `mcp` | Executable to spawn as a stdio MCP server. |
 | `args` | for `mcp` | `mcp` | Argument array passed to `command`. |
 
@@ -46,7 +46,7 @@ See [Merge semantics](/docs/concepts/merge-semantics) and
 
 ## Source types
 
-A layer's `source` decides how its knowledge is loaded. Both are read through the
+A layer's `source` decides how its knowledge is loaded. Each is read through the
 same adapter interface, so they stitch into one effective graph.
 
 ### `okf-local` (default)
@@ -77,6 +77,18 @@ read time — so a graph that was never OKF stitches in alongside your local bun
 
 See [Foreign MCP sources](/docs/guides/foreign-mcp-sources) for the adapter
 contract and `examples/mock-mcp-source/server.mjs` for a runnable foreign source.
+
+### `files`
+
+A local folder of existing Markdown, MDX, or plain-text documents. This is the
+best starting point for repository docs, an Obsidian vault, or a Markdown wiki:
+no ContextCake-specific frontmatter is required. Plain Markdown uses its first
+`#` heading as the title and its `##` headings as sections; files that already
+have OKF frontmatter keep their full structured behavior.
+
+```json
+{ "name": "work-notes", "level": 3, "source": "files", "path": "/Users/you/Documents/Obsidian" }
+```
 
 ## How paths resolve
 

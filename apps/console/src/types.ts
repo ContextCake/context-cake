@@ -46,7 +46,7 @@ export interface ResolvedConcept {
 export interface GraphSource {
   name: string
   level: number
-  kind: string // 'okf-local' | 'mcp'
+  kind: string // 'okf-local' | 'files' | 'mcp'
   location?: string
   origin?: string | null
   conceptCount: number

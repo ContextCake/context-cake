@@ -23,6 +23,17 @@ const { title, description } = Astro.props;
 // opt into light mode, and that explicit preference remains local to them.
 const initialTheme = 'dark';
 const isHome = Astro.url.pathname === '/';
+const mainNavLinks = [
+	{ label: 'Packs', href: '/packs' },
+	{ label: 'Pricing', href: '/pricing' },
+	{ label: 'Docs', href: '/docs' },
+	{ label: 'Demo', href: '/demo' },
+	{ label: 'Install', href: '/install' },
+	{ label: 'GitHub', href: 'https://github.com/ContextCake/context-cake' },
+];
+const isCurrentRoute = (href: string) =>
+	!href.startsWith('http') &&
+	(Astro.url.pathname === href || Astro.url.pathname.startsWith(`${href}/`));
 
 // Absolute URLs for canonical + OpenGraph (Astro.site = https://contextcake.com).
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
@@ -110,12 +121,11 @@ const footerColumns = [
 				<span>ContextCake</span>
 			</a>
 			<nav aria-label="Main">
-				<a href="/packs">Packs</a>
-				<a href="/pricing">Pricing</a>
-				<a href="/docs">Docs</a>
-				<a href="/demo">Demo</a>
-				<a href="/install">Install</a>
-				<a href="https://github.com/ContextCake/context-cake">GitHub</a>
+				{mainNavLinks.map((link) => (
+					<a href={link.href} aria-current={isCurrentRoute(link.href) ? 'page' : undefined}>
+						{link.label}
+					</a>
+				))}
 			</nav>
 			<button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode" title="Switch to light mode">
 				<Icon name="moon" size={18} class="theme-toggle__moon" />
@@ -311,6 +321,10 @@ const footerColumns = [
 	}
 	.nav nav a:hover {
 		background: rgba(243, 239, 230, 0.08);
+		color: var(--cc-text);
+	}
+	.nav nav a[aria-current='page'] {
+		background: rgba(243, 239, 230, 0.11);
 		color: var(--cc-text);
 	}
 	.theme-toggle {
@@ -529,6 +543,10 @@ const footerColumns = [
 		background: transparent;
 	}
 	.theme-paper .nav nav a:hover {
+		background: var(--cc-paper-soft);
+		color: var(--cc-ink);
+	}
+	.theme-paper .nav nav a[aria-current='page'] {
 		background: var(--cc-paper-soft);
 		color: var(--cc-ink);
 	}

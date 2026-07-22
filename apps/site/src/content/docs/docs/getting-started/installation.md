@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Choose a versioned ContextCake source route and run the bundled demo in a few minutes.
+description: Install the Mac app for guided setup, or use the versioned source route for an inspectable evaluation.
 ---
 
 The fastest way to try ContextCake on macOS is the signed, notarized app. ContextCake also runs directly from **versioned source**. The recommended source route is a
@@ -13,12 +13,30 @@ If you are still evaluating whether the model fits your team, start with the
 [demo](/demo) or [the docs overview](/docs) and come back here when you want the
 local setup path.
 
-## macOS app (Apple silicon)
+## macOS app (recommended)
 
 Download [ContextCake 0.1.0 for Mac](https://github.com/ContextCake/context-cake/releases/download/app-v0.1.0/ContextCake-0.1.0-arm64.dmg), open the DMG, and drag ContextCake to Applications. Open it from Applications; macOS may ask you to confirm the first launch.
 
-After sign-in, choose **Install Command Line Tool…** from the app menu if you
-want the `contextcake` command available in Terminal. The [release page](https://github.com/ContextCake/context-cake/releases/tag/app-v0.1.0) contains the matching ZIP and checksums.
+The app's activation path is:
+
+1. Choose **Get started**, then add a **Markdown folder**. Repository docs,
+   Obsidian vaults, wiki exports, and other folders containing `.md`, `.mdx`, or
+   `.txt` files work without conversion.
+2. Finish source setup. ContextCake resolves the first available concept and
+   confirms that your cascade is live.
+3. Choose **Connect an agent** and select Claude Code, Codex, Cursor, Claude
+   Desktop, or another MCP client. The app prepares the local MCP setup and its
+   verification step.
+4. Paste the supplied first-use prompt into your client and check that the answer
+   names its source and keeps any disagreement visible.
+
+Source setup comes before agent connection: an agent needs at least one source to
+query. Sign-in is optional and is only needed when you want account-backed settings
+sync. The app can also install the optional `contextcake` command when a client
+needs it.
+
+The [release page](https://github.com/ContextCake/context-cake/releases/tag/app-v0.1.0)
+contains the matching ZIP and checksums.
 
 ## Prerequisites for the source route
 
@@ -127,14 +145,14 @@ hijacked maintainer accounts and `postinstall` payloads. A knowledge engine your
 agents read from should have a supply chain you can audit: a source archive is
 small, inspectable, and runnable as plain Node.js.
 
-There is no npm global install today. A signed macOS app and Homebrew cask belong
-to the packaged distribution track and will be documented only after their real
-artifacts are published. Windows users should use the terminal route in WSL until
-a native Windows package is tested and signed.
+There is no npm global install today. The signed macOS app is the recommended
+guided route. A Homebrew cask and native Windows package will be documented only
+after their real artifacts are published and tested; Windows users can use the
+terminal route in WSL today.
 
 ## Next
 
 - [Your first cascade](/docs/getting-started/first-cascade): build your own layers
-- [Connect an agent (MCP)](/docs/getting-started/connect-an-agent): wire it into Claude
+- [Connect an agent (MCP)](/docs/getting-started/connect-an-agent): wire it into your AI client
 - [The trust boundary](/docs/concepts/trust-boundary): read this before pointing a
   manifest at sources you didn't write

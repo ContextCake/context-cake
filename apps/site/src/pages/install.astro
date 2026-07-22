@@ -1,26 +1,28 @@
 ---
-// Install page: the public archive-first path plus truthful status for the
-// native/package-manager channels owned by the distribution spec.
+// Install page: the Mac app is the primary activation path. The versioned
+// source workflow stays available for evaluators, Linux/WSL users, and audits.
 import Base from '../layouts/Base.astro';
 import CodeBlock from '../components/CodeBlock.astro';
 import Icon from '../components/Icon.astro';
 import demo from '../data/demo-cascade.json';
 
-const version = '0.2.0';
-const tag = `console-v${version}`;
-const archiveName = `context-cake-${tag}.tar.gz`;
+const sourceVersion = '0.2.0';
+const sourceTag = `console-v${sourceVersion}`;
+const appVersion = '0.1.0';
+const appTag = `app-v${appVersion}`;
+const archiveName = `context-cake-${sourceTag}.tar.gz`;
 const archiveSha256 = '013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253';
-const sourceDownloadUrl = `https://github.com/ContextCake/context-cake/archive/refs/tags/${tag}.tar.gz`;
-const tagUrl = `https://github.com/ContextCake/context-cake/tree/${tag}`;
-const appDownloadUrl = 'https://github.com/ContextCake/context-cake/releases/download/app-v0.1.0/ContextCake-0.1.0-arm64.dmg';
-const appReleaseUrl = 'https://github.com/ContextCake/context-cake/releases/tag/app-v0.1.0';
+const sourceDownloadUrl = `https://github.com/ContextCake/context-cake/archive/refs/tags/${sourceTag}.tar.gz`;
+const sourceTagUrl = `https://github.com/ContextCake/context-cake/tree/${sourceTag}`;
+const appDownloadUrl = `https://github.com/ContextCake/context-cake/releases/download/${appTag}/ContextCake-${appVersion}-arm64.dmg`;
+const appReleaseUrl = `https://github.com/ContextCake/context-cake/releases/tag/${appTag}`;
 
 const terminalDownload = `curl --fail --location ${sourceDownloadUrl} \\
   --output ${archiveName}`;
 const githubCliCheckout = `gh repo clone ContextCake/context-cake contextcake -- \\
-  --branch ${tag} --depth 1
+  --branch ${sourceTag} --depth 1
 cd contextcake`;
-const gitCheckout = `git clone --branch ${tag} --depth 1 \\
+const gitCheckout = `git clone --branch ${sourceTag} --depth 1 \\
   https://github.com/ContextCake/context-cake.git contextcake
 cd contextcake`;
 const unpackCommand = `printf '%s  %s\\n' '${archiveSha256}' '${archiveName}' | shasum -a 256 --check &&
@@ -28,9 +30,7 @@ mkdir contextcake &&
 tar -xzf ${archiveName} -C contextcake --strip-components=1 &&
 cd contextcake`;
 const resolveCommand = 'node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db';
-const connectCommand = `claude mcp add contextcake -- \\
-  node "$PWD/mcp-server.mjs" \\
-  --manifest "$PWD/playground/manifest.json"`;
+const firstPrompt = 'Use ContextCake to list the concepts available to you. Briefly describe the contributing layers, then tell me which project-specific questions you can answer from this context.';
 
 const demoConceptId = 'decisions/primary-db';
 const primaryDb = demo.concepts.find((concept) => concept.id === demoConceptId);
@@ -42,7 +42,7 @@ const resolvedChoice = primaryDb.sections.find(
 if (!resolvedChoice) throw new Error('Install demo choice section is missing');
 
 const conflict = resolvedChoice.conflicts?.[0];
-const summarize = (value: string, limit = 110) => {
+const summarize = (value: string, limit = 108) => {
 	const oneLine = value.replace(/\s+/g, ' ').trim();
 	return oneLine.length > limit ? `${oneLine.slice(0, limit).trimEnd()}…` : oneLine;
 };
@@ -58,179 +58,117 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 <Base
 	tone="dark"
 	title="Install ContextCake"
-	description="Download ContextCake, verify the resolver, and connect your first AI agent in a few minutes."
+	description="Download ContextCake for Mac, add a Markdown source, and connect your AI agent over local MCP."
 >
 	<main class="install-page">
 		<section class="install-hero" aria-labelledby="install-title">
 			<div class="hero-copy">
-				<p class="eyebrow"><span>Install</span> · {tag}</p>
-				<h1 id="install-title">From download to a sourced answer in five minutes.</h1>
+				<p class="eyebrow">ContextCake for Mac · {appTag}</p>
+				<h1 id="install-title">Install the app. Add your knowledge. Ask your agent.</h1>
 				<p class="lede">
-					Start with the signed Mac app for the fastest local setup. If you need source,
-					Linux, WSL, or a Git-based workflow, the other routes below keep the same engine
-					inspectable.
+					ContextCake runs locally on your Mac. Point it at a Markdown folder, connect
+					your AI client, and get a sourced answer without building a manifest by hand.
 				</p>
 				<div class="hero-actions" aria-label="Install actions">
 					<a class="button button--primary" href={appDownloadUrl} download>
 						<Icon name="download" size={18} />
-						Download the Mac app
+						Download for Mac
 					</a>
-					<a class="hero-install-link" href="#download">
-						Other installation options <span aria-hidden="true">→</span>
-					</a>
+					<a class="text-link" href="#source-install">Install from source <span aria-hidden="true">→</span></a>
 				</div>
-				<ul class="hero-facts" aria-label="Install requirements">
-					<li>Signed Mac app · Apple silicon</li>
-					<li>Node.js 18+ for source</li>
-					<li>macOS, Linux, or WSL</li>
-					<li>No <code>npm install</code></li>
+				<ul class="hero-facts" aria-label="Mac app details">
+					<li>Signed and notarized</li>
+					<li>Apple silicon</li>
+					<li>Runs locally</li>
+					<li><a href={appReleaseUrl}>Release notes and checksums</a></li>
 				</ul>
 			</div>
 
-			<figure class="install-map" aria-label="ContextCake setup path">
-				<div class="map-header">
-					<span>Setup path</span>
-					<span class="map-status"><i></i> 4 steps</span>
+			<figure class="app-preview" aria-labelledby="app-preview-title">
+				<div class="window-bar" aria-hidden="true">
+					<span></span><span></span><span></span>
+					<strong>ContextCake</strong>
 				</div>
-				<ol>
-					<li style="--step-color: var(--cc-layer-company)">
-						<span>01</span>
-						<div><strong>Choose a route</strong><small>Archive, GitHub CLI, or Git</small></div>
-					</li>
-					<li style="--step-color: var(--cc-layer-team)">
-						<span>02</span>
-						<div><strong>Verify + unpack</strong><small>SHA-256, then one local folder</small></div>
-					</li>
-					<li style="--step-color: var(--cc-layer-team)">
-						<span>03</span>
-						<div><strong>Resolve</strong><small>See provenance and conflicts</small></div>
-					</li>
-					<li style="--step-color: var(--cc-layer-personal)">
-						<span>04</span>
-						<div><strong>Connect</strong><small>Serve the same graph over MCP</small></div>
-					</li>
-				</ol>
-				<figcaption>
-					<span>Program files</span>
-					<strong>Local and inspectable</strong>
-				</figcaption>
+				<div class="app-shell-preview">
+					<div class="preview-sidebar" aria-hidden="true">
+						<strong>ContextCake</strong>
+						<span class="active">Overview</span>
+						<span>Concepts</span>
+						<span>Conflicts</span>
+					</div>
+					<div class="preview-content">
+						<p>First source</p>
+						<h2 id="app-preview-title">Add your Markdown folder</h2>
+						<div class="folder-choice">
+							<Icon name="layers" size={18} />
+							<div><strong>Markdown folder</strong><span>Recommended · use your existing notes</span></div>
+							<span class="selected-mark">✓</span>
+						</div>
+						<div class="preview-success">
+							<span></span>
+							<div><strong>Source ready</strong><small>Your cascade has something to answer from.</small></div>
+						</div>
+						<div class="preview-action"><span>Connect an agent</span><span>→</span></div>
+					</div>
+				</div>
+				<figcaption>The app guides source setup before it connects an agent.</figcaption>
 			</figure>
 		</section>
 
-		<section class="quickstart" id="quickstart" aria-labelledby="quickstart-title">
-			<aside class="quickstart-nav">
-				<p>Quickstart</p>
-				<h2 id="quickstart-title">Get it running</h2>
-				<nav aria-label="Install steps">
-					<a href="#download"><span>01</span> Get ContextCake</a>
-					<a href="#unpack"><span>02</span> Verify and unpack</a>
-					<a href="#resolve"><span>03</span> Prove it works</a>
-					<a href="#connect"><span>04</span> Connect an agent</a>
-				</nav>
-				<div class="local-note">
-					<Icon name="shield" size={17} />
-					<p><strong>Nothing installs globally.</strong> Delete the folder and ContextCake is gone.</p>
-				</div>
-			</aside>
+		<section class="activation" aria-labelledby="activation-title">
+			<header class="section-intro">
+				<h2 id="activation-title">From download to a sourced answer.</h2>
+				<p>No archive, checksum, or manifest is required for the Mac app.</p>
+			</header>
 
-			<div class="steps">
-				<article class="install-step" id="download">
-					<header class="step-heading">
-						<span>01</span>
-						<div>
-							<p>Choose a route</p>
-							<h2>Get ContextCake</h2>
-						</div>
-					</header>
-					<p class="step-intro">
-						Choose how you want to get the same tagged source. Archive routes preserve an
-						explicit checksum step; Git routes are convenient when you already use source tools.
-					</p>
-					<div class="route-grid">
-						<section class="route route--recommended" aria-labelledby="terminal-route-title">
-							<div class="route-topline">
-								<span class="route-badge">Recommended</span>
-								<span class="route-platform">macOS · Linux · WSL</span>
-							</div>
-							<h3 id="terminal-route-title">Terminal with curl</h3>
-							<p>Fastest for a local evaluation. Download the universal source archive, then verify it in Step 2.</p>
-							<CodeBlock lang="bash" code={terminalDownload} label="Download tagged source" copy />
-							<small>Continue to Step 2 · checksum verification required</small>
-						</section>
-
-						<section class="route" aria-labelledby="browser-route-title">
-							<div class="route-topline">
-								<span class="route-badge route-badge--quiet">No CLI required</span>
-								<Icon name="download" size={18} />
-							</div>
-							<h3 id="browser-route-title">Browser download</h3>
-							<p>Download the same universal archive directly, then use your terminal only to verify and run it.</p>
-							<a class="route-action" href={sourceDownloadUrl} download>
-								Download .tar.gz <Icon name="chevron-down" size={16} />
-							</a>
-							<small>{archiveName} · SHA-256 {archiveSha256.slice(0, 8)}…{archiveSha256.slice(-8)}</small>
-						</section>
-
-						<section class="route" aria-labelledby="github-route-title">
-							<div class="route-topline">
-								<span class="route-badge route-badge--quiet">GitHub CLI</span>
-								<span class="route-platform">Tagged checkout</span>
-							</div>
-							<h3 id="github-route-title">Clone with <code>gh</code></h3>
-							<p>For GitHub CLI users who want the tagged source plus a shallow repository checkout.</p>
-							<CodeBlock lang="bash" code={githubCliCheckout} label="Clone tagged source" copy />
-							<small>Skip Step 2 · continue with the first run</small>
-						</section>
-
-						<section class="route" aria-labelledby="git-route-title">
-							<div class="route-topline">
-								<span class="route-badge route-badge--quiet">Git</span>
-								<span class="route-platform">Tagged checkout</span>
-							</div>
-							<h3 id="git-route-title">Clone with Git</h3>
-							<p>For contributors, auditors, and anyone who wants familiar source-control tooling.</p>
-							<CodeBlock lang="bash" code={gitCheckout} label="Clone tagged source" copy />
-							<small>Skip Step 2 · continue with the first run</small>
-						</section>
+			<ol class="activation-steps">
+				<li>
+					<span class="step-number">1</span>
+					<div class="step-copy">
+						<h3>Add a source you already have</h3>
+						<p>
+							Open the app and choose a Markdown folder. A repository docs folder, Obsidian
+							vault, or wiki export works without conversion. You can add more sources later.
+						</p>
 					</div>
-				</article>
+					<div class="step-proof source-proof" aria-label="Example source selection">
+						<span>Markdown folder · recommended</span>
+						<strong>~/Documents/Work notes</strong>
+						<small>.md · .mdx · .txt</small>
+					</div>
+				</li>
 
-				<article class="install-step" id="unpack">
-					<header class="step-heading">
-						<span>02</span>
-						<div>
-							<p>Keep it contained</p>
-							<h2>Verify and unpack it</h2>
-						</div>
-					</header>
-					<p class="step-intro">
-						If you chose curl or the browser download, check the archive against the published
-						SHA-256, then unpack it into one local folder. Git and GitHub CLI users can skip
-						this step because their checkout is already ready.
-					</p>
-					<CodeBlock lang="bash" code={unpackCommand} label="Verify, unpack, and enter" copy />
-				</article>
+				<li>
+					<span class="step-number">2</span>
+					<div class="step-copy">
+						<h3>Connect the AI client you use</h3>
+						<p>
+							Choose <strong>Connect an agent</strong> in ContextCake. The app prepares the
+							exact local MCP setup and verification steps for your client.
+						</p>
+					</div>
+					<div class="step-proof client-proof" aria-label="Supported AI clients">
+						<span>Claude Code</span>
+						<span>Codex</span>
+						<span>Cursor</span>
+						<span>Claude Desktop</span>
+						<span>Other MCP</span>
+					</div>
+				</li>
 
-				<article class="install-step" id="resolve">
-					<header class="step-heading">
-						<span>03</span>
-						<div>
-							<p>First run</p>
-							<h2>Prove the resolver works</h2>
-						</div>
-					</header>
-					<p class="step-intro">
-						Resolve a bundled concept where three layers disagree. The command prints the
-						effective answer, its source, and the dated dissent that remains attached.
-					</p>
-					<CodeBlock lang="bash" code={resolveCommand} label="Resolve the demo" copy />
-
+				<li>
+					<span class="step-number">3</span>
+					<div class="step-copy">
+						<h3>Ask one question and inspect the answer</h3>
+						<p>
+							Use the first prompt supplied by the app. A good answer names the winning
+							source and keeps any disagreement visible.
+						</p>
+						<CodeBlock lang="text" code={firstPrompt} label="First prompt" copy />
+					</div>
 					<figure class="result-preview" aria-labelledby="result-title">
 						<div class="result-header">
-							<div>
-								<span>Visible output</span>
-								<h3 id="result-title">decisions/primary-db</h3>
-							</div>
+							<div><span>Sourced answer</span><h3 id="result-title">{demoConceptId}</h3></div>
 							<span class="result-status"><i></i> resolved</span>
 						</div>
 						<div class="result-row" style="--result-color: var(--cc-layer-personal)">
@@ -241,127 +179,98 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 						{conflict && (
 							<div class="conflict-row">
 								<Icon name="alert" size={16} />
-								<div><small>Conflict preserved</small><span>{summarize(conflict.content, 86)}</span></div>
+								<div><small>Conflict preserved</small><span>{summarize(conflict.content, 78)}</span></div>
 								<code>{conflict.layer} · {formatDate(conflict.updated)}</code>
 							</div>
 						)}
-						<figcaption>Generated at build time from the same demo bundle the command resolves.</figcaption>
 					</figure>
-				</article>
+				</li>
+			</ol>
 
-				<article class="install-step" id="connect">
-					<header class="step-heading">
-						<span>04</span>
-						<div>
-							<p>Use the graph</p>
-							<h2>Connect an agent</h2>
-						</div>
-					</header>
-					<p class="step-intro">
-						Register the same engine with an MCP client. Claude Code is shown; the
-						<a href="/docs/getting-started/connect-an-agent">agent connection guide</a> covers other clients.
+			<div class="download-strip">
+				<div>
+					<strong>Ready to use your own knowledge?</strong>
+					<span>ContextCake {appVersion} · Apple silicon</span>
+				</div>
+				<a class="button button--primary" href={appDownloadUrl} download>
+					<Icon name="download" size={18} /> Download the DMG
+				</a>
+			</div>
+		</section>
+
+		<section class="source-install" id="source-install" aria-labelledby="source-title">
+			<header class="section-intro section-intro--source">
+				<div>
+					<h2 id="source-title">Need the engine without the app?</h2>
+					<p>
+						The versioned source route stays available for Linux, WSL, contribution work,
+						and anyone who wants to audit every file before running it.
 					</p>
-					<CodeBlock lang="bash" code={connectCommand} label="Claude Code" copy />
-					<div class="next-actions">
-						<div>
-							<strong>Prefer a visual check?</strong>
-							<span>Run the local playground at <code>http://127.0.0.1:8790</code>.</span>
+				</div>
+				<span>Node.js 18+ · macOS, Linux, or WSL · no npm install</span>
+			</header>
+
+			<details class="source-details">
+				<summary>
+					<span><strong>Show source installation</strong><small>{sourceTag} · archive or Git</small></span>
+					<span aria-hidden="true">+</span>
+				</summary>
+				<div class="source-details-body">
+					<section class="source-route" aria-labelledby="archive-title">
+						<div class="route-heading">
+							<span>Recommended source route</span>
+							<h3 id="archive-title">Download and verify the archive</h3>
+							<p>The checksum stops the workflow before extraction if the bytes do not match.</p>
 						</div>
-						<CodeBlock lang="bash" code="npm run playground" label="Local playground" copy />
-					</div>
-				</article>
-			</div>
-		</section>
+						<CodeBlock lang="bash" code={terminalDownload} label="Download tagged source" copy />
+						<CodeBlock lang="bash" code={unpackCommand} label="Verify and unpack" copy />
+						<p class="route-footnote">
+							Prefer your browser? <a href={sourceDownloadUrl} download>Download the same .tar.gz</a>,
+							then run the verification block above.
+						</p>
+					</section>
 
-		<section class="channels channels--available" id="mac-app" aria-labelledby="mac-app-title">
-			<div class="section-heading">
-				<p>Native app · app-v0.1.0</p>
-				<h2 id="mac-app-title">A zero-terminal path for Mac.</h2>
-				<span>The Apple-silicon DMG is signed, notarized, and ready to drag into Applications.</span>
-			</div>
-			<div class="channel-grid">
-				<article>
-					<div><Icon name="dashboard" size={20} /><span>Available now</span></div>
-					<h3>ContextCake for Mac</h3>
-					<p>Open the DMG, move ContextCake to Applications, and sign in. Install the optional CLI from the app menu.</p>
-					<a class="route-action" href={appDownloadUrl} download>Download the DMG <Icon name="download" size={16} /></a>
-					<small><a href={appReleaseUrl}>Release notes and checksums</a> · Apple silicon</small>
-				</article>
-			</div>
-		</section>
+					<section class="source-route" aria-labelledby="git-title">
+						<div class="route-heading">
+							<span>Source-control route</span>
+							<h3 id="git-title">Clone the tagged source</h3>
+							<p>Use Git when you want a checkout for inspection, history, or contribution work.</p>
+						</div>
+						<CodeBlock lang="bash" code={gitCheckout} label="Clone with Git" copy />
+						<details class="cli-alternative">
+							<summary>Use GitHub CLI instead</summary>
+							<CodeBlock lang="bash" code={githubCliCheckout} label="Clone with GitHub CLI" copy />
+						</details>
+					</section>
 
-		<section class="channels" id="channels" aria-labelledby="channels-title">
-			<div class="section-heading">
-				<p>Package managers and apps</p>
-				<h2 id="channels-title">The next distribution layer.</h2>
-				<span>
-					Modern developer tools usually add native apps, package managers, and platform
-					installers. ContextCake will only list a command once its artifact is published,
-					signed where appropriate, and independently verifiable.
-				</span>
-			</div>
-			<div class="channel-grid">
-				<article>
-					<div><Icon name="dashboard" size={20} /><span>Coming next</span></div>
-					<h3>ContextCake for Mac</h3>
-					<p>The signed release is available above. This section remains the roadmap for future universal builds and update channels.</p>
-					<small>Current artifact: Apple-silicon DMG.</small>
-				</article>
-				<article>
-					<div><Icon name="download" size={20} /><span>Planned</span></div>
-					<h3>Homebrew</h3>
-					<p>A familiar managed install for Mac users who want clean upgrades and removal.</p>
-					<small>The cask will install the same verified application artifact.</small>
-				</article>
-				<article>
-					<div><Icon name="dashboard" size={20} /><span>Use WSL today</span></div>
-					<h3>Windows</h3>
-					<p>The terminal route works in WSL today. A native Windows installer waits for a tested, signed artifact.</p>
-					<small>No unverified PowerShell bootstrap command.</small>
-				</article>
-				<article>
-					<div><Icon name="shield" size={20} /><span>Not offered</span></div>
-					<h3>npm global install</h3>
-					<p>The engine has zero runtime dependencies and intentionally avoids registry install scripts.</p>
-					<small>Use the archive or a tagged Git checkout instead.</small>
-				</article>
-			</div>
+					<section class="resolver-proof" aria-labelledby="resolver-title">
+						<div>
+							<span>Same engine, visible result</span>
+							<h3 id="resolver-title">Prove the resolver works</h3>
+							<p>Resolve the bundled concept and inspect its winning source and preserved dissent.</p>
+						</div>
+						<CodeBlock lang="bash" code={resolveCommand} label="Resolve the demo" copy />
+					</section>
+				</div>
+			</details>
 		</section>
 
 		<section class="trust" aria-labelledby="trust-title">
 			<div>
-				<p>Why this path</p>
-				<h2 id="trust-title">An install you can inspect.</h2>
+				<Icon name="shield" size={24} />
+				<h2 id="trust-title">Local does not mean automatic trust.</h2>
 			</div>
 			<div class="trust-copy">
 				<p>
-					Package registries are convenient, but they also add maintainer accounts,
-					transitive dependencies, and lifecycle scripts to the trust chain. The current
-					archive is deliberately smaller: versioned source with a published checksum,
-					plain Node.js, and no
-					<code>postinstall</code> step.
+					ContextCake reads local files and can launch commands named by a manifest. Only
+					add folders and MCP sources you trust. Source installs remain versioned and
+					checksum-verifiable for teams that need the smaller audit surface.
 				</p>
-				<p class="boundary-note">
-					<Icon name="alert" size={18} />
-					<span><strong>The manifest is still a trust boundary.</strong> An MCP source can run the command it names as your user. Only use manifests you wrote or trust.</span>
-				</p>
-				<div class="trust-links">
+				<nav aria-label="Install trust links">
 					<a href="/docs/concepts/trust-boundary">Read the trust model</a>
-					<a href={tagUrl}>Inspect {tag} on GitHub <Icon name="external-link" size={15} /></a>
-				</div>
-				<details>
-					<summary>Need a source checkout instead?</summary>
-					<p>
-						Use Git when you want history, a fork, or a contribution workflow. The current
-						source tree keeps the demo manifest under <code>apps/playground/</code>.
-					</p>
-					<CodeBlock
-						lang="bash"
-						code={`git clone https://github.com/ContextCake/context-cake.git\ncd context-cake\nnode resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db`}
-						label="Clone for development"
-						copy
-					/>
-				</details>
+					<a href={sourceTagUrl}>Inspect {sourceTag} on GitHub <Icon name="external-link" size={15} /></a>
+					<a href="/docs/getting-started/connect-an-agent">Agent connection guide</a>
+				</nav>
 			</div>
 		</section>
 	</main>
@@ -373,38 +282,32 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		z-index: 0;
 		max-width: 76rem;
 		margin: 0 auto;
-		padding: 5.5rem 1.5rem 0;
+		padding: 5rem 1.5rem 0;
 	}
 	.install-hero {
 		display: grid;
-		grid-template-columns: minmax(0, 1.08fr) minmax(22rem, 0.72fr);
+		grid-template-columns: minmax(0, 0.94fr) minmax(28rem, 1.06fr);
 		align-items: center;
-		gap: 4rem;
-		min-height: 34rem;
+		gap: clamp(2.5rem, 6vw, 5.5rem);
+		min-height: 35rem;
 		padding-bottom: 6rem;
 	}
-	.eyebrow,
-	.quickstart-nav > p,
-	.section-heading > p,
-	.trust > div:first-child > p,
-	.step-heading p {
+	.eyebrow {
 		margin: 0;
-		color: var(--cc-text-muted);
+		color: var(--cc-layer-team);
 		font-family: var(--cc-font-mono);
 		font-size: 0.72rem;
 		font-weight: 700;
-		letter-spacing: 0.11em;
+		letter-spacing: 0.07em;
 		text-transform: uppercase;
 	}
-	.eyebrow span {
-		color: var(--cc-layer-team);
-	}
 	h1 {
-		max-width: 13ch;
-		margin: 1.2rem 0 1.35rem;
-		font-size: clamp(3rem, 6vw, 5.75rem);
-		line-height: 0.95;
-		letter-spacing: -0.055em;
+		max-width: 11ch;
+		margin: 1.15rem 0 1.35rem;
+		font-size: clamp(3rem, 6vw, 5.6rem);
+		line-height: 0.98;
+		letter-spacing: -0.035em;
+		text-wrap: balance;
 	}
 	.lede {
 		max-width: 39rem;
@@ -412,11 +315,13 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		color: var(--cc-text-body);
 		font-size: clamp(1.05rem, 1.5vw, 1.2rem);
 		line-height: 1.65;
+		text-wrap: pretty;
 	}
 	.hero-actions {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.75rem;
+		align-items: center;
+		gap: 0.9rem 1.15rem;
 		margin-top: 2rem;
 	}
 	.button {
@@ -431,10 +336,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		font-family: var(--cc-font-heading);
 		font-weight: 700;
 		text-decoration: none;
-		transition:
-			background var(--cc-transition),
-			border-color var(--cc-transition),
-			color var(--cc-transition);
+		transition: background var(--cc-transition), border-color var(--cc-transition), color var(--cc-transition);
 	}
 	.button--primary {
 		border-color: var(--cc-cta);
@@ -445,54 +347,34 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		border-color: var(--cc-cta-hover);
 		background: var(--cc-cta-hover);
 	}
-	:global(body.theme-paper) .button--primary,
-	:global(body.theme-paper) .route-action {
+	:global(body.theme-paper) .button--primary {
 		color: var(--cc-on-cta);
 	}
-	.button--quiet {
-		background: var(--cc-surface-soft);
-		color: var(--cc-text-body);
-	}
-	.button--quiet:hover {
-		background: color-mix(in srgb, var(--cc-layer-team) 10%, var(--cc-surface));
-		color: var(--cc-text);
-	}
-	.hero-install-link {
+	.text-link {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.45rem;
-		min-height: 2.9rem;
-		padding: 0.2rem 0.15rem;
-		border-bottom: 1px solid color-mix(in srgb, var(--cc-text-muted) 52%, transparent);
-		color: var(--cc-text-muted);
-		font-family: var(--cc-font-heading);
+		min-height: 2.75rem;
+		color: var(--cc-text-body);
 		font-weight: 700;
-		text-decoration: none;
-		transition: border-color var(--cc-transition), color var(--cc-transition);
+		text-decoration-color: color-mix(in srgb, var(--cc-text-body) 42%, transparent);
+		text-underline-offset: 0.28rem;
 	}
-	.hero-install-link:hover {
-		border-color: var(--cc-layer-team);
-		color: var(--cc-text);
-	}
-	.hero-install-link:focus-visible {
-		outline: 2px solid var(--cc-layer-team);
-		outline-offset: 4px;
-	}
+	.text-link:hover { color: var(--cc-layer-team); }
 	.hero-facts {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.5rem 1.4rem;
+		gap: 0.5rem 1.2rem;
 		margin: 1.5rem 0 0;
 		padding: 0;
 		list-style: none;
 		color: var(--cc-text-muted);
-		font-family: var(--cc-font-mono);
-		font-size: 0.75rem;
+		font-size: 0.8rem;
 	}
 	.hero-facts li {
 		display: flex;
 		align-items: center;
-		gap: 0.55rem;
+		gap: 0.5rem;
 	}
 	.hero-facts li::before {
 		content: '';
@@ -501,667 +383,461 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		border-radius: 50%;
 		background: var(--cc-layer-team);
 	}
-	.hero-facts code,
-	.channel-grid code {
-		font-family: inherit;
-	}
-	.install-map {
+	.hero-facts a { color: inherit; }
+
+	.app-preview {
 		margin: 0;
-		padding: 1rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-xl);
-		background: var(--cc-surface);
-		box-shadow: var(--cc-shadow-panel);
-		backdrop-filter: blur(18px);
+		border: 1px solid var(--cc-border-strong);
+		border-radius: 16px;
+		background: var(--cc-surface-solid);
+		overflow: hidden;
 	}
-	.map-header,
-	.install-map figcaption,
-	.result-header {
+	.window-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.42rem;
+		min-height: 2.35rem;
+		padding: 0 0.9rem;
+		border-bottom: 1px solid var(--cc-border);
+		background: var(--cc-surface-raised);
+	}
+	.window-bar > span {
+		width: 0.58rem;
+		height: 0.58rem;
+		border-radius: 50%;
+		background: var(--cc-text-faint);
+		opacity: 0.55;
+	}
+	.window-bar strong {
+		margin-left: auto;
+		color: var(--cc-text-muted);
+		font-size: 0.72rem;
+		font-weight: 500;
+	}
+	.app-shell-preview {
+		display: grid;
+		grid-template-columns: 8.5rem minmax(0, 1fr);
+		min-height: 23rem;
+	}
+	.preview-sidebar {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		padding: 1.2rem 0.85rem;
+		border-right: 1px solid var(--cc-border);
+		background: color-mix(in srgb, var(--cc-canvas) 56%, var(--cc-surface-solid));
+		color: var(--cc-text-muted);
+		font-size: 0.72rem;
+	}
+	.preview-sidebar strong {
+		margin: 0 0.35rem 0.8rem;
+		color: var(--cc-text);
+		font-size: 0.82rem;
+	}
+	.preview-sidebar span { padding: 0.48rem 0.55rem; border-radius: 7px; }
+	.preview-sidebar .active { background: var(--cc-surface-soft); color: var(--cc-text); }
+	.preview-content { padding: clamp(1.3rem, 3vw, 2.2rem); }
+	.preview-content > p,
+	.route-heading > span,
+	.resolver-proof > div > span {
+		margin: 0;
+		color: var(--cc-layer-team);
+		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+		font-weight: 700;
+	}
+	.preview-content h2 {
+		margin: 0.45rem 0 1.25rem;
+		font-size: clamp(1.35rem, 2.6vw, 1.8rem);
+		letter-spacing: -0.025em;
+	}
+	.folder-choice {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.9rem;
+		border: 1px solid color-mix(in srgb, var(--cc-layer-team) 60%, var(--cc-border));
+		border-radius: 10px;
+		background: color-mix(in srgb, var(--cc-layer-team) 9%, var(--cc-surface));
+		color: var(--cc-layer-team);
+	}
+	.folder-choice div { display: grid; gap: 0.12rem; }
+	.folder-choice strong { color: var(--cc-text); font-size: 0.85rem; }
+	.folder-choice span { color: var(--cc-text-muted); font-size: 0.7rem; }
+	.folder-choice .selected-mark {
+		display: grid;
+		place-items: center;
+		width: 1.4rem;
+		height: 1.4rem;
+		border-radius: 50%;
+		background: var(--cc-layer-team);
+		color: var(--cc-canvas);
+		font-weight: 700;
+	}
+	.preview-success {
+		display: flex;
+		align-items: center;
+		gap: 0.7rem;
+		margin-top: 0.8rem;
+		padding: 0.8rem 0.9rem;
+		border-bottom: 1px solid var(--cc-border);
+	}
+	.preview-success > span {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 50%;
+		background: var(--cc-layer-team);
+	}
+	.preview-success div { display: grid; gap: 0.05rem; }
+	.preview-success strong { color: var(--cc-text); font-size: 0.78rem; }
+	.preview-success small { color: var(--cc-text-muted); }
+	.preview-action {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 1rem;
+		width: 100%;
+		min-height: 2.6rem;
+		margin-top: 1rem;
+		padding: 0 0.9rem;
+		border-radius: 9px;
+		background: var(--cc-cta);
+		color: var(--cc-on-cta);
+		font-size: 0.8rem;
+		font-weight: 700;
 	}
-	.map-header {
-		padding: 0.3rem 0.35rem 0.95rem;
-		border-bottom: 1px solid var(--cc-border);
+	.app-preview figcaption {
+		padding: 0.7rem 1rem;
+		border-top: 1px solid var(--cc-border);
+		color: var(--cc-text-faint);
+		font-size: 0.68rem;
+		text-align: right;
+	}
+
+	.activation,
+	.source-install,
+	.trust {
+		padding: 5.5rem 0;
+		border-top: 1px solid var(--cc-border);
+	}
+	.section-intro {
+		display: flex;
+		align-items: end;
+		justify-content: space-between;
+		gap: 2rem;
+		margin-bottom: 3rem;
+	}
+	.section-intro h2 {
+		max-width: 15ch;
+		margin: 0;
+		font-size: clamp(2.2rem, 5vw, 4.5rem);
+		line-height: 1;
+		letter-spacing: -0.035em;
+		text-wrap: balance;
+	}
+	.section-intro > p {
+		max-width: 28rem;
+		margin: 0;
+		color: var(--cc-text-muted);
+		line-height: 1.65;
+	}
+	.activation-steps {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.activation-steps > li {
+		display: grid;
+		grid-template-columns: 3.2rem minmax(15rem, 0.72fr) minmax(20rem, 1.28fr);
+		gap: clamp(1.25rem, 4vw, 3.5rem);
+		align-items: start;
+		padding: 2.25rem 0;
+		border-top: 1px solid var(--cc-border);
+	}
+	.activation-steps > li:last-child { padding-bottom: 0; }
+	.step-number {
+		display: grid;
+		place-items: center;
+		width: 2.8rem;
+		height: 2.8rem;
+		border-radius: 10px;
+		background: color-mix(in srgb, var(--cc-layer-team) 12%, var(--cc-surface));
+		color: var(--cc-layer-team);
+		font-family: var(--cc-font-mono);
+		font-size: 0.75rem;
+		font-weight: 700;
+	}
+	.step-copy h3 {
+		margin: 0 0 0.65rem;
+		font-size: 1.45rem;
+		letter-spacing: -0.02em;
+	}
+	.step-copy p {
+		margin: 0;
+		color: var(--cc-text-muted);
+		line-height: 1.65;
+	}
+	.step-copy :global(.code-block) { margin-top: 1.2rem; }
+	.step-proof {
+		align-self: center;
+		border-top: 1px solid var(--cc-border-strong);
+		border-bottom: 1px solid var(--cc-border-strong);
+		background: var(--cc-surface-soft);
+	}
+	.source-proof { display: grid; gap: 0.25rem; padding: 1.1rem 1.25rem; }
+	.source-proof span,
+	.source-proof small {
 		color: var(--cc-text-muted);
 		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+	}
+	.source-proof strong { color: var(--cc-text); overflow-wrap: anywhere; }
+	.client-proof { display: flex; flex-wrap: wrap; gap: 0.55rem; padding: 1rem; }
+	.client-proof span {
+		padding: 0.45rem 0.7rem;
+		border-radius: 999px;
+		background: var(--cc-surface-solid);
+		color: var(--cc-text-body);
 		font-size: 0.72rem;
+	}
+	.result-preview {
+		margin: 0;
+		padding: 1rem;
+		border: 1px solid var(--cc-border);
+		border-radius: 12px;
+		background: var(--cc-surface-soft);
+	}
+	.result-header,
+	.result-row,
+	.conflict-row { display: grid; align-items: center; }
+	.result-header {
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 1rem;
+		padding: 0.25rem 0.2rem 1rem;
+	}
+	.result-header div { display: grid; gap: 0.12rem; }
+	.result-header span,
+	.result-header h3,
+	.result-row code,
+	.conflict-row code { font-family: var(--cc-font-mono); }
+	.result-header span {
+		color: var(--cc-text-muted);
+		font-size: 0.66rem;
+		letter-spacing: 0.06em;
 		text-transform: uppercase;
-		letter-spacing: 0.08em;
 	}
-	.map-status,
-	.result-status {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.45rem;
-	}
-	.map-status i,
+	.result-header h3 { margin: 0; font-size: 0.86rem; letter-spacing: 0; }
+	.result-status { display: inline-flex; align-items: center; gap: 0.45rem; }
 	.result-status i {
 		width: 0.45rem;
 		height: 0.45rem;
 		border-radius: 50%;
 		background: var(--cc-layer-team);
-		box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--cc-layer-team) 14%, transparent);
-	}
-	.install-map ol {
-		display: grid;
-		gap: 0.6rem;
-		margin: 0;
-		padding: 1rem 0;
-		list-style: none;
-	}
-	.install-map li {
-		display: grid;
-		grid-template-columns: 3rem minmax(0, 1fr);
-		align-items: center;
-		gap: 0.8rem;
-		padding: 1rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-md);
-		background: var(--cc-surface-soft);
-	}
-	.install-map li > span {
-		display: grid;
-		place-items: center;
-		width: 2.5rem;
-		height: 2.5rem;
-		border-radius: var(--cc-radius-sm);
-		background: color-mix(in srgb, var(--step-color) 15%, var(--cc-surface-solid));
-		color: var(--step-color);
-		font-family: var(--cc-font-mono);
-		font-size: 0.72rem;
-		font-weight: 700;
-	}
-	.install-map li div {
-		display: grid;
-		gap: 0.1rem;
-	}
-	.install-map li strong {
-		color: var(--cc-text);
-	}
-	.install-map li small {
-		color: var(--cc-text-muted);
-	}
-	.install-map figcaption {
-		padding: 0.85rem 0.35rem 0.2rem;
-		font-family: var(--cc-font-mono);
-		font-size: 0.72rem;
-	}
-	.install-map figcaption span {
-		color: var(--cc-text-muted);
-	}
-	.install-map figcaption strong {
-		color: var(--cc-layer-team);
-		font-weight: 500;
-	}
-	.quickstart {
-		display: grid;
-		grid-template-columns: 15rem minmax(0, 1fr);
-		gap: 4.5rem;
-		padding: 5.5rem 0;
-		border-top: 1px solid var(--cc-border);
-	}
-	.quickstart-nav {
-		position: sticky;
-		top: 2rem;
-		align-self: start;
-	}
-	.quickstart-nav h2 {
-		margin: 0.55rem 0 1.5rem;
-		font-size: 1.8rem;
-		letter-spacing: -0.03em;
-	}
-	.quickstart-nav nav {
-		display: grid;
-		gap: 0.1rem;
-	}
-	.quickstart-nav nav a {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-		min-height: 2.75rem;
-		padding: 0 0.6rem;
-		border-radius: var(--cc-radius-sm);
-		color: var(--cc-text-body);
-		font-size: 0.9rem;
-		text-decoration: none;
-		transition: background var(--cc-transition), color var(--cc-transition);
-	}
-	.quickstart-nav nav a:hover {
-		background: var(--cc-surface-soft);
-		color: var(--cc-text);
-	}
-	.quickstart-nav nav span {
-		color: var(--cc-text-faint);
-		font-family: var(--cc-font-mono);
-		font-size: 0.68rem;
-	}
-	.local-note {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
-		gap: 0.65rem;
-		margin-top: 1.75rem;
-		padding-top: 1.25rem;
-		border-top: 1px solid var(--cc-border);
-		color: var(--cc-layer-team);
-	}
-	.local-note p {
-		margin: 0;
-		color: var(--cc-text-muted);
-		font-size: 0.82rem;
-		line-height: 1.5;
-	}
-	.local-note strong {
-		display: block;
-		color: var(--cc-text-body);
-	}
-	.steps {
-		min-width: 0;
-		container: install-steps / inline-size;
-	}
-	.install-step {
-		scroll-margin-top: 2rem;
-		padding: 0 0 5.5rem;
-	}
-	.install-step + .install-step {
-		padding-top: 0.5rem;
-		border-top: 1px solid var(--cc-border);
-	}
-	.step-heading {
-		display: grid;
-		grid-template-columns: 3rem minmax(0, 1fr);
-		align-items: center;
-		gap: 1rem;
-		padding-top: 2.2rem;
-	}
-	.install-step:first-child .step-heading {
-		padding-top: 0;
-	}
-	.step-heading > span {
-		display: grid;
-		place-items: center;
-		width: 3rem;
-		height: 3rem;
-		border-radius: var(--cc-radius-md);
-		background: color-mix(in srgb, var(--cc-layer-team) 12%, var(--cc-surface));
-		color: var(--cc-layer-team);
-		font-family: var(--cc-font-mono);
-		font-size: 0.74rem;
-		font-weight: 700;
-	}
-	.step-heading h2 {
-		margin: 0.15rem 0 0;
-		font-size: clamp(1.8rem, 3vw, 2.5rem);
-		line-height: 1.1;
-		letter-spacing: -0.035em;
-	}
-	.step-intro {
-		max-width: 43rem;
-		margin: 1.25rem 0 1.5rem 4rem;
-		color: var(--cc-text-body);
-		line-height: 1.7;
-	}
-	.step-intro a,
-	.trust-links a {
-		color: var(--cc-layer-team);
-	}
-	.install-step > :global(.code-block),
-	.result-preview,
-	.next-actions {
-		margin-left: 4rem;
-	}
-	.route-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 1rem;
-		margin-left: 4rem;
-	}
-	.route {
-		display: flex;
-		flex-direction: column;
-		min-width: 0;
-		padding: 1.25rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-lg);
-		background: var(--cc-surface-soft);
-	}
-	.route--recommended {
-		border-color: color-mix(in srgb, var(--cc-layer-team) 48%, var(--cc-border));
-		background: color-mix(in srgb, var(--cc-layer-team) 6%, var(--cc-surface));
-	}
-	.route-topline {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
-		color: var(--cc-layer-team);
-	}
-	.route-platform {
-		color: var(--cc-text-faint);
-		font-family: var(--cc-font-mono);
-		font-size: 0.62rem;
-		letter-spacing: 0.04em;
-		text-align: right;
-		text-transform: uppercase;
-	}
-	.route-badge {
-		padding: 0.25rem 0.5rem;
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--cc-layer-team) 14%, transparent);
-		color: var(--cc-layer-team);
-		font-family: var(--cc-font-mono);
-		font-size: 0.65rem;
-		font-weight: 700;
-		letter-spacing: 0.07em;
-		text-transform: uppercase;
-	}
-	.route-badge--quiet {
-		background: var(--cc-surface-soft);
-		color: var(--cc-text-muted);
-	}
-	.prompt-mark {
-		font-family: var(--cc-font-mono);
-		font-weight: 700;
-	}
-	.route h3 {
-		margin: 1.2rem 0 0.5rem;
-		font-size: 1.3rem;
-	}
-	.route h3 code {
-		font-family: var(--cc-font-mono);
-		font-size: 0.92em;
-	}
-	.route p {
-		margin: 0 0 1.2rem;
-		color: var(--cc-text-muted);
-		font-size: 0.9rem;
-		line-height: 1.6;
-	}
-	.route-action {
-		display: inline-flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
-		min-height: 2.75rem;
-		margin-top: auto;
-		padding: 0 0.9rem;
-		border-radius: var(--cc-radius-sm);
-		background: var(--cc-cta);
-		color: var(--cc-on-cta);
-		font-weight: 700;
-		text-decoration: none;
-	}
-	.route-action:hover {
-		background: var(--cc-cta-hover);
-	}
-	.route > small {
-		margin-top: 0.75rem;
-		color: var(--cc-text-faint);
-		font-family: var(--cc-font-mono);
-		font-size: 0.65rem;
-		overflow-wrap: anywhere;
-	}
-	.route :global(.code-block) {
-		margin-top: auto;
-	}
-	.result-preview {
-		margin-top: 1rem;
-		padding: 1rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-lg);
-		background: var(--cc-surface-soft);
-	}
-	.result-header {
-		padding: 0.25rem 0.2rem 1rem;
-	}
-	.result-header div {
-		display: grid;
-		gap: 0.12rem;
-	}
-	.result-header span,
-	.result-header h3,
-	.result-row code,
-	.conflict-row code {
-		font-family: var(--cc-font-mono);
-	}
-	.result-header span {
-		color: var(--cc-text-muted);
-		font-size: 0.66rem;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-	}
-	.result-header h3 {
-		margin: 0;
-		font-size: 0.88rem;
-		letter-spacing: 0;
 	}
 	.result-row,
 	.conflict-row {
-		display: grid;
 		grid-template-columns: auto minmax(0, 1fr) auto;
-		align-items: center;
-		gap: 0.85rem;
-		padding: 1rem;
+		gap: 0.8rem;
+		padding: 0.9rem;
 		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-md);
+		border-radius: 10px;
 		background: var(--cc-surface-solid);
 	}
 	.result-swatch {
-		width: 0.7rem;
-		height: 2.5rem;
+		width: 0.55rem;
+		height: 2.4rem;
 		border-radius: 999px;
 		background: var(--result-color);
 	}
 	.result-row div,
-	.conflict-row div {
-		display: grid;
-		gap: 0.18rem;
-	}
+	.conflict-row div { display: grid; gap: 0.16rem; }
 	.result-row small,
 	.conflict-row small {
 		color: var(--cc-text-muted);
 		font-family: var(--cc-font-mono);
-		font-size: 0.62rem;
-		letter-spacing: 0.07em;
+		font-size: 0.6rem;
 		text-transform: uppercase;
 	}
-	.result-row strong {
-		color: var(--cc-text);
-		font-size: 0.9rem;
-		font-weight: 500;
-	}
+	.result-row strong { color: var(--cc-text); font-size: 0.86rem; font-weight: 500; }
 	.result-row code,
-	.conflict-row code {
-		color: var(--cc-text-muted);
-		font-size: 0.65rem;
-		white-space: nowrap;
-	}
+	.conflict-row code { color: var(--cc-text-muted); font-size: 0.62rem; white-space: nowrap; }
 	.conflict-row {
 		margin-top: 0.55rem;
 		border-color: color-mix(in srgb, var(--cc-conflict) 30%, var(--cc-border));
 		color: var(--cc-conflict);
 	}
-	.conflict-row span {
-		color: var(--cc-text-body);
-		font-size: 0.82rem;
-	}
-	.result-preview figcaption {
-		margin-top: 0.8rem;
-		color: var(--cc-text-faint);
-		font-family: var(--cc-font-mono);
-		font-size: 0.65rem;
-	}
-	.next-actions {
-		display: grid;
-		grid-template-columns: minmax(12rem, 0.65fr) minmax(0, 1fr);
-		align-items: center;
-		gap: 1rem;
-		margin-top: 1rem;
-		padding: 1rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-lg);
-		background: var(--cc-surface-soft);
-	}
-	.next-actions > div {
-		display: grid;
-		gap: 0.18rem;
-	}
-	.next-actions strong {
-		color: var(--cc-text);
-	}
-	.next-actions span {
-		color: var(--cc-text-muted);
-		font-size: 0.84rem;
-	}
-	.next-actions code,
-	.trust code {
-		font-family: var(--cc-font-mono);
-	}
-	.channels {
-		padding: 5.5rem 0;
-		border-top: 1px solid var(--cc-border);
-	}
-	.section-heading {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.7fr);
-		gap: 0.5rem 3rem;
-		align-items: end;
-		margin-bottom: 2.5rem;
-	}
-	.section-heading > p {
-		grid-column: 1 / -1;
-	}
-	.section-heading h2 {
-		max-width: 18ch;
-		margin: 0;
-		font-size: clamp(2.3rem, 4.5vw, 4.2rem);
-		line-height: 1;
-		letter-spacing: -0.05em;
-	}
-	.section-heading > span {
-		color: var(--cc-text-muted);
-		line-height: 1.7;
-	}
-	.channel-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 1px;
-		border: 1px solid var(--cc-border);
-		background: var(--cc-border);
-	}
-	.channel-grid article {
-		padding: 1.75rem;
-		background: var(--cc-canvas);
-	}
-	.channel-grid article > div {
+	.conflict-row span { color: var(--cc-text-body); font-size: 0.78rem; }
+	.download-strip {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		color: var(--cc-layer-team);
+		gap: 2rem;
+		margin-top: 3.5rem;
+		padding: 1.5rem 0;
+		border-top: 1px solid var(--cc-border-strong);
+		border-bottom: 1px solid var(--cc-border-strong);
 	}
-	.channel-grid article > div span {
-		font-family: var(--cc-font-mono);
-		font-size: 0.65rem;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-	}
-	.channel-grid h3 {
-		margin: 2.3rem 0 0.55rem;
-		font-size: 1.35rem;
-	}
-	.channel-grid p {
-		min-height: 4.5rem;
-		margin: 0 0 1.25rem;
-		color: var(--cc-text-body);
-		font-size: 0.92rem;
-		line-height: 1.6;
-	}
-	.channel-grid small {
+	.download-strip > div { display: grid; gap: 0.18rem; }
+	.download-strip strong { color: var(--cc-text); font-size: 1.1rem; }
+	.download-strip span { color: var(--cc-text-muted); font-size: 0.8rem; }
+
+	.section-intro--source { align-items: start; }
+	.section-intro--source > div { max-width: 43rem; }
+	.section-intro--source h2 { max-width: 18ch; font-size: clamp(2rem, 4vw, 3.3rem); }
+	.section-intro--source p {
+		margin: 1rem 0 0;
 		color: var(--cc-text-muted);
-		font-size: 0.76rem;
-		line-height: 1.5;
+		line-height: 1.65;
 	}
-	.trust {
+	.section-intro--source > span {
+		max-width: 19rem;
+		color: var(--cc-text-faint);
+		font-family: var(--cc-font-mono);
+		font-size: 0.7rem;
+		line-height: 1.7;
+		text-align: right;
+	}
+	.source-details {
+		border-top: 1px solid var(--cc-border-strong);
+		border-bottom: 1px solid var(--cc-border-strong);
+	}
+	.source-details > summary {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		min-height: 5rem;
+		cursor: pointer;
+		list-style: none;
+	}
+	.source-details > summary::-webkit-details-marker { display: none; }
+	.source-details > summary > span:first-child { display: grid; gap: 0.16rem; }
+	.source-details > summary strong { color: var(--cc-text); font-size: 1.05rem; }
+	.source-details > summary small { color: var(--cc-text-muted); font-family: var(--cc-font-mono); }
+	.source-details > summary > span:last-child {
+		color: var(--cc-layer-team);
+		font-size: 1.6rem;
+		transition: transform var(--cc-transition);
+	}
+	.source-details[open] > summary > span:last-child { transform: rotate(45deg); }
+	.source-details-body { padding: 0 0 2.5rem; }
+	.source-route {
 		display: grid;
-		grid-template-columns: minmax(15rem, 0.75fr) minmax(0, 1.25fr);
-		gap: 4rem;
-		padding: 5.5rem 0 1rem;
+		grid-template-columns: minmax(15rem, 0.72fr) minmax(0, 1.28fr);
+		gap: 1.4rem 3rem;
+		padding: 2.5rem 0;
 		border-top: 1px solid var(--cc-border);
 	}
-	.trust h2 {
-		max-width: 9ch;
-		margin: 0.5rem 0 0;
-		font-size: clamp(2.5rem, 5vw, 4.5rem);
-		line-height: 1;
-		letter-spacing: -0.05em;
-	}
-	.trust-copy > p:first-child {
+	.route-heading { grid-row: span 3; }
+	.route-heading h3,
+	.resolver-proof h3 { margin: 0.45rem 0 0.65rem; font-size: 1.5rem; letter-spacing: -0.02em; }
+	.route-heading p,
+	.resolver-proof p,
+	.route-footnote {
 		margin: 0;
-		font-size: 1.05rem;
+		color: var(--cc-text-muted);
+		line-height: 1.65;
+	}
+	.route-footnote { font-size: 0.82rem; }
+	.route-footnote a { color: var(--cc-layer-team); }
+	.cli-alternative { color: var(--cc-text-body); }
+	.cli-alternative summary { cursor: pointer; font-weight: 700; }
+	.cli-alternative :global(.code-block) { margin-top: 0.9rem; }
+	.resolver-proof {
+		display: grid;
+		grid-template-columns: minmax(15rem, 0.72fr) minmax(0, 1.28fr);
+		align-items: center;
+		gap: 3rem;
+		padding-top: 2.5rem;
+		border-top: 1px solid var(--cc-border);
+	}
+
+	.trust {
+		display: grid;
+		grid-template-columns: minmax(15rem, 0.7fr) minmax(0, 1.3fr);
+		gap: 4rem;
+	}
+	.trust > div:first-child { color: var(--cc-layer-team); }
+	.trust h2 {
+		max-width: 15ch;
+		margin: 1rem 0 0;
+		font-size: clamp(2rem, 4vw, 3.2rem);
+		line-height: 1.05;
+		letter-spacing: -0.03em;
+	}
+	.trust-copy > p {
+		max-width: 47rem;
+		margin: 0;
+		color: var(--cc-text-body);
+		font-size: 1.04rem;
 		line-height: 1.75;
 	}
-	.boundary-note {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
-		gap: 0.8rem;
-		margin: 1.75rem 0;
-		padding: 1rem;
-		border: 1px solid color-mix(in srgb, var(--cc-conflict) 32%, var(--cc-border));
-		border-radius: var(--cc-radius-md);
-		background: color-mix(in srgb, var(--cc-conflict) 6%, var(--cc-surface));
-		color: var(--cc-conflict);
-	}
-	.boundary-note span {
-		color: var(--cc-text-body);
-		font-size: 0.9rem;
-	}
-	.boundary-note strong {
-		color: var(--cc-text);
-	}
-	.trust-links {
+	.trust-copy nav {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.6rem 1.25rem;
+		gap: 0.7rem 1.4rem;
+		margin-top: 1.5rem;
 	}
-	.trust-links a {
+	.trust-copy a {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.35rem;
-		min-height: 2.75rem;
-		font-weight: 600;
-	}
-	details {
-		margin-top: 1.5rem;
-		padding-top: 1.5rem;
-		border-top: 1px solid var(--cc-border);
-	}
-	summary {
-		min-height: 2.75rem;
-		color: var(--cc-text);
+		color: var(--cc-layer-team);
 		font-weight: 700;
-		cursor: pointer;
 	}
-	details p {
-		color: var(--cc-text-muted);
-	}
-	@container install-steps (max-width: 42rem) {
-		.route-grid {
-			grid-template-columns: 1fr;
-		}
-	}
+
 	@media (max-width: 980px) {
-		.install-hero {
-			grid-template-columns: 1fr;
-			gap: 2.5rem;
-		}
-		.install-map {
-			max-width: 36rem;
-		}
-		.quickstart {
-			grid-template-columns: 1fr;
-			gap: 3rem;
-		}
-		.quickstart-nav {
-			position: static;
-		}
-		.quickstart-nav nav {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-		.local-note {
-			max-width: 28rem;
-		}
-		.channel-grid {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-		.channel-grid p {
-			min-height: 0;
-		}
+		.install-hero { grid-template-columns: 1fr; min-height: auto; }
+		.hero-copy { max-width: 45rem; }
+		h1 { max-width: 12ch; }
+		.app-preview { max-width: 43rem; }
+		.activation-steps > li { grid-template-columns: 3rem minmax(0, 1fr); }
+		.step-proof,
+		.result-preview { grid-column: 2; }
 	}
 	@media (max-width: 720px) {
-		.install-page {
-			padding: 4rem 1rem 0;
+		.install-page { padding-top: 3rem; }
+		.install-hero { padding-bottom: 4.5rem; }
+		.section-intro,
+		.download-strip { align-items: flex-start; flex-direction: column; }
+		.activation,
+		.source-install,
+		.trust { padding: 4rem 0; }
+		.activation-steps > li {
+			grid-template-columns: 2.8rem minmax(0, 1fr);
+			gap: 1rem 1.25rem;
 		}
-		.install-hero {
-			min-height: auto;
-			padding-bottom: 4rem;
-		}
-		h1 {
-			font-size: clamp(2.8rem, 14vw, 4.4rem);
-		}
-		.quickstart,
-		.channels,
-		.trust {
-			padding: 4rem 0;
-		}
-		.route-grid,
-		.channel-grid,
-		.section-heading,
-		.trust {
-			grid-template-columns: 1fr;
-		}
-		.route-grid,
-		.step-intro,
-		.install-step > :global(.code-block),
-		.result-preview,
-		.next-actions {
-			margin-left: 0;
-		}
-		.next-actions {
-			grid-template-columns: 1fr;
-		}
+		.step-proof,
+		.result-preview { grid-column: 1 / -1; }
+		.source-route,
+		.resolver-proof,
+		.trust { grid-template-columns: 1fr; gap: 1.5rem; }
+		.route-heading { grid-row: auto; }
+		.section-intro--source > span { text-align: left; }
 		.result-row,
-		.conflict-row {
-			grid-template-columns: auto minmax(0, 1fr);
-		}
+		.conflict-row { grid-template-columns: auto minmax(0, 1fr); }
 		.result-row code,
-		.conflict-row code {
-			grid-column: 2;
-		}
-		.section-heading > span {
-			margin-top: 1rem;
-		}
-		.trust {
-			gap: 2rem;
-		}
-		.trust h2 {
-			max-width: 12ch;
-		}
+		.conflict-row code { grid-column: 2; white-space: normal; }
 	}
-	@media (max-width: 480px) {
+	@media (max-width: 520px) {
+		.install-page { padding-inline: 1rem; }
+		h1 { font-size: clamp(2.65rem, 14vw, 4rem); }
 		.hero-actions,
-		.hero-actions .button {
-			width: 100%;
-		}
-		.hero-facts {
-			flex-direction: column;
-		}
-		.install-map {
-			padding: 0.75rem;
-		}
-		.quickstart-nav nav {
-			grid-template-columns: 1fr;
-		}
-		.step-heading {
-			grid-template-columns: 2.7rem minmax(0, 1fr);
-		}
-		.step-heading > span {
-			width: 2.7rem;
-			height: 2.7rem;
-		}
-		.route {
-			padding: 1rem;
-		}
-		.result-header {
-			align-items: flex-start;
-			flex-direction: column;
-		}
+		.hero-actions .button,
+		.download-strip,
+		.download-strip .button { width: 100%; box-sizing: border-box; }
+		.hero-facts { display: grid; }
+		.app-shell-preview { grid-template-columns: 1fr; min-height: 0; }
+		.preview-sidebar { display: none; }
+		.preview-content { padding: 1.25rem; }
+		.activation-steps > li { grid-template-columns: 1fr; }
+		.step-number { width: 2.5rem; height: 2.5rem; }
+		.step-proof,
+		.result-preview { grid-column: 1; }
+		.client-proof { gap: 0.4rem; }
+		.source-details > summary { min-height: 4.5rem; }
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.button,
-		.quickstart-nav nav a {
-			transition: none;
-		}
+		.source-details > summary > span:last-child { transition: none; }
 	}
 </style>

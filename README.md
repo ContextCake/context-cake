@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/brand/readme-hero.svg" alt="ContextCake resolves layered knowledge into one sourced answer" width="900" />
+  <img src="assets/brand/demo-cascade.gif" alt="The ContextCake console resolving a layered decision: clicking the conflicting Primary database card opens the resolved answer, showing each section's source layer (personal, team, company) and the overridden company standard" width="900" />
 </p>
 
 ---

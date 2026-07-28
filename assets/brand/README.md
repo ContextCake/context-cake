@@ -1,8 +1,10 @@
 # ContextCake brand assets
 
 `contextcake-app-icon.svg` is the canonical ContextCake app mark. It is the source for
-the public marketing shell and the Starlight documentation header. Keep its three tiers
-centered and ordered personal, team, company from top to bottom.
+the public marketing shell, the Starlight documentation header, the site and console
+favicons, and the Mac app icon (`apps/desktop/build/icon.icns`, regenerated from this
+file via `npm run icon` in `apps/desktop`). Keep its three tiers centered and ordered
+personal, team, company from top to bottom.
 
 `demo-cascade.gif` is the GitHub README hero: a screen capture of the live console
 resolving a layered decision (the conflicting `Primary database` card opening its

@@ -16,6 +16,7 @@ npm run test:navigation
 npm run test:cli-status
 npm run smoke   # headless boot check: service up, token enforced, exits
 npm run smoke:bootfail
+npm run icon    # regenerate build/icon.icns + icon-master-1024.png from assets/brand/contextcake-app-icon.svg
 npm run pack    # unpacked .app (fast) — dist/ is gitignored
 npm run dist    # DMG + zip, ad-hoc signed in dev
 ```
@@ -35,6 +36,11 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   in renderer code will 401 inside the app.
 - **`resources/bin/contextcake` must stay executable** (mode 755) and POSIX-sh
   compatible — it's exec'd before any Node exists.
+- **The app icon is generated, never hand-edited.** `build/icon.icns` and
+  `build/icon-master-1024.png` are produced by `npm run icon` from the canonical
+  brand mark at `assets/brand/contextcake-app-icon.svg` (the same file the site
+  and console favicons mirror). To change the icon, change the brand SVG and
+  regenerate — a divergent icns is how the app shipped the old logo once already.
 - **`notarize: false` in electron-builder.yml is deliberate** until release
   secrets exist; the release workflow overrides it. Never ship an unnotarized
   artifact to users (distribution spec §7).

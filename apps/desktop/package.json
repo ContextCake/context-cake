@@ -11,6 +11,7 @@
     "start": "electron .",
     "dev": "npm run renderer && electron .",
     "test": "node --test test/*.test.mjs",
+    "icon": "electron scripts/generate-icon.mjs",
     "test:navigation": "node scripts/navigation-test.mjs",
     "test:cli-status": "node scripts/cli-status-test.mjs",
     "smoke": "CC_SMOKE=1 electron .",

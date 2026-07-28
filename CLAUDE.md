@@ -6,7 +6,7 @@
 # Run all tests
 npm test
 # or directly (mirrors the npm test chain):
-bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/git-sync-test.sh && bash packages/core/tests/capture-test.sh && bash packages/core/tests/team-sync-mcp-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh
+bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/pack-test.sh && bash packages/core/tests/git-sync-test.sh && bash packages/core/tests/capture-test.sh && bash packages/core/tests/team-sync-mcp-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh && bash packages/core/tests/setup-robustness-test.sh
 
 # Run the MCP server (cascade mode)
 node mcp-server.mjs --manifest layers.json
@@ -110,3 +110,4 @@ Key files:
 - The engine (`packages/core/src/`) is dependency-free — plain Node.js built-ins only. Do not add npm dependencies without discussion. The exceptions are `apps/console/`, `apps/site/`, and `apps/desktop/` — self-contained npm packages. Console and site never import from the engine; the desktop app imports engine modules by path (one-way: app → engine, never the reverse) and must never cause a dependency to leak into `packages/core`.
 - `apps/console/` and `apps/site/` each have their own `package.json`, build, and tests; run their commands from that subdirectory, not the repo root. Console CI lives at `.github/workflows/console-*.yml`, path-filtered to `apps/console/**` (production deploys on `console-v*` tags).
 - Tests create temp directories and clean up with `trap`. Run from the repo root.
+- **Disk-backed source walks are async and bounded** (`walkDocs` in `okf-local.mjs`: 10k doc files / 150k scanned entries, overridable via `CONTEXTCAKE_MAX_DOC_FILES` / `CONTEXTCAKE_MAX_SCAN_ENTRIES`; per-source resolve budget via `CONTEXTCAKE_SOURCE_BUDGET_MS`). Never reintroduce sync fs walks or unbounded per-source reads in the read path — the desktop app runs the engine on the Electron main process, where one blocking walk freezes the whole UI (the setup "Resolving…" hang). `/api/sources` validates folders and probes MCP commands at add time; keep new source kinds on that same fail-on-the-form contract.

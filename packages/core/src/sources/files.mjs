@@ -6,12 +6,12 @@
 //   listConceptIds() -> string[]
 //   close() -> noop
 
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
-import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading } from "./okf-local.mjs";
+import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading, walkDocs } from "./okf-local.mjs";
 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
-const EXTENSIONS = [".md", ".mdx", ".txt"];
+export const FILES_EXTENSIONS = [".md", ".mdx", ".txt"];
 
 export function createFilesSource({ name, level, root }) {
   return {
@@ -24,14 +24,21 @@ export function createFilesSource({ name, level, root }) {
       } catch {
         return null; // an arbitrary folder is user-facing — a bad id is a miss, not a crash
       }
-      for (const ext of EXTENSIONS) {
+      for (const ext of FILES_EXTENSIONS) {
         const filePath = path.join(root, `${safeId}${ext}`);
-        if (fs.existsSync(filePath)) return parseFile(filePath, ext);
+        let content, stat;
+        try {
+          [content, stat] = await Promise.all([fsp.readFile(filePath, "utf8"), fsp.stat(filePath)]);
+        } catch {
+          continue; // missing under this extension — try the next one
+        }
+        return parseFile(content, stat.mtime.toISOString().slice(0, 10), path.basename(filePath, ext), ext);
       }
       return null;
     },
     async listConceptIds() {
-      const ids = walkFiles(root).map((filePath) =>
+      const files = await walkDocs(root, FILES_EXTENSIONS);
+      const ids = files.map((filePath) =>
         toPosix(path.relative(root, filePath)).replace(/\.(md|mdx|txt)$/, ""),
       );
       return [...new Set(ids)];
@@ -40,10 +47,7 @@ export function createFilesSource({ name, level, root }) {
   };
 }
 
-function parseFile(filePath, ext) {
-  const content = fs.readFileSync(filePath, "utf8");
-  const mtime = fs.statSync(filePath).mtime.toISOString().slice(0, 10);
-  const stem = path.basename(filePath, ext);
+function parseFile(content, mtime, stem, ext) {
   if (ext === ".txt") return parsePlainText(content, stem, mtime);
   if (hasFrontmatter(content)) return parseConcept(content); // full OKF behavior, untouched
   return parsePlainMarkdown(content, stem, mtime);
@@ -106,25 +110,6 @@ function pushPlainSection(sections, section) {
 
 function stripAttrs(text) {
   return text.replace(/\{[^}]*\}/g, "").trim();
-}
-
-// Same walk posture as okf-local: skip dot-entries and node_modules; symlinks
-// are skipped entirely (Dirent.isDirectory/isFile are false for symlinks), so a
-// link escaping root is never followed.
-function walkFiles(root) {
-  if (!root || !fs.existsSync(root)) return [];
-  const files = [];
-  const stack = [root];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    for (const dirent of fs.readdirSync(current, { withFileTypes: true })) {
-      if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
-      const fullPath = path.join(current, dirent.name);
-      if (dirent.isDirectory()) stack.push(fullPath);
-      else if (dirent.isFile() && EXTENSIONS.some((ext) => dirent.name.endsWith(ext))) files.push(fullPath);
-    }
-  }
-  return files.sort();
 }
 
 function toPosix(value) {

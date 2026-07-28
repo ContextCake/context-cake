@@ -52,18 +52,32 @@ export interface DataSource {
 
 // ---- Transport --------------------------------------------------------------
 
+/** Default deadline for engine API calls — no request may spin forever. */
+export const API_TIMEOUT_MS = 60_000
+
 /**
  * fetch for the same-origin engine API. Inside the desktop app the preload
  * script injects a per-launch bearer token (`window.__CC_DESKTOP`) that the
  * local service requires on every /api route; in a browser this is a plain
  * fetch. All renderer code hitting /api/* must go through this.
+ *
+ * Every call carries an abort deadline (callers can pass their own `signal`
+ * to tighten it) so a stalled backend surfaces as a typed error instead of an
+ * eternal spinner — the setup wizard's "Resolving…" hang.
  */
 export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const withSignal: RequestInit = { ...init, signal: init.signal ?? AbortSignal.timeout(API_TIMEOUT_MS) }
   const token = typeof window !== 'undefined' ? window.__CC_DESKTOP?.token : undefined
-  if (!token) return fetch(path, init)
+  if (!token) return fetch(path, withSignal)
   const headers = new Headers(init.headers)
   headers.set('authorization', `Bearer ${token}`)
-  return fetch(path, { ...init, headers })
+  return fetch(path, { ...withSignal, headers })
+}
+
+/** True when a fetch rejection came from the request deadline, not the network. */
+export function isTimeout(e: unknown): boolean {
+  const name = typeof e === 'object' && e !== null ? (e as { name?: unknown }).name : undefined
+  return name === 'TimeoutError' || name === 'AbortError'
 }
 
 // ---- Mode selection --------------------------------------------------------
@@ -141,8 +155,13 @@ class LiveSource implements DataSource {
     let res: Response
     try {
       res = await apiFetch(path, { headers: { accept: 'application/json' } })
-    } catch {
-      throw new LiveDataError('unreachable', `Cannot reach the ContextCake server (${path}). Is the playground running?`)
+    } catch (e) {
+      throw new LiveDataError(
+        'unreachable',
+        isTimeout(e)
+          ? `The ContextCake server took too long to respond (${path}). A source may be very large or unreachable.`
+          : `Cannot reach the ContextCake server (${path}). Is the playground running?`,
+      )
     }
     if (!res.ok) {
       throw new LiveDataError('bad-status', `Server returned ${res.status} for ${path}`, res.status)

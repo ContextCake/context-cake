@@ -4,7 +4,7 @@
 //   listConceptIds() -> string[]
 //   close() -> noop
 
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 
 export function createOkfLocalSource({ name, level, root }) {
@@ -14,11 +14,17 @@ export function createOkfLocalSource({ name, level, root }) {
     async loadConcept(id) {
       const safeId = normalizeConceptId(id);
       const filePath = path.join(root, `${safeId}.md`);
-      if (!fs.existsSync(filePath)) return null;
-      return parseConcept(fs.readFileSync(filePath, "utf8"));
+      let content;
+      try {
+        content = await fsp.readFile(filePath, "utf8");
+      } catch {
+        return null;
+      }
+      return parseConcept(content);
     },
     async listConceptIds() {
-      return walkMarkdown(root).map((filePath) =>
+      const files = await walkDocs(root, [".md"]);
+      return files.map((filePath) =>
         toPosix(path.relative(root, filePath)).replace(/\.md$/i, ""),
       );
     },
@@ -123,17 +129,61 @@ export function isTraversal(normalized) {
   );
 }
 
-function walkMarkdown(root) {
-  if (!root || !fs.existsSync(root)) return [];
+// ---- shared bounded walk ----------------------------------------------------
+//
+// One async walker for every disk-backed adapter (okf-local, files, and the
+// service's add-time folder probe). Async so a big tree never blocks the event
+// loop — inside the desktop app this code runs in the Electron main process,
+// where a synchronous walk freezes the whole UI. Bounded so a folder that is
+// too large to be a context layer (a home directory, a monorepo checkout)
+// fails fast with an actionable message instead of grinding for minutes.
+// Same skip posture as before: dot-entries and node_modules are skipped, and
+// symlinks are never followed (Dirent.isDirectory/isFile are false for them).
+
+export const WALK_LIMITS = {
+  maxFiles: envLimit("CONTEXTCAKE_MAX_DOC_FILES", 10_000),
+  maxEntries: envLimit("CONTEXTCAKE_MAX_SCAN_ENTRIES", 150_000),
+};
+
+function envLimit(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export async function walkDocs(root, extensions, limits = WALK_LIMITS) {
+  if (!root) return [];
+  const { maxFiles, maxEntries } = { ...WALK_LIMITS, ...limits };
   const files = [];
+  let scanned = 0;
   const stack = [root];
   while (stack.length > 0) {
     const current = stack.pop();
-    for (const dirent of fs.readdirSync(current, { withFileTypes: true })) {
+    let dirents;
+    try {
+      dirents = await fsp.readdir(current, { withFileTypes: true });
+    } catch {
+      continue; // missing root or an unreadable subfolder — skip, don't crash the layer
+    }
+    for (const dirent of dirents) {
       if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
+      scanned += 1;
+      if (scanned > maxEntries) {
+        throw new Error(
+          `This folder is too large to index (scanned over ${maxEntries.toLocaleString("en-US")} entries). ` +
+            `Choose a more specific folder, such as your notes or docs directory.`,
+        );
+      }
       const fullPath = path.join(current, dirent.name);
       if (dirent.isDirectory()) stack.push(fullPath);
-      else if (dirent.isFile() && dirent.name.endsWith(".md")) files.push(fullPath);
+      else if (dirent.isFile() && extensions.some((ext) => dirent.name.endsWith(ext))) {
+        files.push(fullPath);
+        if (files.length > maxFiles) {
+          throw new Error(
+            `This folder has too many documents to index (over ${maxFiles.toLocaleString("en-US")}). ` +
+              `Choose a more specific folder, such as your notes or docs directory.`,
+          );
+        }
+      }
     }
   }
   return files.sort();

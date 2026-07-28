@@ -121,6 +121,18 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
         return res?.nodes ?? [];
       } catch (e) { warn(e); return []; }
     },
+    // Add-time health check: unlike the read methods (which degrade to
+    // null/[] so one dead source never sinks a resolve), probe() surfaces the
+    // failure — a wrong command must be rejected while the user is still
+    // looking at the form, not discovered as a hang on the first resolve.
+    // tools/list is mandatory in the MCP spec, so any compliant server answers.
+    // Bounded by the same per-request timeout as every other send().
+    async probe() {
+      ensureStarted();
+      if (startError) throw startError;
+      await ready;
+      return send("tools/list", {});
+    },
     close() {
       closed = true;
       if (rl) { try { rl.close(); } catch {} rl = null; }

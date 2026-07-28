@@ -99,6 +99,42 @@ describe('SetupWizard connection handoff', () => {
     }))
   })
 
+  it('surfaces server-side folder validation inline at the add step', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/sources' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ error: 'Folder not found: /tmp/nope' }), {
+          status: 400, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/nope')
+    await act(async () => button('Next').click())
+
+    expect(container.textContent).toContain('Folder not found: /tmp/nope')
+    // Still on the add step — the wizard must not advance past a rejected source.
+    expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
+  })
+
+  it('shows the indexed document count on the review step', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
+      JSON.stringify(url === '/api/sources' && init?.method === 'POST' ? { ok: true, added: 'personal', docCount: 3 } : {}),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ))
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/work-vault')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+    await act(async () => button('Skip for now').click())
+
+    expect(container.textContent).toContain('/tmp/work-vault · 3 docs')
+  })
+
   it('keeps advanced MCP fields hidden until the user chooses to connect a server', async () => {
     await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
 

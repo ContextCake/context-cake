@@ -64,6 +64,17 @@ describe('LiveSource error taxonomy', () => {
     await expect(source.graph()).rejects.toBeInstanceOf(LiveDataError)
   })
 
+  it('reports a request timeout honestly — an eternal "Resolving…" is never an option', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockRejectedValue(new DOMException('The operation timed out', 'TimeoutError'))
+    const source = createDataSource('live')
+
+    await expect(source.graph()).rejects.toMatchObject({
+      kind: 'unreachable',
+      message: expect.stringContaining('took too long'),
+    })
+  })
+
   it('throws a LiveDataError with kind "bad-status" and the status on non-ok', async () => {
     const { createDataSource } = await import('./api')
     vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500, json: async () => ({}) } as Response)

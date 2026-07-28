@@ -20,9 +20,28 @@ function encoder() {
   return enc;
 }
 
+// Building the encoder is a one-time ~800ms synchronous block (2.3MB rank
+// table). Hosts that run on a UI-owning event loop (the desktop app's main
+// process) call this at boot so the cost is never paid mid-request.
+export function warmTokenizer() {
+  try { encoder(); } catch { /* countTokens degrades to 0 on a broken vendor file */ }
+}
+
+// Exact BPE beyond this many characters is CPU-bound for seconds per megabyte —
+// and countTokens runs on every doc during /api/graph, inside the desktop app's
+// main process. Encode a prefix exactly and extrapolate for oversized texts:
+// the count is a budgeting proxy either way (o200k vs Claude), and a bounded
+// estimate beats pinning the UI on a giant generated markdown file.
+const EXACT_ENCODE_LIMIT = 200_000;
+
 export function countTokens(text) {
   if (!text) return 0;
-  try { return encoder().encode(String(text)).length; } catch { return 0; }
+  const s = String(text);
+  try {
+    if (s.length <= EXACT_ENCODE_LIMIT) return encoder().encode(s).length;
+    const prefix = encoder().encode(s.slice(0, EXACT_ENCODE_LIMIT)).length;
+    return Math.round((prefix * s.length) / EXACT_ENCODE_LIMIT);
+  } catch { return 0; }
 }
 
 // Approximate the text a source/agent actually carries for a concept:

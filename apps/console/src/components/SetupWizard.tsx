@@ -17,18 +17,34 @@ interface AddedLayer {
   detail: string
 }
 
-async function postSource(body: Record<string, unknown>): Promise<void> {
+// Adding/syncing a github source runs a `git clone` server-side (bounded at
+// 120s there) — give these mutations more headroom than apiFetch's default.
+const MUTATION_TIMEOUT_MS = 150_000
+
+async function postSource(body: Record<string, unknown>): Promise<{ docCount?: number }> {
   const res = await apiFetch('/api/sources', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
   })
-  const data = await res.json().catch(() => ({}) as { error?: string })
+  const data = await res.json().catch(() => ({}) as { error?: string; docCount?: number })
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
+  return data as { docCount?: number }
+}
+
+/** "…/notes · 12 docs", or an honest nudge when the folder has none yet. */
+function describeFolder(path: string, docCount: number | undefined): string {
+  if (docCount === undefined) return path
+  if (docCount === 0) return `${path} · no documents found yet — add Markdown files and reload`
+  return `${path} · ${docCount} doc${docCount === 1 ? '' : 's'}`
 }
 
 async function syncSource(name: string): Promise<void> {
-  const res = await apiFetch(`/api/sources/sync?name=${encodeURIComponent(name)}`, { method: 'POST' })
+  const res = await apiFetch(`/api/sources/sync?name=${encodeURIComponent(name)}`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
+  })
   const data = await res.json().catch(() => ({}) as { error?: string })
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
 }
@@ -272,11 +288,11 @@ export function SetupWizard({
     setPersonalBusy(true)
     setPersonalErr(null)
     try {
-      await postSource({ kind: personalKind, name: personalName.trim(), level: 3, path: personalPath.trim() })
-      setAdded((prev) => [...prev, { kind: personalKind, name: personalName.trim(), level: 3, detail: personalPath.trim() }])
+      const { docCount } = await postSource({ kind: personalKind, name: personalName.trim(), level: 3, path: personalPath.trim() })
+      setAdded((prev) => [...prev, { kind: personalKind, name: personalName.trim(), level: 3, detail: describeFolder(personalPath.trim(), docCount) }])
       goNext()
     } catch (e) {
-      setPersonalErr(e instanceof Error ? `${e.message} Choose a different source name and try again.` : String(e))
+      setPersonalErr(e instanceof Error ? e.message : String(e))
     } finally {
       setPersonalBusy(false)
     }
@@ -288,8 +304,8 @@ export function SetupWizard({
     try {
       if (teamKind === 'local' || teamKind === 'files') {
         if (!teamPath.trim()) { setTeamErr('Provide a folder path.'); setTeamBusy(false); return }
-        await postSource({ kind: teamKind, name: 'team', level: 2, path: teamPath.trim() })
-        setAdded((prev) => [...prev, { kind: teamKind, name: 'team', level: 2, detail: teamPath.trim() }])
+        const { docCount } = await postSource({ kind: teamKind, name: 'team', level: 2, path: teamPath.trim() })
+        setAdded((prev) => [...prev, { kind: teamKind, name: 'team', level: 2, detail: describeFolder(teamPath.trim(), docCount) }])
       } else {
         if (!teamRepo.trim()) { setTeamErr('Provide a repo as owner/name.'); setTeamBusy(false); return }
         await postSource({ kind: 'github', name: 'team', level: 2, repo: teamRepo.trim() })
@@ -336,7 +352,13 @@ export function SetupWizard({
     setSuccessBusy(true)
     reload()
     try {
-      const res = await apiFetch('/api/graph', { headers: { accept: 'application/json' } })
+      // A tighter deadline than apiFetch's default: "Resolving…" must never
+      // outlive the user's patience — on timeout we land on the success step
+      // without a sample concept rather than spinning forever.
+      const res = await apiFetch('/api/graph', {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(20_000),
+      })
       if (res.ok) {
         const graph = (await res.json()) as GraphSummary
         setSuccessConcept(graph.concepts[0]?.id ?? null)

@@ -19,13 +19,17 @@
 // rebuilds the sources — the CRUD routes call it after every mutation.
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { buildSources } from "./sources/index.mjs";
+import { walkDocs } from "./sources/okf-local.mjs";
+import { FILES_EXTENSIONS } from "./sources/files.mjs";
+import { createMcpSource } from "./sources/mcp.mjs";
 import { resolveConcept } from "./resolver.mjs";
-import { countTokens, conceptText, TOKENIZER } from "./tokenize.mjs";
+import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
 
 const execFileP = promisify(execFile);
 
@@ -148,8 +152,89 @@ function normalizeRepo(repo) {
 
 function slugify(s) { return s.replace(/[^\w.-]+/g, "__"); }
 
+// A pasted "~/notes" reaches the manifest verbatim otherwise, and buildSources
+// then resolves a literal "~" directory that doesn't exist.
+function expandHome(p) {
+  if (p === "~") return os.homedir();
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
 function parseJson(raw) {
   try { return JSON.parse(raw || "{}"); } catch { throw httpError(400, "Body must be JSON"); }
+}
+
+// ---- bounded source snapshots ----------------------------------------------
+//
+// The read API used to load every concept once for token counting and then
+// again inside resolveConcept — every file read and parsed twice per request,
+// with no upper bound on how long one source could take. A snapshot reads each
+// source exactly once per request; resolution then runs over the in-memory
+// snapshot. Yields keep the event loop breathing during long loads (the
+// desktop app runs this in the Electron main process), and a per-source time
+// budget turns a stalled source (dead network mount, wedged MCP server) into
+// an errored source instead of a hung request.
+
+const SOURCE_BUDGET_MS = envMs("CONTEXTCAKE_SOURCE_BUDGET_MS", 30_000);
+const YIELD_EVERY = 25;
+
+function envMs(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+const yieldNow = () => new Promise((resolve) => setImmediate(resolve));
+
+export function withDeadline(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    timer.unref?.();
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+async function snapshotSource(source) {
+  const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds() : [];
+  const concepts = new Map();
+  let tokens = 0;
+  let n = 0;
+  for (const id of ids) {
+    const concept = await source.loadConcept(id);
+    concepts.set(id, concept);
+    tokens += countTokens(conceptText(concept));
+    if (++n % YIELD_EVERY === 0) await yieldNow();
+  }
+  return { ids, concepts, tokens };
+}
+
+function snapshotSources(sources) {
+  return Promise.all(
+    sources.map(async (source) => {
+      try {
+        const snap = await withDeadline(
+          snapshotSource(source),
+          SOURCE_BUDGET_MS,
+          `Source "${source.name}" took longer than ${Math.round(SOURCE_BUDGET_MS / 1000)}s to respond`,
+        );
+        return { source, snap, status: "ok", error: null };
+      } catch (err) {
+        return { source, snap: null, status: "error", error: err.message };
+      }
+    }),
+  );
+}
+
+// A source view resolveConcept can consume that serves from the snapshot —
+// same name/level, zero further disk or MCP reads.
+function snapshotView(source, snap) {
+  return {
+    name: source.name,
+    level: source.level,
+    async loadConcept(id) { return snap.concepts.get(id) ?? null; },
+  };
 }
 
 // ---- the service -------------------------------------------------------------
@@ -180,6 +265,10 @@ export function createEngineService({
 
   let closed = false;
   let cache = null; // { stamp, manifest, sources }
+
+  // Pay the tokenizer's one-time init at boot, right after creation, instead
+  // of blocking the first /api/graph for ~800ms mid-setup.
+  setImmediate(warmTokenizer).unref?.();
 
   function manifestStamp() {
     try {
@@ -302,29 +391,22 @@ export function createEngineService({
     const { manifest, sources } = openSources();
     const layerMeta = new Map((manifest.layers ?? []).map((l) => [l.name, l]));
 
-    // Per-source concept lists + tokens. A source that fails to list (e.g. a
-    // down MCP server or a missing clone) is recorded as errored, not fatal.
-    const perSource = await Promise.all(
-      sources.map(async (s) => {
-        try {
-          const ids = typeof s.listConceptIds === "function" ? await s.listConceptIds() : [];
-          let tokens = 0;
-          for (const id of ids) tokens += countTokens(conceptText(await s.loadConcept(id)));
-          return { source: s, ids, tokens, status: "ok", error: null };
-        } catch (err) {
-          return { source: s, ids: [], tokens: 0, status: "error", error: err.message };
-        }
-      }),
-    );
+    // Per-source snapshot: one bounded read of every source. A source that
+    // fails or stalls (a down MCP server, a missing clone, an over-sized
+    // folder) is recorded as errored, not fatal.
+    const perSource = await snapshotSources(sources);
 
-    // Resolve only over healthy sources so one bad source can't blank the index.
-    const healthy = perSource.filter((p) => p.status === "ok").map((p) => p.source);
-    const allIds = [...new Set(perSource.flatMap((p) => p.ids))].sort();
+    // Resolve only over healthy sources so one bad source can't blank the
+    // index — over the snapshots, so nothing is read twice.
+    const healthy = perSource.filter((p) => p.status === "ok").map((p) => snapshotView(p.source, p.snap));
+    const allIds = [...new Set(perSource.flatMap((p) => p.snap?.ids ?? []))].sort();
 
     const concepts = [];
     const latestPerSource = new Map(); // source name -> latest `updated`
     let resolvedTokens = 0;
+    let sinceYield = 0;
     for (const id of allIds) {
+      if (++sinceYield % YIELD_EVERY === 0) await yieldNow();
       let resolved = null;
       try { resolved = await resolveConcept(id, healthy); } catch { continue; }
       if (!resolved) continue;
@@ -356,8 +438,8 @@ export function createEngineService({
         kind,
         location: kind === "mcp" ? [meta.command, ...(meta.args ?? [])].join(" ") : meta.path,
         origin: meta.origin ?? null, // e.g. a github repo a clone came from
-        conceptCount: ps?.ids.length ?? 0,
-        tokens: ps?.tokens ?? 0,
+        conceptCount: ps?.snap?.ids.length ?? 0,
+        tokens: ps?.snap?.tokens ?? 0,
         latestUpdated: latestPerSource.get(s.name) ?? null,
         status: ps?.status ?? "error",
         error: ps?.error ?? null,
@@ -387,20 +469,14 @@ export function createEngineService({
   // Per-concept failures are reported alongside the successes, never fatal.
   async function resolveAllApi() {
     const { sources } = openSources();
-    const perSource = await Promise.all(
-      sources.map(async (s) => {
-        try {
-          return { ids: typeof s.listConceptIds === "function" ? await s.listConceptIds() : [], source: s, error: null };
-        } catch (err) {
-          return { ids: [], source: s, error: err.message };
-        }
-      }),
-    );
-    const healthy = perSource.filter((p) => !p.error).map((p) => p.source);
-    const allIds = [...new Set(perSource.flatMap((p) => p.ids))].sort();
+    const perSource = await snapshotSources(sources);
+    const healthy = perSource.filter((p) => p.status === "ok").map((p) => snapshotView(p.source, p.snap));
+    const allIds = [...new Set(perSource.flatMap((p) => p.snap?.ids ?? []))].sort();
     const concepts = [];
     const errors = [];
+    let sinceYield = 0;
     for (const id of allIds) {
+      if (++sinceYield % YIELD_EVERY === 0) await yieldNow();
       try {
         const resolved = await resolveConcept(id, healthy);
         if (resolved) concepts.push(resolved);
@@ -424,18 +500,26 @@ export function createEngineService({
     const level = Number.isFinite(+b.level) ? +b.level : 1;
 
     let layer;
+    let docCount = null;
     if (b.kind === "local" || b.kind === "files") {
       if (!b.path) throw httpError(400, "Local source needs a path");
+      const given = expandHome(String(b.path).trim());
+      docCount = await probeFolder(path.resolve(MANIFEST_DIR, given), b.kind === "files" ? FILES_EXTENSIONS : [".md"]);
       layer = {
         name,
         level,
-        path: String(b.path),
+        path: given,
         ...(b.kind === "files" ? { source: "files" } : {}),
       };
     } else if (b.kind === "mcp") {
       if (!b.command) throw httpError(400, "MCP source needs a command");
       const args = Array.isArray(b.args) ? b.args.map(String) : String(b.args ?? "").split(/\s+/).filter(Boolean);
-      layer = { name, level, source: "mcp", command: String(b.command), args };
+      const command = String(b.command);
+      // Probe with the same arg resolution buildSources applies, so the check
+      // exercises exactly what the layer will run.
+      const probeArgs = args.map((a) => (a.startsWith("./") || a.startsWith("../") ? path.resolve(MANIFEST_DIR, a) : a));
+      await probeMcp({ name, level, command, args: probeArgs });
+      layer = { name, level, source: "mcp", command, args };
     } else if (b.kind === "github") {
       const { url, slug } = normalizeRepo(String(b.repo ?? ""));
       const dir = path.join(CACHE_DIR, slug);
@@ -448,6 +532,7 @@ export function createEngineService({
         abs = path.resolve(dir, sub);
         if (abs !== dir && !abs.startsWith(dir + path.sep)) throw httpError(400, "Sub-directory escapes the repository");
       }
+      docCount = await probeFolder(abs, [".md"]);
       layer = { name, level, path: path.relative(MANIFEST_DIR, abs), origin: url, ref: b.ref || null };
     } else {
       throw httpError(400, `Unknown source kind: ${b.kind}`);
@@ -466,7 +551,43 @@ export function createEngineService({
     }
     writeManifest(manifest);
     reload();
-    return { ok: true, added: name };
+    return { ok: true, added: name, ...(docCount !== null ? { docCount } : {}) };
+  }
+
+  // Add-time folder validation. The wizard used to accept any string here and
+  // let the first resolve discover the problem — as a hang, when the folder
+  // was a home directory or a monorepo checkout. Fail while the user is still
+  // on the form instead: the folder must exist, be a directory, and stay
+  // inside the same walk bounds resolution enforces.
+  async function probeFolder(abs, extensions) {
+    let st;
+    try { st = fs.statSync(abs); } catch { throw httpError(400, `Folder not found: ${abs}`); }
+    if (!st.isDirectory()) throw httpError(400, `Not a folder: ${abs}`);
+    try {
+      const files = await withDeadline(
+        walkDocs(abs, extensions),
+        SOURCE_BUDGET_MS,
+        `Indexing this folder took longer than ${Math.round(SOURCE_BUDGET_MS / 1000)}s. Choose a smaller, more specific folder.`,
+      );
+      return files.length;
+    } catch (err) {
+      throw httpError(400, err.message);
+    }
+  }
+
+  // Add-time MCP validation: spawn the command and require an answer to
+  // tools/list (bounded by the adapter's own timeouts) before the manifest is
+  // written. A wrong command fails the form in seconds; the old behavior was a
+  // silently-empty source.
+  async function probeMcp({ name, level, command, args }) {
+    const probe = createMcpSource({ name, level, command, args });
+    try {
+      await probe.probe();
+    } catch (err) {
+      throw httpError(400, `The MCP server did not respond (${err.message}). Check the command and try again.`);
+    } finally {
+      probe.close();
+    }
   }
 
   function removeSourceApi(name) {

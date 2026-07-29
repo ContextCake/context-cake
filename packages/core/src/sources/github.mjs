@@ -71,15 +71,22 @@ export function createGithubSource({
   let warnedAt = 0;
   // Everything above is about staying up; this one is about being honest. Reads
   // swallow API failures, so "no concepts" covers both an empty repo and an
-  // unreachable one. lastError is the swallowed failure, kept until the next
-  // successful index refresh or an explicit sync(), and reported by health().
+  // unreachable one. lastError is the swallowed failure, kept until a
+  // subsequent success in the SAME scope (an index refresh clears an "index"
+  // failure, a content read clears a "content" one — they answer different
+  // questions, so one succeeding says nothing about the other) or an explicit
+  // sync(), and reported by health().
   let lastError = null; // { at, scope: "index" | "content", message } — message is scrubbed
 
   // The token never reaches a log line, and a credential embedded in a custom
   // apiBase (https://user:pass@host) never survives an error message either.
+  // lastError now reaches an HTTP response body (health(), Sync's 502) rather
+  // than only stderr, so the fine-grained PAT form is covered here too, not
+  // just the classic gh[pousr]_ prefix.
   function scrub(message) {
     return String(message)
       .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, "[redacted]")
+      .replace(/github_pat_[A-Za-z0-9_]{20,}/g, "[redacted]")
       .replace(/\/\/[^/@\s]+@/g, "//[redacted]@");
   }
 
@@ -156,16 +163,36 @@ export function createGithubSource({
   // actually reach into (treeScopes). A scope GitHub doesn't have is a miss,
   // not a failure: selectors are written for a family of repos ("docs/**" for
   // every repo in the org), and the ones without a docs/ still index the rest.
-  // Only when NOTHING resolves is it an error, because at that point "empty
-  // layer" and "wrong ref" are the same silence and the user deserves the
-  // question asked out loud.
+  // That holds even when a layer has only ONE selector and that directory
+  // doesn't exist yet — an ordinary state for a narrow selector on a repo
+  // that hasn't created it, exactly the config this feature exists to enable
+  // for an oversized repo. What IS still an error is a genuinely bad ref, and
+  // "every scope missed" can't tell those two apart on its own — a probe of
+  // the ref's root settles it with one extra request, only in that otherwise-
+  // ambiguous case.
   async function fetchIndex() {
     const meta = await api(`/repos/${slug}`);
     if (!meta) throw new Error(`repository ${slug} not found (or not visible to this token)`);
     const branch = ref ?? meta.default_branch ?? "HEAD";
+    if (scopes.length === 0) {
+      // Every selector was rejected outright (e.g. all traversal attempts) —
+      // nothing was even requested, so unlike the "all scopes missed" case
+      // below there is no "maybe the directory just doesn't exist yet" story
+      // to rule out. Always an error, no probe needed.
+      throw new Error(`ref "${branch}" not found in ${slug}, or it holds none of the selected paths`);
+    }
     const trees = await Promise.all(scopes.map((scope) => fetchScope(branch, scope)));
     if (trees.every((tree) => tree === null)) {
-      throw new Error(`ref "${branch}" not found in ${slug}, or it holds none of the selected paths`);
+      // A scope with prefix "" already IS a root probe — if one was among the
+      // scopes, its own fetch already came back null (every entry here did,
+      // to reach this branch), which already answers "the ref doesn't exist".
+      // Otherwise nothing here checked the root at all, so ask once, directly.
+      const refExists = scopes.some((s) => s.prefix === "")
+        ? false
+        : (await api(`/repos/${slug}/git/trees/${encodeURIComponent(branch)}`)) !== null;
+      if (!refExists) throw new Error(`ref "${branch}" not found in ${slug}`);
+      // else: the ref is real, the configured directories just don't exist
+      // yet — an empty layer, not a failure. entries below stays empty.
     }
 
     const entries = new Map();
@@ -257,12 +284,14 @@ export function createGithubSource({
         });
         if (content == null) return null;
         const updated = await commitDate(generation, entry.path);
-        return parseDocument({
+        const doc = parseDocument({
           content,
           stem: path.posix.basename(entry.path, entry.ext),
           updated,
           ext: entry.ext,
         });
+        if (lastError?.scope === "content") lastError = null; // this file reads fine again
+        return doc;
       } catch (e) {
         recordFailure(e, "content"); // the index is fine; this one file isn't readable
         warn(e);

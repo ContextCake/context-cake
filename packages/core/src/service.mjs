@@ -364,7 +364,13 @@ export function createEngineService({
       // the adapter's own account of whether its last request actually worked,
       // and it is the only thing that tells those two rows apart.
       const health = typeof s.health === "function" ? s.health() : null;
-      const degraded = ps?.status === "ok" && health !== null && !health.ok;
+      // Scope matters: an "index" failure means the whole repo is unreachable
+      // — everything this source would contribute is stale or missing. A
+      // "content" failure means exactly one file didn't read; every other
+      // concept in this source is fine (that one already falls through the
+      // cascade on its own, the existing warn-and-continue behavior), so it
+      // must not paint the whole row as down.
+      const degraded = ps?.status === "ok" && health?.ok === false && health.lastErrorScope === "index";
       return {
         name: s.name,
         level: s.level,

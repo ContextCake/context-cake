@@ -135,6 +135,7 @@ import { createGithubSource } from "${sources_dir}/github.mjs";
 const [, , apiBase, arg, ...rest] = process.argv;
 const opts = { name: "repo", level: 3, repo: "acme/payments", apiBase, token: rest[0] || null };
 if (rest[1]) opts.paths = rest[1].split(",");
+if (rest[2]) opts.ref = rest[2];
 const s = createGithubSource(opts);
 if (arg === "--list") console.log(JSON.stringify(await s.listConceptIds()));
 else console.log(JSON.stringify(await s.loadConcept(arg)));
@@ -499,6 +500,24 @@ try {
     throw new Error("a recovered repo should read ok again: " + JSON.stringify(recovered));
   }
   if (recovered.conceptCount < 1) throw new Error("a recovered repo should list again: " + JSON.stringify(recovered));
+
+  // A denied file read is not the same failure as an unreachable repo: the
+  // index is current and every OTHER concept in this source is fine, so it
+  // must not paint the whole row "degraded" — that already happens per
+  // concept (buildGraph's own loadConcept sweep just gets 0 tokens for that
+  // one id), which is warn-and-continue doing its job, not an outage. This
+  // layer is cached (ttlSeconds: 600 in the manifest above), and the prior
+  // "recovered" check just warmed every concept into it — so a sync while
+  // nocontent mode is already active is required here, purely to bust the
+  // cache, or this assertion would pass vacuously against stale, still-good
+  // reads instead of actually exercising the denial.
+  await fetch(apiBase + "/__mode?value=nocontent");
+  await fetch(base + "/api/sources/sync?name=repo", { method: "POST" }); // index-only refresh; still succeeds
+  const contentDenied = await graphRow();
+  await fetch(apiBase + "/__mode?value=");
+  if (contentDenied.status !== "ok") {
+    throw new Error("a denied file read must not degrade the whole source: " + JSON.stringify(contentDenied));
+  }
   console.log("SERVICE-SYNC-OK");
 } finally {
   service.close();
@@ -610,10 +629,32 @@ set_mode ""
 mixed="$(node "$tmpdir/load.mjs" "$api" --list "" 'docs/**,nosuchdir/**' 2>"$tmpdir/mixed.log")"
 grep -q 'docs/runbook' <<<"$mixed" || fail "a missing subtree must not fail the whole index" "$mixed$(cat "$tmpdir/mixed.log")"
 
-# ...but when nothing resolves at all, that is configuration, not an empty repo.
+# ...and when EVERY selector misses, that alone still isn't a failure: a repo
+# that hasn't created "adr/" yet is a perfectly normal state for the exact
+# single-selector config this feature exists to enable on an oversized repo.
+# It must read as a quiet empty layer, not an announced error — the original
+# version of this test asserted the opposite, which punished narrow selectors
+# specifically (the default selectors always include a root-level scope and
+# so never hit this path at all).
+curl -fsS "$api/__trees?reset=1" > /dev/null
 none="$(node "$tmpdir/load.mjs" "$api" --list "" 'nosuchdir/**' 2>"$tmpdir/none.log")"
 [ "$none" = "[]" ] || fail "a selector matching no directory should index nothing" "$none"
-grep -q 'none of the selected paths' "$tmpdir/none.log" || fail "an all-missing selector set should be announced, not silently empty" "$(cat "$tmpdir/none.log")"
+[ -s "$tmpdir/none.log" ] && fail "a missing directory under a VALID ref must not be announced as an error" "$(cat "$tmpdir/none.log")"
+none_trees="$(curl -fsS "$api/__trees?reset=1")"
+grep -q '"main:nosuchdir?recursive"' <<<"$none_trees" || fail "the missing-directory scope should still be requested" "$none_trees"
+grep -q '"main"' <<<"$none_trees" || fail "settling the ambiguity should cost exactly one extra root probe" "$none_trees"
+
+# A genuinely bad ref is still an announced error — the root probe is what
+# tells the two apart, so prove it actually distinguishes them.
+badref="$(node "$tmpdir/load.mjs" "$api" --list "" 'docs/**' 'nope' 2>"$tmpdir/badref.log")"
+[ "$badref" = "[]" ] || fail "a bad ref should index nothing" "$badref"
+grep -q 'ref "nope" not found' "$tmpdir/badref.log" || fail "a bad ref should be announced, unlike a merely-missing directory" "$(cat "$tmpdir/badref.log")"
+
+# The default selectors always include a root-level scope, so the ambiguous
+# case (and its extra probe) never applies to them, bad ref or not.
+badref_default="$(node "$tmpdir/load.mjs" "$api" --list "" "" 'nope' 2>"$tmpdir/badref_default.log")"
+[ "$badref_default" = "[]" ] || fail "a bad ref with default selectors should index nothing" "$badref_default"
+grep -q 'ref "nope" not found' "$tmpdir/badref_default.log" || fail "a bad ref should be announced even with default selectors" "$(cat "$tmpdir/badref_default.log")"
 
 # --- 11. health(): what the read path refuses to say --------------------------
 # Reads swallow API failures so one down repo can never fail a resolve, which
@@ -661,6 +702,24 @@ if ((await s.loadConcept("acme/payments/CLAUDE")) !== null) throw new Error("exp
 const partial = s.health();
 if (partial.ok || partial.lastErrorScope !== "content") throw new Error("a denied file read should be scoped content: " + JSON.stringify(partial));
 if (!partial.lastSuccessAt) throw new Error("a content failure should not erase the index success time");
+
+// A content failure clears on the next successful read of that SAME file —
+// not on an unrelated index refresh succeeding, and not by staying stuck
+// until the next sync(). The header comment on lastError promises exactly
+// this ("kept until a subsequent success in the same scope"); this is that
+// promise under test.
+await setMode("");
+if ((await s.loadConcept("acme/payments/CLAUDE")) === null) throw new Error("expected the retry to succeed once content is reachable again");
+if (!s.health().ok) throw new Error("a successful content read should clear a content-scope lastError");
+
+// And the reverse must not cross-clear: an index failure served from cache
+// (the stale-serve path) must survive a content read that happens to succeed
+// against that same stale index — they answer different questions.
+await setMode("nocommits"); // irrelevant to this — content still reads fine here
+await s.loadConcept("acme/payments/docs/runbook"); // an unrelated successful content read
+await setMode("forbidden");
+await s.listConceptIds(); // a refresh attempt fails; stale index still served (indexTtlMs: 0 above forces the attempt)
+if (s.health().lastErrorScope !== "index") throw new Error("a fresh index failure must not be masked by an earlier content success");
 
 // sync() is a clean slate: whatever health reports next belongs to the sync.
 await setMode("");

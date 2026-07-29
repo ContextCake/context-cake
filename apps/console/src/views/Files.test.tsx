@@ -66,7 +66,7 @@ beforeEach(() => {
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
   mocks.apiFetch.mockImplementation(async (url: string) => {
     if (url === '/api/files') return json(FILES)
-    if (url.startsWith('/api/file/raw?')) return new Response(new Blob(['image']), { status: 200, headers: { 'content-type': 'image/png' } })
+    if (url.startsWith('/api/file/raw?')) return new Response(new Uint8Array([1]), { status: 200, headers: { 'content-type': 'image/png' } })
     if (url.startsWith('/api/file?')) return json(MEETING)
     return json({})
   })
@@ -163,7 +163,9 @@ describe('Files view', () => {
 
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/file/raw?path=personal%2Flogo.png')
     await act(async () => {
-      releasePreview(new Response(new Blob(['image']), { status: 200, headers: { 'content-type': 'image/png' } }))
+      // A byte body uses the fetch implementation's own Blob realm when
+      // Files calls response.blob(), which works on both Node 22 CI and Node 24.
+      releasePreview(new Response(new Uint8Array([1]), { status: 200, headers: { 'content-type': 'image/png' } }))
     })
     expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:preview')
     expect(container.querySelector('textarea')).toBeNull()

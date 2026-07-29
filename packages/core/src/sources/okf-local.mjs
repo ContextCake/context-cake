@@ -2,13 +2,129 @@
 // frontmatter) from disk. Owns all OKF parsing. Implements the source contract:
 //   loadConcept(id) -> { frontmatter, sections } | null
 //   listConceptIds() -> string[]
-//   close() -> noop
+//   sync() -> drops the commit-date memo      close() -> noop
 
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolveSettings, walkLimitsFrom } from "../settings.mjs";
+import { runGit } from "./git-core.mjs";
+
+// A read-path memo of the layer's git history must not outlive the history —
+// mcp-server is a session-lifetime process, so a boot-time snapshot would serve
+// stale dates all session. Short enough to pick up local commits, long enough
+// that a search sweep is one `git log`, not one per concept.
+const HISTORY_TTL_MS = 30000;
 
 export function createOkfLocalSource({ name, level, root, limits = null }) {
+  let history = null; // { at, promise } — see commitHistory
+  let warned = false;
+
+  function warnOnce(message) {
+    if (warned) return;
+    warned = true;
+    console.error(`[okf-local source "${name}"] ${message}`); // stderr: stdout is the MCP protocol
+  }
+
+  // Memoize the PROMISE, never the map. Publishing a half-built map before the
+  // await would let every concurrent reader find it empty, miss, and fall back
+  // to the mtime — which is the precise wrong answer this whole path exists to
+  // prevent, and mcp-server handles requests concurrently.
+  function commitHistory() {
+    if (!history || Date.now() - history.at >= HISTORY_TTL_MS) {
+      history = { at: Date.now(), promise: readHistory() };
+    }
+    return history.promise;
+  }
+
+  // A section date has to say when the CONTENT last changed. An okf-local
+  // bundle is a git repo, and git does not preserve mtimes — clone, checkout
+  // and pull all stamp the working tree with the operation time — so an mtime
+  // would report "today" for a decision written years ago, in the one field the
+  // product sells as the staleness signal. Read the commit history instead.
+  //
+  // Batched per generation, not per file: mcp-server sweeps loadConcept over
+  // every id for search/list, so a per-file spawn is not affordable.
+  async function readHistory() {
+    const dates = new Map();
+    // --git-path resolves even when the git dir is not ".git" (worktrees, GIT_DIR).
+    const where = await runGit(root, ["rev-parse", "--git-path", "shallow"], { allowFailure: true });
+    if (!where.ok) {
+      // A plain folder is a legitimate okf-local root, so "not a repository" is
+      // not worth a word. Anything else — no git on PATH, a safe.directory
+      // refusal — means dates silently degrade to mtimes, and that must be said
+      // out loud or the layer just quietly starts claiming everything is new.
+      if (!/not a git repository/i.test(where.stderr)) {
+        warnOnce(`cannot read git history (${where.stderr}) — sections will fall back to file mtimes`);
+      }
+      return { dates, inRepo: false, tracked: null };
+    }
+    const boundary = readShallowBoundary(path.resolve(root, where.stdout));
+
+    // %as is the AUTHOR date, not the committer date: git-core runs
+    // `pull --rebase` as its standard divergence recovery, and a rebase rewrites
+    // every committer date to now — which would re-date the whole bundle to
+    // today on the very flow team-sync depends on. Author dates survive it.
+    // --relative prints paths relative to this layer root, so a layer inside a
+    // bigger repo needs no prefix arithmetic; `-- .` bounds the walk to it.
+    // core.quotePath=false keeps non-ASCII paths literal so they match our keys.
+    const log = await runGit(
+      root,
+      ["-c", "core.quotePath=false", "log", "--format=%x00%as%x00%H", "--name-only", "--relative", "--", "."],
+      { allowFailure: true },
+    );
+    // Inside a repo, a failed history read means the dates are unknown — NOT
+    // that the mtime is now trustworthy. Returning an empty tracked set here
+    // would date every doc today, the exact lie this path exists to prevent.
+    if (!log.ok) {
+      warnOnce(`cannot read commit dates (${log.stderr}) — sections in this layer will be undated`);
+      return { dates, inRepo: true, tracked: null };
+    }
+    // Newest-first, so the first date seen for a path is its latest.
+    let date = null;
+    for (const line of log.stdout.split("\n")) {
+      if (line.startsWith("\0")) {
+        const [, authored, hash] = line.split("\0");
+        // A shallow clone's boundary commit lists the ENTIRE tree as added at
+        // the truncation date. Trusting it would date every untouched file to
+        // the clone — mtime's lie by another route. Leave those paths undated.
+        date = boundary.has(hash) ? null : authored;
+      } else if (line !== "" && date && !dates.has(line)) {
+        dates.set(line, date);
+      }
+    }
+    // ls-files prints cwd-relative paths, matching the log's --relative keys.
+    // Needed to tell "untracked, so the mtime is the true edit time" apart from
+    // "tracked but the history could not date it", where the mtime is a lie.
+    const listed = await runGit(root, ["-c", "core.quotePath=false", "ls-files"], { allowFailure: true });
+    if (!listed.ok) {
+      warnOnce(`cannot list tracked files (${listed.stderr}) — undatable sections will be undated`);
+    }
+    return { dates, inRepo: true, tracked: listed.ok ? new Set(listed.stdout.split("\n").filter(Boolean)) : null };
+  }
+
+  async function documentDate(filePath) {
+    const { dates, inRepo, tracked } = await commitHistory();
+    const rel = toPosix(path.relative(root, filePath));
+    const authored = dates.get(rel);
+    if (authored) return authored;
+    // Inside a repo with no date for this path, the mtime is a checkout time,
+    // not an edit time. That covers a truncated history (shallow clone), a change
+    // that only landed inside a merge commit, and a history we could not read at
+    // all (tracked === null, so we cannot rule any of it out). None of them has
+    // an honest date — say nothing rather than claim today.
+    if (inRepo && (tracked === null || tracked.has(rel))) return null;
+    // Untracked, or no repo at all: here the mtime IS the real edit time, the
+    // same signal files.mjs uses for the plain folders it points at.
+    try {
+      // Async stat: this runs in the read path, and on the desktop app the
+      // engine must never block its loop on the filesystem.
+      return localDate((await fsp.stat(filePath)).mtime);
+    } catch {
+      return null; // vanished between read and stat — undated beats crashing the resolve
+    }
+  }
+
   return {
     name,
     level,
@@ -19,9 +135,9 @@ export function createOkfLocalSource({ name, level, root, limits = null }) {
       try {
         content = await fsp.readFile(filePath, "utf8");
       } catch {
-        return null;
+        return null; // missing or unreadable — a miss, not a crash
       }
-      return parseConcept(content);
+      return withDocumentDate(parseConcept(content), await documentDate(filePath));
     },
     async listConceptIds() {
       const files = await walkDocs(root, [".md"], limits);
@@ -29,8 +145,49 @@ export function createOkfLocalSource({ name, level, root, limits = null }) {
         toPosix(path.relative(root, filePath)).replace(/\.md$/i, ""),
       );
     },
+    // withGitSync calls this after a pull that changed something — new commits
+    // mean new dates, so the memo must not outlive them.
+    sync() {
+      history = null;
+    },
     close() {},
   };
+}
+
+// ---- document dates --------------------------------------------------------
+
+// The commits a shallow clone truncated at. Their diff is the whole tree, so
+// their date describes the clone, not the content.
+function readShallowBoundary(shallowFile) {
+  try {
+    return new Set(fs.readFileSync(shallowFile, "utf8").split("\n").filter(Boolean));
+  } catch {
+    return new Set(); // absent = a complete clone, the common case
+  }
+}
+
+// Fills in section dates the document did not state. Explicit per-section attrs
+// ({updated=}) stay authoritative; otherwise an OKF-level `updated` wins, then
+// the adapter's document date (a commit date here and in github.mjs, an mtime
+// for the plain folders files.mjs reads). Every adapter applies this — the same
+// bytes must produce the same staleness metadata no matter which kind of layer
+// read them. Kept out of parseConcept so callers that only want the literal
+// document (promote.mjs, team-activity.mjs) are unaffected.
+export function withDocumentDate(parsed, documentDate) {
+  const fallback = parsed.frontmatter.updated ?? documentDate ?? null;
+  return {
+    ...parsed,
+    sections: parsed.sections.map((section) => ({ ...section, updated: section.updated ?? fallback })),
+  };
+}
+
+// A file's mtime is a local wall-clock event, so it has to be formatted in
+// local time: toISOString() would file an edit made this evening under
+// tomorrow's date. (API timestamps are real UTC instants — github.mjs formats
+// those as UTC, correctly.)
+export function localDate(when) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
 }
 
 // ---- OKF parsing (moved verbatim from resolver.mjs) ------------------------

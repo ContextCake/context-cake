@@ -62,9 +62,20 @@ export interface GraphSource {
   conceptCount: number
   tokens: number
   latestUpdated: string | null
-  status: string // 'ok' | 'indexing' | 'error'
+  /**
+   * 'ok' | 'indexing' | 'degraded' | 'error'. 'indexing' is a source the
+   * background index has not finished reading yet. 'degraded' is a source that
+   * listed but whose adapter reports its last request failed — it is serving
+   * cached or partial content and still resolves, unlike 'error', which
+   * contributed nothing.
+   */
+  status: string
   error: string | null
+  /** Background-index progress; absent on sources that never index. */
   indexing?: IndexProgress
+  /** ISO timestamps from adapters that track health (remote sources); else null. */
+  lastErrorAt?: string | null
+  lastSuccessAt?: string | null
 }
 
 /** A concept index entry in the graph summary (lighter than a full resolve). */

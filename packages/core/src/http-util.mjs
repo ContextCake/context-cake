@@ -35,9 +35,16 @@ export function json(res, status, body) {
   res.end(payload);
 }
 
-export function httpError(status, message) {
+/**
+ * `detail` rides along on the error and is merged into the JSON response body
+ * by the service's catch. Some failures owe the caller structured facts, not
+ * just a sentence — a failed remote Sync reports ok:false with the health
+ * timestamps beside the message.
+ */
+export function httpError(status, message, detail = null) {
   const err = new Error(message);
   err.status = status;
+  if (detail) err.detail = detail;
   return err;
 }
 

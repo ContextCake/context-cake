@@ -8,7 +8,10 @@
 
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading, walkDocs } from "./okf-local.mjs";
+import {
+  parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading,
+  walkDocs, withDocumentDate, localDate,
+} from "./okf-local.mjs";
 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
 export const FILES_EXTENSIONS = Object.freeze([".md", ".mdx", ".txt"]);
@@ -37,7 +40,9 @@ export function createFilesSource({ name, level, root, limits = null }) {
         } catch {
           continue; // missing under this extension — try the next one
         }
-        return parseFile(content, stat.mtime.toISOString().slice(0, 10), path.basename(filePath, ext), ext);
+        // localDate, not toISOString: dates are local-calendar days everywhere
+        // else in the engine, and UTC slicing shifts them a day near midnight.
+        return parseFile(content, localDate(stat.mtime), path.basename(filePath, ext), ext);
       }
       return null;
     },
@@ -52,6 +57,8 @@ export function createFilesSource({ name, level, root, limits = null }) {
   };
 }
 
+// Takes bytes rather than a path: the caller already read the file
+// asynchronously, and the read path must not block the event loop.
 function parseFile(content, mtime, stem, ext) {
   return parseDocument({ content, stem, updated: mtime, ext });
 }
@@ -61,21 +68,10 @@ function parseFile(content, mtime, stem, ext) {
 // mtime) so a GitHub-hosted CLAUDE.md and a local one resolve identically.
 export function parseDocument({ content, stem, updated, ext = ".md" }) {
   if (ext === ".txt") return parsePlainText(content, stem, updated);
-  if (hasFrontmatter(content)) {
-    const parsed = parseConcept(content);
-    // Explicit per-section dates remain authoritative. Otherwise an OKF-level
-    // date wins, then the adapter's document date (mtime or remote commit).
-    // Without this fallback, structured remote docs silently lose the
-    // per-document staleness metadata that plain documents receive.
-    const fallback = parsed.frontmatter.updated ?? updated;
-    return {
-      ...parsed,
-      sections: parsed.sections.map((section) => ({
-        ...section,
-        updated: section.updated ?? fallback,
-      })),
-    };
-  }
+  // Undated sections inherit the OKF-level date, then this adapter's document
+  // date — same rule okf-local applies, so structured docs never lose the
+  // per-document staleness metadata that plain documents receive.
+  if (hasFrontmatter(content)) return withDocumentDate(parseConcept(content), updated);
   return parsePlainMarkdown(content, stem, updated);
 }
 

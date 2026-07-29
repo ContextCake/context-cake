@@ -6,7 +6,8 @@ export interface Layer {
 
 export interface Source {
   name: string; kind: 'mcp' | 'okf-local'; layer: LayerId
-  coverage: number; focus: string; status: 'serving' | 'synced' | 'error'
+  /** 'degraded': answering, but its last request failed — stale or partial. */
+  coverage: number; focus: string; status: 'serving' | 'synced' | 'degraded' | 'error'
 }
 
 export interface Signal {

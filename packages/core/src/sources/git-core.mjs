@@ -38,7 +38,9 @@ export async function runGit(root, args, { allowFailure = false } = {}) {
     return { ok: true, stdout: stdout.trim(), stderr: stderr.trim() };
   } catch (error) {
     if (allowFailure) {
-      return { ok: false, stdout: scrub(error.stdout ?? ""), stderr: scrub(error.stderr ?? error.message) };
+      // `||`, not `??`: a maxBuffer/timeout kill leaves stderr an empty string,
+      // and a caller that surfaces it would report a blank reason.
+      return { ok: false, stdout: scrub(error.stdout ?? ""), stderr: scrub(error.stderr || error.message) };
     }
     const wrapped = new Error(`git ${args[0]} failed: ${scrub(error.stderr || error.message)}`);
     wrapped.code = "GitError";

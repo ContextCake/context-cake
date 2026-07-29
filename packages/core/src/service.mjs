@@ -522,7 +522,7 @@ export function createEngineService({
       }
       return false; // an /api/* route this service doesn't own (e.g. the playground's editor endpoints)
     } catch (err) {
-      json(res, err.status ?? 500, { error: err.message });
+      json(res, err.status ?? 500, { error: err.message, ...(err.detail ?? {}) });
       return true;
     }
   }
@@ -547,8 +547,12 @@ export function createEngineService({
       error: entry.error,
     }));
 
-    // Resolve only over ready sources so one slow or bad source can't blank
-    // the index — over the snapshots, so nothing is read twice.
+    // Resolve over every source that produced a snapshot, from the snapshot,
+    // so nothing is read twice and one slow or bad source can't blank the
+    // index. A source that listed but reports itself degraded (see below)
+    // still has a snapshot and stays in: it is serving cached or partial
+    // content, which is the whole point of warn-and-continue. Only a source
+    // that couldn't be read at all — or hasn't been read yet — drops out.
     const healthy = perSource.filter((p) => p.snap).map((p) => snapshotView(p.source, p.snap));
     const allIds = [...new Set(perSource.flatMap((p) => p.snap?.ids ?? []))].sort();
 
@@ -582,6 +586,24 @@ export function createEngineService({
     const sourcesOut = perSource.map(({ source: s, entry, snap, status, error }) => {
       const meta = layerMeta.get(s.name) ?? {};
       const kind = meta.source ?? "okf-local";
+      // Whether the listing threw is not evidence a remote source is healthy:
+      // remote adapters answer [] instead of throwing precisely so one down
+      // repo can't fail a resolve. So an unreachable GitHub layer lists cleanly
+      // with zero concepts — the same row an empty repo produces. health() is
+      // the adapter's own account of whether its last request actually worked,
+      // and it is the only thing that tells those two rows apart.
+      const health = typeof s.health === "function" ? s.health() : null;
+      // Scope matters: an "index" failure means the whole repo is unreachable
+      // — everything this source would contribute is stale or missing. A
+      // "content" failure means exactly one file didn't read; every other
+      // concept in this source is fine (that one already falls through the
+      // cascade on its own, the existing warn-and-continue behavior), so it
+      // must not paint the whole row as down.
+      //
+      // Index state and adapter health are orthogonal: the index says whether
+      // WE have read the source yet, health says whether the source itself is
+      // answering. Only a source we finished reading can be called degraded.
+      const degraded = status === "ok" && health?.ok === false && health.lastErrorScope === "index";
       return {
         name: s.name,
         level: s.level,
@@ -591,9 +613,17 @@ export function createEngineService({
         conceptCount: snap?.ids.length ?? 0,
         tokens: snap?.tokens ?? 0,
         latestUpdated: latestPerSource.get(s.name) ?? null,
-        status,
-        error: error ?? null,
+        // Four states, because there are four: still being read; served
+        // cleanly; served, but the source behind it is failing, so what you see
+        // may be stale or partial; and failed to be read at all, so it
+        // contributed nothing.
+        status: degraded ? "degraded" : status,
+        error: degraded ? health.lastError : error ?? null,
         indexing: indexProgress(entry),
+        // Enough for "last synced X, failed Y ago" without a second request.
+        // Null on sources that keep no health (local bundles, MCP children).
+        lastErrorAt: health?.lastErrorAt ?? null,
+        lastSuccessAt: health?.lastSuccessAt ?? null,
       };
     });
 
@@ -847,8 +877,26 @@ export function createEngineService({
       // sync() invalidates both the outer cache and the adapter's internal
       // index. Refresh now so a successful API response means the remote index
       // has actually bypassed TTL rather than merely being marked dirty.
-      await source.listConceptIds();
-      return { ok: true, synced: name, lastSynced: source.lastSynced ?? lastSynced ?? null };
+      const concepts = (await source.listConceptIds()).length;
+      // Remote adapters swallow API failures on purpose — one unreachable repo
+      // must never fail a resolve — which makes an outage look exactly like an
+      // empty repo from out here: no throw, no concepts. Everywhere else that's
+      // the right trade; here it isn't, because the user asked about this one
+      // repo and is owed the answer. health() is the out-of-band channel for it,
+      // and sync() cleared it first, so what it reports belongs to this sync.
+      const health = typeof source.health === "function" ? source.health() : null;
+      const detail = {
+        synced: name,
+        concepts,
+        lastSynced: source.lastSynced ?? lastSynced ?? null, // when this attempt ran
+        lastSuccessAt: health?.lastSuccessAt ?? null, // when the index last actually loaded
+        lastError: health?.lastError ?? null,
+        lastErrorAt: health?.lastErrorAt ?? null,
+      };
+      if (health && !health.ok) {
+        throw httpError(502, `Sync failed: ${health.lastError}`, { ...detail, ok: false });
+      }
+      return { ok: true, ...detail };
     }
     if (!layer.origin) throw httpError(400, `"${name}" is not a git-backed source`);
     const { url, slug } = normalizeRepo(layer.origin);

@@ -58,7 +58,12 @@ serves and marks staleness.
 | `gdrive` | `<folder>/<doc-slug>` | Google Docs exported as text → heading-split; `.md` files parsed as `files` | `modifiedTime` | Google OAuth PKCE, `drive.readonly` (**ships only after scope verification clears**) |
 
 Defaults for `github` path selection: `CLAUDE.md`, `AGENTS.md`, `README.md`,
-`docs/**`, `.context/**` — overridable per layer.
+`docs/**`, `.context/**` — overridable per layer. Selectors scope the tree
+request, not just its result: each contributes the directory before its first
+wildcard (`docs/**` → the `docs` subtree), so a repo far past GitHub's
+tree-listing limit is still indexable. A selector whose first segment is a
+wildcard (`**/*.md`) has no directory to stand on and still costs a whole-tree
+request.
 
 ## 5. Acceptance criteria (EARS)
 
@@ -80,6 +85,14 @@ Defaults for `github` path selection: `CLAUDE.md`, `AGENTS.md`, `README.md`,
   the degradation as a warning with the cache age — never a hard failure.
 - [ ] WHEN the user triggers Sync (per source or all) THE SYSTEM SHALL bypass
   TTL, refresh the cache, and update `lastSynced` visibly.
+- [ ] WHEN a Sync refreshes a source whose remote is unreachable THE SYSTEM
+  SHALL report the failure with the last successful sync time, and SHALL NOT
+  report success — warn-and-continue governs resolves, not a Sync the user
+  asked for on that one source.
+- [ ] WHEN a remote listing is truncated by the provider THE SYSTEM SHALL
+  refuse the partial index rather than publish it as complete, and SHALL scope
+  its requests by the layer's path selectors so a repo over the provider's
+  listing limit remains indexable.
 - [ ] WHEN remote content lacks OKF structure THE SYSTEM SHALL synthesize
   concepts per §4 rather than skipping or erroring (graceful plain-content
   ingestion).

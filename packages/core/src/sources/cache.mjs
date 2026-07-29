@@ -64,6 +64,12 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null } = {}) {
     async listConceptIds() {
       return cached("list", () => source.listConceptIds());
     },
+    // Deliberately NOT cached: health() reports whether the last real request
+    // failed, so answering it from a memo taken before the outage would defeat
+    // the one question it exists to answer.
+    health() {
+      return source.health?.() ?? null;
+    },
     // Drop everything cached (memory + disk) so the next reads hit the source.
     // Remote adapters keep their own index memo, so the refresh has to reach
     // them too or a user-triggered Sync only clears the outer half.

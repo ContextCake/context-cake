@@ -76,6 +76,10 @@ code 200 "$(C -H 'Authorization: Bearer   sekrit' "$BASE/api/graph")" "extra sep
 code 401 "$(C -H 'Authorization: Bearer      ' "$BASE/api/graph")" "all-whitespace token rejected (ReDoS-safe parse)"
 G="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const g=JSON.parse(s);process.stdout.write(`${g.tokenizer}:${g.totals.sources}:${g.totals.sourceTokens>0}`)})')"
 [ "$G" = "o200k_base:1:true" ] && pass "graph payload intact behind auth" || fail "graph payload ($G)"
+# A source with no health of its own (a local bundle) reports plain "ok" and
+# null health fields — "degraded" is reserved for an adapter that says so.
+H="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s).sources[0];process.stdout.write(`${x.status}:${x.error}:${x.lastErrorAt}:${x.lastSuccessAt}`)})')"
+[ "$H" = "ok:null:null:null" ] && pass "healthless source reports plain ok" || fail "local source health shape ($H)"
 code 401 "$(C "$BASE/api/resolve?concept=note")" "resolve without header rejected"
 code 200 "$(C "${AUTH[@]}" "$BASE/api/resolve?concept=note")" "resolve with Bearer accepted"
 code 401 "$(C "$BASE/api/files")" "unknown /api/* path still gated without token"

@@ -15,11 +15,15 @@ tmpdir="$(mktemp -d)"
 fail() { echo "FAIL: $1" >&2; [ "${2:-}" ] && echo "$2" >&2; exit 1; }
 
 # --- Fixture GitHub API -------------------------------------------------------
-# Serves one repo (acme/payments). POST-free mode switch drives failure paths:
+# Serves one repo (acme/payments), including real subtree listings
+# (GET .../git/trees/{ref}:{dir}) so path-scoped indexing is actually
+# exercised rather than mocked. POST-free mode switch drives failure paths:
 #   forbidden  -> 403 on everything (rate limit / bad token)
 #   nocommits  -> 403 on /commits only (exercises the pushed_at fallback)
 #   nocontent  -> 403 on /contents only (index fine, per-file reads denied)
-#   truncated  -> the tree listing comes back truncated
+#   truncated  -> every tree listing comes back truncated
+#   bigrepo    -> only the WHOLE-tree listing truncates, as a monorepo does;
+#                 subtrees answer in full
 
 cat > "$tmpdir/api.mjs" <<'EOF'
 import http from "node:http";
@@ -50,6 +54,7 @@ let reverseTree = false;
 let mode = null;
 let lastAuth = null;
 let requests = 0;
+let treeCalls = []; // which trees were actually requested — scoping is about the REQUEST
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
@@ -62,6 +67,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/__count") { const n = requests; if (url.searchParams.get("reset")) requests = 0; return json(200, { requests: n }); }
   if (url.pathname === "/__edit") { editedDate = url.searchParams.get("date") || null; return json(200, { editedDate }); }
   if (url.pathname === "/__reverse") { reverseTree = url.searchParams.get("on") === "1"; return json(200, { reverseTree }); }
+  if (url.pathname === "/__trees") { const t = treeCalls; if (url.searchParams.get("reset")) treeCalls = []; return json(200, { trees: t }); }
 
   requests += 1;
   lastAuth = req.headers.authorization ?? null;
@@ -70,11 +76,28 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/repos/acme/payments") {
     return json(200, { default_branch: "main", pushed_at: "2026-07-20T12:00:00Z" });
   }
-  if (url.pathname === "/repos/acme/payments/git/trees/main") {
-    const blobs = Object.entries(FILES).map(([p, c]) => ({ path: p, type: "blob", size: Buffer.byteLength(c) }));
+  // "{ref}" lists the root, "{ref}:{dir}" the tree object at that path; without
+  // ?recursive=1 only the entries directly at that level. Paths in a subtree
+  // response are RELATIVE to the subtree — the caller has to re-prefix them.
+  const treeReq = url.pathname.match(/^\/repos\/acme\/payments\/git\/trees\/(.+)$/);
+  if (treeReq) {
+    const [refPart, dirPart = ""] = treeReq[1].split(":");
+    const ref = decodeURIComponent(refPart);
+    const dir = dirPart.split("/").filter(Boolean).map(decodeURIComponent).join("/");
+    const recursive = url.searchParams.get("recursive") === "1";
+    treeCalls.push((dir ? `${ref}:${dir}` : ref) + (recursive ? "?recursive" : ""));
+    if (ref !== "main") return json(404, { message: "Not Found" });
+    const held = Object.keys(FILES).filter((p) => (dir ? p.startsWith(dir + "/") : true));
+    if (dir && held.length === 0) return json(404, { message: "Not Found" }); // no such directory
+    const rel = held.map((p) => (dir ? p.slice(dir.length + 1) : p));
+    const blobs = rel
+      .filter((p) => recursive || !p.includes("/"))
+      .map((p) => ({ path: p, type: "blob", size: Buffer.byteLength(FILES[dir ? `${dir}/${p}` : p]) }));
+    const subdirs = [...new Set(rel.filter((p) => p.includes("/")).map((p) => p.split("/")[0]))]
+      .map((p) => ({ path: p, type: "tree", size: 0 }));
     return json(200, {
-      truncated: mode === "truncated",
-      tree: (reverseTree ? blobs.reverse() : blobs).concat([{ path: "docs", type: "tree", size: 0 }]),
+      truncated: mode === "truncated" || (mode === "bigrepo" && !dir && recursive),
+      tree: (reverseTree ? blobs.reverse() : blobs).concat(subdirs),
     });
   }
   if (url.pathname === "/repos/acme/payments/commits") {
@@ -112,6 +135,7 @@ import { createGithubSource } from "${sources_dir}/github.mjs";
 const [, , apiBase, arg, ...rest] = process.argv;
 const opts = { name: "repo", level: 3, repo: "acme/payments", apiBase, token: rest[0] || null };
 if (rest[1]) opts.paths = rest[1].split(",");
+if (rest[2]) opts.ref = rest[2];
 const s = createGithubSource(opts);
 if (arg === "--list") console.log(JSON.stringify(await s.listConceptIds()));
 else console.log(JSON.stringify(await s.loadConcept(arg)));
@@ -329,9 +353,10 @@ const during = [];
 for (let i = 0; i < 5; i += 1) during.push((await s.listConceptIds()).length);
 if (during.some((n) => n !== good.length)) throw new Error("outage should serve the cached index, got " + JSON.stringify(during));
 const hits = await count(true);
-// One truncated refresh reaches repo metadata and the tree. The cooldown must
-// prevent the remaining reads from starting another refresh attempt.
-if (hits > 2) throw new Error("cooldown should cap retries during an outage, got " + hits + " requests");
+// One refresh attempt is repo metadata plus one call per scope the default
+// selectors derive (docs/, .context/, and the root level) = 4. The cooldown
+// must prevent the remaining four reads from starting a second attempt.
+if (hits > 4) throw new Error("cooldown should cap retries during an outage, got " + hits + " requests");
 // sync() is the user-facing escape hatch: it clears the cooldown and retries.
 await setMode("");
 s.sync();
@@ -378,7 +403,8 @@ EOF
 slug_out="$(node "$tmpdir/slug.mjs")"
 if grep -q 'ACCEPTED' <<<"$slug_out"; then fail "every malformed repo slug must be rejected" "$slug_out"; fi
 
-# --- 8. Service Sync: remote sources refresh instead of entering clone flow ---
+# --- 8. Service: Sync refreshes a remote source, and neither Sync nor the -----
+#        graph row reports a green result for a repo it never reached.
 
 cat > "$tmpdir/service-sync.mjs" <<EOF
 import fs from "node:fs";
@@ -392,6 +418,7 @@ fs.writeFileSync(manifestPath, JSON.stringify({ layers: [{
   source: "github",
   repo: "acme/payments",
   apiBase,
+  auth: { tokenEnv: "CC_GH_TOKEN" },
   cache: { ttlSeconds: 600 },
 }] }));
 
@@ -415,14 +442,90 @@ try {
   }
   const requests = await fetch(apiBase + "/__count").then((r) => r.json()).then((j) => j.requests);
   if (requests < 2) throw new Error("remote Sync did not refresh the GitHub index (requests=" + requests + ")");
+  if (body.concepts < 1) throw new Error("a successful Sync should report what it indexed: " + JSON.stringify(body));
+  if (!body.lastSuccessAt) throw new Error("a successful Sync should report when the index loaded: " + JSON.stringify(body));
+
+  const graphRow = async () => {
+    const g = await fetch(base + "/api/graph").then((r) => r.json());
+    return g.sources.find((s) => s.name === "repo");
+  };
+  const healthy = await graphRow();
+  if (healthy.status !== "ok") throw new Error("a working repo should read ok: " + JSON.stringify(healthy));
+  if (!healthy.lastSuccessAt) throw new Error("the graph row should carry the index time: " + JSON.stringify(healthy));
+
+  // The adapter swallows API failures so a resolve never dies on a down repo.
+  // Sync is the one caller that must not inherit that: the user asked about
+  // this repo specifically, so an unreachable one is a failed Sync, not an
+  // empty one. Answering 200 {ok:true} here is a green checkmark over an
+  // outage — the exact thing a Sync button exists to rule out.
+  await fetch(apiBase + "/__mode?value=forbidden");
+  const down = await fetch(base + "/api/sources/sync?name=repo", { method: "POST" });
+  const downBody = await down.json();
+  if (down.ok) throw new Error("Sync against an unreachable repo answered OK: " + JSON.stringify(downBody));
+  if (downBody.ok !== false) throw new Error("a failed Sync should report ok:false: " + JSON.stringify(downBody));
+  if (!/403/.test(downBody.lastError ?? "")) throw new Error("a failed Sync should surface the API failure: " + JSON.stringify(downBody));
+  if (!downBody.lastErrorAt || Number.isNaN(Date.parse(downBody.lastErrorAt))) {
+    throw new Error("a failed Sync should timestamp the failure: " + JSON.stringify(downBody));
+  }
+  if (downBody.concepts !== 0) throw new Error("a failed Sync indexed nothing: " + JSON.stringify(downBody));
+
+  // The same truth has to reach the Sources table, which reads /api/graph and
+  // never sees the Sync response. Listing didn't throw here — it returned [] —
+  // so without the adapter's health this row is "ok, 0 concepts": a green dot
+  // over an outage, identical to a repo that simply has no docs.
+  const broken = await graphRow();
+  if (broken.status !== "degraded") throw new Error("an unreachable repo should read degraded: " + JSON.stringify(broken));
+  if (!/403/.test(broken.error ?? "")) throw new Error("the degraded row should carry the failure: " + JSON.stringify(broken));
+  if (!broken.lastErrorAt || Number.isNaN(Date.parse(broken.lastErrorAt))) {
+    throw new Error("the degraded row should timestamp the failure: " + JSON.stringify(broken));
+  }
+  // Not vacuous: the fixture confirms this layer really did authenticate.
+  const sent = await fetch(apiBase + "/__auth").then((r) => r.json());
+  if (sent.authorization !== "Bearer " + process.env.CC_GH_TOKEN) {
+    throw new Error("expected the layer to authenticate before checking for leaks: " + JSON.stringify(sent));
+  }
+  if (JSON.stringify(broken).includes(process.env.CC_GH_TOKEN)) {
+    throw new Error("a graph row must never echo a credential: " + JSON.stringify(broken));
+  }
+
+  // And recovery reads clean again — in the Sync response and in the row.
+  await fetch(apiBase + "/__mode?value=");
+  const back = await fetch(base + "/api/sources/sync?name=repo", { method: "POST" });
+  const backBody = await back.json();
+  if (!back.ok || backBody.ok !== true || backBody.lastError !== null) {
+    throw new Error("a recovered Sync should report clean: " + JSON.stringify(backBody));
+  }
+  const recovered = await graphRow();
+  if (recovered.status !== "ok" || recovered.error !== null) {
+    throw new Error("a recovered repo should read ok again: " + JSON.stringify(recovered));
+  }
+  if (recovered.conceptCount < 1) throw new Error("a recovered repo should list again: " + JSON.stringify(recovered));
+
+  // A denied file read is not the same failure as an unreachable repo: the
+  // index is current and every OTHER concept in this source is fine, so it
+  // must not paint the whole row "degraded" — that already happens per
+  // concept (buildGraph's own loadConcept sweep just gets 0 tokens for that
+  // one id), which is warn-and-continue doing its job, not an outage. This
+  // layer is cached (ttlSeconds: 600 in the manifest above), and the prior
+  // "recovered" check just warmed every concept into it — so a sync while
+  // nocontent mode is already active is required here, purely to bust the
+  // cache, or this assertion would pass vacuously against stale, still-good
+  // reads instead of actually exercising the denial.
+  await fetch(apiBase + "/__mode?value=nocontent");
+  await fetch(base + "/api/sources/sync?name=repo", { method: "POST" }); // index-only refresh; still succeeds
+  const contentDenied = await graphRow();
+  await fetch(apiBase + "/__mode?value=");
+  if (contentDenied.status !== "ok") {
+    throw new Error("a denied file read must not degrade the whole source: " + JSON.stringify(contentDenied));
+  }
   console.log("SERVICE-SYNC-OK");
 } finally {
   service.close();
   await new Promise((resolve) => server.close(resolve));
 }
 EOF
-service_sync_out="$(node "$tmpdir/service-sync.mjs" "$api" "$tmpdir/service-manifest.json")"
-grep -q 'SERVICE-SYNC-OK' <<<"$service_sync_out" || fail "service Sync should refresh a remote github source" "$service_sync_out"
+service_sync_out="$(CC_GH_TOKEN=s3cret-graph node "$tmpdir/service-sync.mjs" "$api" "$tmpdir/service-manifest.json")"
+grep -q 'SERVICE-SYNC-OK' <<<"$service_sync_out" || fail "service Sync + graph health reporting" "$service_sync_out"
 
 # --- 9. Cache wrapper: TTL memoization, and sync() reaching the adapter -------
 
@@ -451,4 +554,184 @@ EOF
 cache_out="$(node "$tmpdir/cache.mjs" "$api")"
 grep -q 'CACHE-OK' <<<"$cache_out" || fail "cache wrapper over the github adapter" "$cache_out"
 
-echo "github source test passed (glob index + commit dates + credential indirection + cascade merge + degradation + cache)"
+# --- 10. Scoped indexing: selectors narrow the REQUEST, not just the result ---
+# GitHub truncates a whole-tree listing around 100k entries, and a truncated
+# tree is refused rather than indexed half-way — which, for a repo permanently
+# over that line, used to mean the layer never worked at all. The selectors are
+# the way out: each one names a directory the request can be scoped to.
+
+cat > "$tmpdir/scopes.mjs" <<EOF
+import { treeScopes } from "${sources_dir}/github.mjs";
+const show = (globs) => JSON.stringify(treeScopes(globs).map((s) => (s.prefix || ".") + (s.recursive ? "/**" : "/*")).sort());
+console.log(show(["docs/**"]));
+console.log(show(["CLAUDE.md", "AGENTS.md"]));         // literals live in their parent
+console.log(show(["docs/**", "docs/adr/**"]));         // a nested scope is already covered
+console.log(show(["docs/**", "docs/index.md"]));       // so is a literal under one
+console.log(show(["**/*.md", "docs/**"]));             // one prefix-less selector = whole tree
+console.log(show(["docs/*.md"]));                      // superset scope; matchers still filter
+console.log(show(["a/b/c/*.md"]));                     // the prefix is the whole static head
+console.log(show(["../../etc/**", "docs/**"]));        // no path syntax reaches a request
+console.log(show(["../../etc/**"]));
+EOF
+scopes_out="$(node "$tmpdir/scopes.mjs")"
+[ "$(sed -n 1p <<<"$scopes_out")" = '["docs/**"]' ] || fail "docs/** should scope to the docs subtree" "$scopes_out"
+[ "$(sed -n 2p <<<"$scopes_out")" = '["./*"]' ] || fail "root-level literals should scope to a flat root listing" "$scopes_out"
+[ "$(sed -n 3p <<<"$scopes_out")" = '["docs/**"]' ] || fail "a nested recursive scope should collapse into its parent" "$scopes_out"
+[ "$(sed -n 4p <<<"$scopes_out")" = '["docs/**"]' ] || fail "a literal under a recursive scope should collapse into it" "$scopes_out"
+[ "$(sed -n 5p <<<"$scopes_out")" = '["./**"]' ] || fail "a prefix-less selector must widen the plan to the whole tree" "$scopes_out"
+[ "$(sed -n 6p <<<"$scopes_out")" = '["docs/**"]' ] || fail "docs/*.md should scope to docs" "$scopes_out"
+[ "$(sed -n 7p <<<"$scopes_out")" = '["a/b/c/**"]' ] || fail "the scope should be the full static head" "$scopes_out"
+[ "$(sed -n 8p <<<"$scopes_out")" = '["docs/**"]' ] || fail "a traversing selector must not become a scope" "$scopes_out"
+[ "$(sed -n 9p <<<"$scopes_out")" = '[]' ] || fail "a traversing selector must produce no scope at all" "$scopes_out"
+
+# ...and end to end: it reaches no request, and is reported rather than
+# resolving to an empty layer that looks legitimately empty.
+curl -fsS "$api/__trees?reset=1" > /dev/null
+evil="$(node "$tmpdir/load.mjs" "$api" --list "" '../../etc/**' 2>"$tmpdir/evil.log")"
+[ "$evil" = "[]" ] || fail "a traversing selector should index nothing" "$evil"
+evil_trees="$(curl -fsS "$api/__trees?reset=1")"
+[ "$evil_trees" = '{"trees":[]}' ] || fail "a traversing selector must not shape any tree request" "$evil_trees"
+
+# The behavior that matters: a repo whose whole-tree listing always truncates
+# still indexes, because the default selectors never ask for the whole tree.
+curl -fsS "$api/__trees?reset=1" > /dev/null
+set_mode bigrepo
+big="$(node "$tmpdir/load.mjs" "$api" --list 2>"$tmpdir/big.log")"
+grep -q '"acme/payments/CLAUDE"' <<<"$big" || fail "a repo too big for a whole-tree listing should still index" "$big$(cat "$tmpdir/big.log")"
+grep -q '"acme/payments/docs/runbook"' <<<"$big" || fail "docs/** should index through its own subtree" "$big"
+grep -q '"acme/payments/docs/deep/nested"' <<<"$big" || fail "a scoped fetch should still recurse below its prefix" "$big"
+if grep -q 'internal/private' <<<"$big"; then fail "scoping must not widen what the selectors admit" "$big"; fi
+
+trees="$(curl -fsS "$api/__trees?reset=1")"
+if grep -q '"main?recursive"' <<<"$trees"; then fail "prefixed selectors must not request the whole recursive tree" "$trees"; fi
+grep -q 'main:docs?recursive' <<<"$trees" || fail "docs/** should be fetched as a subtree" "$trees"
+grep -q '"main"' <<<"$trees" || fail "root-level literals should be fetched as a flat root listing" "$trees"
+
+# A selector with no static prefix has nothing to narrow with, so the whole tree
+# is still the only correct request — and on this repo it still refuses rather
+# than publishing half an index as complete.
+anchorless="$(node "$tmpdir/load.mjs" "$api" --list "" '**/*.md' 2>"$tmpdir/anchorless.log")"
+[ "$anchorless" = "[]" ] || fail "a prefix-less selector must not index a truncated tree" "$anchorless"
+grep -q 'refusing to index incomplete context' "$tmpdir/anchorless.log" || fail "the prefix-less fallback should still refuse a truncated tree" "$(cat "$tmpdir/anchorless.log")"
+trees="$(curl -fsS "$api/__trees?reset=1")"
+grep -q '"main?recursive"' <<<"$trees" || fail "a prefix-less selector should fall back to the whole tree" "$trees"
+
+# A subtree that truncates on its own is refused too, naming the scope — the
+# actionable fix is a narrower selector for that directory.
+set_mode truncated
+subtrunc="$(node "$tmpdir/load.mjs" "$api" --list "" 'docs/**' 2>"$tmpdir/subtrunc.log")"
+[ "$subtrunc" = "[]" ] || fail "a truncated subtree must still be refused" "$subtrunc"
+grep -q 'acme/payments:docs' "$tmpdir/subtrunc.log" || fail "the refusal should name the subtree that truncated" "$(cat "$tmpdir/subtrunc.log")"
+set_mode ""
+
+# Selectors are written for a family of repos, so a directory this one lacks is
+# a miss, not a failure...
+mixed="$(node "$tmpdir/load.mjs" "$api" --list "" 'docs/**,nosuchdir/**' 2>"$tmpdir/mixed.log")"
+grep -q 'docs/runbook' <<<"$mixed" || fail "a missing subtree must not fail the whole index" "$mixed$(cat "$tmpdir/mixed.log")"
+
+# ...and when EVERY selector misses, that alone still isn't a failure: a repo
+# that hasn't created "adr/" yet is a perfectly normal state for the exact
+# single-selector config this feature exists to enable on an oversized repo.
+# It must read as a quiet empty layer, not an announced error — the original
+# version of this test asserted the opposite, which punished narrow selectors
+# specifically (the default selectors always include a root-level scope and
+# so never hit this path at all).
+curl -fsS "$api/__trees?reset=1" > /dev/null
+none="$(node "$tmpdir/load.mjs" "$api" --list "" 'nosuchdir/**' 2>"$tmpdir/none.log")"
+[ "$none" = "[]" ] || fail "a selector matching no directory should index nothing" "$none"
+[ -s "$tmpdir/none.log" ] && fail "a missing directory under a VALID ref must not be announced as an error" "$(cat "$tmpdir/none.log")"
+none_trees="$(curl -fsS "$api/__trees?reset=1")"
+grep -q '"main:nosuchdir?recursive"' <<<"$none_trees" || fail "the missing-directory scope should still be requested" "$none_trees"
+grep -q '"main"' <<<"$none_trees" || fail "settling the ambiguity should cost exactly one extra root probe" "$none_trees"
+
+# A genuinely bad ref is still an announced error — the root probe is what
+# tells the two apart, so prove it actually distinguishes them.
+badref="$(node "$tmpdir/load.mjs" "$api" --list "" 'docs/**' 'nope' 2>"$tmpdir/badref.log")"
+[ "$badref" = "[]" ] || fail "a bad ref should index nothing" "$badref"
+grep -q 'ref "nope" not found' "$tmpdir/badref.log" || fail "a bad ref should be announced, unlike a merely-missing directory" "$(cat "$tmpdir/badref.log")"
+
+# The default selectors always include a root-level scope, so the ambiguous
+# case (and its extra probe) never applies to them, bad ref or not.
+badref_default="$(node "$tmpdir/load.mjs" "$api" --list "" "" 'nope' 2>"$tmpdir/badref_default.log")"
+[ "$badref_default" = "[]" ] || fail "a bad ref with default selectors should index nothing" "$badref_default"
+grep -q 'ref "nope" not found' "$tmpdir/badref_default.log" || fail "a bad ref should be announced even with default selectors" "$(cat "$tmpdir/badref_default.log")"
+
+# --- 11. health(): what the read path refuses to say --------------------------
+# Reads swallow API failures so one down repo can never fail a resolve, which
+# leaves "empty repo" and "unreachable repo" looking identical from outside.
+# health() is the out-of-band answer, and must not change any read.
+
+cat > "$tmpdir/health.mjs" <<EOF
+import { createGithubSource } from "${sources_dir}/github.mjs";
+const api = process.argv[2];
+const setMode = (v) => fetch(api + "/__mode?value=" + v).then((r) => r.json());
+// No TTL and no cooldown: every read is a real refresh attempt, so each health
+// assertion below is about the request that just happened.
+const s = createGithubSource({
+  name: "repo", level: 3, repo: "acme/payments", apiBase: api,
+  token: "tok-health", indexTtlMs: 0, failureCooldownMs: 0,
+});
+
+const good = await s.listConceptIds();
+const fresh = s.health();
+if (!fresh.ok || fresh.lastError !== null) throw new Error("a healthy source should report ok: " + JSON.stringify(fresh));
+if (!fresh.lastSuccessAt || fresh.indexedConcepts !== good.length) {
+  throw new Error("health should report the loaded index: " + JSON.stringify(fresh));
+}
+
+// An outage still serves the cached index — the read is unchanged, and health
+// is the only place the failure shows up.
+await setMode("forbidden");
+const during = await s.listConceptIds();
+if (during.length !== good.length) throw new Error("health must not change the degraded read path");
+const down = s.health();
+if (down.ok) throw new Error("a failed refresh should be reported: " + JSON.stringify(down));
+if (down.lastErrorScope !== "index") throw new Error("a failed refresh is an index failure: " + JSON.stringify(down));
+if (!down.lastErrorAt || Number.isNaN(Date.parse(down.lastErrorAt))) throw new Error("health should timestamp the failure");
+if (!down.lastSuccessAt) throw new Error("health should still report when the index last loaded");
+if (JSON.stringify(down).includes("tok-health")) throw new Error("health must never echo the token");
+
+await setMode("");
+await s.listConceptIds();
+if (!s.health().ok) throw new Error("a successful refresh should clear the last error");
+
+// A denied file read is a different failure from an unreachable repo: the
+// index is current, one document isn't readable.
+await setMode("nocontent");
+if ((await s.loadConcept("acme/payments/CLAUDE")) !== null) throw new Error("expected a denied content read to miss");
+const partial = s.health();
+if (partial.ok || partial.lastErrorScope !== "content") throw new Error("a denied file read should be scoped content: " + JSON.stringify(partial));
+if (!partial.lastSuccessAt) throw new Error("a content failure should not erase the index success time");
+
+// A content failure clears on the next successful read of that SAME file —
+// not on an unrelated index refresh succeeding, and not by staying stuck
+// until the next sync(). The header comment on lastError promises exactly
+// this ("kept until a subsequent success in the same scope"); this is that
+// promise under test.
+await setMode("");
+if ((await s.loadConcept("acme/payments/CLAUDE")) === null) throw new Error("expected the retry to succeed once content is reachable again");
+if (!s.health().ok) throw new Error("a successful content read should clear a content-scope lastError");
+
+// And the reverse must not cross-clear: an index failure served from cache
+// (the stale-serve path) must survive a content read that happens to succeed
+// against that same stale index — they answer different questions.
+await setMode("nocommits"); // irrelevant to this — content still reads fine here
+await s.loadConcept("acme/payments/docs/runbook"); // an unrelated successful content read
+await setMode("forbidden");
+await s.listConceptIds(); // a refresh attempt fails; stale index still served (indexTtlMs: 0 above forces the attempt)
+if (s.health().lastErrorScope !== "index") throw new Error("a fresh index failure must not be masked by an earlier content success");
+
+// sync() is a clean slate: whatever health reports next belongs to the sync.
+await setMode("");
+s.sync();
+if (!s.health().ok) throw new Error("sync() should clear the last error");
+if (s.health().lastSuccessAt !== null) throw new Error("sync() drops the index, so there is no success to report yet");
+s.close();
+console.log("HEALTH-OK");
+EOF
+health_out="$(node "$tmpdir/health.mjs" "$api" 2>"$tmpdir/health.log")"
+grep -q 'HEALTH-OK' <<<"$health_out" || fail "health() reporting" "$health_out$(cat "$tmpdir/health.log")"
+if grep -q 'tok-health' "$tmpdir/health.log"; then fail "the degradation warning must never echo the token" "$(cat "$tmpdir/health.log")"; fi
+set_mode ""
+
+echo "github source test passed (scoped index + commit dates + credential indirection + cascade merge + degradation + health + cache)"

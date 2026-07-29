@@ -271,6 +271,57 @@ node "$core/promote.mjs" --manifest "$manifest" --profile work --approve "$revie
 [ -f "$tmpdir/curated/systems/profile-promotion.md" ] || fail "profile-aware promotion did not write curated target"
 [ ! -f "$live/captures/investigation/profile-tester--promotion-one.md" ] || fail "successful profile promotion did not clean live capture"
 
+# A slow network push must not keep the manifest lock. Once the local deletion
+# commit is durable, a profile edit can proceed while push is still in flight.
+cat > "$live/captures/investigation/profile-tester--lock-release.md" <<'EOF'
+---
+kind: investigation
+title: Lock release
+author: Profile Tester
+captured: 2026-07-29T00:00:00.000Z
+status: unreviewed
+---
+
+# Lock release
+
+## Fix {#fix}
+
+Do not hold the manifest lock during a slow push.
+EOF
+( cd "$live" && git add -A && git commit -qm "seed promotion lock release" && git push -q )
+node "$core/promote.mjs" --manifest "$manifest" --profile work --capture captures/investigation/profile-tester--lock-release --target-layer curated --dest systems/lock-release >/dev/null
+lock_release_review="$tmpdir/curated/_review/promotions/lock-release.md"
+cat > "$live/.git/hooks/pre-push" <<EOF
+#!/usr/bin/env sh
+: > "$tmpdir/promotion-push-started"
+while [ ! -f "$tmpdir/promotion-push-release" ]; do sleep 0.05; done
+EOF
+chmod +x "$live/.git/hooks/pre-push"
+( node "$core/promote.mjs" --manifest "$manifest" --profile work --approve "$lock_release_review" --target-layer curated >"$tmpdir/promotion-lock-release.out" 2>&1 ) &
+promotion_pid=$!
+for _ in {1..40}; do
+  [ -f "$tmpdir/promotion-push-started" ] && break
+  sleep 0.05
+done
+[ -f "$tmpdir/promotion-push-started" ] || fail "promotion did not reach its blocked push"
+( node "$core/profile-cli.mjs" map work "$tmpdir/project" --manifest "$manifest" >"$tmpdir/profile-map-during-push.out" 2>&1 && : > "$tmpdir/profile-map-during-push.complete" ) &
+map_pid=$!
+for _ in {1..40}; do
+  [ -f "$tmpdir/profile-map-during-push.complete" ] && break
+  sleep 0.05
+done
+if [ ! -f "$tmpdir/profile-map-during-push.complete" ]; then
+  : > "$tmpdir/promotion-push-release"
+  wait "$promotion_pid" || true
+  wait "$map_pid" || true
+  fail "slow promotion push kept the manifest lock" "$(cat "$tmpdir/profile-map-during-push.out")"
+fi
+: > "$tmpdir/promotion-push-release"
+wait "$promotion_pid" || fail "promotion failed after releasing blocked push" "$(cat "$tmpdir/promotion-lock-release.out")"
+wait "$map_pid" || fail "profile map failed during promotion push" "$(cat "$tmpdir/profile-map-during-push.out")"
+rm "$live/.git/hooks/pre-push"
+[ ! -f "$lock_release_review" ] || fail "lock-release promotion did not clear review"
+
 # A live-repo symlink must never turn promotion into a local file read.
 printf 'LOCAL-SECRET-MUST-NOT-BE-PROMOTED\n' > "$tmpdir/outside-promotion-secret.md"
 mkdir -p "$live/captures/investigation"

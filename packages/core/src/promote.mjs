@@ -99,9 +99,14 @@ if (args["print-git"]) {
 //   writes the curated concept, verifies it is durable, and only then removes
 //   the review entry and the live capture. Re-running approve is idempotent.
 
+// The manifest lock guards selection + local mutation only (matching capture
+// confirmation's boundary) — never the network push. A push can take far
+// longer than the manifest lock's own timeout, and holding the lock through it
+// would stall or spuriously fail every other profile-aware operation sharing
+// this manifest (concurrent captures, other promotions, profile-cli edits).
 async function runProfilePromotion(parsed) {
   const manifestPath = path.resolve(parsed.manifest);
-  return withManifestLockAsync(manifestPath, async () => {
+  const pending = await withManifestLockAsync(manifestPath, async () => {
     const runtime = loadProfileRuntime(manifestPath, {
       requestedProfile: parsed.profile ?? null,
       cwd: process.cwd(),
@@ -127,11 +132,16 @@ async function runProfilePromotion(parsed) {
     const bound = { ...parsed, _profileBinding: profileBinding, _manifestPath: manifestPath };
     if (parsed.approve) {
       const reviewPath = resolveProfileReviewPath(curatedRoot, parsed.approve);
-      return approvePromotion(liveLayer.root, curatedRoot, reviewPath, bound);
+      const outcome = await commitPromotion(liveLayer.root, curatedRoot, reviewPath, bound);
+      return { kind: "approve", liveRoot: liveLayer.root, ...outcome };
     }
-    if (parsed.capture) return requestPromotion(liveLayer.root, curatedRoot, parsed.capture, bound);
+    if (parsed.capture) {
+      await requestPromotion(liveLayer.root, curatedRoot, parsed.capture, bound);
+      return { kind: "capture" };
+    }
     throw new Error("Pass --capture <id> to request a promotion or --approve <review-file> to finalize one.");
   });
+  if (pending.kind === "approve") await finalizePromotion(pending);
 }
 
 function kindDest(kind) {
@@ -143,7 +153,10 @@ async function runFromLive(parsed) {
   const curatedRoot = parsed.target ? path.resolve(parsed.target) : null;
   if (!curatedRoot) throw new Error("--target <curated-root> is required");
 
-  if (parsed.approve) return approvePromotion(liveRoot, curatedRoot, path.resolve(parsed.approve), parsed);
+  if (parsed.approve) {
+    const outcome = await commitPromotion(liveRoot, curatedRoot, path.resolve(parsed.approve), parsed);
+    return finalizePromotion({ liveRoot, ...outcome });
+  }
   if (parsed.capture) return requestPromotion(liveRoot, curatedRoot, parsed.capture, parsed);
   throw new Error("Pass --capture <id> to request a promotion or --approve <review-file> to finalize one.");
 }
@@ -225,7 +238,12 @@ async function requestPromotion(liveRoot, curatedRoot, captureId, parsed) {
   console.log(`Staged promotion request: ${reviewRel} -> ${dest}`);
 }
 
-async function approvePromotion(liveRoot, curatedRoot, reviewPath, parsed) {
+// Validates the review, writes the curated concept, and commits the live
+// deletion — everything that must stay behind the manifest lock (in
+// profile-aware mode) so a concurrent profile edit can't retarget the write.
+// Returns a descriptor for finalizePromotion to push and clean up afterward,
+// outside the lock.
+async function commitPromotion(liveRoot, curatedRoot, reviewPath, parsed) {
   if (!fs.existsSync(reviewPath)) throw new Error(`Review file not found: ${reviewPath}`);
   const reviewRaw = parsed._profileBinding
     ? readFileInRoot(curatedRoot, path.relative(curatedRoot, reviewPath))
@@ -279,6 +297,7 @@ async function approvePromotion(liveRoot, curatedRoot, reviewPath, parsed) {
   // Keep the review until the live deletion is committed. The repo lock is
   // acquired before rm; if add/commit fails, restore the exact capture and
   // clear the staged deletion so approval remains resumable.
+  let needsPush = false;
   if (liveRaw !== null) {
     await commitPathsWithMutation(liveRoot, [liveRel], `chore: promote ${captureId} -> ${dest}`, {
       mutate: () => fs.rmSync(safeJoin(liveRoot, liveRel)),
@@ -300,13 +319,31 @@ async function approvePromotion(liveRoot, curatedRoot, reviewPath, parsed) {
         try { await commitPaths(liveRoot, [telemetryPath], `chore: telemetry for promotion ${captureId}`); } catch { /* retry on next sync */ }
       }
     }
+    needsPush = true;
+  } else if (authoritative?.cleanupCommitted === true) {
+    needsPush = true;
   }
-  if (liveRaw !== null || authoritative?.cleanupCommitted === true) {
+
+  return {
+    needsPush,
+    reviewPath,
+    captureId,
+    dest,
+    manifestPath: parsed._manifestPath ?? null,
+    promotionBinding: authoritative ? frontmatter.promotionBinding : null,
+  };
+}
+
+// Push (best-effort — a queued/failed push is retried later by sync()) and
+// clean up the review + local binding. Runs after the manifest lock (if any)
+// has been released, since nothing here touches manifest-guarded state.
+async function finalizePromotion({ liveRoot, needsPush, reviewPath, captureId, dest, manifestPath, promotionBinding }) {
+  if (needsPush) {
     const pushed = await push(liveRoot);
     if (pushed.queued) console.error("promote: live cleanup committed locally; push queued (run sync to retry)");
   }
   fs.rmSync(reviewPath, { force: true });
-  if (authoritative) deletePromotionBinding(parsed._manifestPath, frontmatter.promotionBinding);
+  if (manifestPath && promotionBinding) deletePromotionBinding(manifestPath, promotionBinding);
   console.log(`Promoted ${captureId} -> ${dest}`);
 }
 

@@ -13,6 +13,13 @@ import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading }
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
 const EXTENSIONS = [".md", ".mdx", ".txt"];
 
+// Shared with remote adapters that ingest the same plain-document shapes
+// (github.mjs) — the extension set and the parsing below must stay one
+// implementation or section keys drift and the cascade stops merging. Order is
+// meaningful: it is the tie-break when one concept id has several extensions.
+// Frozen because it is the same array the local adapter walks.
+export const DOC_EXTENSIONS = Object.freeze([...EXTENSIONS]);
+
 export function createFilesSource({ name, level, root }) {
   return {
     name,
@@ -43,10 +50,30 @@ export function createFilesSource({ name, level, root }) {
 function parseFile(filePath, ext) {
   const content = fs.readFileSync(filePath, "utf8");
   const mtime = fs.statSync(filePath).mtime.toISOString().slice(0, 10);
-  const stem = path.basename(filePath, ext);
-  if (ext === ".txt") return parsePlainText(content, stem, mtime);
-  if (hasFrontmatter(content)) return parseConcept(content); // full OKF behavior, untouched
-  return parsePlainMarkdown(content, stem, mtime);
+  return parseDocument({ content, stem: path.basename(filePath, ext), updated: mtime, ext });
+}
+
+// The document-shape rules, independent of where the bytes came from. Remote
+// adapters call this with their own `updated` (a commit date rather than an
+// mtime) so a GitHub-hosted CLAUDE.md and a local one resolve identically.
+export function parseDocument({ content, stem, updated, ext = ".md" }) {
+  if (ext === ".txt") return parsePlainText(content, stem, updated);
+  if (hasFrontmatter(content)) {
+    const parsed = parseConcept(content);
+    // Explicit per-section dates remain authoritative. Otherwise an OKF-level
+    // date wins, then the adapter's document date (mtime or remote commit).
+    // Without this fallback, structured remote docs silently lose the
+    // per-document staleness metadata that plain documents receive.
+    const fallback = parsed.frontmatter.updated ?? updated;
+    return {
+      ...parsed,
+      sections: parsed.sections.map((section) => ({
+        ...section,
+        updated: section.updated ?? fallback,
+      })),
+    };
+  }
+  return parsePlainMarkdown(content, stem, updated);
 }
 
 // Mirrors okf-local's parseFrontmatter detection: opening --- fence with a closer.

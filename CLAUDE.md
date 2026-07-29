@@ -6,7 +6,7 @@
 # Run all tests
 npm test
 # or directly (mirrors the npm test chain):
-bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/git-sync-test.sh && bash packages/core/tests/capture-test.sh && bash packages/core/tests/team-sync-mcp-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh
+bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/github-source-test.sh && bash packages/core/tests/git-sync-test.sh && bash packages/core/tests/capture-test.sh && bash packages/core/tests/team-sync-mcp-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh
 
 # Run the MCP server (cascade mode)
 node mcp-server.mjs --manifest layers.json
@@ -74,7 +74,8 @@ Key files:
 | `packages/core/src/mcp-server.mjs` | stdio MCP server; resolves via resolver.mjs; renders conflicts in markdown |
 | `packages/core/src/sources/okf-local.mjs` | OKF-local source adapter: reads OKF markdown bundles from disk |
 | `packages/core/src/sources/mcp.mjs` | MCP source adapter: spawns a foreign stdio MCP server, translates to OKF |
-| `packages/core/src/sources/files.mjs` | Files source adapter: any plain folder of `.md`/`.mdx`/`.txt` docs becomes a layer (OKF parsing when frontmatter present, synthesized sections otherwise) |
+| `packages/core/src/sources/files.mjs` | Files source adapter: any plain folder of `.md`/`.mdx`/`.txt` docs becomes a layer (OKF parsing when frontmatter present, synthesized sections otherwise). Owns `parseDocument`, shared with remote adapters so section keys match |
+| `packages/core/src/sources/github.mjs` | GitHub source adapter: a repo's `CLAUDE.md`/`AGENTS.md`/`README.md`/`docs/**` become a layer without a clone — recursive tree index, raw content, last-commit dates, warn-and-continue on API failure |
 | `packages/core/src/sources/cache.mjs` | TTL cache wrapper for any source adapter (memory + optional disk, `sync()` to invalidate) — opt-in per layer via a manifest `cache` block |
 | `packages/core/src/sources/git-core.mjs` | Locked git mutation coordinator for live layers: intended-paths commits, push with offline queue + rebase retry, URL-scrubbed errors |
 | `packages/core/src/sources/git-sync.mjs` | withGitSync wrapper (TTL-gated pull, 14-day capture decay, sync() lands queued pushes) + `resolveLiveLayer` manifest contract |
@@ -104,6 +105,8 @@ Key files:
 - `apps/control-surface/signals.json` is generated — gitignored, produced by `ingest.mjs`.
 - Staleness is surfaced via per-section `conflicts[]` + last-updated dates (the shadow/hash subsystem was removed in the core re-arch; see `specs/contextcake-core/design.md`).
 - **The manifest is a trust boundary.** An `mcp` layer spawns `command` with `args` from the manifest — a manifest you did not author can run arbitrary commands as your user. Only point `--manifest` at configs you trust (same model as any MCP client config).
+- **A manifest names credentials, never carries them.** A remote layer's `auth` may only be `"keychain:<alias>"` (resolved from the `tokens` map the caller injects into `buildSources` — the app owns the keychain, the engine never opens it) or `{"tokenEnv": "NAME"}` for headless runs. Any other shape throws, which is what structurally keeps a raw token out of a manifest. An alias with no injected secret reads anonymously rather than failing.
+- **A manifest still decides where a named credential is *sent*.** A `github` layer's `apiBase` (the GitHub Enterprise knob) plus a valid `auth` alias means an untrusted manifest can direct a real token at a host it chooses. This is inside the existing manifest trust boundary, not a separate one — but when the desktop app writes manifests it should only ever emit the default `apiBase`.
 - **The live layer's git repo is inside the team trust boundary.** Push access = the ability to inject unreviewed context into every teammate's agent; scope repo membership accordingly.
 - Capture tools (`log_capture`/`confirm_capture`) exist only behind `mcp-server.mjs --capture`. The default server exposes 6 read-only tools (the original `search`/`read_file`/`list_concepts`/`get_links` stay byte-identical to the committed `fixtures/mcp-tools-baseline.json`, plus always-on read-only `find_captures`/`whats_new`); `--capture` adds the two write tools for 8. Telemetry (`--telemetry`) records concept ids and enums only — never content.
 - All git mutations against a live root go through `git-core.mjs` (advisory `.contextcake.lock`, per-repo serialization) — never call git directly against a live layer from engine code.

@@ -508,8 +508,21 @@ export function createEngineService({
 
   async function syncSourceApi(name) {
     if (!name) throw httpError(400, "Provide ?name=");
-    const layer = (readManifest().layers ?? []).find((l) => l.name === name);
+    const { manifest, sources } = openSources();
+    const layer = (manifest.layers ?? []).find((l) => l.name === name);
     if (!layer) throw httpError(404, `No source named "${name}"`);
+    if (layer.source === "github") {
+      const source = sources.find((candidate) => candidate.name === name);
+      if (!source || typeof source.sync !== "function") {
+        throw httpError(400, `"${name}" does not support Sync`);
+      }
+      const lastSynced = await source.sync();
+      // sync() invalidates both the outer cache and the adapter's internal
+      // index. Refresh now so a successful API response means the remote index
+      // has actually bypassed TTL rather than merely being marked dirty.
+      await source.listConceptIds();
+      return { ok: true, synced: name, lastSynced: source.lastSynced ?? lastSynced ?? null };
+    }
     if (!layer.origin) throw httpError(400, `"${name}" is not a git-backed source`);
     const { url, slug } = normalizeRepo(layer.origin);
     await gitCloneOrPull(url, path.join(CACHE_DIR, slug), layer.ref ?? null);

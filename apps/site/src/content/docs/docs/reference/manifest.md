@@ -28,10 +28,15 @@ registry is bookkeeping for rollback; the resolver reads only the explicit layer
 |-------|----------|------------|---------|
 | `name` | yes | all | Layer identifier. Used in provenance (`sourceLayer`, `contributors`) and as the `layer` argument to `read_file`. |
 | `level` | yes | all | Precedence. Higher wins per section. Personal is 3, Team is 2, Company is 0 by convention, but any integer works. |
-| `source` | no | all | `okf-local` (default when omitted), `files`, or `mcp`. |
+| `source` | no | all | `okf-local` (default when omitted), `files`, `github`, or `mcp`. |
 | `path` | for `okf-local` / `files` | `okf-local`, `files` | Directory of the OKF bundle or existing document folder. |
 | `command` | for `mcp` | `mcp` | Executable to spawn as a stdio MCP server. |
 | `args` | for `mcp` | `mcp` | Argument array passed to `command`. |
+| `repo` | for `github` | `github` | `owner/name` of the repository to read. |
+| `ref` | no | `github` | Branch or tag to read. Defaults to the repository's default branch. |
+| `paths` | no | `github` | Glob selectors for which files become concepts. Replaces the defaults when set. |
+| `auth` | no | `github` | A credential *reference* — `"keychain:<alias>"` or `{"tokenEnv": "NAME"}`. Never a token. |
+| `cache` | no | all | `{ "ttlSeconds": N, "dir": "..." }`. Strongly recommended for `github`. |
 
 ## Precedence is by level
 
@@ -90,6 +95,61 @@ have OKF frontmatter keep their full structured behavior.
 { "name": "work-notes", "level": 3, "source": "files", "path": "/Users/you/Documents/Obsidian" }
 ```
 
+### `github`
+
+A repository read directly over the GitHub API — no clone, no checkout. The
+markdown your team already keeps in the repo becomes a layer: by default
+`CLAUDE.md`, `AGENTS.md`, `README.md`, `docs/**`, and `.context/**`. Documents
+parse by exactly the same rules as `files`, so a `CLAUDE.md` on GitHub and one on
+disk merge section-for-section instead of splitting into parallel sections.
+
+```json
+{
+  "name": "payments-repo",
+  "level": 3,
+  "source": "github",
+  "repo": "acme/payments",
+  "paths": ["CLAUDE.md", "docs/**"],
+  "auth": "keychain:github",
+  "cache": { "ttlSeconds": 900 }
+}
+```
+
+Concept ids are repo-qualified — `acme/payments/docs/runbook` — so several repos
+can be layered without colliding. Section dates come from each file's last commit
+rather than the repo's last push, so staleness is per document. An explicit OKF
+section date still wins; an OKF frontmatter date fills otherwise-undated sections
+before the commit date is used.
+
+`paths` accepts `*` (within one path segment), `?`, and `**` (spanning segments).
+Setting it replaces the defaults rather than adding to them. Only `.md`, `.mdx`,
+and `.txt` files are indexed.
+
+Reads are read-only and degrade rather than fail: if GitHub is unreachable, rate
+limited, or the token lacks access, the layer warns on stderr and the remaining
+layers still resolve. Add a `cache` block — a search sweeps every concept in
+every layer, and the cache is what keeps that inside your API rate limit.
+
+GitHub may truncate very large recursive tree responses. ContextCake refuses to
+index that partial response as if it were complete; it serves the last complete
+cached index when available, or resolves without that layer until a complete tree
+can be read. The source Sync action clears its TTL and immediately refreshes this
+remote index while preserving the separate clone-and-pull behavior of local Git
+sources.
+
+#### Credentials
+
+The manifest never holds a token. `auth` may only *name* one:
+
+- `"keychain:<alias>"` — the desktop app resolves the alias from the macOS
+  Keychain and injects the secret at build time. The engine never opens a keychain.
+- `{"tokenEnv": "NAME"}` — for CLI and CI runs, read from that environment variable.
+
+The object form must contain exactly the one `tokenEnv` field. Extra fields and
+every other shape are rejected outright, so a raw credential cannot hide beside
+an otherwise-valid reference. A repository you can read without a token needs no
+`auth` at all; an alias with nothing injected reads anonymously rather than failing.
+
 ## How paths resolve
 
 `path` and any relative `args` (those starting with `./` or `../`) resolve relative
@@ -105,6 +165,13 @@ author can therefore execute arbitrary commands as your user the moment you reso
 against it. Treat the manifest the way you treat any MCP client config: only point
 `--manifest` at files you trust. Read [The trust boundary](/docs/concepts/trust-boundary)
 before pointing a manifest at sources you didn't write.
+
+The same applies to credentials. A `github` layer may set `apiBase` to reach GitHub
+Enterprise — which means a manifest that pairs a hostile `apiBase` with a legitimate
+`auth` alias would send that credential to a host of its choosing. The alias names a
+secret the *app* holds, so the manifest never sees the token itself, but it does decide
+where the token is sent. Review `apiBase` and `auth` together on any manifest you did
+not write, and prefer omitting `apiBase` entirely unless you genuinely run Enterprise.
 
 ## Pack-managed layers
 

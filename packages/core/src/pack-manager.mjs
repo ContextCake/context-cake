@@ -8,6 +8,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  MANIFEST_LOCK_STALE_MS,
+  classifyManifest,
+  getManifestProfileLayers,
+  readContextManifest,
+  withManifestLock,
+  writeContextManifest,
+} from "./manifest.mjs";
 
 const ALLOWED_EXTENSIONS = new Set([".md", ".yaml", ".yml", ".json", ".txt"]);
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -141,7 +149,8 @@ export function previewPackUpdate({
   const manifest = readContextManifest(resolvedManifestPath);
   const record = readPackRecord(manifest, candidate.id);
   if (!record) throw new Error(`Pack is not installed: ${candidate.id}`);
-  const assignment = record.assignments.find((entry) => entry.profile === (profile ?? null));
+  const profileKey = packProfileKey(manifest, profile);
+  const assignment = findPackAssignment(record, manifest, profileKey);
   if (!assignment) throw new Error(`Pack ${candidate.id} is not attached to ${profile ? `profile ${profile}` : "the default stack"}.`);
   const active = record.installedVersions.find((entry) => entry.version === assignment.activeVersion);
   if (!active) throw new Error(`Pack registry is missing the active version ${candidate.id}@${assignment.activeVersion}.`);
@@ -150,7 +159,7 @@ export function previewPackUpdate({
   return {
     action: "update-preview",
     id: candidate.id,
-    profile: profile ?? null,
+    profile: profileKey,
     fromVersion: current.version,
     toVersion: candidate.version,
     currentChecksum: current.checksum,
@@ -175,7 +184,7 @@ export function installPack({
   const resolvedPacksDir = path.resolve(packsDir);
   return withManifestLock(resolvedManifestPath, () => {
     const manifest = readContextManifest(resolvedManifestPath);
-    const layers = selectProfileLayers(manifest, profile);
+    const layers = getManifestProfileLayers(manifest, profile);
     const registry = ensurePackRegistry(manifest);
     const record = registry[pack.id] ? readPackRecord(manifest, pack.id) : {
       id: pack.id,
@@ -187,8 +196,9 @@ export function installPack({
     };
     registry[pack.id] = record;
 
-    const profileKey = profile ?? null;
-    const existingAssignment = record.assignments.find((entry) => entry.profile === profileKey);
+    const profileKey = packProfileKey(manifest, profile);
+    const existingAssignment = findPackAssignment(record, manifest, profileKey);
+    if (existingAssignment && classifyManifest(manifest) === "v2" && existingAssignment.profile == null) existingAssignment.profile = "default";
     const priorVersion = existingAssignment?.activeVersion ?? null;
     const numericLevel = level === null || level === undefined ? Number(existingAssignment?.level ?? 0) : Number(level);
     if (!Number.isInteger(numericLevel) || numericLevel < -100 || numericLevel > 100) {
@@ -215,7 +225,7 @@ export function installPack({
       });
     }
 
-    let assignment = record.assignments.find((entry) => entry.profile === profileKey);
+    let assignment = findPackAssignment(record, manifest, profileKey);
     if (!assignment) {
       assignment = {
         profile: profileKey,
@@ -230,7 +240,7 @@ export function installPack({
     }
 
     upsertPackLayer(layers, assignment, pack.id, versionRoot, resolvedManifestPath);
-    writeContextManifest(resolvedManifestPath, manifest);
+    writeContextManifest(resolvedManifestPath, manifest, { allowTransitional: true });
 
     return {
       action: priorVersion && priorVersion !== pack.version ? "updated" : installed ? "installed" : "attached",
@@ -252,7 +262,8 @@ export function rollbackPack({ manifestPath, packId, profile = null, version = n
     const manifest = readContextManifest(resolvedManifestPath);
     const record = readPackRecord(manifest, packId);
     if (!record) throw new Error(`Pack is not installed: ${packId}`);
-    const assignment = record.assignments?.find((entry) => entry.profile === (profile ?? null));
+    const profileKey = packProfileKey(manifest, profile);
+    const assignment = findPackAssignment(record, manifest, profileKey);
     if (!assignment) throw new Error(`Pack ${packId} is not attached to ${profile ? `profile ${profile}` : "the default stack"}.`);
 
     const candidates = record.installedVersions.filter((entry) => entry.version !== assignment.activeVersion);
@@ -263,12 +274,13 @@ export function rollbackPack({ manifestPath, packId, profile = null, version = n
 
     const versionRoot = safeChildPath(resolvedPacksDir, packId, selected.version);
     const inspected = inspectPack(versionRoot, { expectedChecksum: selected.checksum });
-    const layers = selectProfileLayers(manifest, profile);
+    const layers = getManifestProfileLayers(manifest, profile);
     const priorVersion = assignment.activeVersion;
+    if (classifyManifest(manifest) === "v2" && assignment.profile == null) assignment.profile = "default";
     assignment.activeVersion = selected.version;
     upsertPackLayer(layers, assignment, packId, versionRoot, resolvedManifestPath);
-    writeContextManifest(resolvedManifestPath, manifest);
-    return { action: "rolled-back", pack: inspected, profile: profile ?? null, priorVersion };
+    writeContextManifest(resolvedManifestPath, manifest, { allowTransitional: true });
+    return { action: "rolled-back", pack: inspected, profile: profileKey, priorVersion };
   });
 }
 
@@ -279,15 +291,15 @@ export function removePack({ manifestPath, packId, profile = null }) {
     const manifest = readContextManifest(resolvedManifestPath);
     const record = readPackRecord(manifest, packId);
     if (!record) throw new Error(`Pack is not installed: ${packId}`);
-    const profileKey = profile ?? null;
-    const assignmentIndex = record.assignments?.findIndex((entry) => entry.profile === profileKey) ?? -1;
+    const profileKey = packProfileKey(manifest, profile);
+    const assignmentIndex = record.assignments?.findIndex((entry) => packProfileKey(manifest, entry.profile) === profileKey) ?? -1;
     if (assignmentIndex < 0) throw new Error(`Pack ${packId} is not attached to ${profile ? `profile ${profile}` : "the default stack"}.`);
 
+    const layers = getManifestProfileLayers(manifest, profile);
     const [assignment] = record.assignments.splice(assignmentIndex, 1);
-    const layers = selectProfileLayers(manifest, profile);
     const layerIndex = layers.findIndex((layer) => layer.name === assignment.layerName && isPackOrigin(layer.origin, packId));
     if (layerIndex >= 0) layers.splice(layerIndex, 1);
-    writeContextManifest(resolvedManifestPath, manifest);
+    writeContextManifest(resolvedManifestPath, manifest, { allowTransitional: true });
     return {
       action: "detached",
       id: packId,
@@ -466,86 +478,19 @@ function sweepStaleStaging(idDir, versionName) {
   }
 }
 
-function readContextManifest(manifestPath) {
-  if (!fs.existsSync(manifestPath)) return { layers: [] };
-  const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("ContextCake manifest must be a JSON object.");
-  if (parsed.layers !== undefined && !Array.isArray(parsed.layers)) throw new Error("ContextCake manifest layers must be an array.");
-  parsed.layers ??= [];
-  return parsed;
-}
-
-function writeContextManifest(manifestPath, manifest) {
-  fs.mkdirSync(path.dirname(manifestPath), { recursive: true, mode: 0o700 });
-  const temporary = `${manifestPath}.tmp-${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
-  try {
-    fs.writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-    fs.renameSync(temporary, manifestPath);
-    fs.chmodSync(manifestPath, 0o600);
-  } catch (error) {
-    fs.rmSync(temporary, { force: true });
-    throw error;
-  }
-}
-
-const MANIFEST_LOCK_TIMEOUT_MS = 15_000;
-const MANIFEST_LOCK_STALE_MS = 60_000;
-
-// Serialize the manifest read-modify-write so two concurrent `pack` commands
-// cannot clobber each other's registry edits (writeContextManifest already
-// guards against torn writes; this guards against lost updates). Advisory
-// lockfile next to the manifest, with stale-lock takeover after a crash.
-function withManifestLock(manifestPath, mutate) {
-  const lockPath = `${manifestPath}.lock`;
-  fs.mkdirSync(path.dirname(manifestPath), { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + MANIFEST_LOCK_TIMEOUT_MS;
-  let fd = null;
-  while (fd === null) {
-    try {
-      fd = fs.openSync(lockPath, "wx", 0o600);
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      if (reapStaleLock(lockPath)) continue;
-      if (Date.now() >= deadline) throw new Error(`Timed out acquiring the Pack manifest lock at ${lockPath}.`);
-      sleepSync(50);
-    }
-  }
-  try {
-    fs.writeSync(fd, `${process.pid}\n`);
-    return mutate();
-  } finally {
-    fs.closeSync(fd);
-    fs.rmSync(lockPath, { force: true });
-  }
-}
-
-function reapStaleLock(lockPath) {
-  try {
-    const stat = fs.lstatSync(lockPath);
-    if (Date.now() - stat.mtimeMs < MANIFEST_LOCK_STALE_MS) return false;
-    fs.rmSync(lockPath, { force: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sleepSync(milliseconds) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
-}
-
-function selectProfileLayers(manifest, profile) {
-  if (!profile) return manifest.layers;
-  if (FORBIDDEN_KEYS.has(profile) || !manifest.profiles || !Object.hasOwn(manifest.profiles, profile)) throw new Error(`Unknown ContextCake profile: ${profile}`);
-  const selected = manifest.profiles[profile];
-  if (!Array.isArray(selected.layers)) throw new Error(`Profile ${profile} does not have a layers array.`);
-  return selected.layers;
-}
-
 function ensurePackRegistry(manifest) {
   if (manifest.packs === undefined) manifest.packs = {};
   if (!manifest.packs || typeof manifest.packs !== "object" || Array.isArray(manifest.packs)) throw new Error("ContextCake manifest packs registry must be an object.");
   return manifest.packs;
+}
+
+function packProfileKey(manifest, profile) {
+  if (classifyManifest(manifest) === "v2") return profile ?? "default";
+  return profile === "default" ? null : (profile ?? null);
+}
+
+function findPackAssignment(record, manifest, profileKey) {
+  return record.assignments?.find((entry) => packProfileKey(manifest, entry.profile) === profileKey);
 }
 
 function readPackRecord(manifest, packId) {

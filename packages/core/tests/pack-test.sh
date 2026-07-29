@@ -113,6 +113,27 @@ fi
 if node "$pack_cli" install "$source_pack" --manifest "$tmpdir/manifest.json" --packs-dir "$tmpdir/packs" --profile missing >/dev/null 2>&1; then
   fail "unknown profile was silently created"
 fi
+
+# Canonical v2 uses the explicit default profile id in both the registry and
+# the profile layer stack; the legacy null assignment must not leak forward.
+cat > "$tmpdir/manifest-v2.json" <<'EOF'
+{
+  "profiles": {
+    "default": { "label": "Default", "layers": [] }
+  },
+  "projects": {}
+}
+EOF
+node "$pack_cli" install "$source_pack" --manifest "$tmpdir/manifest-v2.json" --packs-dir "$tmpdir/packs-v2" --level 0 >/dev/null
+node - "$tmpdir/manifest-v2.json" <<'NODE' || fail "v2 default Pack assignment was not canonical"
+const fs = require('node:fs')
+const m = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+const assignment = m.packs.contextcake.assignments[0]
+if (assignment.profile !== 'default') process.exit(1)
+if (!m.profiles.default.layers.some((layer) => layer.origin === 'pack:contextcake@0.1.0')) process.exit(1)
+if (Object.hasOwn(m, 'layers')) process.exit(1)
+NODE
+
 mkdir "$tmpdir/outside-store"
 ln -s "$tmpdir/outside-store" "$tmpdir/symlink-store"
 if node "$pack_cli" install "$source_pack" --manifest "$tmpdir/manifest.json" --packs-dir "$tmpdir/symlink-store" >/dev/null 2>&1; then

@@ -38,6 +38,12 @@ import {
 import {
   layerRootMap, listFilesApi, readFileApi, serveRawApi, writeFileApi, writeSectionApi,
 } from "./layer-files.mjs";
+import {
+  classifyManifest,
+  getManifestProfileLayers,
+  mutateContextManifest,
+  readContextManifest,
+} from "./manifest.mjs";
 
 // Re-exported so hosts (apps/playground/server.mjs) keep importing the shared
 // HTTP internals from the service, wherever they are actually defined.
@@ -152,6 +158,19 @@ function snapshotView(source, snap) {
 
 const sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
 
+function defaultProfileContainer(manifest) {
+  return classifyManifest(manifest) === "v2" ? manifest.profiles.default : manifest;
+}
+
+function removePendingSource(container, name) {
+  if (!Array.isArray(container.pendingSources)) return;
+  container.pendingSources = container.pendingSources.filter((pending) => pending?.name !== name);
+  if (container.pendingSources.length === 0) {
+    delete container.pendingSources;
+    delete container.pendingSourcesOwnerUserId;
+  }
+}
+
 // ---- the service -------------------------------------------------------------
 
 export function createEngineService({
@@ -198,11 +217,7 @@ export function createEngineService({
   }
 
   function readManifest() {
-    return JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
-  }
-
-  function writeManifest(manifest) {
-    fs.writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    return readContextManifest(MANIFEST, { allowMissing: false });
   }
 
   // A rebuild (manifest edit, or a CRUD/sync route) must not close the adapter
@@ -694,15 +709,15 @@ export function createEngineService({
     } catch (err) {
       throw httpError(400, err.message);
     }
-    const manifest = readManifest();
-    const next = { ...(manifest.settings ?? {}) };
-    for (const key of Object.keys(body.settings ?? body)) {
-      if (clean[key] === undefined) delete next[key]; // null = reset to default
-      else next[key] = clean[key];
-    }
-    if (Object.keys(next).length === 0) delete manifest.settings;
-    else manifest.settings = next;
-    writeManifest(manifest);
+    mutateContextManifest(MANIFEST, (manifest) => {
+      const next = { ...(manifest.settings ?? {}) };
+      for (const key of Object.keys(body.settings ?? body)) {
+        if (clean[key] === undefined) delete next[key]; // null = reset to default
+        else next[key] = clean[key];
+      }
+      if (Object.keys(next).length === 0) delete manifest.settings;
+      else manifest.settings = next;
+    }, { allowMissing: false, allowTransitional: true });
     // New limits change how sources are read, so their indexes are stale: the
     // settings are part of the index key, so reload() rebuilds them.
     reload();
@@ -725,9 +740,8 @@ export function createEngineService({
     const b = parseJson(rawBody);
     const name = String(b.name ?? "").trim();
     if (!/^[a-zA-Z0-9 _-]{1,40}$/.test(name)) throw httpError(400, "Name: letters/numbers/space/_/- (max 40)");
-    const manifest = readManifest();
-    manifest.layers = manifest.layers ?? [];
-    if (manifest.layers.some((l) => l.name === name)) throw httpError(409, `A source named "${name}" already exists`);
+    const initialManifest = readManifest();
+    if (getManifestProfileLayers(initialManifest).some((l) => l.name === name)) throw httpError(409, `A source named "${name}" already exists`);
     const level = Number.isFinite(+b.level) ? +b.level : 1;
 
     let layer;
@@ -772,19 +786,16 @@ export function createEngineService({
       throw httpError(400, `Unknown source kind: ${b.kind}`);
     }
 
-    manifest.layers.push(layer);
-    // A synced source whose machine-local path/command was scrubbed waits in
-    // pendingSources. Configuring that source locally promotes it to a runnable
-    // layer without leaving a duplicate metadata-only record behind.
-    if (Array.isArray(manifest.pendingSources)) {
-      manifest.pendingSources = manifest.pendingSources.filter((pending) => pending?.name !== name);
-      if (manifest.pendingSources.length === 0) {
-        delete manifest.pendingSources;
-        delete manifest.pendingSourcesOwnerUserId;
-      }
-    }
-    writeManifest(manifest);
-    reload(); // starts this source's background index
+    mutateContextManifest(MANIFEST, (manifest) => {
+      const layers = getManifestProfileLayers(manifest);
+      if (layers.some((candidate) => candidate.name === name)) throw httpError(409, `A source named "${name}" already exists`);
+      layers.push(layer);
+      // A synced source whose machine-local path/command was scrubbed waits in
+      // pendingSources. Configuring that source locally promotes it to a runnable
+      // layer without leaving a duplicate metadata-only record behind.
+      removePendingSource(defaultProfileContainer(manifest), name);
+    }, { allowMissing: false, allowTransitional: true });
+    reload();
     return {
       ok: true,
       added: name,
@@ -828,37 +839,35 @@ export function createEngineService({
 
   function removeSourceApi(name) {
     if (!name) throw httpError(400, "Provide ?name=");
-    const manifest = readManifest();
-    const before = (manifest.layers ?? []).length;
-    const pendingBefore = (manifest.pendingSources ?? []).length;
-    manifest.layers = (manifest.layers ?? []).filter((l) => l.name !== name);
-    if (Array.isArray(manifest.pendingSources)) {
-      manifest.pendingSources = manifest.pendingSources.filter((pending) => pending?.name !== name);
-      if (manifest.pendingSources.length === 0) {
-        delete manifest.pendingSources;
-        delete manifest.pendingSourcesOwnerUserId;
+    mutateContextManifest(MANIFEST, (manifest) => {
+      const layers = getManifestProfileLayers(manifest);
+      const before = layers.length;
+      const container = defaultProfileContainer(manifest);
+      const pendingBefore = container.pendingSources?.length ?? 0;
+      const retained = layers.filter((layer) => layer.name !== name);
+      layers.splice(0, layers.length, ...retained);
+      removePendingSource(container, name);
+      if (layers.length === before && (container.pendingSources?.length ?? 0) === pendingBefore) {
+        throw httpError(404, `No source named "${name}"`);
       }
-    }
-    if (manifest.layers.length === before && (manifest.pendingSources ?? []).length === pendingBefore) {
-      throw httpError(404, `No source named "${name}"`);
-    }
-    writeManifest(manifest);
+    }, { allowMissing: false, allowTransitional: true });
     reload();
     return { ok: true, removed: name };
   }
 
   function patchSourceApi(rawBody) {
     const b = parseJson(rawBody);
-    const manifest = readManifest();
-    const layer = (manifest.layers ?? []).find((l) => l.name === b.name);
-    if (!layer) throw httpError(404, `No source named "${b.name}"`);
-    if (b.level !== undefined && Number.isFinite(+b.level)) layer.level = +b.level;
-    if (b.newName && b.newName !== b.name) {
-      if (!/^[a-zA-Z0-9 _-]{1,40}$/.test(b.newName)) throw httpError(400, "Invalid new name");
-      if (manifest.layers.some((l) => l.name === b.newName)) throw httpError(409, "Name already exists");
-      layer.name = b.newName;
-    }
-    writeManifest(manifest);
+    mutateContextManifest(MANIFEST, (manifest) => {
+      const layers = getManifestProfileLayers(manifest);
+      const layer = layers.find((candidate) => candidate.name === b.name);
+      if (!layer) throw httpError(404, `No source named "${b.name}"`);
+      if (b.level !== undefined && Number.isFinite(+b.level)) layer.level = +b.level;
+      if (b.newName && b.newName !== b.name) {
+        if (!/^[a-zA-Z0-9 _-]{1,40}$/.test(b.newName)) throw httpError(400, "Invalid new name");
+        if (layers.some((candidate) => candidate.name === b.newName)) throw httpError(409, "Name already exists");
+        layer.name = b.newName;
+      }
+    }, { allowMissing: false, allowTransitional: true });
     reload();
     return { ok: true };
   }

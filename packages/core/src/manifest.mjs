@@ -1,0 +1,834 @@
+// Shared ContextCake manifest boundary.
+//
+// This module owns schema-mode detection, profile selection, migration, and
+// serialized atomic writes. Callers may inspect a complete manifest here, but
+// runtime adapters should receive only the selected layer array returned by
+// selectManifestProfile(). The dependency-free core deliberately uses only
+// Node.js built-ins.
+
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+
+export const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+export const MANIFEST_LOCK_TIMEOUT_MS = 15_000;
+export const MANIFEST_LOCK_STALE_MS = 60_000;
+
+const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const RUNNABLE_SOURCE_KINDS = new Set(["okf-local", "files", "github", "mcp"]);
+const CREDENTIAL_PATTERN = /(?:github_pat_|gh[pousr]_|sk-[A-Za-z0-9]|bearer\s+[A-Za-z0-9._-])/i;
+const CREDENTIAL_KEY_PATTERN = /^(?:(?:[a-z0-9]+_)?token|access[_-]?token|refresh[_-]?token|password|passwd|secret|client[_-]?secret|private[_-]?key|api[_-]?key|credential|authorization|cookie)$/i;
+const CREDENTIAL_VALUE_PATTERN = /(?:github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|glpat-[A-Za-z0-9_-]{12,}|npm_[A-Za-z0-9]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|(?:AKIA|ASIA)[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{12,}|bearer\s+[A-Za-z0-9._-]{12,}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|https?:\/\/[^/@\s]+:[^/@\s]+@)/i;
+const CREDENTIAL_ASSIGNMENT_PATTERN = /(?:^|[\s?&#:_'"-])(?:access[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|secret|password|credential|authorization|signature|sig)\s*(?:=|:)/i;
+
+export function classifyManifest(manifest) {
+  assertObject(manifest, "ContextCake manifest");
+  const hasLayers = Object.hasOwn(manifest, "layers");
+  const hasProfiles = Object.hasOwn(manifest, "profiles");
+  if (hasLayers && hasProfiles) return "transitional";
+  if (hasProfiles) return "v2";
+  return "legacy";
+}
+
+export function validateContextManifest(manifest, { validatePacks = true } = {}) {
+  assertSafeKeys(manifest);
+  rejectCredentialFields(manifest, "ContextCake manifest");
+  rejectCredentialValues(manifest, "ContextCake manifest", { allowScrubbed: true });
+  const mode = classifyManifest(manifest);
+  const warnings = [];
+
+  if (mode === "legacy" || mode === "transitional") {
+    if (manifest.layers !== undefined && !Array.isArray(manifest.layers)) throw new Error("ContextCake manifest layers must be an array.");
+    validateLayers(manifest.layers ?? [], "legacy default");
+  }
+
+  if (mode === "v2" || mode === "transitional") {
+    assertObject(manifest.profiles, "ContextCake manifest profiles");
+    if (mode === "v2" && !Object.hasOwn(manifest.profiles, "default")) {
+      throw new Error("Manifest v2 requires profiles.default.");
+    }
+    for (const [profileId, profile] of Object.entries(manifest.profiles)) {
+      assertProfileId(profileId);
+      assertObject(profile, `Profile ${profileId}`);
+      if (profile.label !== undefined) normalizeProfileLabel(profile.label);
+      if (!Array.isArray(profile.layers)) throw new Error(`Profile ${profileId} does not have a layers array.`);
+      if (mode === "transitional") validateTransitionalProfileLayers(profile.layers, `profile ${profileId}`);
+      else validateLayers(profile.layers, `profile ${profileId}`);
+      if (profile.pendingSources !== undefined) {
+        if (!Array.isArray(profile.pendingSources)) throw new Error(`Profile ${profileId} pendingSources must be an array.`);
+        validatePendingSources(profile.pendingSources, `profile ${profileId}`);
+      }
+    }
+  }
+
+  if (manifest.pendingSources !== undefined) {
+    if (!Array.isArray(manifest.pendingSources)) throw new Error("ContextCake manifest pendingSources must be an array.");
+    validatePendingSources(manifest.pendingSources, "legacy default");
+  }
+
+  if (manifest.projects !== undefined) {
+    assertObject(manifest.projects, "ContextCake manifest projects");
+    for (const [root, profileId] of Object.entries(manifest.projects)) {
+      if (!path.isAbsolute(root)) throw new Error(`Project mapping must use an absolute path: ${root}`);
+      assertProfileId(profileId);
+      if (mode !== "v2" || !Object.hasOwn(manifest.profiles, profileId)) {
+        warnings.push({ code: "dangling-project-profile", root, profileId });
+      }
+    }
+  }
+
+  if (validatePacks) validatePackRegistry(manifest, mode, warnings);
+  return { mode, warnings };
+}
+
+export function readContextManifest(manifestPath, { allowMissing = true, validatePacks = true } = {}) {
+  const resolved = path.resolve(manifestPath);
+  if (!fs.existsSync(resolved)) {
+    if (allowMissing) return { layers: [] };
+    throw new Error(`ContextCake manifest does not exist: ${resolved}`);
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(resolved, "utf8"));
+  } catch (error) {
+    throw new Error(`ContextCake manifest is not valid JSON: ${error.message}`);
+  }
+  validateContextManifest(manifest, { validatePacks });
+  return manifest;
+}
+
+export function getManifestProfileLayers(manifest, profile = null) {
+  const { mode } = validateContextManifest(manifest);
+  if (mode === "legacy") {
+    if (profile !== null && profile !== "default") throw new Error(`Unknown ContextCake profile: ${profile}`);
+    manifest.layers ??= [];
+    return manifest.layers;
+  }
+  if (mode === "transitional") {
+    if (profile === null || profile === "default") return manifest.layers;
+    if (!Object.hasOwn(manifest.profiles, profile)) throw new Error(`Unknown ContextCake profile: ${profile}`);
+    return manifest.profiles[profile].layers;
+  }
+  const profileId = profile ?? "default";
+  if (!Object.hasOwn(manifest.profiles, profileId)) throw new Error(`Unknown ContextCake profile: ${profileId}`);
+  return manifest.profiles[profileId].layers;
+}
+
+export function selectManifestProfile(manifest, {
+  requestedProfile = null,
+  cwd = process.cwd(),
+  realpath = fs.realpathSync.native,
+} = {}) {
+  const { mode, warnings } = validateContextManifest(manifest);
+  if (mode === "legacy" || mode === "transitional") {
+    if (requestedProfile !== null && requestedProfile !== "default") {
+      throw new Error(`Profile ${requestedProfile} requires migration to Manifest v2.`);
+    }
+    return {
+      mode,
+      profileId: "default",
+      profileLabel: "Default",
+      layers: manifest.layers ?? [],
+      reason: requestedProfile === "default" ? "explicit" : "legacy-default",
+      matchedProjectRoot: null,
+      warnings,
+    };
+  }
+
+  if (requestedProfile !== null) {
+    assertProfileId(requestedProfile);
+    return selectedV2Profile(manifest, requestedProfile, "explicit", null, warnings);
+  }
+
+  const canonicalCwd = canonicalExistingPath(cwd, realpath, "Working directory");
+  const matches = [];
+  for (const [configuredRoot, profileId] of Object.entries(manifest.projects ?? {})) {
+    let canonicalRoot;
+    try {
+      canonicalRoot = canonicalExistingPath(configuredRoot, realpath, "Project mapping");
+    } catch {
+      warnings.push({ code: "stale-project-root", root: configuredRoot, profileId });
+      continue;
+    }
+    if (!containsPath(canonicalRoot, canonicalCwd)) continue;
+    matches.push({ configuredRoot, canonicalRoot, profileId, depth: pathDepth(canonicalRoot) });
+  }
+  matches.sort((a, b) => b.depth - a.depth || b.canonicalRoot.length - a.canonicalRoot.length);
+  if (matches.length) {
+    const winner = matches[0];
+    const conflict = matches.find((candidate) => (
+      candidate !== winner
+      && candidate.depth === winner.depth
+      && candidate.canonicalRoot === winner.canonicalRoot
+      && candidate.profileId !== winner.profileId
+    ));
+    if (conflict) throw new Error(`Project mappings resolve the same canonical root to different profiles: ${winner.configuredRoot} and ${conflict.configuredRoot}`);
+    return selectedV2Profile(manifest, winner.profileId, "project", winner.canonicalRoot, warnings);
+  }
+  return selectedV2Profile(manifest, "default", "default", null, warnings);
+}
+
+export function listManifestProfiles(manifest) {
+  const { mode, warnings } = validateContextManifest(manifest);
+  if (mode === "legacy") {
+    return [{ id: "default", label: "Default", sourceCount: manifest.layers?.length ?? 0, mappingCount: 0, mode, valid: true }];
+  }
+  if (mode === "transitional") {
+    const virtual = [{ id: "default", label: "Default", sourceCount: manifest.layers.length, mappingCount: 0, mode, valid: true }];
+    return virtual.concat(Object.entries(manifest.profiles)
+      .filter(([id]) => id !== "default")
+      .map(([id, profile]) => profileSummary(id, profile, manifest.projects, mode, warnings)));
+  }
+  return Object.entries(manifest.profiles).map(([id, profile]) => profileSummary(id, profile, manifest.projects, mode, warnings));
+}
+
+export function normalizeProfileLabel(value) {
+  if (typeof value !== "string") throw new Error("Profile label must be a string.");
+  const label = value.normalize("NFC").trim();
+  if (label.length < 1 || [...label].length > 80) throw new Error("Profile label must contain 1 to 80 characters.");
+  if (/\p{Cc}|\p{Cf}/u.test(label) || /[\r\n]/.test(label)) throw new Error("Profile label cannot contain control characters or line breaks.");
+  if (CREDENTIAL_PATTERN.test(label)) throw new Error("Profile label looks like a credential and was rejected.");
+  return label;
+}
+
+export function createProfileId(label, existingIds = []) {
+  const normalized = normalizeProfileLabel(label)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 63)
+    .replace(/-+$/g, "") || "profile";
+  const occupied = new Set(existingIds);
+  if (!occupied.has(normalized)) return normalized;
+  for (let suffix = 2; suffix < 1_000_000; suffix += 1) {
+    const tail = `-${suffix}`;
+    const candidate = `${normalized.slice(0, 63 - tail.length).replace(/-+$/g, "")}${tail}`;
+    if (!occupied.has(candidate)) return candidate;
+  }
+  throw new Error("Could not allocate a unique profile id.");
+}
+
+export function manifestRevision(manifest) {
+  return crypto.createHash("sha256").update(stableJson(manifest)).digest("hex");
+}
+
+export function sourceConfigFingerprint(profileId, layer, manifestDir = process.cwd()) {
+  assertProfileId(profileId);
+  validateLayer(layer, `profile ${profileId}`);
+  const kind = layer.source ?? "okf-local";
+  const localRoot = (kind === "okf-local" || kind === "files") && typeof layer.path === "string"
+    ? canonicalConfiguredPath(manifestDir, layer.path)
+    : null;
+  const mcpArgs = kind === "mcp"
+    ? (layer.args ?? []).map((argument) => (
+      argument.startsWith("./") || argument.startsWith("../")
+        ? canonicalConfiguredPath(manifestDir, argument)
+        : argument
+    ))
+    : null;
+  const config = {
+    profileId,
+    name: layer.name,
+    kind,
+    root: localRoot,
+    repo: layer.repo ?? null,
+    ref: layer.ref ?? null,
+    paths: layer.paths ?? null,
+    apiBase: layer.apiBase ?? null,
+    auth: layer.auth ?? null,
+    command: kind === "mcp" ? layer.command ?? null : null,
+    args: mcpArgs,
+    cache: layer.cache ? { ttlSeconds: layer.cache.ttlSeconds ?? null } : null,
+    git: layer.git ?? null,
+  };
+  return crypto.createHash("sha256").update(stableJson(config)).digest("hex");
+}
+
+export function writeContextManifest(manifestPath, manifest, {
+  allowLegacy = true,
+  allowTransitional = false,
+} = {}) {
+  const { mode } = validateContextManifest(manifest);
+  if (mode === "legacy" && !allowLegacy) throw new Error("A legacy manifest cannot be written by this operation.");
+  if (mode === "transitional" && !allowTransitional) {
+    throw new Error("A transitional manifest can only be written by an explicit compatibility operation or normalized to v2.");
+  }
+  writeAtomicJson(path.resolve(manifestPath), manifest);
+}
+
+export function withManifestLock(manifestPath, mutate, {
+  timeoutMs = MANIFEST_LOCK_TIMEOUT_MS,
+  staleMs = MANIFEST_LOCK_STALE_MS,
+} = {}) {
+  const resolved = path.resolve(manifestPath);
+  const lockPath = `${resolved}.lock`;
+  fs.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + timeoutMs;
+  let token = tryAcquireManifestLock(lockPath, staleMs);
+  while (token === null) {
+    if (Date.now() >= deadline) throw new Error(`Timed out acquiring the ContextCake manifest lock at ${lockPath}.`);
+    sleepSync(50);
+    token = tryAcquireManifestLock(lockPath, staleMs);
+  }
+  try {
+    return mutate();
+  } finally {
+    releaseManifestLock(lockPath, token);
+  }
+}
+
+export function mutateContextManifest(manifestPath, mutate, {
+  allowMissing = true,
+  allowLegacy = true,
+  allowTransitional = false,
+} = {}) {
+  const resolved = path.resolve(manifestPath);
+  return withManifestLock(resolved, () => {
+    const manifest = readContextManifest(resolved, { allowMissing });
+    const result = mutate(manifest);
+    writeContextManifest(resolved, manifest, { allowLegacy, allowTransitional });
+    return result;
+  });
+}
+
+export function migrateManifestToV2(manifestPath, {
+  newProfile = null,
+  projectPath = null,
+  now = () => new Date(),
+  realpath = fs.realpathSync.native,
+} = {}) {
+  const resolved = path.resolve(manifestPath);
+  return withManifestLock(resolved, () => {
+    const raw = fs.readFileSync(resolved);
+    const manifest = readContextManifest(resolved, { allowMissing: false });
+    const beforeMode = classifyManifest(manifest);
+    if (newProfile) validateNewProfile(newProfile, manifest);
+
+    if (beforeMode === "v2") {
+      const candidate = structuredClone(manifest);
+      applyNewProfile(candidate, newProfile, projectPath, realpath);
+      if (newProfile) writeContextManifest(resolved, candidate, { allowLegacy: false });
+      return { action: newProfile ? "profile-created" : "already-v2", mode: "v2", backupPath: null, backupHash: null };
+    }
+
+    const candidate = normalizeToV2(manifest);
+    applyNewProfile(candidate, newProfile, projectPath, realpath);
+    validateContextManifest(candidate);
+
+    const backupHash = crypto.createHash("sha256").update(raw).digest("hex");
+    const stamp = formatUtcTimestamp(now());
+    const backupPath = `${resolved}.pre-profiles.${stamp}.${backupHash}.json`;
+    writeVerifiedBackup(backupPath, raw, backupHash);
+    writeContextManifest(resolved, candidate, { allowLegacy: false });
+    return { action: "migrated", mode: "v2", backupPath, backupHash };
+  });
+}
+
+export function verifyManifestBackup(backupPath, expectedHash) {
+  if (!/^([a-f0-9]{64})$/.test(expectedHash)) throw new Error("Expected backup hash must be a SHA-256 hex digest.");
+  const actual = crypto.createHash("sha256").update(fs.readFileSync(backupPath)).digest("hex");
+  if (actual !== expectedHash) throw new Error(`Manifest backup hash mismatch: expected ${expectedHash}, received ${actual}.`);
+  return true;
+}
+
+function selectedV2Profile(manifest, profileId, reason, matchedProjectRoot, warnings) {
+  if (!Object.hasOwn(manifest.profiles, profileId)) throw new Error(`Unknown ContextCake profile: ${profileId}`);
+  const profile = manifest.profiles[profileId];
+  return {
+    mode: "v2",
+    profileId,
+    profileLabel: profile.label ?? (profileId === "default" ? "Default" : profileId),
+    layers: profile.layers,
+    reason,
+    matchedProjectRoot,
+    warnings,
+  };
+}
+
+function profileSummary(id, profile, projects, mode, warnings) {
+  return {
+    id,
+    label: profile.label ?? (id === "default" ? "Default" : id),
+    sourceCount: profile.layers.length,
+    pendingSourceCount: profile.pendingSources?.length ?? 0,
+    mappingCount: Object.values(projects ?? {}).filter((profileId) => profileId === id).length,
+    mode,
+    valid: !warnings.some((warning) => warning.profileId === id),
+  };
+}
+
+function validateLayers(layers, owner) {
+  const names = new Set();
+  let liveCount = 0;
+  for (const layer of layers) {
+    validateLayer(layer, owner);
+    if (names.has(layer.name)) throw new Error(`${owner} contains duplicate layer name: ${layer.name}`);
+    names.add(layer.name);
+    if (layer.live === true) liveCount += 1;
+  }
+  if (liveCount > 1) throw new Error(`${owner} contains more than one live layer.`);
+}
+
+function validateTransitionalProfileLayers(layers, owner) {
+  const names = new Set();
+  for (const layer of layers) {
+    assertObject(layer, `Layer in ${owner}`);
+    rejectCredentialFields(layer, `Layer in ${owner}`);
+    rejectCredentialValues(layer, `Layer in ${owner}`, { allowScrubbed: true });
+    if (typeof layer.name !== "string" || !layer.name.trim()) throw new Error(`Layer in ${owner} must have a non-empty name.`);
+    if (names.has(layer.name)) throw new Error(`${owner} contains duplicate layer name: ${layer.name}`);
+    names.add(layer.name);
+    if (isRunnableLayer(layer)) validateLayer(layer, owner);
+    else validateAuthReference(layer.auth, `Pending source ${layer.name}`, { allowScrubbed: true });
+  }
+}
+
+function validateLayer(layer, owner) {
+  assertObject(layer, `Layer in ${owner}`);
+  rejectCredentialFields(layer, `Layer in ${owner}`);
+  rejectCredentialValues(layer, `Layer in ${owner}`);
+  if (typeof layer.name !== "string" || !layer.name.trim()) throw new Error(`Layer in ${owner} must have a non-empty name.`);
+  if (!Number.isInteger(Number(layer.level))) throw new Error(`Layer ${layer.name} in ${owner} must have an integer level.`);
+  const kind = layer.source ?? "okf-local";
+  if (!RUNNABLE_SOURCE_KINDS.has(kind)) throw new Error(`Layer ${layer.name} has unsupported source kind: ${kind}`);
+  if ((kind === "okf-local" || kind === "files") && typeof layer.path !== "string") {
+    throw new Error(`Layer ${layer.name} requires a path.`);
+  }
+  if (kind === "github" && typeof layer.repo !== "string") throw new Error(`Layer ${layer.name} requires a GitHub repo.`);
+  if (kind === "mcp" && typeof layer.command !== "string") throw new Error(`Layer ${layer.name} requires an MCP command.`);
+  if (layer.args !== undefined && (!Array.isArray(layer.args) || layer.args.some((value) => typeof value !== "string"))) {
+    throw new Error(`Layer ${layer.name} args must be an array of strings.`);
+  }
+  validateAuthReference(layer.auth, `Layer ${layer.name}`);
+}
+
+function validatePendingSources(sources, owner) {
+  const names = new Set();
+  for (const source of sources) {
+    assertObject(source, `Pending source in ${owner}`);
+    rejectCredentialFields(source, `Pending source in ${owner}`);
+    rejectCredentialValues(source, `Pending source in ${owner}`, { allowScrubbed: true });
+    if (typeof source.name !== "string" || !source.name.trim()) throw new Error(`Pending source in ${owner} must have a non-empty name.`);
+    if (names.has(source.name)) throw new Error(`${owner} contains duplicate pending source name: ${source.name}`);
+    names.add(source.name);
+    validateAuthReference(source.auth, `Pending source ${source.name}`, { allowScrubbed: true });
+  }
+}
+
+function validatePackRegistry(manifest, mode, warnings) {
+  if (manifest.packs === undefined) return;
+  assertObject(manifest.packs, "ContextCake manifest packs registry");
+  const assignedLayers = new Set();
+  for (const [packId, record] of Object.entries(manifest.packs)) {
+    assertObject(record, `Pack registry entry ${packId}`);
+    if (record.id !== undefined && record.id !== packId) throw new Error(`Pack registry key ${packId} does not match record id ${record.id}.`);
+    if (!Array.isArray(record.installedVersions) || !Array.isArray(record.assignments)) {
+      throw new Error(`Pack registry entry is missing version or assignment arrays: ${packId}`);
+    }
+    const versions = new Set();
+    for (const entry of record.installedVersions) {
+      assertObject(entry, `Installed Pack version ${packId}`);
+      if (typeof entry.version !== "string" || !entry.version) throw new Error(`Pack ${packId} has an invalid installed version.`);
+      if (versions.has(entry.version)) throw new Error(`Pack ${packId} contains duplicate retained version ${entry.version}.`);
+      versions.add(entry.version);
+    }
+    const assignmentProfiles = new Set();
+    for (const assignment of record.assignments) {
+      assertObject(assignment, `Pack assignment ${packId}`);
+      const profileId = assignment.profile ?? null;
+      if (profileId !== null) assertProfileId(profileId);
+      if (typeof assignment.layerName !== "string" || !assignment.layerName) throw new Error(`Pack ${packId} assignment is missing layerName.`);
+      if (typeof assignment.activeVersion !== "string" || !assignment.activeVersion) throw new Error(`Pack ${packId} assignment is missing activeVersion.`);
+      if (!Number.isInteger(Number(assignment.level))) throw new Error(`Pack ${packId} assignment has an invalid level.`);
+      const normalizedProfileId = mode === "v2" && profileId === null ? "default" : (profileId ?? "default");
+      if (assignmentProfiles.has(normalizedProfileId)) throw new Error(`Pack ${packId} contains a duplicate assignment for profile ${normalizedProfileId}.`);
+      assignmentProfiles.add(normalizedProfileId);
+      if (mode === "v2" && profileId === null) warnings.push({ code: "legacy-null-pack-profile", packId, profileId: "default" });
+      let layers;
+      try {
+        layers = getLayersWithoutValidation(manifest, mode, profileId);
+      } catch (error) {
+        warnings.push({ code: "dangling-pack-profile", packId, profileId, message: error.message });
+        continue;
+      }
+      if (!versions.has(assignment.activeVersion)) throw new Error(`Pack ${packId} assignment references missing version ${assignment.activeVersion}.`);
+      const matches = layers.filter((layer) => layer.name === assignment.layerName);
+      if (matches.length !== 1) throw new Error(`Pack ${packId} assignment must match exactly one layer named ${assignment.layerName}.`);
+      const layer = matches[0];
+      const expectedOrigin = `pack:${packId}@${assignment.activeVersion}`;
+      if (layer.origin !== expectedOrigin || Number(layer.level) !== Number(assignment.level)) {
+        throw new Error(`Pack ${packId} assignment does not match layer ${assignment.layerName}.`);
+      }
+      assignedLayers.add(`${normalizedProfileId}\0${layer.name}\0${layer.origin}`);
+    }
+  }
+  for (const [profileId, layers] of allRunnableLayerSets(manifest, mode)) {
+    for (const layer of layers) {
+      if (typeof layer.origin !== "string" || !layer.origin.startsWith("pack:")) continue;
+      if (!assignedLayers.has(`${profileId}\0${layer.name}\0${layer.origin}`)) {
+        throw new Error(`Pack layer ${layer.name} in profile ${profileId} has no matching registry assignment.`);
+      }
+    }
+  }
+}
+
+function getLayersWithoutValidation(manifest, mode, profile) {
+  if (mode === "legacy") {
+    if (profile !== null && profile !== "default") throw new Error(`Unknown ContextCake profile: ${profile}`);
+    return manifest.layers ?? [];
+  }
+  if (mode === "transitional") {
+    if (profile === null || profile === "default") return manifest.layers;
+    if (!Object.hasOwn(manifest.profiles, profile)) throw new Error(`Unknown ContextCake profile: ${profile}`);
+    return manifest.profiles[profile].layers;
+  }
+  const profileId = profile ?? "default";
+  if (!Object.hasOwn(manifest.profiles, profileId)) throw new Error(`Unknown ContextCake profile: ${profileId}`);
+  return manifest.profiles[profileId].layers;
+}
+
+function allRunnableLayerSets(manifest, mode) {
+  if (mode === "legacy") return [["default", manifest.layers ?? []]];
+  if (mode === "transitional") {
+    return [["default", manifest.layers], ...Object.entries(manifest.profiles).filter(([id]) => id !== "default").map(([id, profile]) => [id, profile.layers])];
+  }
+  return Object.entries(manifest.profiles).map(([id, profile]) => [id, profile.layers]);
+}
+
+function normalizeToV2(manifest) {
+  const existingProfiles = structuredClone(manifest.profiles ?? {});
+  const output = structuredClone(manifest);
+  delete output.layers;
+  delete output.pendingSources;
+  delete output.pendingSourcesOwnerUserId;
+  const profiles = {};
+
+  const existingDefault = existingProfiles.default ?? {};
+  const legacyLayers = manifest.layers ?? [];
+  const defaultIdentities = new Set(legacyLayers.map(sourceIdentity));
+  const defaultPending = [
+    ...(existingDefault.pendingSources ?? []),
+    ...(manifest.pendingSources ?? []),
+  ].filter((source) => !defaultIdentities.has(sourceIdentity(source)));
+  for (const layer of existingDefault.layers ?? []) {
+    if (!defaultIdentities.has(sourceIdentity(layer))) defaultPending.push(layer);
+  }
+  profiles.default = {
+    ...existingDefault,
+    label: normalizeProfileLabel(existingDefault.label ?? "Default"),
+    layers: structuredClone(legacyLayers),
+    ...nonEmptyPending(defaultPending),
+    ...(manifest.pendingSourcesOwnerUserId ? { pendingSourcesOwnerUserId: manifest.pendingSourcesOwnerUserId } : {}),
+  };
+
+  for (const [profileId, profile] of Object.entries(existingProfiles)) {
+    if (profileId === "default") continue;
+    const runnable = [];
+    const pending = [...(profile.pendingSources ?? [])];
+    for (const layer of profile.layers ?? []) {
+      if (isRunnableLayer(layer)) runnable.push(layer);
+      else pending.push(layer);
+    }
+    const runnableIdentities = new Set(runnable.map(sourceIdentity));
+    profiles[profileId] = {
+      ...profile,
+      label: normalizeProfileLabel(profile.label ?? profileId),
+      layers: runnable,
+      ...nonEmptyPending(pending.filter((source) => !runnableIdentities.has(sourceIdentity(source)))),
+    };
+  }
+  output.profiles = profiles;
+  output.projects ??= {};
+  for (const record of Object.values(output.packs ?? {})) {
+    for (const assignment of record.assignments ?? []) {
+      if (assignment.profile === null || assignment.profile === undefined) assignment.profile = "default";
+    }
+  }
+  return output;
+}
+
+function applyNewProfile(manifest, newProfile, projectPath, realpath) {
+  if (!newProfile) {
+    if (projectPath) throw new Error("A project mapping requires a new profile.");
+    return;
+  }
+  const id = newProfile.id ?? createProfileId(newProfile.label, Object.keys(manifest.profiles));
+  assertProfileId(id);
+  if (Object.hasOwn(manifest.profiles, id)) throw new Error(`ContextCake profile already exists: ${id}`);
+  manifest.profiles[id] = {
+    label: normalizeProfileLabel(newProfile.label),
+    layers: structuredClone(newProfile.layers ?? []),
+    ...(newProfile.pendingSources?.length ? { pendingSources: structuredClone(newProfile.pendingSources) } : {}),
+  };
+  if (projectPath) {
+    const canonical = canonicalExistingPath(projectPath, realpath, "Project mapping");
+    for (const [existingRoot, existingId] of Object.entries(manifest.projects ?? {})) {
+      let existingCanonical;
+      try { existingCanonical = canonicalExistingPath(existingRoot, realpath, "Project mapping"); } catch { continue; }
+      if (existingCanonical === canonical && existingId !== id) throw new Error(`Project mapping already belongs to profile ${existingId}: ${existingRoot}`);
+    }
+    manifest.projects ??= {};
+    manifest.projects[canonical] = id;
+  }
+}
+
+function validateNewProfile(profile, manifest) {
+  assertObject(profile, "New profile");
+  normalizeProfileLabel(profile.label);
+  if (profile.id !== undefined) assertProfileId(profile.id);
+  if (profile.id && Object.hasOwn(manifest.profiles ?? {}, profile.id)) throw new Error(`ContextCake profile already exists: ${profile.id}`);
+  validateLayers(profile.layers ?? [], "new profile");
+  if (profile.pendingSources) validatePendingSources(profile.pendingSources, "new profile");
+}
+
+function nonEmptyPending(sources) {
+  const unique = [];
+  const seen = new Set();
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    const identity = sourceIdentity(source);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    unique.push(structuredClone(source));
+  }
+  return unique.length ? { pendingSources: unique } : {};
+}
+
+function isRunnableLayer(layer) {
+  if (!layer || typeof layer !== "object" || Array.isArray(layer)) return false;
+  const kind = layer.source ?? "okf-local";
+  if ((kind === "okf-local" || kind === "files") && typeof layer.path !== "string") return false;
+  if (kind === "mcp" && typeof layer.command !== "string") return false;
+  if (kind === "github" && typeof layer.repo !== "string") return false;
+  return RUNNABLE_SOURCE_KINDS.has(kind);
+}
+
+function sourceIdentity(source) {
+  return `${source?.source ?? "okf-local"}\0${source?.name ?? ""}`;
+}
+
+function rejectCredentialFields(value, label) {
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    const normalizedKey = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2");
+    if (CREDENTIAL_KEY_PATTERN.test(normalizedKey)) {
+      throw new Error(`${label} contains forbidden raw credential field: ${key}`);
+    }
+    rejectCredentialFields(child, label);
+  }
+}
+
+function rejectCredentialValues(value, label, { allowScrubbed = false } = {}, key = "") {
+  if (allowScrubbed && isScrubMarker(value)) return;
+  if (typeof value === "string") {
+    if (key === "auth" && value.startsWith("keychain:")) return;
+    if (CREDENTIAL_VALUE_PATTERN.test(value) || CREDENTIAL_ASSIGNMENT_PATTERN.test(value)) {
+      throw new Error(`${label} contains a value that looks like a raw credential.`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) rejectCredentialValues(entry, label, { allowScrubbed }, key);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [childKey, childValue] of Object.entries(value)) {
+    rejectCredentialValues(childValue, label, { allowScrubbed }, childKey);
+  }
+}
+
+function validateAuthReference(auth, label, { allowScrubbed = false } = {}) {
+  if (auth === undefined || auth === null) return;
+  if (allowScrubbed && isScrubMarker(auth)) return;
+  if (typeof auth === "string" && /^keychain:[A-Za-z0-9._/-]+$/.test(auth)) return;
+  if (
+    auth && typeof auth === "object" && !Array.isArray(auth)
+    && Object.keys(auth).length === 1
+    && typeof auth.tokenEnv === "string"
+    && /^[A-Za-z_][A-Za-z0-9_]*$/.test(auth.tokenEnv)
+  ) return;
+  throw new Error(`${label} auth must be a keychain alias or a tokenEnv reference, never a raw credential.`);
+}
+
+function isScrubMarker(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === 1 && typeof value.__scrubbed === "string";
+}
+
+function writeVerifiedBackup(backupPath, bytes, expectedHash) {
+  if (fs.existsSync(backupPath)) {
+    verifyManifestBackup(backupPath, expectedHash);
+    return;
+  }
+  writeAtomicBytes(backupPath, bytes, { exclusiveTarget: true });
+  verifyManifestBackup(backupPath, expectedHash);
+}
+
+function writeAtomicJson(filePath, value) {
+  writeAtomicBytes(filePath, Buffer.from(`${JSON.stringify(value, null, 2)}\n`));
+}
+
+function writeAtomicBytes(filePath, bytes, { exclusiveTarget = false } = {}) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  if (exclusiveTarget && fs.existsSync(filePath)) throw new Error(`Refusing to overwrite existing file: ${filePath}`);
+  const temporary = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+  let descriptor = null;
+  try {
+    descriptor = fs.openSync(temporary, "wx", 0o600);
+    fs.writeFileSync(descriptor, bytes);
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = null;
+    if (exclusiveTarget) {
+      try {
+        // An exclusive hard link is the no-overwrite counterpart to rename:
+        // the completed bytes become visible atomically, while a target that
+        // appeared after our preflight check is never replaced.
+        fs.linkSync(temporary, filePath);
+      } catch (error) {
+        if (error.code === "EEXIST") throw new Error(`Refusing to overwrite existing file: ${filePath}`);
+        throw error;
+      }
+      fs.rmSync(temporary);
+    } else {
+      fs.renameSync(temporary, filePath);
+    }
+  } catch (error) {
+    if (descriptor !== null) fs.closeSync(descriptor);
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
+function readManifestLock(lockPath) {
+  try {
+    const stat = fs.lstatSync(lockPath);
+    const value = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    return { ...value, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs };
+  } catch {
+    try {
+      const stat = fs.lstatSync(lockPath);
+      return { dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs };
+    } catch { return null; }
+  }
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+function manifestLockIsStale(lock, staleMs) {
+  if (!lock) return false;
+  if (processIsAlive(lock.pid)) return false;
+  const timestamp = Number.isFinite(lock.createdAt) ? lock.createdAt : lock.mtimeMs;
+  const age = Date.now() - timestamp;
+  return age > staleMs || age < -staleMs;
+}
+
+function tryAcquireManifestLock(lockPath, staleMs) {
+  const token = crypto.randomUUID();
+  const payload = { pid: process.pid, createdAt: Date.now(), token };
+  try {
+    fs.writeFileSync(lockPath, JSON.stringify(payload), { flag: "wx", mode: 0o600 });
+    return token;
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+
+  const observed = readManifestLock(lockPath);
+  if (!manifestLockIsStale(observed, staleMs)) return null;
+  const parked = `${lockPath}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString("hex")}.stale`;
+  try {
+    fs.renameSync(lockPath, parked);
+  } catch {
+    return null;
+  }
+
+  // Another contender may have replaced the stale lock between our read and
+  // rename. Restore that newer owner instead of treating it as the stale inode
+  // we observed.
+  const parkedLock = readManifestLock(parked);
+  if (!parkedLock || parkedLock.dev !== observed?.dev || parkedLock.ino !== observed?.ino) {
+    try { fs.renameSync(parked, lockPath); } catch { /* lock path was restored elsewhere */ }
+    return null;
+  }
+  fs.rmSync(parked, { force: true });
+  try {
+    fs.writeFileSync(lockPath, JSON.stringify(payload), { flag: "wx", mode: 0o600 });
+    return token;
+  } catch (error) {
+    if (error.code === "EEXIST") return null;
+    throw error;
+  }
+}
+
+function releaseManifestLock(lockPath, token) {
+  try {
+    // A delayed former holder must never delete a replacement lock.
+    if (readManifestLock(lockPath)?.token !== token) return;
+    fs.rmSync(lockPath, { force: true });
+  } catch {
+    // Releasing an advisory lock must not hide the mutation result.
+  }
+}
+
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function canonicalExistingPath(value, realpath, label) {
+  if (typeof value !== "string" || !path.isAbsolute(value)) throw new Error(`${label} must be an absolute path.`);
+  return path.normalize(realpath(value));
+}
+
+function canonicalConfiguredPath(manifestDir, value) {
+  const resolved = path.resolve(manifestDir, value);
+  try { return fs.realpathSync.native(resolved); } catch { return resolved; }
+}
+
+function containsPath(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function pathDepth(value) {
+  return path.normalize(value).split(path.sep).filter(Boolean).length;
+}
+
+function formatUtcTimestamp(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error("Migration timestamp is invalid.");
+  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+}
+
+function assertProfileId(value) {
+  if (typeof value !== "string" || !PROFILE_ID_PATTERN.test(value) || FORBIDDEN_KEYS.has(value)) {
+    throw new Error(`Invalid ContextCake profile id: ${String(value)}`);
+  }
+}
+
+function assertObject(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be a JSON object.`);
+}
+
+function assertSafeKeys(value, location = "manifest") {
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    if (FORBIDDEN_KEYS.has(key)) throw new Error(`ContextCake manifest uses reserved key ${key} at ${location}.`);
+    assertSafeKeys(child, `${location}.${key}`);
+  }
+}

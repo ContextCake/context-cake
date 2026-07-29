@@ -5,7 +5,7 @@ dependency-free engine, MCP server, engine service, Mac app, Console, Packs,
 team sync, docs, and release validation.
 
 **Date:** 2026-07-28
-**Status:** Proposed — adversarial review complete; awaiting product approval
+**Status:** Approved — implementation authorized 2026-07-29
 **Spec:** `specs/contextcake-project-profiles/spec.md`
 **Estimated shape:** five implementation PRs plus a seven-day dogfood gate
 

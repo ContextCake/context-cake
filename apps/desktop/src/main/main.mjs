@@ -189,28 +189,26 @@ function safeProfiles(profiles) {
 }
 
 function applyPulledManifest(settings) {
-  const current = readManifestConfig()
   const currentUserId = authManager?.getUserId?.() ?? null
   const incomingSources = Array.isArray(settings?.sources) ? settings.sources : null
-  const layers = incomingSources ? incomingSources.filter(sourceIsRunnable) : current.layers
-  const pendingSources = incomingSources ? incomingSources.filter((source) => !sourceIsRunnable(source)) : current.pendingSources
   const profiles = safeProfiles(settings?.profiles)
-  const next = {
-    ...current,
-    ...(layers ? { layers } : {}),
-    ...(pendingSources?.length ? { pendingSources, pendingSourcesOwnerUserId: currentUserId } : {}),
-    ...(profiles ? { profiles, profilesOwnerUserId: currentUserId } : {}),
-  }
-  if (!pendingSources?.length) {
-    delete next.pendingSources
-    delete next.pendingSourcesOwnerUserId
-  }
-  if (isDeepStrictEqual(current, next)) return
-  const serialized = `${JSON.stringify(next, null, 2)}\n`
-  const temporary = `${manifestPath()}.tmp`
-  fs.writeFileSync(temporary, serialized, { mode: 0o600 })
-  fs.renameSync(temporary, manifestPath())
-  lastAppliedManifest = serialized
+  const mutation = service.mutateManifest((current) => {
+    const layers = incomingSources ? incomingSources.filter(sourceIsRunnable) : current.layers
+    const pendingSources = incomingSources ? incomingSources.filter((source) => !sourceIsRunnable(source)) : current.pendingSources
+    const next = {
+      ...current,
+      ...(layers ? { layers } : {}),
+      ...(pendingSources?.length ? { pendingSources, pendingSourcesOwnerUserId: currentUserId } : {}),
+      ...(profiles ? { profiles, profilesOwnerUserId: currentUserId } : {}),
+    }
+    if (!pendingSources?.length) {
+      delete next.pendingSources
+      delete next.pendingSourcesOwnerUserId
+    }
+    return isDeepStrictEqual(current, next) ? null : next
+  })
+  if (!mutation.changed) return
+  lastAppliedManifest = mutation.serialized
   service?.reload?.()
 }
 
@@ -370,7 +368,10 @@ async function initializeAccounts() {
   let wasSignedIn = currentAuthState().signedIn
   authManager.on('session-changed', (state) => {
     sendToRenderer('auth:session-changed', state)
-    if (state.signedIn && !wasSignedIn) syncAfterSignIn()
+    // Startup can finish an OAuth deep link before the engine service exists.
+    // The post-createWindow bootstrap below performs that first pull; only
+    // already-running app sessions sync immediately from this event.
+    if (state.signedIn && !wasSignedIn && service) syncAfterSignIn()
     wasSignedIn = state.signedIn
   })
   settingsSync.on('status-changed', (state) => sendToRenderer('settings:sync-status', state))

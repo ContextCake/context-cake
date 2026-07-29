@@ -17,14 +17,19 @@ import { createMcpSource } from "./mcp.mjs";
 import { withCache } from "./cache.mjs";
 import { withGitSync } from "./git-sync.mjs";
 import { resolveSettings, walkLimitsFrom } from "../settings.mjs";
+import { sourceConfigFingerprint } from "../manifest.mjs";
 
-export function buildSources(manifest, manifestDir, { tokens = {} } = {}) {
+export function buildSources(manifest, manifestDir, { tokens = {}, profileId = null } = {}) {
   // Indexing limits are user settings, so they must reach the adapters that
   // enforce them — changing the limit in the app and reloading has to matter.
   const limits = walkLimitsFrom(resolveSettings(manifest));
   return (manifest.layers ?? []).map((layer) => {
     const kind = layer.source ?? "okf-local";
     const base = { name: layer.name, level: Number(layer.level) };
+    // Existing flat-manifest callers omit profileId and retain their exact
+    // cache layout. Profile-aware callers opt into the isolated fingerprint
+    // namespace after selecting one stack.
+    const fingerprint = profileId === null ? null : sourceConfigFingerprint(profileId, layer, manifestDir);
     let source;
     if (kind === "okf-local") {
       source = createOkfLocalSource({ ...base, root: path.resolve(manifestDir, layer.path), limits });
@@ -52,6 +57,7 @@ export function buildSources(manifest, manifestDir, { tokens = {} } = {}) {
       source = withCache(source, {
         ...(layer.cache.ttlSeconds != null ? { ttlMs: Number(layer.cache.ttlSeconds) * 1000 } : {}),
         cacheDir: layer.cache.dir ? path.resolve(manifestDir, layer.cache.dir) : null,
+        namespace: fingerprint,
       });
     }
     if (layer.git) {

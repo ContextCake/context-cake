@@ -7,11 +7,19 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export function withCache(source, { ttlMs = 300000, cacheDir = null } = {}) {
+export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace = null } = {}) {
   const memory = new Map(); // cache key -> { value, storedAt }
   // Per-source subdir; encodeURIComponent keeps ids (which may contain "/")
   // as single safe filenames — nothing can traverse out of cacheDir.
-  const dir = cacheDir ? path.join(cacheDir, encodeURIComponent(source.name)) : null;
+  // Profile-aware callers add an opaque source fingerprint before the display
+  // name. Legacy/direct callers retain the original on-disk layout.
+  const dir = cacheDir
+    ? path.join(cacheDir, ...(namespace ? [safeCacheSegment(namespace)] : []), safeCacheSegment(source.name))
+    : null;
+
+  function memoryKey(key) {
+    return namespace ? `${namespace}\0${key}` : key;
+  }
 
   function diskPath(key) {
     return path.join(dir, `${encodeURIComponent(key)}.json`);
@@ -41,15 +49,16 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null } = {}) {
   }
 
   async function cached(key, load) {
-    const hit = memory.get(key);
+    const scopedKey = memoryKey(key);
+    const hit = memory.get(scopedKey);
     if (hit && Date.now() - hit.storedAt < ttlMs) return hit.value;
     const disk = readDisk(key);
     if (disk) {
-      memory.set(key, disk);
+      memory.set(scopedKey, disk);
       return disk.value;
     }
     const value = await load();
-    memory.set(key, { value, storedAt: Date.now() });
+    memory.set(scopedKey, { value, storedAt: Date.now() });
     writeDisk(key, value);
     return value;
   }
@@ -85,4 +94,15 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null } = {}) {
     },
   };
   return wrapped;
+}
+
+// encodeURIComponent leaves dots untouched, so a complete segment of "." or
+// ".." would regain filesystem meaning when passed to path.join. Encode those
+// two cases explicitly while keeping ordinary source-name cache paths stable.
+function safeCacheSegment(value) {
+  const encoded = encodeURIComponent(String(value));
+  if (encoded === "") return "%00";
+  if (encoded === ".") return "%2E";
+  if (encoded === "..") return "%2E%2E";
+  return encoded;
 }

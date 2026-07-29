@@ -1,14 +1,20 @@
 ---
-title: layers.json manifest
-description: Layer names, levels, and sources — the complete manifest schema.
+title: Manifest reference
+description: Profiles, project mappings, layer sources, precedence, and compatibility.
 ---
 
-The manifest is a single JSON file that declares your layer stack. Every command
-that resolves knowledge (`resolver.mjs`, `mcp-server.mjs`, `write.mjs`) is pointed
-at one with `--manifest`. It is the one file that defines what layers exist, in
-what order they take precedence, and where each layer's knowledge comes from.
+The manifest is a single local JSON file that declares ContextCake's profiles,
+project mappings, layer stacks, and Pack assignments. Every command that resolves
+knowledge is pointed at one with `--manifest`.
 
-## Schema
+ContextCake still reads the original flat `layers` shape without rewriting it.
+The Project Profiles rollout adds a canonical v2 shape with a required `default`
+profile. The shared manifest and Pack code understand v2 now; automatic profile
+selection in `resolver.mjs` and `mcp-server.mjs` arrives in the next implementation
+slice. Until that wiring ships, keep agent-facing manifests flat rather than
+manually converting them.
+
+## Current flat schema
 
 ```json
 {
@@ -20,9 +26,103 @@ what order they take precedence, and where each layer's knowledge comes from.
 }
 ```
 
-The main top-level key is `layers`, an ordered array of layer objects. The local Pack
-manager may also maintain a `packs` registry of installed versions and assignments. That
-registry is bookkeeping for rollback; the resolver reads only the explicit layer entries.
+The main top-level key is `layers`, an array of layer objects. The local Pack manager
+may also maintain a `packs` registry of installed versions and assignments. That
+registry is bookkeeping for rollback; resolution reads only explicit layer entries.
+
+The shared profile selector treats a flat manifest as an in-memory virtual profile
+with id `default`. Selection does not alter the file. Creating the first additional
+profile is the deliberate migration point described below.
+
+## Manifest v2: Project Profiles
+
+Canonical v2 moves every runnable layer into one profile and stores local project
+folder mappings separately:
+
+```json
+{
+  "profiles": {
+    "default": {
+      "label": "Default",
+      "layers": [
+        { "name": "personal", "level": 3, "source": "files", "path": "/Users/you/Notes" }
+      ]
+    },
+    "payments": {
+      "label": "Payments",
+      "layers": [
+        { "name": "repo", "level": 3, "source": "github", "repo": "acme/payments", "paths": ["docs/**"] },
+        { "name": "team-pack", "level": 0, "source": "okf-local", "path": "packs/team/1.0.0" }
+      ],
+      "pendingSources": []
+    }
+  },
+  "projects": {
+    "/Users/you/Code/payments": "payments"
+  },
+  "packs": {}
+}
+```
+
+The v2 rules are intentionally strict:
+
+- `profiles.default` is required and cannot be deleted.
+- Profile ids are stable lowercase slugs of at most 63 characters. Changing a
+  visible `label` does not change the id.
+- Each profile owns a complete `layers` array. Layer names need to be unique only
+  within that profile.
+- `projects` maps absolute, machine-local folders to profile ids. The paths are
+  never uploaded by settings sync.
+- `pendingSources` holds synced descriptors that are incomplete or not yet
+  trusted on this machine. The later profile UI will present them as repair tasks;
+  the engine never treats them as runnable layers.
+- Canonical v2 has `profiles` and no top-level `layers`.
+
+### Selection order
+
+Profile-aware commands use one deterministic order:
+
+1. An explicit `--profile <id>` wins.
+2. Otherwise, the deepest canonical project folder containing the process working
+   directory wins. Matching uses path segments, not a raw string prefix.
+3. With no match, the required `default` profile wins.
+
+An explicit or matched unknown profile fails closed. It never falls through to
+unrelated default context. Symlink aliases are resolved to real paths; two equally
+specific aliases that name different profiles are a configuration error.
+
+### Migration and transitional manifests
+
+Existing flat manifests are not migrated on read. Creating the first additional
+profile performs one locked transaction:
+
+1. Re-read and validate the latest manifest.
+2. Write and verify a mode-`0600` backup whose filename contains a UTC timestamp
+   and SHA-256 of the original bytes.
+3. Move the exact flat layer array to `profiles.default.layers`.
+4. Convert default-stack Pack assignments to profile `default` and quarantine
+   incomplete synced source descriptors in `pendingSources`.
+5. Validate the complete candidate and atomically replace the manifest.
+
+Some current settings-sync and Pack combinations can contain both top-level
+`layers` and profile metadata. ContextCake recognizes that as a transitional
+shape and continues running the flat stack until explicit normalization. General
+writers reject newly created split-brain documents; only compatibility operations
+may update a shipped transitional file.
+
+Profile and source mutations share one adjacent lock file, so concurrent Pack,
+source, mapping, and profile operations cannot overwrite one another. Pack
+assignment, active version, precedence, origin, and layer references are validated
+as one contract before an atomic write.
+
+### Cache identity
+
+Profile-aware cache entries use an opaque SHA-256 fingerprint derived from the
+profile id and canonical source configuration. The fingerprint includes source
+kind and name plus its local root, repository/ref/path selection, endpoint, MCP
+command/arguments, and adapter options as applicable. Raw local paths do not appear
+in the cache namespace. Equal layer names in two profiles, renamed sources, and the
+same repository at different refs therefore cannot share cached content.
 
 | Field | Required | Applies to | Meaning |
 |-------|----------|------------|---------|
@@ -43,8 +143,9 @@ registry is bookkeeping for rollback; the resolver reads only the explicit layer
 When a concept exists in more than one layer, the resolver merges it per section:
 the highest `level` that speaks to a given section wins that section, and everything
 else is inherited from below. Levels are integers you choose — higher is more
-authoritative. Precedence is decided by level alone: two layers at the same level
-keep the first one listed.
+authoritative. When two contributors have the same level, the most recently
+updated contributor wins that horizontal tie; array order is not an extra
+precedence rule.
 
 See [Merge semantics](/docs/concepts/merge-semantics) and
 [Layer cake](/docs/concepts/layer-cake) for how precedence plays out across sections.
@@ -191,7 +292,8 @@ that records the Pack identity and active version:
 Do not edit installed Pack directories. Put personal or team changes in a separate,
 higher-precedence layer. Updates switch only the Pack-managed layer path; rollback points
 it at a retained version; removal detaches it. None of those operations overwrite or
-delete another layer.
+delete another layer. In v2, every Pack assignment names its profile explicitly;
+the same retained immutable version may be attached to more than one profile.
 
 ## The bundled demo manifest
 

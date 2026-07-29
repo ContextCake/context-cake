@@ -12,6 +12,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { utilityProcess } from 'electron'
 import { enginePaths, manifestPath, configDir } from './paths.mjs'
 
@@ -23,13 +24,15 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const BOOT_TIMEOUT_MS = 20_000
 const RELOAD_TIMEOUT_MS = 5_000
 
-function ensureConfig() {
+function ensureConfig(withManifestLock, writeContextManifest) {
   fs.mkdirSync(configDir(), { recursive: true })
-  if (!fs.existsSync(manifestPath())) {
-    // Valid empty manifest: the console shows its first-run SetupWizard when
-    // the cascade has zero sources and writes layers through /api/sources.
-    fs.writeFileSync(manifestPath(), JSON.stringify({ layers: [] }, null, 2) + '\n')
-  }
+  withManifestLock(manifestPath(), () => {
+    if (!fs.existsSync(manifestPath())) {
+      // Valid empty manifest: the console shows its first-run SetupWizard when
+      // the cascade has zero sources and writes layers through /api/sources.
+      writeContextManifest(manifestPath(), { layers: [] })
+    }
+  })
 }
 
 /**
@@ -40,8 +43,14 @@ function ensureConfig() {
  *   engine, so the caller treats it as fatal.
  */
 export async function startEngineService({ onCrash } = {}) {
-  ensureConfig()
   const { serviceModule, consoleDist } = enginePaths()
+  const manifestModule = path.join(path.dirname(serviceModule), 'manifest.mjs')
+  const {
+    readContextManifest,
+    withManifestLock,
+    writeContextManifest,
+  } = await import(pathToFileURL(manifestModule).href)
+  ensureConfig(withManifestLock, writeContextManifest)
 
   const child = utilityProcess.fork(
     path.join(here, 'engine-process.mjs'),
@@ -107,6 +116,17 @@ export async function startEngineService({ onCrash } = {}) {
                 pendingAcks.delete(id)
                 done()
               }
+            })
+          },
+          mutateManifest(buildCandidate) {
+            return withManifestLock(manifestPath(), () => {
+              const current = readContextManifest(manifestPath(), { allowMissing: false })
+              const candidate = buildCandidate(current)
+              if (candidate === null) {
+                return { changed: false, serialized: `${JSON.stringify(current, null, 2)}\n` }
+              }
+              writeContextManifest(manifestPath(), candidate, { allowTransitional: true })
+              return { changed: true, serialized: `${JSON.stringify(candidate, null, 2)}\n` }
             })
           },
           close() {

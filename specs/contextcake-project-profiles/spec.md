@@ -7,7 +7,7 @@ project's profile automatically and exposes only its sources, Packs, live
 captures, provenance, and conflicts.
 
 **Date:** 2026-07-28
-**Status:** Proposed — adversarial review complete; awaiting product approval
+**Status:** Approved — implementation authorized 2026-07-29
 **Workflow:** Requirements-First delivery slice of the approved profiles work in
 `specs/contextcake-integrations/spec.md`
 **Depends on:** `specs/contextcake-core/design.md`,

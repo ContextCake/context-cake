@@ -680,7 +680,6 @@ Primary changes:
 - envelope every profile-derived response and precondition every mutation with
   profile id plus manifest revision;
 - preserve the prior active adapter set on failed switch;
-- return profile id/revision envelopes with every profile-derived response;
 - persist app-active profile through the desktop settings seam;
 - extend loopback service tests for auth, CSRF, path validation, deletion, and
   concurrent mutation.
@@ -779,7 +778,7 @@ assert isolation across:
 - Pack version assignment;
 - live capture staging/confirmation;
 - queued git writes and promotion;
-- service graph and Console state.
+- service graph and Console state;
 - response revision mixing and stale mutation preconditions;
 - clone-backed GitHub checkouts for same repo/different refs.
 

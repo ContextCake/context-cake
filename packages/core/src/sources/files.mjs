@@ -15,8 +15,10 @@ const EXTENSIONS = [".md", ".mdx", ".txt"];
 
 // Shared with remote adapters that ingest the same plain-document shapes
 // (github.mjs) — the extension set and the parsing below must stay one
-// implementation or section keys drift and the cascade stops merging.
-export const DOC_EXTENSIONS = EXTENSIONS;
+// implementation or section keys drift and the cascade stops merging. Order is
+// meaningful: it is the tie-break when one concept id has several extensions.
+// Frozen because it is the same array the local adapter walks.
+export const DOC_EXTENSIONS = Object.freeze([...EXTENSIONS]);
 
 export function createFilesSource({ name, level, root }) {
   return {

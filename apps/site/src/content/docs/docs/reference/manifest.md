@@ -156,6 +156,13 @@ against it. Treat the manifest the way you treat any MCP client config: only poi
 `--manifest` at files you trust. Read [The trust boundary](/docs/concepts/trust-boundary)
 before pointing a manifest at sources you didn't write.
 
+The same applies to credentials. A `github` layer may set `apiBase` to reach GitHub
+Enterprise — which means a manifest that pairs a hostile `apiBase` with a legitimate
+`auth` alias would send that credential to a host of its choosing. The alias names a
+secret the *app* holds, so the manifest never sees the token itself, but it does decide
+where the token is sent. Review `apiBase` and `auth` together on any manifest you did
+not write, and prefer omitting `apiBase` entirely unless you genuinely run Enterprise.
+
 ## Pack-managed layers
 
 A Pack installed with `pack.mjs` is an ordinary `okf-local` base layer with an `origin`

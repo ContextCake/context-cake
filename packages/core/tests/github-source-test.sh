@@ -30,10 +30,17 @@ const FILES = {
   "docs/deep/nested.md": "# Nested\n\n## Detail\n\nStill indexed by docs/**.\n",
   "docs/okf.md": "---\ntype: decision\ntitle: OKF-authored in-repo\nupdated: 2026-05-01\n---\n\n## Engine {#engine updated=2026-04-01}\n\nSingleStore.\n",
   "notes.txt": "Loose text note.\n",
+  // Same concept id from two extensions — precedence must not depend on the
+  // order GitHub returns the tree in.
+  "docs/dup.md": "# Dup\n\n## Body\n\nfrom the md file.\n",
+  "docs/dup.txt": "from the txt file.\n",
   "src/index.js": "should never be indexed (not a doc extension)",
   "internal/private.md": "should never be indexed (outside the path globs)",
 };
 const COMMIT_DATES = { "CLAUDE.md": "2026-06-11T09:00:00Z", "docs/runbook.md": "2026-03-02T09:00:00Z" };
+// Mutable so a test can simulate an upstream edit between index generations.
+let editedDate = null;
+let reverseTree = false;
 
 let mode = null;
 let lastAuth = null;
@@ -48,6 +55,8 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/__auth") return json(200, { authorization: lastAuth });
   if (url.pathname === "/__mode") { mode = url.searchParams.get("value") || null; return json(200, { mode }); }
   if (url.pathname === "/__count") { const n = requests; if (url.searchParams.get("reset")) requests = 0; return json(200, { requests: n }); }
+  if (url.pathname === "/__edit") { editedDate = url.searchParams.get("date") || null; return json(200, { editedDate }); }
+  if (url.pathname === "/__reverse") { reverseTree = url.searchParams.get("on") === "1"; return json(200, { reverseTree }); }
 
   requests += 1;
   lastAuth = req.headers.authorization ?? null;
@@ -57,16 +66,16 @@ const server = http.createServer((req, res) => {
     return json(200, { default_branch: "main", pushed_at: "2026-07-20T12:00:00Z" });
   }
   if (url.pathname === "/repos/acme/payments/git/trees/main") {
+    const blobs = Object.entries(FILES).map(([p, c]) => ({ path: p, type: "blob", size: Buffer.byteLength(c) }));
     return json(200, {
       truncated: mode === "truncated",
-      tree: Object.entries(FILES)
-        .map(([p, c]) => ({ path: p, type: "blob", size: Buffer.byteLength(c) }))
-        .concat([{ path: "docs", type: "tree", size: 0 }]),
+      tree: (reverseTree ? blobs.reverse() : blobs).concat([{ path: "docs", type: "tree", size: 0 }]),
     });
   }
   if (url.pathname === "/repos/acme/payments/commits") {
     if (mode === "nocommits") return json(403, { message: "forbidden" });
     const p = url.searchParams.get("path");
+    if (editedDate) return json(200, [{ commit: { committer: { date: editedDate } } }]);
     if (!COMMIT_DATES[p]) return json(200, []);
     return json(200, [{ commit: { committer: { date: COMMIT_DATES[p] } } }]);
   }
@@ -141,6 +150,36 @@ grep -q '"updated":"2026-07-20"' <<<"$nested" || fail "empty commit history shou
 okf="$(node "$tmpdir/load.mjs" "$api" acme/payments/docs/okf)"
 grep -q '"title":"OKF-authored in-repo"' <<<"$okf" || fail "OKF frontmatter should be honored" "$okf"
 grep -q '"updated":"2026-04-01"' <<<"$okf" || fail "an OKF updated= attr should win over the commit date" "$okf"
+
+# A commit date belongs to the index generation it was read against. When the
+# index expires and refreshes, an upstream edit has to show through — a date
+# memo that outlives its index reports the old date for the life of the process.
+cat > "$tmpdir/dates.mjs" <<EOF
+import { createGithubSource } from "${sources_dir}/github.mjs";
+const api = process.argv[2];
+const s = createGithubSource({ name: "repo", level: 3, repo: "acme/payments", apiBase: api, indexTtlMs: 30 });
+const before = (await s.loadConcept("acme/payments/CLAUDE")).sections[0].updated;
+await fetch(api + "/__edit?date=2026-09-09T00:00:00Z").then((r) => r.json());
+await new Promise((r) => setTimeout(r, 60)); // let the index TTL lapse
+const after = (await s.loadConcept("acme/payments/CLAUDE")).sections[0].updated;
+await fetch(api + "/__edit").then((r) => r.json()); // clear for later sections
+s.close();
+if (before !== "2026-06-11") throw new Error("unexpected pre-edit date: " + before);
+if (after !== "2026-09-09") throw new Error("an upstream edit should surface after the index refreshes, got " + after);
+console.log("DATES-OK");
+EOF
+dates_out="$(node "$tmpdir/dates.mjs" "$api" 2>&1)"
+grep -q 'DATES-OK' <<<"$dates_out" || fail "commit dates must refresh with the index generation" "$dates_out"
+
+# docs/dup.md and docs/dup.txt collapse to one id. files.mjs resolves that by
+# extension precedence (.md > .mdx > .txt); github must agree, and must not let
+# the answer depend on the order GitHub returned the tree in.
+for order in 0 1; do
+  curl -fsS "$api/__reverse?on=$order" > /dev/null
+  dup="$(node "$tmpdir/load.mjs" "$api" acme/payments/docs/dup)"
+  grep -q 'from the md file' <<<"$dup" || fail "extension precedence should pick .md over .txt (tree order $order)" "$dup"
+done
+curl -fsS "$api/__reverse?on=0" > /dev/null
 
 # --- 3. Foreign, traversal, and unknown ids are misses, not crashes -----------
 

@@ -54,10 +54,13 @@ export function createGithubSource({
   // The last index that loaded successfully. Deliberately kept past its TTL: if
   // a refresh fails, stale-but-labelled beats an empty layer (integrations spec
   // §5 — serve from cache and surface the age, never hard-fail).
-  let index = null; // { entries: Map<conceptId, {path, ext}>, branch, pushedAt, at }
+  // Commit dates live INSIDE the index rather than beside it: a date belongs to
+  // the generation of the tree it was read against, so a refreshed index must
+  // start with an empty date memo or an upstream edit would keep reporting its
+  // old date for the life of the process.
+  let index = null; // { entries: Map<conceptId,{path,ext}>, dates: Map, branch, pushedAt, at }
   let failure = null; // { at, error } — most recent refresh failure
   let warnedAt = 0;
-  const commitDates = new Map(); // repo path -> YYYY-MM-DD (cleared with the index)
 
   // The token never reaches a log line, and a credential embedded in a custom
   // apiBase (https://user:pass@host) never survives an error message either.
@@ -141,19 +144,27 @@ export function createGithubSource({
     for (const node of tree.tree ?? []) {
       if (node.type !== "blob") continue;
       const ext = DOC_EXTENSIONS.find((candidate) => node.path.endsWith(candidate));
-      if (!ext) continue;
+      if (!ext || node.path === ext) continue; // ".md" is an extension, not a document
       if (Number(node.size) > maxFileBytes) continue;
       if (!matchers.some((re) => re.test(node.path))) continue;
-      entries.set(`${slug}/${node.path.slice(0, -ext.length)}`, { path: node.path, ext });
+      const id = `${slug}/${node.path.slice(0, -ext.length)}`;
+      // a.md and a.txt collapse to the same id. Break the tie by DOC_EXTENSIONS
+      // order, exactly as files.mjs does — otherwise the winner depends on the
+      // order GitHub happened to return the tree in, and the same collision
+      // resolves differently on disk and on GitHub.
+      const held = entries.get(id);
+      if (held && DOC_EXTENSIONS.indexOf(held.ext) <= DOC_EXTENSIONS.indexOf(ext)) continue;
+      entries.set(id, { path: node.path, ext });
     }
-    return { entries, branch, pushedAt: dateOnly(meta.pushed_at), at: now() };
+    return { entries, dates: new Map(), branch, pushedAt: dateOnly(meta.pushed_at), at: now() };
   }
 
   // The section date users actually care about is when the doc last changed,
   // not when the repo was last pushed — but a rate-limited or forbidden commits
   // call must not lose the concept, so pushed_at is the fallback.
-  async function commitDate(repoPath, branch, pushedAt) {
-    if (commitDates.has(repoPath)) return commitDates.get(repoPath);
+  async function commitDate(generation, repoPath) {
+    const { dates, branch, pushedAt } = generation;
+    if (dates.has(repoPath)) return dates.get(repoPath);
     let date = pushedAt;
     try {
       const commits = await api(`/repos/${slug}/commits`, {
@@ -163,7 +174,7 @@ export function createGithubSource({
     } catch {
       // keep pushedAt — a missing history date is not worth dropping the doc over
     }
-    commitDates.set(repoPath, date);
+    dates.set(repoPath, date);
     return date;
   }
 
@@ -174,15 +185,15 @@ export function createGithubSource({
       const repoPath = withinRepo(id, slug);
       if (!repoPath) return null;
       try {
-        const { entries, branch, pushedAt } = await loadIndex();
-        const entry = entries.get(`${slug}/${repoPath}`);
+        const generation = await loadIndex();
+        const entry = generation.entries.get(`${slug}/${repoPath}`);
         if (!entry) return null;
         const content = await api(`/repos/${slug}/contents/${encodePath(entry.path)}`, {
           raw: true,
-          search: { ref: branch },
+          search: { ref: generation.branch },
         });
         if (content == null) return null;
-        const updated = await commitDate(entry.path, branch, pushedAt);
+        const updated = await commitDate(generation, entry.path);
         return parseDocument({
           content,
           stem: path.posix.basename(entry.path, entry.ext),
@@ -207,10 +218,9 @@ export function createGithubSource({
     // cooldown so the next read re-fetches immediately. The cache wrapper calls
     // through to this on its own sync().
     sync() {
-      index = null;
+      index = null; // the commit-date memo lives inside it and goes with it
       failure = null;
       warnedAt = 0;
-      commitDates.clear();
       source.lastSynced = new Date(now()).toISOString();
       return source.lastSynced;
     },

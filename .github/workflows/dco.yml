@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,8 +31,25 @@ jobs:
       - name: Test the check script
         run: bash .github/scripts/check-dco-test.sh
 
+      - name: Identify GitHub-verified bot commits
+        id: bots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # A commit's local git author name is whatever the contributor set
+          # before pushing — never trust it for a security decision. The API's
+          # per-commit `author` object instead reflects GitHub's own account
+          # lookup, so `author.type == "Bot"` cannot be spoofed the same way.
+          shas="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" --paginate \
+            --jq '.[] | select(.author != null and .author.type == "Bot") | .sha' \
+            | tr '\n' ' ')"
+          echo "shas=${shas}" >> "$GITHUB_OUTPUT"
+
       - name: Verify sign-off on every commit
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DCO_BOT_SHAS: ${{ steps.bots.outputs.shas }}
         run: bash .github/scripts/check-dco.sh "$BASE_SHA" "$HEAD_SHA"

@@ -6,9 +6,21 @@
 #
 # Usage: check-dco.sh <base-ref> [head-ref]
 #
-# Merge commits are skipped — they are generated, not authored. Commits authored
-# by a bot are skipped because a bot cannot execute `git commit -s`; this matches
-# the default behavior of GitHub's DCO app and keeps Dependabot PRs mergeable.
+# Merge commits are skipped — they are generated, not authored.
+#
+# Commits authored by a bot are skipped because a bot cannot execute
+# `git commit -s`, matching the default behavior of GitHub's DCO app and
+# keeping Dependabot PRs mergeable. Which commits count as "bot" depends on
+# whether DCO_BOT_SHAS is set:
+#   - Set (CI): a space-separated allowlist of full SHAs the caller already
+#     verified via the GitHub API (commit author.type == "Bot"). Only those
+#     exact commits skip. A contributor's local git author name is theirs to
+#     set to anything before they ever push — `git config user.name
+#     'x[bot]'` costs nothing — so trusting a name pattern here would let
+#     anyone opt their own commits out of certification.
+#   - Unset (local/manual runs): falls back to an "ends with [bot]" name
+#     heuristic, for developer convenience only. Nothing is enforced by a
+#     local run, so the spoofability doesn't matter there.
 set -euo pipefail
 
 base=${1:?usage: check-dco.sh <base-ref> [head-ref]}
@@ -28,6 +40,22 @@ fi
 # re-checked when the base has moved ahead.
 range_start="$(git merge-base "$base" "$head" 2>/dev/null || echo "$base")"
 
+is_bot_commit() {
+  local sha=$1 author_name=$2
+
+  if [ -n "${DCO_BOT_SHAS+set}" ]; then
+    case " ${DCO_BOT_SHAS} " in
+      *" ${sha} "*) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+
+  case "$author_name" in
+    *'[bot]') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 failed=0
 checked=0
 skipped=0
@@ -40,13 +68,11 @@ while IFS= read -r sha; do
   subject="$(git show -s --format='%s' "$sha")"
   short="$(git rev-parse --short "$sha")"
 
-  case "$author_name" in
-    *'[bot]')
-      echo "skip  ${short}  ${subject}  (bot author)"
-      skipped=$((skipped + 1))
-      continue
-      ;;
-  esac
+  if is_bot_commit "$sha" "$author_name"; then
+    echo "skip  ${short}  ${subject}  (bot author)"
+    skipped=$((skipped + 1))
+    continue
+  fi
 
   checked=$((checked + 1))
   expected="Signed-off-by: ${author_name} <${author_email}>"

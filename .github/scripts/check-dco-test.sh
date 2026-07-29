@@ -82,7 +82,8 @@ git commit --quiet -a -m "lowercase trailer
 signed-off-by: Ada Contributor <ada@example.com>"
 expect_ok "lowercase trailer" "$base" > /dev/null
 
-# A bot cannot run `git commit -s`, so bot-authored commits are skipped.
+# A bot cannot run `git commit -s`, so bot-authored commits are skipped in the
+# unenforced local-heuristic mode (no DCO_BOT_SHAS set).
 branch bot
 echo bot >> file.txt
 git commit --quiet -a \
@@ -90,6 +91,36 @@ git commit --quiet -a \
   -m "bump a dependency"
 out="$(expect_ok "bot author" "$base")"
 assert_contains "bot author" "(bot author)" "$out"
+
+# CI mode (DCO_BOT_SHAS set): a local author name is attacker-controlled
+# before push — a human faking "[bot]" in their own commit must NOT skip the
+# check just because the name heuristic would have matched it.
+branch spoofed_bot
+echo spoofed >> file.txt
+git commit --quiet -a \
+  --author="attacker[bot] <attacker@example.com>" \
+  -m "unsigned commit pretending to be a bot"
+if out=$(DCO_BOT_SHAS="" bash "$check" "$base" HEAD 2>&1); then
+  echo "DCO check test: spoofed bot author — an unsigned branch was accepted" >&2
+  printf '%s\n' "$out" >&2
+  exit 1
+fi
+assert_contains "spoofed bot author" \
+  "Signed-off-by: attacker[bot] <attacker@example.com>" "$out"
+
+# CI mode: a commit whose SHA the caller verified via the GitHub API skips,
+# regardless of what its local author name says.
+branch verified_bot
+echo verified >> file.txt
+git commit --quiet -a --author="Some Human <human@example.com>" \
+  -m "commit the API says is bot-authored"
+verified_sha="$(git rev-parse HEAD)"
+if ! out=$(DCO_BOT_SHAS="$verified_sha" bash "$check" "$base" HEAD 2>&1); then
+  echo "DCO check test: API-verified bot sha — a verified bot commit was rejected" >&2
+  printf '%s\n' "$out" >&2
+  exit 1
+fi
+assert_contains "API-verified bot sha" "(bot author)" "$out"
 
 # Merge commits are generated, not authored, so they are skipped.
 branch feature

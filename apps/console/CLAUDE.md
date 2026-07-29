@@ -41,9 +41,12 @@ and `npm test`; CI runs both. dev/build/typecheck/test all regenerate
   `resolveConflict`, `send`, view/selection setters) in one context. Callbacks
   read the freshest values through refs so they don't re-subscribe. State is
   in-memory only — reloads reset it.
-- **Views** — `src/views/` (Canvas, Overview, Triage, Conflicts, Concepts).
+- **Views** — `src/views/` (Canvas, Overview, Triage, Conflicts, Concepts, Files).
   `App.tsx` is the shell: topbar + subbar + routed view, plus the Triage
   S/R/D keyboard handler. The canvas view stays full-height inside the chrome.
+  Files is live-mode only: it browses and edits the real files behind each
+  layer through the engine's `/api/files` + `/api/file`, with a rendered/raw
+  toggle for Markdown.
 - **Theming** — every color is a CSS variable in `src/styles.css` (light
   soft-control-plane default, dark primary surface under
   `:root[data-theme="dark"]`). `C` in `src/theme.ts` holds the variable references; `css()` parses inline
@@ -78,5 +81,15 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   build won't ship until typecheck is clean.
 - **Dark-first** — default theme is dark, persisted in `localStorage` under
   `cc-theme`. Don't assume light.
+- **Never block the shell on data.** `store.load.shell` is true only until the
+  graph responds (milliseconds); concepts resolve after the UI is up, and the
+  store polls while the engine reports `indexing`. The full-page
+  "Resolving the cascade…" gate was the first-run hang — don't add another one.
+  A failed *background* refresh must not clear a working page.
+- **`src/markdown.ts` parses to typed data and has no dependencies.** It never
+  emits HTML; `components/Markdown.tsx` renders document strings as React text
+  nodes, so source content cannot become markup. Link/image URLs still go
+  through a scheme allowlist. Preserve that no-HTML boundary when extending it
+  — see `markdown.test.ts` and `components/Markdown.test.tsx`.
 - `project/` holds the original Claude Design handoff (prototype HTML, chat,
   assets). It's provenance, not part of the build — don't import from it.

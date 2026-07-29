@@ -99,6 +99,62 @@ describe('SetupWizard connection handoff', () => {
     }))
   })
 
+  it('surfaces server-side folder validation inline at the add step', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/sources' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ error: 'Folder not found: /tmp/nope' }), {
+          status: 400, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/nope')
+    await act(async () => button('Next').click())
+
+    expect(container.textContent).toContain('Folder not found: /tmp/nope')
+    // Still on the add step — the wizard must not advance past a rejected source.
+    expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
+  })
+
+  it('warns on the review step when a folder holds no documents', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
+      JSON.stringify(url === '/api/sources' && init?.method === 'POST'
+        ? { ok: true, added: 'personal', indexing: true, hasDocuments: false, scanComplete: true }
+        : {}),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ))
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/empty-vault')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+    await act(async () => button('Skip for now').click())
+
+    expect(container.textContent).toContain('no documents found')
+  })
+
+  it('says indexing continues in the background rather than blocking setup', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
+      JSON.stringify(url === '/api/sources' && init?.method === 'POST'
+        ? { ok: true, added: 'personal', indexing: true, hasDocuments: true, scanComplete: true }
+        : { concepts: [{ id: 'systems/app' }] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ))
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/work-vault')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+    await act(async () => button('Skip for now').click())
+
+    expect(container.textContent).toContain('indexing in the background')
+  })
+
   it('keeps advanced MCP fields hidden until the user chooses to connect a server', async () => {
     await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
 
@@ -116,10 +172,28 @@ describe('SetupWizard connection handoff', () => {
     expect(button('Connect server').disabled).toBe(true)
   })
 
+  it('carries the explicit trust acknowledgement to the command-executing API', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/contextcake-personal')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+    await act(async () => button('Connect an MCP server').click())
+    await enter('#wiz-mcp-command', 'npx -y @company/context-mcp')
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.click())
+    await act(async () => button('Connect server').click())
+
+    const call = mocks.apiFetch.mock.calls.find(([url, init]) => url === '/api/sources' && init?.method === 'POST'
+      && JSON.parse(String(init.body)).kind === 'mcp')
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      kind: 'mcp', command: 'npx', args: ['-y', '@company/context-mcp'], trusted: true,
+    })
+  })
+
   it('uses the native folder browser when the desktop bridge is available', async () => {
     const chooseFolder = vi.fn().mockResolvedValue('/Users/person/ContextCake/personal')
     window.__CC_DESKTOP = {
-      token: 'test',
+      getApiToken: async () => 'test',
       version: '0.1.0',
       authState: { signedIn: false },
       chooseFolder,
@@ -154,6 +228,26 @@ describe('SetupWizard connection handoff', () => {
     await act(async () => button('Connect an agent').click())
     expect(onClose).toHaveBeenCalledOnce()
     expect(onConnectAgent).toHaveBeenCalledOnce()
+  })
+
+  it('does not tell users to add content while their source is still indexing', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
+      JSON.stringify(url === '/api/sources' && init?.method === 'POST'
+        ? { ok: true, added: 'personal', indexing: true, hasDocuments: true, scanComplete: true }
+        : { concepts: [], indexing: true, indexingSources: ['personal'] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ))
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/contextcake-personal')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+    await act(async () => button('Skip for now').click())
+    await act(async () => button('Finish').click())
+
+    expect(container.textContent).toContain('still indexing in the background')
+    expect(container.textContent).not.toContain('Add content to a layer')
   })
 })
 

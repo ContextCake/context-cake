@@ -5,7 +5,9 @@
 //   sync() -> drops the commit-date memo      close() -> noop
 
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
+import { resolveSettings, walkLimitsFrom } from "../settings.mjs";
 import { runGit } from "./git-core.mjs";
 
 // A read-path memo of the layer's git history must not outlive the history —
@@ -14,7 +16,7 @@ import { runGit } from "./git-core.mjs";
 // that a search sweep is one `git log`, not one per concept.
 const HISTORY_TTL_MS = 30000;
 
-export function createOkfLocalSource({ name, level, root }) {
+export function createOkfLocalSource({ name, level, root, limits = null }) {
   let history = null; // { at, promise } — see commitHistory
   let warned = false;
 
@@ -115,7 +117,9 @@ export function createOkfLocalSource({ name, level, root }) {
     // Untracked, or no repo at all: here the mtime IS the real edit time, the
     // same signal files.mjs uses for the plain folders it points at.
     try {
-      return localDate(fs.statSync(filePath).mtime);
+      // Async stat: this runs in the read path, and on the desktop app the
+      // engine must never block its loop on the filesystem.
+      return localDate((await fsp.stat(filePath)).mtime);
     } catch {
       return null; // vanished between read and stat — undated beats crashing the resolve
     }
@@ -127,12 +131,17 @@ export function createOkfLocalSource({ name, level, root }) {
     async loadConcept(id) {
       const safeId = normalizeConceptId(id);
       const filePath = path.join(root, `${safeId}.md`);
-      if (!fs.existsSync(filePath)) return null;
-      const parsed = parseConcept(fs.readFileSync(filePath, "utf8"));
-      return withDocumentDate(parsed, await documentDate(filePath));
+      let content;
+      try {
+        content = await fsp.readFile(filePath, "utf8");
+      } catch {
+        return null; // missing or unreadable — a miss, not a crash
+      }
+      return withDocumentDate(parseConcept(content), await documentDate(filePath));
     },
     async listConceptIds() {
-      return walkMarkdown(root).map((filePath) =>
+      const files = await walkDocs(root, [".md"], limits);
+      return files.map((filePath) =>
         toPosix(path.relative(root, filePath)).replace(/\.md$/i, ""),
       );
     },
@@ -278,17 +287,84 @@ export function isTraversal(normalized) {
   );
 }
 
-function walkMarkdown(root) {
-  if (!root || !fs.existsSync(root)) return [];
-  const files = [];
+// ---- shared bounded walk ----------------------------------------------------
+//
+// One async walker for every disk-backed adapter (okf-local, files, and the
+// service's add-time folder probe). Async so a big tree never monopolizes its
+// process's event loop. The desktop runs this work in an isolated utility
+// process, keeping it off the Electron UI thread. Bounded so a folder that is
+// too large to be a context layer (a home directory, a monorepo checkout)
+// fails fast with an actionable message instead of grinding for minutes.
+// Same skip posture as before: dot-entries and node_modules are skipped, and
+// symlinks are never followed (Dirent.isDirectory/isFile are false for them).
+//
+// The caps are user-facing settings (settings.mjs): the manifest's `settings`
+// block wins, the environment is the fallback, and callers that already know
+// the effective settings pass `limits` explicitly.
+
+export function defaultWalkLimits() {
+  return walkLimitsFrom(resolveSettings({}));
+}
+
+/**
+ * Cheap "does this folder hold any documents?" check for the add-source form.
+ * Stops at the first hit and at a small scan ceiling, so it answers in
+ * milliseconds on a normal folder and stays bounded on a huge one. Never
+ * throws on size — being too big is an indexing outcome, not a form error.
+ */
+export async function probeDocs(root, extensions, maxEntries = 4_000) {
+  let scanned = 0;
   const stack = [root];
   while (stack.length > 0) {
     const current = stack.pop();
-    for (const dirent of fs.readdirSync(current, { withFileTypes: true })) {
+    let dirents;
+    try { dirents = await fsp.readdir(current, { withFileTypes: true }); } catch { continue; }
+    for (const dirent of dirents) {
       if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
+      if (++scanned > maxEntries) return { found: false, scanned, complete: false };
+      if (dirent.isDirectory()) stack.push(path.join(current, dirent.name));
+      else if (dirent.isFile() && extensions.some((ext) => dirent.name.endsWith(ext))) {
+        return { found: true, scanned, complete: true };
+      }
+    }
+  }
+  return { found: false, scanned, complete: true };
+}
+
+export async function walkDocs(root, extensions, limits = null) {
+  if (!root) return [];
+  const { maxFiles, maxEntries } = { ...defaultWalkLimits(), ...(limits ?? {}) };
+  const files = [];
+  let scanned = 0;
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let dirents;
+    try {
+      dirents = await fsp.readdir(current, { withFileTypes: true });
+    } catch {
+      continue; // missing root or an unreadable subfolder — skip, don't crash the layer
+    }
+    for (const dirent of dirents) {
+      if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
+      scanned += 1;
+      if (scanned > maxEntries) {
+        throw new Error(
+          `This folder is too large to index (scanned over ${maxEntries.toLocaleString("en-US")} entries). ` +
+            `Choose a more specific folder, such as your notes or docs directory.`,
+        );
+      }
       const fullPath = path.join(current, dirent.name);
       if (dirent.isDirectory()) stack.push(fullPath);
-      else if (dirent.isFile() && dirent.name.endsWith(".md")) files.push(fullPath);
+      else if (dirent.isFile() && extensions.some((ext) => dirent.name.endsWith(ext))) {
+        files.push(fullPath);
+        if (files.length > maxFiles) {
+          throw new Error(
+            `This folder has too many documents to index (over ${maxFiles.toLocaleString("en-US")}). ` +
+              `Choose a more specific folder, such as your notes or docs directory.`,
+          );
+        }
+      }
     }
   }
   return files.sort();

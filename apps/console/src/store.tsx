@@ -10,10 +10,10 @@ import {
 } from './api'
 import type { LayerId, RouteId } from './theme'
 
-export type ViewId = 'canvas' | 'overview' | 'triage' | 'conflicts' | 'concepts'
+export type ViewId = 'canvas' | 'overview' | 'triage' | 'conflicts' | 'concepts' | 'files'
 export type TriageTab = 'review' | 'captured' | 'ignored'
 
-const VIEW_IDS: ViewId[] = ['canvas', 'overview', 'triage', 'conflicts', 'concepts']
+const VIEW_IDS: ViewId[] = ['canvas', 'overview', 'triage', 'conflicts', 'concepts', 'files']
 
 /** Parse the URL hash into a view + optional concept id (deep link). */
 function parseHash(): { view?: ViewId; concept?: string } {
@@ -72,9 +72,20 @@ function cannedAnswer(q: string): { text: string; cites: Cite[]; note?: string }
   return { text: 'I resolved that across all three layers but found nothing specific. Try asking about the database, auth tokens, deploys, or incident response.', cites: [] }
 }
 
+/** What the shell is waiting on. `shell` is the only state that blocks the UI. */
+export interface LoadState {
+  /** True only until the source topology is known — milliseconds, not minutes. */
+  shell: boolean
+  /** True while concepts are still being resolved in the background. */
+  concepts: boolean
+  /** Sources the engine is still reading. */
+  indexingSources: string[]
+}
+
 export interface Store {
   mode: Mode
   loading: boolean
+  load: LoadState
   error: LiveDataError | null
 
   view: ViewId
@@ -121,8 +132,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const mode = source.mode
 
   const [loading, setLoading] = useState(true)
+  const [conceptsLoading, setConceptsLoading] = useState(true)
+  const [indexingSources, setIndexingSources] = useState<string[]>([])
   const [error, setError] = useState<LiveDataError | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const shellReadyRef = useRef(false)
 
   const [concepts, setConcepts] = useState<Concept[]>([])
   const [sources, setSources] = useState<Source[]>([])
@@ -144,44 +158,91 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(initialMessages)
 
-  // Load the cascade from the data source (demo bundle or live playground API).
+  // Load the cascade in two stages so the app is usable immediately.
+  //
+  // Stage 1 (the graph) only needs the source topology, which the engine
+  // answers from its background index in milliseconds — that unblocks the
+  // shell. Stage 2 (resolve-all) fills in concepts and conflicts as they
+  // arrive. While the engine is still reading sources it says so, and we poll
+  // rather than making the user stare at a blocked screen: that full-page
+  // "Resolving the cascade…" wait was the hang people hit on first run.
   useEffect(() => {
     let cancelled = false
-    void (async () => {
-      setLoading(true)
-      setError(null)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let failures = 0
+    const MAX_POLL_FAILURES = 3
+
+    const pass = async (first: boolean) => {
       try {
         const g = await source.graph()
-        const { concepts: raw, errors } = await source.resolveAll()
-        // Only fail the whole page when nothing resolved; partial failures
-        // render what loaded and surface the rest.
-        if (raw.length === 0 && errors.length > 0) {
+        if (cancelled) return
+        setSources(adaptSources(g))
+        setIndexingSources(g.indexingSources ?? [])
+        setError(null)
+        shellReadyRef.current = true
+        setLoading(false) // the shell can render now — everything else streams in
+
+        const { concepts: raw, errors, indexing, indexingSources: resolvingSources } = await source.resolveAll()
+        if (cancelled) return
+        // Only fail the whole page when nothing resolved AND nothing is still
+        // being read; a partial pass mid-index is expected, not an error.
+        if (raw.length === 0 && errors.length > 0 && !indexing) {
           throw new LiveDataError('bad-shape', `No concept resolved (first error: ${errors[0].concept}: ${errors[0].error})`)
         }
-        if (cancelled) return
         setLoadErrors(errors)
-        setSources(adaptSources(g))
+        // The graph and resolve-all requests are separate snapshots. Indexing
+        // can finish between them; use the later answer so a stale graph never
+        // leaves the banner running after polling has stopped.
+        setIndexingSources(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
         setConcepts(raw.map(adaptConcept))
         const derivedConflicts = adaptConflicts(raw)
         setConflicts(derivedConflicts)
-        // Honor a deep-linked concept from the URL hash; else default to the first.
-        const pending = pendingConceptRef.current
-        if (pending && raw.some((c) => c.id === pending)) {
+        // Honor a deep-linked concept from the URL hash; else default to the
+        // first. Only claim the deep link once it actually resolved.
+        const pendingId = pendingConceptRef.current
+        if (pendingId && raw.some((c) => c.id === pendingId)) {
           setView('concepts')
-          setSelConcept(pending)
-        } else {
+          setSelConcept(pendingId)
+          pendingConceptRef.current = undefined
+        } else if (!indexing) {
           setSelConcept((prev) => prev || raw[0]?.id || '')
+          pendingConceptRef.current = undefined
         }
-        pendingConceptRef.current = undefined
         setSelConflict((prev) => prev || derivedConflicts[0]?.id || '')
+        setConceptsLoading(Boolean(indexing))
+        failures = 0
+        if (indexing) timer = setTimeout(() => void pass(false), 900)
       } catch (e) {
         if (cancelled) return
-        setError(e instanceof LiveDataError ? e : new LiveDataError('bad-shape', e instanceof Error ? e.message : String(e)))
-      } finally {
-        if (!cancelled) setLoading(false)
+        // A failure on a background refresh must not blow away a working page.
+        if (first && !shellReadyRef.current) {
+          setError(e instanceof LiveDataError ? e : new LiveDataError('bad-shape', e instanceof Error ? e.message : String(e)))
+          setLoading(false)
+          setConceptsLoading(false)
+          return
+        }
+        // Retry a stumble mid-index with backoff. Giving up silently here would
+        // leave the "Indexing…" banner running forever with nothing refreshing
+        // it, which reads as a hang — the exact impression to avoid.
+        failures += 1
+        if (failures <= MAX_POLL_FAILURES) {
+          timer = setTimeout(() => void pass(false), 900 * failures)
+          return
+        }
+        setConceptsLoading(false)
+        setIndexingSources([]) // stop claiming work is still in flight
       }
-    })()
-    return () => { cancelled = true }
+    }
+
+    // A refresh must not replace an already-usable shell with a full-page
+    // loader. Besides the visual regression, doing so unmounts the Files editor
+    // and can discard an unsaved draft. Only the initial bootstrap owns the
+    // shell-level loading state.
+    if (!shellReadyRef.current) setLoading(true)
+    setConceptsLoading(true)
+    setError(null)
+    void pass(true)
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
   }, [source, reloadKey])
 
   // Refs so callbacks read the freshest values without re-subscribing.
@@ -302,15 +363,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
 
+  const load = useMemo<LoadState>(
+    () => ({ shell: loading, concepts: conceptsLoading, indexingSources }),
+    [loading, conceptsLoading, indexingSources],
+  )
+
   const value = useMemo<Store>(() => ({
-    mode, loading, error,
+    mode, loading, load, error,
     view, triageTab, selSignal, selConflict, selConcept, query,
     chatOpen, chatBusy, chatInput, chatMessages,
     concepts, sources, signals, conflicts, activity, loadErrors,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
     openChat: () => setChatOpen(true), closeChat: () => setChatOpen(false), setChatInput,
     filtered, route, resolveConflict, send, reload,
-  }), [mode, loading, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, filtered, route, resolveConflict, send, reload])
+  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, filtered, route, resolveConflict, send, reload])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

@@ -17,18 +17,47 @@ interface AddedLayer {
   detail: string
 }
 
-async function postSource(body: Record<string, unknown>): Promise<void> {
+// Adding/syncing a github source runs a `git clone` server-side (bounded at
+// 120s there) — give these mutations more headroom than apiFetch's default.
+const MUTATION_TIMEOUT_MS = 150_000
+
+interface AddResult {
+  /** The engine spotted at least one document without indexing the folder. */
+  hasDocuments?: boolean
+  /** False when the quick look stopped early — "none found" is then unproven. */
+  scanComplete?: boolean
+}
+
+async function postSource(body: Record<string, unknown>): Promise<AddResult> {
   const res = await apiFetch('/api/sources', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
   })
   const data = await res.json().catch(() => ({}) as { error?: string })
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
+  return data as AddResult
+}
+
+/**
+ * Adding a source no longer waits for it to be read, so there is no document
+ * count yet — the engine indexes in the background and the app shows progress.
+ * The one thing worth saying here is when a quick look found nothing, which
+ * usually means the wrong folder was picked.
+ */
+function describeFolder(path: string, result: AddResult): string {
+  if (result.hasDocuments === false && result.scanComplete) {
+    return `${path} · no documents found — check this is the right folder`
+  }
+  return `${path} · indexing in the background`
 }
 
 async function syncSource(name: string): Promise<void> {
-  const res = await apiFetch(`/api/sources/sync?name=${encodeURIComponent(name)}`, { method: 'POST' })
+  const res = await apiFetch(`/api/sources/sync?name=${encodeURIComponent(name)}`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
+  })
   const data = await res.json().catch(() => ({}) as { error?: string })
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
 }
@@ -249,6 +278,7 @@ export function SetupWizard({
   const [mcpBusy, setMcpBusy] = useState(false)
 
   const [successConcept, setSuccessConcept] = useState<string | null>(null)
+  const [successIndexing, setSuccessIndexing] = useState(false)
   const [successBusy, setSuccessBusy] = useState(false)
 
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -272,11 +302,11 @@ export function SetupWizard({
     setPersonalBusy(true)
     setPersonalErr(null)
     try {
-      await postSource({ kind: personalKind, name: personalName.trim(), level: 3, path: personalPath.trim() })
-      setAdded((prev) => [...prev, { kind: personalKind, name: personalName.trim(), level: 3, detail: personalPath.trim() }])
+      const result = await postSource({ kind: personalKind, name: personalName.trim(), level: 3, path: personalPath.trim() })
+      setAdded((prev) => [...prev, { kind: personalKind, name: personalName.trim(), level: 3, detail: describeFolder(personalPath.trim(), result) }])
       goNext()
     } catch (e) {
-      setPersonalErr(e instanceof Error ? `${e.message} Choose a different source name and try again.` : String(e))
+      setPersonalErr(e instanceof Error ? e.message : String(e))
     } finally {
       setPersonalBusy(false)
     }
@@ -288,8 +318,8 @@ export function SetupWizard({
     try {
       if (teamKind === 'local' || teamKind === 'files') {
         if (!teamPath.trim()) { setTeamErr('Provide a folder path.'); setTeamBusy(false); return }
-        await postSource({ kind: teamKind, name: 'team', level: 2, path: teamPath.trim() })
-        setAdded((prev) => [...prev, { kind: teamKind, name: 'team', level: 2, detail: teamPath.trim() }])
+        const result = await postSource({ kind: teamKind, name: 'team', level: 2, path: teamPath.trim() })
+        setAdded((prev) => [...prev, { kind: teamKind, name: 'team', level: 2, detail: describeFolder(teamPath.trim(), result) }])
       } else {
         if (!teamRepo.trim()) { setTeamErr('Provide a repo as owner/name.'); setTeamBusy(false); return }
         await postSource({ kind: 'github', name: 'team', level: 2, repo: teamRepo.trim() })
@@ -320,7 +350,10 @@ export function SetupWizard({
     setMcpErr(null)
     try {
       const [command, ...args] = parts
-      await postSource({ kind: 'mcp', name: 'company', level: 0, command, args })
+      // The API also requires this explicit acknowledgement. Keeping the
+      // consent bit in the request prevents a caller from bypassing the UI's
+      // trust checkbox and turning source creation into an accidental RCE API.
+      await postSource({ kind: 'mcp', name: 'company', level: 0, command, args, trusted: true })
       setAdded((prev) => [...prev, { kind: 'mcp', name: 'company', level: 0, detail: mcpCommandLine.trim() }])
       goNext()
     } catch (e) {
@@ -336,13 +369,21 @@ export function SetupWizard({
     setSuccessBusy(true)
     reload()
     try {
-      const res = await apiFetch('/api/graph', { headers: { accept: 'application/json' } })
+      // A tighter deadline than apiFetch's default: "Resolving…" must never
+      // outlive the user's patience — on timeout we land on the success step
+      // without a sample concept rather than spinning forever.
+      const res = await apiFetch('/api/graph', {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(20_000),
+      })
       if (res.ok) {
         const graph = (await res.json()) as GraphSummary
         setSuccessConcept(graph.concepts[0]?.id ?? null)
+        setSuccessIndexing(Boolean(graph.indexing))
       }
     } catch {
       setSuccessConcept(null)
+      setSuccessIndexing(false)
     } finally {
       setSuccessBusy(false)
       goNext()
@@ -591,6 +632,8 @@ export function SetupWizard({
               <div style={css(`padding:12px 14px; border-radius:10px; background:${C.tealFill}; border:1px solid ${C.tealStroke}; font-size:13px; color:${C.tealText};`)}>
                 Your agent can now read: <strong style={css(`font-family:${MONO};`)}>{successConcept}</strong>
               </div>
+            ) : successIndexing ? (
+              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Setup complete — your sources are still indexing in the background. Concepts will appear here automatically.</p>
             ) : (
               <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Setup complete — no concepts resolved yet. Add content to a layer and reload.</p>
             )}

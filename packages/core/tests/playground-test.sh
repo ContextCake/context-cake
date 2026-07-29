@@ -32,6 +32,8 @@ FENCE='```'
   printf -- '---\ntype: runbook\ntitle: Deploy\nupdated: 2026-07-01\n---\n\n# Deploy\n\n## Trigger {#trigger}\n\nRun:\n\n'
   printf '%sbash\n# a comment\necho hi\n%s\n\ndone.\n\n## Rollback {#rollback}\n\nroll back.\n' "$FENCE" "$FENCE"
 } > "$TMP/bundle/deploy.md"
+printf '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>\n' > "$TMP/bundle/pixel.svg"
+printf '<script>document.body.textContent="unsafe"</script>\n' > "$TMP/bundle/page.html"
 cat > "$TMP/manifest.json" <<EOF
 { "layers": [ { "name": "t", "level": 1, "path": "$TMP/bundle" } ] }
 EOF
@@ -44,14 +46,21 @@ for _ in $(seq 1 30); do curl -sf "$BASE/api/graph" >/dev/null 2>&1 && break; sl
 C() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
 echo "token accounting"
-TOK="$(curl -s "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const g=JSON.parse(s);process.stdout.write(`${g.tokenizer}:${g.totals.sourceTokens>0}`)})')"
+TOK="$(curl -s "$BASE/api/graph?wait=15000" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const g=JSON.parse(s);process.stdout.write(`${g.tokenizer}:${g.totals.sourceTokens>0}`)})')"
 [ "$TOK" = "o200k_base:true" ] && pass "graph reports o200k tokens" || fail "token accounting ($TOK)"
 
 echo "path + symlink sandbox"
 code 403 "$(C "$BASE/api/file?path=t/../../../etc/hosts")" "traversal read blocked"
 code 403 "$(C "$BASE/api/file?path=t/escape.md")" "symlink read blocked"
 code 403 "$(C -X PUT -H 'content-type: application/json' -d '{"path":"t/escape.md","text":"x"}' "$BASE/api/file")" "symlink write blocked"
+code 403 "$(C "$BASE/api/file/raw?path=t/escape.md")" "symlink raw preview blocked"
 grep -q SECRET "$TMP/outside/secret.txt" && pass "secret not overwritten" || fail "secret overwritten"
+
+echo "raw preview sandbox"
+code 415 "$(C "$BASE/api/file/raw?path=t/page.html")" "non-preview content blocked"
+RAW_HEADERS="$(curl -s -D - -o /dev/null "$BASE/api/file/raw?path=t/pixel.svg" | tr -d '\r')"
+grep -qi '^content-security-policy: sandbox' <<<"$RAW_HEADERS" && pass "raw preview CSP" || fail "raw preview CSP missing"
+grep -qi '^content-disposition: attachment' <<<"$RAW_HEADERS" && pass "SVG direct navigation downloads" || fail "SVG direct navigation not contained"
 
 echo "CSRF + DNS-rebinding guard"
 code 403 "$(C -X POST -H 'content-type: application/json' -H 'Sec-Fetch-Site: cross-site' -d '{}' "$BASE/api/sources")" "cross-site POST blocked"
@@ -68,7 +77,9 @@ grep -q 'roll back.' "$TMP/bundle/deploy.md" && pass "next section survived" || 
 grep -q 'a comment' "$TMP/bundle/deploy.md" && fail "fenced comment leaked (boundary bug)" || pass "fenced comment replaced cleanly"
 
 echo "bulk resolve (/api/resolve-all)"
-RA="$(curl -s "$BASE/api/resolve-all" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s);process.stdout.write(`${r.concepts.length}:${r.errors.length}:${r.concepts[0]?.id}`)})')"
+# ?wait= — reads answer from the background index and are partial until it
+# lands, so a completeness assertion has to ask for a settled index.
+RA="$(curl -s "$BASE/api/resolve-all?wait=15000" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s);process.stdout.write(`${r.concepts.length}:${r.errors.length}:${r.concepts[0]?.id}`)})')"
 [ "$RA" = "1:0:deploy" ] && pass "resolve-all returns all concepts in one pass" || fail "resolve-all ($RA)"
 
 echo "console not mounted → friendly notice (default server)"

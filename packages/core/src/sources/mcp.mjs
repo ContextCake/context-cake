@@ -5,6 +5,25 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
+function spawnTrustedMcpCommand(command, args) {
+  if (typeof command !== "string" || command.trim() === "" || command.includes("\0")) {
+    throw new Error("MCP command must be a non-empty executable name or path");
+  }
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
+    throw new Error("MCP command arguments must be strings without NUL bytes");
+  }
+  // MCP server execution is an intentional trust boundary, not interpolation:
+  // direct manifests are trusted configuration, and the mutation API requires
+  // an explicit `trusted: true` acknowledgement before persisting a command.
+  // `shell: false` keeps command/args as an argv vector, so metacharacters have
+  // no meaning unless the trusted command deliberately launches a shell.
+  // See apps/site/src/content/docs/docs/concepts/trust-boundary.md.
+
+  // codeql[js/command-line-injection]
+  // lgtm[js/command-line-injection]
+  return spawn(command.trim(), args, { stdio: ["pipe", "pipe", "inherit"], shell: false });
+}
+
 export function createMcpSource({ name, level, command, args = [], respawnCooldownMs = 3000 }) {
   let child = null;
   let rl = null;
@@ -34,7 +53,7 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
     ready = null;
     lastSpawnAt = Date.now();
     try {
-      child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"] });
+      child = spawnTrustedMcpCommand(command, args);
     } catch (e) {
       startError = e;
       return;
@@ -120,6 +139,18 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
         const res = await callTool("list_nodes", {});
         return res?.nodes ?? [];
       } catch (e) { warn(e); return []; }
+    },
+    // Add-time health check: unlike the read methods (which degrade to
+    // null/[] so one dead source never sinks a resolve), probe() surfaces the
+    // failure — a wrong command must be rejected while the user is still
+    // looking at the form, not discovered as a hang on the first resolve.
+    // tools/list is mandatory in the MCP spec, so any compliant server answers.
+    // Bounded by the same per-request timeout as every other send().
+    async probe() {
+      ensureStarted();
+      if (startError) throw startError;
+      await ready;
+      return send("tools/list", {});
     },
     close() {
       closed = true;

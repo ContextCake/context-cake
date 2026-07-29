@@ -445,8 +445,11 @@ try {
   if (body.concepts < 1) throw new Error("a successful Sync should report what it indexed: " + JSON.stringify(body));
   if (!body.lastSuccessAt) throw new Error("a successful Sync should report when the index loaded: " + JSON.stringify(body));
 
+  // ?wait= — /api/graph answers from the background index and reports
+  // "indexing" until a source has been read. Sync deliberately re-indexes, so
+  // a health assertion has to ask for a settled index or it races the re-read.
   const graphRow = async () => {
-    const g = await fetch(base + "/api/graph").then((r) => r.json());
+    const g = await fetch(base + "/api/graph?wait=15000").then((r) => r.json());
     return g.sources.find((s) => s.name === "repo");
   };
   const healthy = await graphRow();

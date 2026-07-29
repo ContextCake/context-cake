@@ -1,0 +1,248 @@
+// A small, deliberately limited Markdown parser for the Files view.
+//
+// It produces DATA, never HTML. Rendering is React's job
+// (components/Markdown.tsx), which means document text reaches the DOM as text
+// nodes and can never be interpreted as markup — there is no HTML string, no
+// `dangerouslySetInnerHTML`, and no hand-rolled escaping to get subtly wrong.
+// That is the whole security posture: don't sanitize, don't build HTML.
+//
+// The one thing still filtered here is URLs, because a `javascript:` href is
+// dangerous even inside a properly-created React element. Anything outside a
+// small navigational allowlist is dropped and the link renders as plain text.
+//
+// Not a spec-complete CommonMark implementation and not trying to be: it
+// covers what appears in real context notes (headings, emphasis, code, lists,
+// quotes, tables, links, images, rules) and degrades to plain text otherwise.
+// The console has no markdown dependency and this keeps it that way — see
+// apps/console/CLAUDE.md on the dependency posture.
+
+export type Inline =
+  | { type: 'text'; value: string }
+  | { type: 'code'; value: string }
+  | { type: 'strong'; children: Inline[] }
+  | { type: 'em'; children: Inline[] }
+  | { type: 'del'; children: Inline[] }
+  | { type: 'link'; href: string; children: Inline[] }
+  | { type: 'image'; src: string; alt: string }
+  | { type: 'wikilink'; value: string }
+
+export interface ListItem {
+  content: Inline[]
+  task: boolean
+  checked: boolean
+}
+
+export type Block =
+  | { type: 'heading'; level: number; content: Inline[] }
+  | { type: 'paragraph'; content: Inline[] }
+  | { type: 'code'; lang: string | null; text: string }
+  | { type: 'list'; ordered: boolean; items: ListItem[] }
+  | { type: 'quote'; content: Inline[] }
+  | { type: 'rule' }
+  /** `head` is a row of cells; `rows` is a list of such rows. */
+  | { type: 'table'; head: Inline[][]; rows: Inline[][][] }
+
+const SAFE_SCHEME = /^(https?:|mailto:|#|\/|\.{0,2}\/)/i
+
+/** Allow only navigational schemes; anything else is not a link at all. */
+export function safeUrl(raw: string): string | null {
+  const url = raw.trim()
+  if (!url || !SAFE_SCHEME.test(url)) return null
+  return url
+}
+
+// One pass, alternation ordered by precedence. Code spans come first so their
+// contents are never re-scanned as markup — no placeholder substitution, and
+// therefore no way for literal text to collide with a placeholder.
+//
+// Kept as a SOURCE string, not a shared RegExp: parseInline recurses (emphasis
+// and link contents), and a shared /g regex would have its lastIndex reset by
+// the inner call, restarting the outer scan forever.
+const INLINE_SOURCE = [
+  '(`[^`]+`)',                    // 1 code
+  '(!\\[[^\\]]*\\]\\([^)\\s]+\\))', // 2 image
+  '(\\[\\[[^\\]]+\\]\\])',         // 3 wiki link
+  '(\\[[^\\]]+\\]\\([^)\\s]+\\))', // 4 link
+  '(\\*\\*\\*[^*]+\\*\\*\\*)',     // 5 strong+em
+  // Strong may contain single asterisks so `**bold *and italic* bold**`
+  // nests. The two alternatives are disjoint (a non-asterisk, or an asterisk
+  // not followed by one), so this cannot backtrack ambiguously.
+  '(\\*\\*(?:[^*]|\\*(?!\\*))+\\*\\*)', // 6 strong
+  '(\\*[^*\\n]+\\*)',              // 7 em
+  '(~~[^~]+~~)',                   // 8 del
+].join('|')
+
+function text(value: string): Inline[] {
+  return value ? [{ type: 'text', value }] : []
+}
+
+export function parseInline(source: string): Inline[] {
+  const out: Inline[] = []
+  let last = 0
+  const pattern = new RegExp(INLINE_SOURCE, 'g') // per call — see INLINE_SOURCE
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(source)) !== null) {
+    if (match.index > last) out.push(...text(source.slice(last, match.index)))
+    last = match.index + match[0].length
+    const [, code, image, wiki, link, strongEm, strong, em, del] = match
+
+    if (code !== undefined) {
+      out.push({ type: 'code', value: code.slice(1, -1) })
+    } else if (image !== undefined) {
+      const parts = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(image)
+      const src = parts ? safeUrl(parts[2]) : null
+      // A rejected URL is not silently dropped — the alt text stays visible.
+      if (parts && src) out.push({ type: 'image', src, alt: parts[1] })
+      else out.push(...text(image))
+    } else if (wiki !== undefined) {
+      out.push({ type: 'wikilink', value: wiki.slice(2, -2) })
+    } else if (link !== undefined) {
+      const parts = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(link)
+      const href = parts ? safeUrl(parts[2]) : null
+      if (parts && href) out.push({ type: 'link', href, children: parseInline(parts[1]) })
+      else out.push(...text(link))
+    } else if (strongEm !== undefined) {
+      out.push({ type: 'strong', children: [{ type: 'em', children: parseInline(strongEm.slice(3, -3)) }] })
+    } else if (strong !== undefined) {
+      out.push({ type: 'strong', children: parseInline(strong.slice(2, -2)) })
+    } else if (em !== undefined) {
+      out.push({ type: 'em', children: parseInline(em.slice(1, -1)) })
+    } else if (del !== undefined) {
+      out.push({ type: 'del', children: parseInline(del.slice(2, -2)) })
+    }
+  }
+  if (last < source.length) out.push(...text(source.slice(last)))
+  return out
+}
+
+// Single character class, no ambiguous repetition — the obvious
+// `[\s:|-]+\|[\s:|-]*` form can backtrack polynomially on a long divider.
+function isTableDivider(line: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed.includes('-') || !trimmed.includes('|')) return false
+  return /^[\s:|-]+$/.test(trimmed)
+}
+
+function splitRow(line: string): string[] {
+  return line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((cell) => cell.trim())
+}
+
+export function parseMarkdown(src: string): Block[] {
+  const lines = String(src ?? '').split(/\r?\n/)
+  const blocks: Block[] = []
+  let i = 0
+  let list: { ordered: boolean; items: ListItem[] } | null = null
+
+  const closeList = () => {
+    if (list) { blocks.push({ type: 'list', ordered: list.ordered, items: list.items }); list = null }
+  }
+  const pushItem = (ordered: boolean, item: ListItem) => {
+    if (!list || list.ordered !== ordered) { closeList(); list = { ordered, items: [] } }
+    list.items.push(item)
+  }
+
+  while (i < lines.length) {
+    const line = lines[i]
+
+    // Fenced code: contents are captured verbatim as text, never parsed.
+    const fence = /^\s{0,3}(```|~~~)(.*)$/.exec(line)
+    if (fence) {
+      closeList()
+      const marker = fence[1]
+      const lang = fence[2].trim().split(/\s+/)[0] || null
+      const body: string[] = []
+      i += 1
+      while (i < lines.length && !lines[i].trimStart().startsWith(marker)) {
+        body.push(lines[i])
+        i += 1
+      }
+      i += 1 // consume the closing fence
+      blocks.push({ type: 'code', lang, text: body.join('\n') })
+      continue
+    }
+
+    if (!line.trim()) { closeList(); i += 1; continue }
+
+    if (/^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      closeList()
+      blocks.push({ type: 'rule' })
+      i += 1
+      continue
+    }
+
+    const heading = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(line)
+    if (heading) {
+      closeList()
+      // Drop OKF heading attributes ({#key updated=…}) — they're metadata, and
+      // the Files view shows them in the raw tab.
+      const content = heading[2].replace(/\{[^}]*\}\s*$/, '').trim()
+      blocks.push({ type: 'heading', level: heading[1].length, content: parseInline(content) })
+      i += 1
+      continue
+    }
+
+    // Table: a header row followed by a divider row.
+    if (line.includes('|') && i + 1 < lines.length && isTableDivider(lines[i + 1])) {
+      closeList()
+      const head = splitRow(line).map(parseInline)
+      i += 2
+      const rows: Inline[][][] = []
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+        rows.push(splitRow(lines[i]).map(parseInline))
+        i += 1
+      }
+      blocks.push({ type: 'table', head, rows })
+      continue
+    }
+
+    const quote = /^\s{0,3}>\s?(.*)$/.exec(line)
+    if (quote) {
+      closeList()
+      const body: string[] = [quote[1]]
+      i += 1
+      while (i < lines.length) {
+        const next = /^\s{0,3}>\s?(.*)$/.exec(lines[i])
+        if (!next) break
+        body.push(next[1])
+        i += 1
+      }
+      blocks.push({ type: 'quote', content: parseInline(body.join(' ')) })
+      continue
+    }
+
+    const task = /^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/.exec(line)
+    if (task) {
+      pushItem(false, { content: parseInline(task[2]), task: true, checked: task[1].toLowerCase() === 'x' })
+      i += 1
+      continue
+    }
+
+    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line)
+    if (bullet) {
+      pushItem(false, { content: parseInline(bullet[1]), task: false, checked: false })
+      i += 1
+      continue
+    }
+
+    const ordered = /^\s*\d+[.)]\s+(.*)$/.exec(line)
+    if (ordered) {
+      pushItem(true, { content: parseInline(ordered[1]), task: false, checked: false })
+      i += 1
+      continue
+    }
+
+    // Paragraph: consume until a blank line or the start of another block.
+    closeList()
+    const para: string[] = [line]
+    i += 1
+    while (i < lines.length && lines[i].trim() && !/^\s{0,3}(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|```|~~~|-{3,}\s*$)/.test(lines[i])) {
+      para.push(lines[i])
+      i += 1
+    }
+    blocks.push({ type: 'paragraph', content: parseInline(para.join(' ')) })
+  }
+
+  closeList()
+  return blocks
+}

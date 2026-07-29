@@ -31,6 +31,7 @@ const state = {
   mode: "canvas",
   files: null,
   openFilePath: null,
+  openFileModified: null,
   editor: null,
   dirty: false,
   fview: "split",
@@ -98,8 +99,25 @@ async function refreshGraphData() {
   applyGraph(await fetchJSON("/api/graph"), { relayout: false });
 }
 
+// Sources are read by a background index, so the first graph can be partial
+// (`indexing: true`). Poll until it settles instead of leaving the workbench
+// showing a half-empty cascade.
+let indexPoll = null;
+function pollWhileIndexing(graph) {
+  if (!graph?.indexing) {
+    if (indexPoll) { clearTimeout(indexPoll); indexPoll = null; }
+    return;
+  }
+  if (indexPoll) return;
+  indexPoll = setTimeout(async () => {
+    indexPoll = null;
+    try { await refreshGraphData(); } catch { /* transient — the next load retries */ }
+  }, 700);
+}
+
 function applyGraph(graph, { relayout }) {
   state.graph = graph;
+  pollWhileIndexing(graph);
 
   // Assign a color per layer by precedence rank (highest level first).
   const byPrecedence = [...graph.sources].sort((a, b) => b.level - a.level);
@@ -1020,6 +1038,7 @@ async function openFile(apiPath) {
   }
 
   state.openFilePath = apiPath;
+  state.openFileModified = data.modified ?? null;
   renderFileTree();
   fx.empty.hidden = true;
   fx.head.hidden = false;
@@ -1142,7 +1161,11 @@ async function saveFile() {
   const text = state.editor.getValue();
   fx.save.disabled = true;
   try {
-    await fetchJSON("/api/file", { method: "PUT", body: JSON.stringify({ path: state.openFilePath, text }) });
+    const saved = await fetchJSON("/api/file", {
+      method: "PUT",
+      body: JSON.stringify({ path: state.openFilePath, text, modified: state.openFileModified }),
+    });
+    state.openFileModified = saved.modified ?? state.openFileModified;
   } catch (err) {
     toast(`Save failed: ${err.message}`);
     fx.save.disabled = false;

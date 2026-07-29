@@ -27,8 +27,8 @@ interface CliResult {
 declare global {
   interface Window {
     __CC_DESKTOP?: {
-      /** Per-launch bearer token the local engine service requires on /api/*. */
-      token: string
+      /** Fetch the per-launch engine bearer through the desktop's trusted IPC gate. */
+      getApiToken: () => Promise<string>
       /** Desktop app version. Update UX is owned by the app's native updater. */
       version: string
       /** Initial auth snapshot; subscribe through __CC_AUTH for live state. */

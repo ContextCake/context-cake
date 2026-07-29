@@ -6,6 +6,7 @@ const TITLES: Record<ViewId, [string, string]> = {
   triage: ['Review queue', 'Decide what becomes shared knowledge. S stores, R keeps review, D discards.'],
   conflicts: ['Resolver', 'Compare layer values and lock the effective read.'],
   concepts: ['Resolved knowledge', 'Browse concepts, sections, and provenance across the cascade.'],
+  files: ['Context files', 'Read and edit the files behind each source, as Markdown or raw text.'],
 }
 
 /** Content-column header: a mobile menu button, the view title, search, and

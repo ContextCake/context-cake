@@ -117,7 +117,9 @@ disk merge section-for-section instead of splitting into parallel sections.
 
 Concept ids are repo-qualified — `acme/payments/docs/runbook` — so several repos
 can be layered without colliding. Section dates come from each file's last commit
-rather than the repo's last push, so staleness is per document.
+rather than the repo's last push, so staleness is per document. An explicit OKF
+section date still wins; an OKF frontmatter date fills otherwise-undated sections
+before the commit date is used.
 
 `paths` accepts `*` (within one path segment), `?`, and `**` (spanning segments).
 Setting it replaces the defaults rather than adding to them. Only `.md`, `.mdx`,
@@ -128,6 +130,13 @@ limited, or the token lacks access, the layer warns on stderr and the remaining
 layers still resolve. Add a `cache` block — a search sweeps every concept in
 every layer, and the cache is what keeps that inside your API rate limit.
 
+GitHub may truncate very large recursive tree responses. ContextCake refuses to
+index that partial response as if it were complete; it serves the last complete
+cached index when available, or resolves without that layer until a complete tree
+can be read. The source Sync action clears its TTL and immediately refreshes this
+remote index while preserving the separate clone-and-pull behavior of local Git
+sources.
+
 #### Credentials
 
 The manifest never holds a token. `auth` may only *name* one:
@@ -136,9 +145,10 @@ The manifest never holds a token. `auth` may only *name* one:
   Keychain and injects the secret at build time. The engine never opens a keychain.
 - `{"tokenEnv": "NAME"}` — for CLI and CI runs, read from that environment variable.
 
-Any other shape is rejected outright, so a raw credential cannot sit in a manifest
-by accident. A repository you can read without a token needs no `auth` at all; an
-alias with nothing injected reads anonymously rather than failing.
+The object form must contain exactly the one `tokenEnv` field. Extra fields and
+every other shape are rejected outright, so a raw credential cannot hide beside
+an otherwise-valid reference. A repository you can read without a token needs no
+`auth` at all; an alias with nothing injected reads anonymously rather than failing.
 
 ## How paths resolve
 

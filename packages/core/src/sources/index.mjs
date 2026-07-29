@@ -81,7 +81,14 @@ export function resolveToken(layer, tokens = {}) {
     }
     return tokens[auth.slice("keychain:".length)] ?? null;
   }
-  if (typeof auth === "object" && typeof auth.tokenEnv === "string" && auth.tokenEnv) {
+  if (
+    typeof auth === "object" &&
+    !Array.isArray(auth) &&
+    Object.keys(auth).length === 1 &&
+    Object.hasOwn(auth, "tokenEnv") &&
+    typeof auth.tokenEnv === "string" &&
+    auth.tokenEnv
+  ) {
     return process.env[auth.tokenEnv] ?? null;
   }
   throw new Error(

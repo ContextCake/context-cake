@@ -29,6 +29,7 @@ const FILES = {
   "docs/runbook.md": "# Runbook\n\n## Oncall\n\nPage the payments rotation.\n",
   "docs/deep/nested.md": "# Nested\n\n## Detail\n\nStill indexed by docs/**.\n",
   "docs/okf.md": "---\ntype: decision\ntitle: OKF-authored in-repo\nupdated: 2026-05-01\n---\n\n## Engine {#engine updated=2026-04-01}\n\nSingleStore.\n",
+  "docs/okf-undated.md": "---\ntype: decision\ntitle: Undated OKF document\n---\n\n## Engine\n\nPostgres.\n",
   "notes.txt": "Loose text note.\n",
   // Same concept id from two extensions — precedence must not depend on the
   // order GitHub returns the tree in.
@@ -37,7 +38,11 @@ const FILES = {
   "src/index.js": "should never be indexed (not a doc extension)",
   "internal/private.md": "should never be indexed (outside the path globs)",
 };
-const COMMIT_DATES = { "CLAUDE.md": "2026-06-11T09:00:00Z", "docs/runbook.md": "2026-03-02T09:00:00Z" };
+const COMMIT_DATES = {
+  "CLAUDE.md": "2026-06-11T09:00:00Z",
+  "docs/runbook.md": "2026-03-02T09:00:00Z",
+  "docs/okf-undated.md": "2026-02-14T09:00:00Z",
+};
 // Mutable so a test can simulate an upstream edit between index generations.
 let editedDate = null;
 let reverseTree = false;
@@ -150,6 +155,8 @@ grep -q '"updated":"2026-07-20"' <<<"$nested" || fail "empty commit history shou
 okf="$(node "$tmpdir/load.mjs" "$api" acme/payments/docs/okf)"
 grep -q '"title":"OKF-authored in-repo"' <<<"$okf" || fail "OKF frontmatter should be honored" "$okf"
 grep -q '"updated":"2026-04-01"' <<<"$okf" || fail "an OKF updated= attr should win over the commit date" "$okf"
+undated_okf="$(node "$tmpdir/load.mjs" "$api" acme/payments/docs/okf-undated)"
+grep -q '"updated":"2026-02-14"' <<<"$undated_okf" || fail "an undated OKF section should inherit the file commit date" "$undated_okf"
 
 # A commit date belongs to the index generation it was read against. When the
 # index expires and refreshes, an upstream edit has to show through — a date
@@ -219,6 +226,8 @@ console.log(check({ name: "d", auth: { tokenEnv: "CC_TEST_TOKEN" } }, {}));
 console.log(check({ name: "e", auth: rawLooking }, {}));
 console.log(check({ name: "f", auth: { token: "raw" } }, {}));
 console.log(check({ name: "g", auth: "keychain:" }, {}));
+console.log(check({ name: "h", auth: { tokenEnv: "CC_TEST_TOKEN", token: rawLooking } }, {}));
+console.log(check({ name: "i", auth: ["CC_TEST_TOKEN"] }, {}));
 EOF
 auth_out="$(node "$tmpdir/auth.mjs")"
 [ "$(sed -n 1p <<<"$auth_out")" = '"s3cret"' ] || fail "a keychain alias should resolve from injected tokens" "$auth_out"
@@ -228,6 +237,8 @@ auth_out="$(node "$tmpdir/auth.mjs")"
 grep -q '^THROW' <<<"$(sed -n 5p <<<"$auth_out")" || fail "a raw credential in a manifest must be rejected" "$auth_out"
 grep -q '^THROW' <<<"$(sed -n 6p <<<"$auth_out")" || fail "an unrecognized auth object must be rejected" "$auth_out"
 grep -q '^THROW' <<<"$(sed -n 7p <<<"$auth_out")" || fail "an empty keychain alias must be rejected" "$auth_out"
+grep -q '^THROW' <<<"$(sed -n 8p <<<"$auth_out")" || fail "tokenEnv plus an embedded credential must be rejected" "$auth_out"
+grep -q '^THROW' <<<"$(sed -n 9p <<<"$auth_out")" || fail "an auth array must be rejected" "$auth_out"
 
 # The resolved token actually reaches the request as a bearer header.
 node "$tmpdir/load.mjs" "$api" acme/payments/CLAUDE "tok-abc123" > /dev/null
@@ -291,17 +302,17 @@ direct="$(node "$tmpdir/load.mjs" "$api" --list 2>/dev/null)"
 
 set_mode truncated
 trunc="$(node "$tmpdir/load.mjs" "$api" --list 2>"$tmpdir/trunc.log")"
-grep -q 'CLAUDE' <<<"$trunc" || fail "a truncated tree should still index what it returned" "$trunc"
-grep -q 'truncated' "$tmpdir/trunc.log" || fail "a truncated tree should warn" "$(cat "$tmpdir/trunc.log")"
+[ "$trunc" = "[]" ] || fail "a truncated tree must not publish a partial index" "$trunc"
+grep -q 'refusing to index incomplete context' "$tmpdir/trunc.log" || fail "a truncated tree should explain the integrity failure" "$(cat "$tmpdir/trunc.log")"
 
 set_mode nocommits
 fallback="$(node "$tmpdir/load.mjs" "$api" acme/payments/CLAUDE 2>/dev/null)"
 grep -q '"updated":"2026-07-20"' <<<"$fallback" || fail "a forbidden commits call should fall back to pushed_at" "$fallback"
 set_mode ""
 
-# A failed REFRESH must serve the last good index rather than blanking the
-# layer, and must stop retrying (and stop warning) for the cooldown — otherwise
-# a rate limit turns one sweep into one API call per concept.
+# A failed REFRESH (including an incomplete tree) must serve the last good index
+# rather than blanking the layer, and must stop retrying (and stop warning) for
+# the cooldown.
 cat > "$tmpdir/stale.mjs" <<EOF
 import { createGithubSource } from "${sources_dir}/github.mjs";
 const api = process.argv[2];
@@ -312,13 +323,15 @@ const count = (reset) => fetch(api + "/__count" + (reset ? "?reset=1" : "")).the
 const s = createGithubSource({ name: "repo", level: 3, repo: "acme/payments", apiBase: api, indexTtlMs: 0, failureCooldownMs: 60000 });
 const good = await s.listConceptIds();
 if (good.length === 0) throw new Error("expected a populated index before the outage");
-await setMode("forbidden");
+await setMode("truncated");
 await count(true);
 const during = [];
 for (let i = 0; i < 5; i += 1) during.push((await s.listConceptIds()).length);
 if (during.some((n) => n !== good.length)) throw new Error("outage should serve the cached index, got " + JSON.stringify(during));
 const hits = await count(true);
-if (hits > 1) throw new Error("cooldown should cap retries during an outage, got " + hits + " requests");
+// One truncated refresh reaches repo metadata and the tree. The cooldown must
+// prevent the remaining reads from starting another refresh attempt.
+if (hits > 2) throw new Error("cooldown should cap retries during an outage, got " + hits + " requests");
 // sync() is the user-facing escape hatch: it clears the cooldown and retries.
 await setMode("");
 s.sync();
@@ -365,7 +378,53 @@ EOF
 slug_out="$(node "$tmpdir/slug.mjs")"
 if grep -q 'ACCEPTED' <<<"$slug_out"; then fail "every malformed repo slug must be rejected" "$slug_out"; fi
 
-# --- 8. Cache wrapper: TTL memoization, and sync() reaching the adapter -------
+# --- 8. Service Sync: remote sources refresh instead of entering clone flow ---
+
+cat > "$tmpdir/service-sync.mjs" <<EOF
+import fs from "node:fs";
+import http from "node:http";
+import { createEngineService } from "${repo_root}/packages/core/src/service.mjs";
+
+const [apiBase, manifestPath] = process.argv.slice(2);
+fs.writeFileSync(manifestPath, JSON.stringify({ layers: [{
+  name: "repo",
+  level: 3,
+  source: "github",
+  repo: "acme/payments",
+  apiBase,
+  cache: { ttlSeconds: 600 },
+}] }));
+
+const service = createEngineService({ manifestPath });
+const server = http.createServer(async (req, res) => {
+  if (await service.handleRequest(req, res)) return;
+  res.writeHead(404).end();
+});
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const base = "http://127.0.0.1:" + server.address().port;
+
+try {
+  const warm = await fetch(base + "/api/graph");
+  if (!warm.ok) throw new Error("failed to prime service: " + warm.status);
+  await fetch(apiBase + "/__count?reset=1");
+  const response = await fetch(base + "/api/sources/sync?name=repo", { method: "POST" });
+  const body = await response.json();
+  if (!response.ok) throw new Error("remote Sync failed: " + JSON.stringify(body));
+  if (!body.lastSynced || Number.isNaN(Date.parse(body.lastSynced))) {
+    throw new Error("remote Sync did not surface lastSynced: " + JSON.stringify(body));
+  }
+  const requests = await fetch(apiBase + "/__count").then((r) => r.json()).then((j) => j.requests);
+  if (requests < 2) throw new Error("remote Sync did not refresh the GitHub index (requests=" + requests + ")");
+  console.log("SERVICE-SYNC-OK");
+} finally {
+  service.close();
+  await new Promise((resolve) => server.close(resolve));
+}
+EOF
+service_sync_out="$(node "$tmpdir/service-sync.mjs" "$api" "$tmpdir/service-manifest.json")"
+grep -q 'SERVICE-SYNC-OK' <<<"$service_sync_out" || fail "service Sync should refresh a remote github source" "$service_sync_out"
+
+# --- 9. Cache wrapper: TTL memoization, and sync() reaching the adapter -------
 
 cat > "$tmpdir/cache.mjs" <<EOF
 import { createGithubSource } from "${sources_dir}/github.mjs";

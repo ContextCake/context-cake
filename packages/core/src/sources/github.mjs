@@ -138,7 +138,11 @@ export function createGithubSource({
     const tree = await api(`/repos/${slug}/git/trees/${encodeURIComponent(branch)}`, { search: { recursive: "1" } });
     if (!tree) throw new Error(`ref "${branch}" not found in ${slug}`);
     if (tree.truncated) {
-      console.error(`[github source "${name}"] ${slug} tree listing was truncated by the API — narrow "paths" to index the whole layer`);
+      // `paths` filters locally after this response, so narrowing selectors
+      // cannot recover entries GitHub omitted. Never publish a partial index as
+      // complete: loadIndex will retain the last complete generation, or the
+      // source will degrade to an empty result when none exists yet.
+      throw new Error(`GitHub API returned a truncated tree for ${slug}; refusing to index incomplete context`);
     }
     const entries = new Map();
     for (const node of tree.tree ?? []) {

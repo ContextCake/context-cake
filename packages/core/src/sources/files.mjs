@@ -58,7 +58,21 @@ function parseFile(filePath, ext) {
 // mtime) so a GitHub-hosted CLAUDE.md and a local one resolve identically.
 export function parseDocument({ content, stem, updated, ext = ".md" }) {
   if (ext === ".txt") return parsePlainText(content, stem, updated);
-  if (hasFrontmatter(content)) return parseConcept(content); // full OKF behavior, untouched
+  if (hasFrontmatter(content)) {
+    const parsed = parseConcept(content);
+    // Explicit per-section dates remain authoritative. Otherwise an OKF-level
+    // date wins, then the adapter's document date (mtime or remote commit).
+    // Without this fallback, structured remote docs silently lose the
+    // per-document staleness metadata that plain documents receive.
+    const fallback = parsed.frontmatter.updated ?? updated;
+    return {
+      ...parsed,
+      sections: parsed.sections.map((section) => ({
+        ...section,
+        updated: section.updated ?? fallback,
+      })),
+    };
+  }
   return parsePlainMarkdown(content, stem, updated);
 }
 

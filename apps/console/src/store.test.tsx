@@ -130,6 +130,38 @@ describe('store load state', () => {
     expect(probe().dataset.indexing).toBe('')
   })
 
+  it('retries a stumble mid-index instead of leaving the banner running forever', async () => {
+    mocks.graph.mockResolvedValue(graphPayload(['personal']))
+    mocks.resolveAll
+      .mockResolvedValueOnce({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+
+    expect(probe().dataset.count).toBe('1')
+    expect(probe().dataset.concepts).toBe('false')
+  })
+
+  it('stops claiming to index after repeated failures rather than spinning', async () => {
+    mocks.graph
+      .mockResolvedValueOnce(graphPayload(['personal']))
+      .mockRejectedValue(new Error('server went away'))
+    mocks.resolveAll.mockResolvedValueOnce({
+      concepts: [], errors: [], indexing: true, indexingSources: ['personal'],
+    })
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    expect(probe().dataset.indexing).toBe('personal')
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+
+    // The banner must not outlive the polling that would clear it.
+    expect(probe().dataset.indexing).toBe('')
+    expect(probe().dataset.concepts).toBe('false')
+  })
+
   it('does not treat an empty mid-index pass as a fatal error', async () => {
     mocks.graph.mockResolvedValue(graphPayload(['personal']))
     // Zero concepts AND errors, but indexing is still running: not a failure.

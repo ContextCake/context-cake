@@ -1,92 +1,142 @@
 import { describe, expect, it } from 'vitest'
-import { renderMarkdown } from './markdown'
+import { parseMarkdown, parseInline, safeUrl, type Inline } from './markdown'
 
-describe('renderMarkdown security', () => {
-  // The renderer is escape-first: a document is untrusted input, and the only
-  // tags in the output are ones the renderer writes itself.
-  it('renders raw HTML as text instead of markup', () => {
-    const out = renderMarkdown('<script>alert(1)</script>')
-    expect(out).not.toContain('<script>')
-    expect(out).toContain('&lt;script&gt;')
+/** Flatten an inline tree to its visible text, for concise assertions. */
+function textOf(nodes: Inline[]): string {
+  return nodes.map((n) => {
+    switch (n.type) {
+      case 'text': return n.value
+      case 'code': return n.value
+      case 'wikilink': return n.value
+      case 'image': return n.alt
+      default: return 'children' in n ? textOf(n.children) : ''
+    }
+  }).join('')
+}
+
+describe('URL filtering', () => {
+  // The parser emits data, so injection is impossible by construction; a
+  // javascript: href would still be dangerous inside a real anchor, so URLs
+  // are the one thing filtered here.
+  it('rejects javascript: and data: URLs', () => {
+    expect(safeUrl('javascript:alert(1)')).toBeNull()
+    expect(safeUrl('JaVaScRiPt:alert(1)')).toBeNull()
+    expect(safeUrl('data:text/html;base64,PHNjcmlwdD4=')).toBeNull()
+    expect(safeUrl('vbscript:msgbox')).toBeNull()
   })
 
-  it('neutralizes an inline event-handler attribute', () => {
-    const out = renderMarkdown('<img src=x onerror="alert(1)">')
-    expect(out).not.toMatch(/<img[^>]*onerror/i)
-    expect(out).toContain('&lt;img')
+  it('allows ordinary navigational URLs', () => {
+    expect(safeUrl('https://example.com')).toBe('https://example.com')
+    expect(safeUrl('mailto:x@y.z')).toBe('mailto:x@y.z')
+    expect(safeUrl('./notes.md')).toBe('./notes.md')
+    expect(safeUrl('#anchor')).toBe('#anchor')
   })
 
-  it('refuses javascript: links, keeping the text visible', () => {
-    const out = renderMarkdown('[click me](javascript:alert(1))')
-    expect(out).not.toContain('href="javascript')
-    expect(out).toContain('click me')
+  it('keeps a rejected link visible as text rather than dropping content', () => {
+    const nodes = parseInline('[click me](javascript:alert(1))')
+    expect(nodes.every((n) => n.type !== 'link')).toBe(true)
+    expect(textOf(nodes)).toContain('click me')
   })
 
-  it('refuses data: URLs in images', () => {
-    const out = renderMarkdown('![x](data:text/html;base64,PHNjcmlwdD4=)')
-    expect(out).not.toContain('<img')
-  })
-
-  it('allows ordinary http(s), mailto and relative links', () => {
-    expect(renderMarkdown('[a](https://example.com)')).toContain('href="https://example.com"')
-    expect(renderMarkdown('[a](mailto:x@y.z)')).toContain('href="mailto:x@y.z"')
-    expect(renderMarkdown('[a](./notes.md)')).toContain('href="./notes.md"')
-  })
-
-  it('adds rel=noopener to outbound links', () => {
-    expect(renderMarkdown('[a](https://example.com)')).toContain('rel="noopener noreferrer"')
-  })
-
-  it('does not treat markup inside a code span or fence as markup', () => {
-    expect(renderMarkdown('`<b>x</b>`')).toContain('<code>&lt;b&gt;x&lt;/b&gt;</code>')
-    const fenced = renderMarkdown('```html\n<script>bad()</script>\n```')
-    expect(fenced).toContain('<pre><code class="language-html">')
-    expect(fenced).toContain('&lt;script&gt;')
-    expect(fenced).not.toContain('<script>')
+  it('keeps a rejected image visible as text', () => {
+    const nodes = parseInline('![alt](data:text/html,x)')
+    expect(nodes.every((n) => n.type !== 'image')).toBe(true)
   })
 })
 
-describe('renderMarkdown formatting', () => {
-  it('renders headings, dropping OKF heading attributes', () => {
-    expect(renderMarkdown('## Engine {#engine updated=2026-04-01}')).toBe('<h2>Engine</h2>')
+describe('parseInline', () => {
+  it('treats raw HTML as ordinary text, never markup', () => {
+    const nodes = parseInline('<script>alert(1)</script>')
+    expect(nodes).toEqual([{ type: 'text', value: '<script>alert(1)</script>' }])
   })
 
-  it('renders emphasis, strong and strikethrough', () => {
-    expect(renderMarkdown('**bold** and *italic* and ~~gone~~'))
-      .toContain('<strong>bold</strong>')
-    expect(renderMarkdown('*italic*')).toContain('<em>italic</em>')
-    expect(renderMarkdown('~~gone~~')).toContain('<del>gone</del>')
+  it('parses code spans without re-scanning their contents', () => {
+    expect(parseInline('`<b>x</b>`')).toEqual([{ type: 'code', value: '<b>x</b>' }])
+    // Markup inside a code span stays literal.
+    expect(parseInline('`**not bold**`')).toEqual([{ type: 'code', value: '**not bold**' }])
   })
 
-  it('renders bullet, numbered and task lists', () => {
-    expect(renderMarkdown('- one\n- two')).toBe('<ul>\n<li>one</li>\n<li>two</li>\n</ul>')
-    expect(renderMarkdown('1. one')).toContain('<ol>')
-    const task = renderMarkdown('- [x] done\n- [ ] todo')
-    expect(task).toContain('checked')
-    expect(task).toContain('todo')
+  it('does not confuse literal text with an internal placeholder', () => {
+    // The previous string-based renderer used ` CODE0 ` markers, which a
+    // document could collide with. There are no placeholders now.
+    const nodes = parseInline('`x` and the CODE0 constant')
+    expect(textOf(nodes)).toBe('x and the CODE0 constant')
   })
 
-  it('renders tables inside a horizontally scrollable wrapper', () => {
-    const out = renderMarkdown('| a | b |\n| --- | --- |\n| 1 | 2 |')
-    expect(out).toContain('cc-md-tablewrap')
-    expect(out).toContain('<th>a</th>')
-    expect(out).toContain('<td>2</td>')
+  it('parses emphasis, strong and strikethrough', () => {
+    expect(parseInline('**bold**')).toEqual([{ type: 'strong', children: [{ type: 'text', value: 'bold' }] }])
+    expect(parseInline('*italic*')).toEqual([{ type: 'em', children: [{ type: 'text', value: 'italic' }] }])
+    expect(parseInline('~~gone~~')).toEqual([{ type: 'del', children: [{ type: 'text', value: 'gone' }] }])
   })
 
-  it('renders blockquotes and horizontal rules', () => {
-    expect(renderMarkdown('> quoted')).toBe('<blockquote>quoted</blockquote>')
-    expect(renderMarkdown('---')).toBe('<hr />')
+  it('parses nested inline markup without re-scanning from the start', () => {
+    // Regression: the scanner regex was module-level and global, so a
+    // recursive call (emphasis/link contents) reset its lastIndex and the
+    // outer loop restarted forever. This input hangs on that bug.
+    const nodes = parseInline('**bold with *nested* emphasis** and [a **link**](https://example.com)')
+    expect(textOf(nodes)).toBe('bold with nested emphasis and a link')
+    expect(nodes.some((n) => n.type === 'link')).toBe(true)
   })
 
-  it('renders OKF wiki links as marks, not broken text', () => {
-    expect(renderMarkdown('See [[decisions/primary-db]]')).toContain('cc-md-wikilink')
+  it('parses links and OKF wiki links', () => {
+    const [link] = parseInline('[a](https://example.com)')
+    expect(link).toMatchObject({ type: 'link', href: 'https://example.com' })
+    expect(parseInline('[[decisions/primary-db]]')).toEqual([{ type: 'wikilink', value: 'decisions/primary-db' }])
+  })
+})
+
+describe('parseMarkdown', () => {
+  it('parses headings and drops OKF heading attributes', () => {
+    expect(parseMarkdown('## Engine {#engine updated=2026-04-01}')).toEqual([
+      { type: 'heading', level: 2, content: [{ type: 'text', value: 'Engine' }] },
+    ])
+  })
+
+  it('captures fenced code verbatim, including markup', () => {
+    const [block] = parseMarkdown('```html\n<script>bad()</script>\n```')
+    expect(block).toEqual({ type: 'code', lang: 'html', text: '<script>bad()</script>' })
+  })
+
+  it('parses bullet, ordered and task lists', () => {
+    const [bullets] = parseMarkdown('- one\n- two')
+    expect(bullets).toMatchObject({ type: 'list', ordered: false })
+    expect(parseMarkdown('1. one')[0]).toMatchObject({ type: 'list', ordered: true })
+    const [tasks] = parseMarkdown('- [x] done\n- [ ] todo')
+    expect(tasks).toMatchObject({
+      type: 'list',
+      items: [{ task: true, checked: true }, { task: true, checked: false }],
+    })
+  })
+
+  it('parses tables into head and rows', () => {
+    const [table] = parseMarkdown('| a | b |\n| --- | --- |\n| 1 | 2 |')
+    expect(table).toMatchObject({ type: 'table' })
+    if (table.type !== 'table') throw new Error('expected a table')
+    expect(table.head.map(textOf)).toEqual(['a', 'b'])
+    expect(table.rows[0].map(textOf)).toEqual(['1', '2'])
+  })
+
+  it('parses quotes and rules', () => {
+    expect(parseMarkdown('> quoted')[0]).toMatchObject({ type: 'quote' })
+    expect(parseMarkdown('---')).toEqual([{ type: 'rule' }])
   })
 
   it('joins wrapped lines into one paragraph', () => {
-    expect(renderMarkdown('one\ntwo')).toBe('<p>one two</p>')
+    const [para] = parseMarkdown('one\ntwo')
+    expect(para).toMatchObject({ type: 'paragraph' })
+    if (para.type !== 'paragraph') throw new Error('expected a paragraph')
+    expect(textOf(para.content)).toBe('one two')
   })
 
-  it('handles empty input without throwing', () => {
-    expect(renderMarkdown('')).toBe('')
+  it('handles empty input', () => {
+    expect(parseMarkdown('')).toEqual([])
+  })
+
+  it('parses a long table divider quickly (no catastrophic backtracking)', () => {
+    // The obvious divider regex backtracks polynomially on input like this.
+    const line = `| ${'-'.repeat(4000)}`
+    const started = Date.now()
+    parseMarkdown(`| a |\n${line}\n`)
+    expect(Date.now() - started).toBeLessThan(500)
   })
 })

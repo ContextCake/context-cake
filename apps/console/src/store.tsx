@@ -168,6 +168,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let failures = 0
+    const MAX_POLL_FAILURES = 3
 
     const pass = async (first: boolean) => {
       try {
@@ -202,13 +204,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         setSelConflict((prev) => prev || derivedConflicts[0]?.id || '')
         setConceptsLoading(Boolean(indexing))
+        failures = 0
         if (indexing) timer = setTimeout(() => void pass(false), 900)
       } catch (e) {
         if (cancelled) return
         // A failure on a background refresh must not blow away a working page.
-        if (first) setError(e instanceof LiveDataError ? e : new LiveDataError('bad-shape', e instanceof Error ? e.message : String(e)))
-        setLoading(false)
+        if (first) {
+          setError(e instanceof LiveDataError ? e : new LiveDataError('bad-shape', e instanceof Error ? e.message : String(e)))
+          setLoading(false)
+          setConceptsLoading(false)
+          return
+        }
+        // Retry a stumble mid-index with backoff. Giving up silently here would
+        // leave the "Indexing…" banner running forever with nothing refreshing
+        // it, which reads as a hang — the exact impression to avoid.
+        failures += 1
+        if (failures <= MAX_POLL_FAILURES) {
+          timer = setTimeout(() => void pass(false), 900 * failures)
+          return
+        }
         setConceptsLoading(false)
+        setIndexingSources([]) // stop claiming work is still in flight
       }
     }
 

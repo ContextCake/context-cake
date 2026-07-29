@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { apiFetch } from '../api'
-import { renderMarkdown } from '../markdown'
+import { Markdown } from '../components/Markdown'
 import { useStore } from '../store'
 import type { FileContent, LayerFile, LayerFiles } from '../types'
 
@@ -136,11 +136,6 @@ export function Files() {
     return () => window.removeEventListener('keydown', onKey)
   }, [save])
 
-  const rendered = useMemo(
-    () => (file?.markdown ? renderMarkdown(tab === 'rendered' ? draft : '') : ''),
-    [file?.markdown, draft, tab],
-  )
-
   if (!live) {
     return <Empty title="Files are a live-mode view" detail="Open ContextCake with your own sources to browse and edit the files behind each layer. The demo uses a build-time snapshot with no files on disk." />
   }
@@ -259,7 +254,9 @@ export function Files() {
                   detail={file.reason ?? 'This file type is stored alongside your notes but is not text ContextCake can edit.'}
                 />
               ) : tab === 'rendered' && file.markdown ? (
-                <div className="cc-md" style={css('padding:20px 24px; max-width:74ch;')} dangerouslySetInnerHTML={{ __html: rendered }} />
+                <div style={css('padding:20px 24px; max-width:74ch;')}>
+                  <Markdown source={draft} className="cc-md" />
+                </div>
               ) : (
                 <textarea
                   ref={editorRef}

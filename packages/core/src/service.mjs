@@ -228,6 +228,9 @@ export function createEngineService({
     cache = next;
     deferClose(prev);
     pruneIndexes(next.keys);
+    // Deferred: syncWatchers calls openSources() itself, and cache is now set,
+    // so this returns immediately rather than recursing.
+    queueMicrotask(() => { try { syncWatchers(); } catch { /* watching is best effort */ } });
     return next;
   }
 
@@ -244,6 +247,7 @@ export function createEngineService({
 
   function close() {
     closed = true;
+    closeWatchers();
     const prev = cache;
     cache = null;
     indexes = new Map();
@@ -276,13 +280,15 @@ export function createEngineService({
     return { ...open, entries };
   }
 
-  function startIndex(source, key, settings) {
+  // `previousSnap` keeps the last good answer readable while a re-index runs,
+  // so a file edit refreshes the cascade without the UI blinking to empty.
+  function startIndex(source, key, settings, previousSnap = null) {
     const entry = {
       status: "indexing",
       phase: "queued",
       loaded: 0,
       total: null,
-      snap: null,
+      snap: previousSnap,
       error: null,
       startedAt: Date.now(),
       finishedAt: null,
@@ -331,6 +337,82 @@ export function createEngineService({
     if (!Number.isFinite(raw) || raw <= 0) return 0;
     const { settings } = openSources();
     return Math.min(raw, settings.sourceBudgetMs);
+  }
+
+  /**
+   * Re-read one layer's sources because its content changed on disk.
+   *
+   * The index is a snapshot, so without this a saved edit would never reach
+   * /api/graph or /api/resolve-all: the manifest is untouched, so the index
+   * key is unchanged and the stale entry would be reused forever. Serving the
+   * previous snapshot meanwhile keeps reads answering during the re-read.
+   *
+   * `layerName` null re-indexes every layer (a section write can touch several).
+   */
+  function invalidateIndex(layerName = null) {
+    if (closed) return;
+    let open;
+    try { open = openSources(); } catch { return; } // manifest unreadable — nothing to refresh
+    open.sources.forEach((source, i) => {
+      if (layerName !== null && source.name !== layerName) return;
+      const key = open.keys[i];
+      const previous = indexes.get(key);
+      indexes.set(key, startIndex(source, key, open.settings, previous?.snap ?? null));
+    });
+  }
+
+  // Disk-backed layers can also change from outside the app — someone edits a
+  // note in Obsidian or pulls a repo. Watch each layer root and re-index on
+  // change, debounced so a burst of writes costs one pass. Best effort by
+  // design: recursive watching is supported on macOS and Windows but not
+  // Linux, where only top-level changes are seen. Every write through this
+  // service invalidates explicitly (above), so the watcher is a convenience,
+  // never the only path to freshness.
+  const watchers = new Map(); // root -> { watcher, timer }
+  const WATCH_DEBOUNCE_MS = 250;
+
+  function syncWatchers() {
+    const roots = new Map(); // root -> layer name
+    for (const [name, { root }] of layerRootMap(openSources().manifest, MANIFEST_DIR)) {
+      roots.set(root, name);
+    }
+    for (const [root, state] of watchers) {
+      if (roots.has(root)) continue;
+      clearTimeout(state.timer);
+      try { state.watcher.close(); } catch { /* already gone */ }
+      watchers.delete(root);
+    }
+    for (const [root, name] of roots) {
+      if (watchers.has(root)) continue;
+      let watcher;
+      try {
+        watcher = fs.watch(root, { recursive: true, persistent: false }, () => onChange(root, name));
+      } catch {
+        try {
+          watcher = fs.watch(root, { persistent: false }, () => onChange(root, name));
+        } catch {
+          continue; // unwatchable (missing, permissions, descriptor limits) — reads still work
+        }
+      }
+      watcher.on("error", () => {});
+      watchers.set(root, { watcher, timer: null });
+    }
+  }
+
+  function onChange(root, layerName) {
+    const state = watchers.get(root);
+    if (!state) return;
+    clearTimeout(state.timer);
+    state.timer = setTimeout(() => invalidateIndex(layerName), WATCH_DEBOUNCE_MS);
+    state.timer.unref?.();
+  }
+
+  function closeWatchers() {
+    for (const [, state] of watchers) {
+      clearTimeout(state.timer);
+      try { state.watcher.close(); } catch { /* already gone */ }
+    }
+    watchers.clear();
   }
 
   function indexProgress(entry) {
@@ -390,7 +472,9 @@ export function createEngineService({
         if (req.method === "PUT" || req.method === "POST") {
           if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
           const out = await writeFileApi(await readBody(req), fileRoots());
-          reload(); // the edited file is layer content — re-index so reads see it
+          // The edited file IS layer content, and the manifest did not change,
+          // so the index would otherwise keep serving the pre-edit snapshot.
+          invalidateIndex(out.layer ?? null);
           json(res, 200, out);
           return true;
         }
@@ -401,7 +485,7 @@ export function createEngineService({
       if (p === "/api/section" && (req.method === "PUT" || req.method === "POST")) {
         if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
         const out = await writeSectionApi(await readBody(req), fileRoots());
-        reload();
+        invalidateIndex(); // a section write can touch several layers at once
         json(res, 200, out);
         return true;
       }

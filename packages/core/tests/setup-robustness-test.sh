@@ -207,6 +207,25 @@ code 404 "$(C -X PUT -H 'content-type: application/json' -d '{"path":"notes/bran
 code 403 "$(C "$BASE/api/file?path=notes/../../escape.md")" "traversal out of a layer root blocked"
 code 404 "$(C "$BASE/api/file?path=nosuchlayer/x.md")" "unknown layer rejected"
 
+echo "an edit reaches the indexed reads, not just the live one"
+# The index is a snapshot and the manifest does not change when a file is
+# edited, so without explicit invalidation /api/graph and /api/resolve-all
+# would serve the pre-edit content forever.
+curl -s "$BASE/api/resolve-all?wait=15000" | grep -q 'Ship on Monday' && pass "an in-app edit reaches /api/resolve-all" || fail "in-app edit not indexed"
+# Same file changed underneath the app, as if edited in another editor.
+printf '# Meeting notes\n\n## Decision\n\nShip on Wednesday.\n' > "$TMP/notes/meeting.md"
+for _ in $(seq 1 40); do
+  curl -s "$BASE/api/resolve-all?wait=15000" | grep -q 'Ship on Wednesday' && break
+  sleep 0.1
+done
+curl -s "$BASE/api/resolve-all?wait=15000" | grep -q 'Ship on Wednesday' && pass "an external edit is noticed and re-indexed" || fail "external edit not noticed"
+printf '# Later note\n\n## Body\n\nAdded outside the app.\n' > "$TMP/notes/later.md"
+for _ in $(seq 1 40); do
+  curl -s "$BASE/api/graph?wait=15000" | grep -q 'later' && break
+  sleep 0.1
+done
+curl -s "$BASE/api/graph?wait=15000" | grep -q 'later' && pass "a new file appears without restarting" || fail "new file not picked up"
+
 # ---- host B: responsiveness while indexing a large corpus ---------------------
 mkdir -p "$TMP/big-corpus"
 node -e '
@@ -266,7 +285,11 @@ echo "a second source does not re-index the first"
 # Adding a source rebuilds the manifest; a finished index must survive that or
 # every add would re-read every existing source.
 BEFORE="$(curl -s "$BASE2/api/graph" | JQ 'String(d.sources.find((s) => s.name === "corpus").indexing.elapsedMs)')"
-code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"extra\",\"level\":0,\"path\":\"$TMP/notes\"}" "$BASE2/api/sources")" "add a second source"
+# Its own folder: $TMP/notes is mutated by the freshness assertions above, and
+# sharing it would make this count depend on test ordering.
+mkdir -p "$TMP/extra"
+printf '# Extra\n\n## Body\n\nOne document.\n' > "$TMP/extra/only.md"
+code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"extra\",\"level\":0,\"path\":\"$TMP/extra\"}" "$BASE2/api/sources")" "add a second source"
 G="$(curl -s "$BASE2/api/graph?wait=15000")"
 AFTER="$(JQ 'String(d.sources.find((s) => s.name === "corpus").indexing.elapsedMs)' <<<"$G")"
 [ "$BEFORE" = "$AFTER" ] && pass "the existing corpus index was reused, not rebuilt" || fail "corpus re-indexed on add ($BEFORE -> $AFTER)"

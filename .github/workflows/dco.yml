@@ -1,0 +1,37 @@
+name: DCO
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sign-off:
+    name: sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history: the check compares against the fork point with the base
+          # branch, so both parents of the pull request merge ref must be
+          # reachable.
+          fetch-depth: 0
+
+      - name: Test the check script
+        run: bash .github/scripts/check-dco-test.sh
+
+      - name: Verify sign-off on every commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/check-dco.sh "$BASE_SHA" "$HEAD_SHA"

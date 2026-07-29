@@ -61,6 +61,46 @@ npm --prefix apps/site run build
   manifest.
 - Keep generated files out of Git unless a spec says otherwise.
 
+## Sign Your Work
+
+ContextCake uses the [Developer Certificate of Origin](DCO) (DCO). Signing off
+is how you certify that you wrote the contribution, or otherwise have the right
+to submit it under this project's MIT license. There is no CLA to sign and no
+copyright assignment.
+
+Add the trailer by committing with `-s`:
+
+```bash
+git commit -s -m "fix(core): date sections from git history"
+```
+
+That appends a line matching your Git identity:
+
+```text
+Signed-off-by: Your Name <your@email>
+```
+
+Every commit in a pull request needs one, and it must match that commit's
+author. Use your real name and an address you can be reached at; the sign-off
+becomes a permanent part of the public history.
+
+To sign off work you already committed:
+
+```bash
+git commit --amend --signoff --no-edit   # the most recent commit
+git rebase --signoff main                # every commit on the branch
+git push --force-with-lease
+```
+
+CI enforces this on every pull request. To check a branch before pushing:
+
+```bash
+bash .github/scripts/check-dco.sh main
+```
+
+Merge commits are skipped, as are commits authored by bots — Dependabot cannot
+run `git commit -s`.
+
 ## Validation
 
 Run the smallest relevant checks while developing, then run the broader gates
@@ -68,4 +108,6 @@ before opening a PR. `npm test` starts a local playground server, so it needs a
 local environment where binding to `127.0.0.1` is allowed.
 
 For AI contributors: state which commands you ran, include failures honestly,
-and avoid broad rewrites unrelated to the issue.
+and avoid broad rewrites unrelated to the issue. Agent-assisted commits are
+signed off by the person submitting them — the DCO is a human certification,
+so use the submitter's identity, not the agent's.

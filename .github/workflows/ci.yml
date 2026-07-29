@@ -144,6 +144,12 @@ jobs:
         working-directory: apps/desktop
         run: npm run smoke:bootfail
 
+      # Guards the process split: engine work must never land back on the UI
+      # thread, which is what froze the app during first-run setup.
+      - name: Engine isolation (UI thread stays responsive while indexing)
+        working-directory: apps/desktop
+        run: npm run test:isolation
+
   required:
     name: required
     runs-on: ubuntu-latest

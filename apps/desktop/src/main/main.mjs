@@ -38,6 +38,10 @@ for (const stream of [process.stdout, process.stderr]) {
 function handleFatal(err) {
   if (err && err.code === 'EPIPE') return
   const detail = (err && err.stack) || String(err)
+  // Stop the engine child first. app.exit() below skips before-quit, so
+  // without this its teardown would look like an unexpected exit and report a
+  // second, misleading failure.
+  shutdownEngine()
   // Synchronous write: app.exit() below is abrupt and would race an async
   // console.error, so the diagnostic (and CI's grep for it) could be lost.
   try { fs.writeSync(2, `[contextcake] fatal: ${detail}\n`) } catch { /* stderr gone */ }
@@ -78,6 +82,17 @@ if (app.isPackaged) {
 
 let service = null
 let win = null
+
+/**
+ * Stop the engine process and stop treating its exit as a crash. Every path
+ * that ends the app — before-quit, a fatal error, the smoke check's app.exit —
+ * must go through this, because app.exit() does not fire before-quit.
+ */
+function shutdownEngine() {
+  try { service?.close() } catch { /* already down */ }
+  service = null
+}
+
 let authManager = null
 let settingsSync = null
 let pendingDeepLink = null
@@ -383,7 +398,11 @@ handleTrustedIpc('contextcake:choose-folder', async () => {
 })
 
 async function createWindow() {
-  service ??= await startEngineService()
+  // The engine runs in its own utilityProcess (service-host.mjs). If it dies
+  // after boot the app has no cascade to show and no way to re-point the
+  // already-loaded window at a new port, so an unexpected exit is fatal —
+  // same clean dialog-and-exit as a failed boot.
+  service ??= await startEngineService({ onCrash: handleFatal })
 
   win = new BrowserWindow({
     width: 1360,
@@ -427,29 +446,59 @@ async function createWindow() {
   startManifestSync()
 }
 
+/**
+ * Worst observed delay of a fixed-interval timer on the MAIN process — a
+ * direct read of how blocked the UI thread is. The engine runs in its own
+ * utilityProcess, so even while it reads thousands of documents this should
+ * stay near zero; before that split, indexing work landed right here.
+ */
+function measureMainLoopLag(durationMs, intervalMs = 20) {
+  return new Promise((resolve) => {
+    let worst = 0
+    let previous = Date.now()
+    const ticker = setInterval(() => {
+      const now = Date.now()
+      worst = Math.max(worst, now - previous - intervalMs)
+      previous = now
+    }, intervalMs)
+    setTimeout(() => { clearInterval(ticker); resolve(worst) }, durationMs)
+  })
+}
+
 async function smokeCheck() {
   // CC_SMOKE=1: boot, prove the service answers with the token, exit.
   // Used by CI and agents — no lingering window.
   try {
     // Exercise the wrapper used after a settings pull, not only HTTP reads.
-    service.reload()
-    const res = await fetch(`${service.origin}/api/graph`, {
-      headers: { authorization: `Bearer ${service.token}` },
-    })
+    // It round-trips to the engine process now, so await the acknowledgement.
+    await service.reload()
+    const authHeaders = { authorization: `Bearer ${service.token}` }
+    // The first read starts the engine's background index; measure the main
+    // loop while that work is actually running.
+    const first = await fetch(`${service.origin}/api/graph`, { headers: authHeaders })
+    const graph = await first.json().catch(() => null)
+    const lag = await measureMainLoopLag(1200)
+    const res = await fetch(`${service.origin}/api/graph`, { headers: authHeaders })
     const unauth = await fetch(`${service.origin}/api/graph`)
     // Guard the app-name/CLI agreement: userData must resolve under a dir named
     // "ContextCake" so `contextcake mcp` finds the manifest the app wrote.
     const userDataName = path.basename(app.getPath('userData'))
     const okName = userDataName === 'ContextCake'
     if (res.ok && unauth.status === 401 && okName) {
-      console.log(`SMOKE OK ${service.origin} api=200 unauth=401 userData=${userDataName}`)
+      console.log(
+        `SMOKE OK ${service.origin} api=200 unauth=401 userData=${userDataName}`
+        + ` lag=${lag}ms indexing=${graph?.indexing === true}`,
+      )
+      shutdownEngine()
       app.exit(0)
     } else {
       console.error(`SMOKE FAIL api=${res.status} unauth=${unauth.status} userData=${userDataName}`)
+      shutdownEngine()
       app.exit(1)
     }
   } catch (err) {
     console.error('SMOKE FAIL', err?.message ?? err)
+    shutdownEngine()
     app.exit(1)
   }
 }
@@ -490,6 +539,5 @@ app.on('before-quit', () => {
   clearTimeout(settingsPushTimer)
   if (manifestWatchStarted) fs.unwatchFile(manifestPath())
   authManager?.close()
-  service?.close()
-  service = null
+  shutdownEngine()
 })

@@ -16,6 +16,7 @@ npm run test:navigation
 npm run test:cli-status
 npm run smoke   # headless boot check: service up, token enforced, exits
 npm run smoke:bootfail
+npm run test:isolation   # engine must not block the UI thread (2500-doc corpus)
 npm run icon    # regenerate build/icon.icns + icon-master-1024.png from assets/brand/contextcake-app-icon.svg
 npm run pack    # unpacked .app (fast) — dist/ is gitignored
 npm run dist    # DMG + zip, ad-hoc signed in dev
@@ -27,6 +28,18 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   deps; `packages/core` stays dependency-free. The app imports the engine by
   path (dev: repo-relative; packaged: `process.resourcesPath/engine`) — see
   `src/main/paths.mjs` for the dual resolution.
+- **The engine runs in a utilityProcess, never on the main process**
+  (`src/main/engine-process.mjs`, supervised by `src/main/service-host.mjs`).
+  Folder walks, markdown parsing, the tokenizer and spawned MCP servers must
+  not share the UI thread — that was the "Resolving…" freeze.
+  `npm run test:isolation` fails if that work moves back (400ms main-loop
+  ceiling; measured ~30ms isolated vs ~694ms sharing the loop). The child has
+  no `electron` module: pass it plain paths via argv, and note the bearer
+  token travels UP the message port (argv is visible in `ps`).
+- **Every path that ends the app must stop the engine first** via
+  `shutdownEngine()` in `main.mjs`. `app.exit()` does not fire `before-quit`,
+  so skipping it makes a normal shutdown look like a crash and reports a
+  bogus fatal error.
 - **The renderer is sandboxed** (`contextIsolation`, `sandbox: true`). The only
   bridge is `src/preload.cjs`: `window.__CC_DESKTOP` exposes static launch metadata,
   while `window.__CC_AUTH` exposes the narrow auth/settings IPC surface. Keep both

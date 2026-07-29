@@ -15,7 +15,8 @@ export function createOkfLocalSource({ name, level, root }) {
       const safeId = normalizeConceptId(id);
       const filePath = path.join(root, `${safeId}.md`);
       if (!fs.existsSync(filePath)) return null;
-      return parseConcept(fs.readFileSync(filePath, "utf8"));
+      const parsed = parseConcept(fs.readFileSync(filePath, "utf8"));
+      return withDocumentDate(parsed, fs.statSync(filePath).mtime.toISOString().slice(0, 10));
     },
     async listConceptIds() {
       return walkMarkdown(root).map((filePath) =>
@@ -31,6 +32,20 @@ export function createOkfLocalSource({ name, level, root }) {
 export function parseConcept(content) {
   const { frontmatter, body } = parseFrontmatter(content);
   return { frontmatter, sections: parseSections(body) };
+}
+
+// Fills in section dates the document did not state. Explicit per-section attrs
+// ({updated=}) stay authoritative; otherwise an OKF-level `updated` wins, then
+// the adapter's document date (an mtime here, a commit date for remotes). Every
+// adapter applies this — the same bytes must produce the same staleness metadata
+// no matter which kind of layer read them. Kept out of parseConcept so callers
+// that only want the literal document (promote.mjs, team-activity.mjs) are unaffected.
+export function withDocumentDate(parsed, documentDate) {
+  const fallback = parsed.frontmatter.updated ?? documentDate ?? null;
+  return {
+    ...parsed,
+    sections: parsed.sections.map((section) => ({ ...section, updated: section.updated ?? fallback })),
+  };
 }
 
 function parseSections(body) {

@@ -159,7 +159,9 @@ describe('Files view', () => {
     await act(async () => button('logo.png').click())
 
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/file/raw?path=personal%2Flogo.png')
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:preview')
+    await vi.waitFor(() => {
+      expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:preview')
+    })
     expect(container.querySelector('textarea')).toBeNull()
   })
 

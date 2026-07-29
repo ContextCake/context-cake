@@ -23,7 +23,8 @@ export function Overview() {
     return { id, L, col, nc, conceptCount }
   })
 
-  const statusColor = (s: string) => (s === 'error' ? C.amberStrokeE : s === 'serving' ? C.tealStrokeE : C.blueStroke)
+  const statusColor = (s: string) =>
+    s === 'error' ? C.amberStrokeE : s === 'degraded' ? C.amberStroke : s === 'serving' ? C.tealStrokeE : C.blueStroke
   const kindMap: Record<string, { g: string; l: string }> = {
     mcp: { g: '⇄', l: 'MCP source' }, 'okf-local': { g: '▤', l: 'OKF bundle' },
   }
@@ -99,7 +100,9 @@ export function Overview() {
                     <span title={k.l} style={css(`display:grid; place-items:center; font-family:${MONO}; font-size:13px; color:${C.caption};`)}>{k.g}</span>
                     <div style={{ minWidth: 0 }}>
                       <div style={css(`font-weight:500; font-size:13px; font-family:${MONO}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;`)}>{s.name}</div>
-                      <div style={css('font-size:11px; color:#8A8A82; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;')}>{s.focus}</div>
+                      {/* titled because a degraded/errored focus line carries
+                          the failure detail and this row ellipsizes it */}
+                      <div title={s.focus} style={css('font-size:11px; color:#8A8A82; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;')}>{s.focus}</div>
                     </div>
                     <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:${col.fill}; color:${col.text}; border:1px solid ${col.strokeE}; justify-self:start;`)}>{layerName(s.layer)}</span>
                     <div className="cc-src-cov" style={css('display:flex; align-items:center; gap:8px;')}>

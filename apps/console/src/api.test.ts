@@ -230,6 +230,38 @@ describe('adaptSources', () => {
     expect(team.focus).toBe('ENOENT: no such directory')
   })
 
+  it('maps a degraded source to its own status, not a healthy one', () => {
+    // The row a rate-limited GitHub layer produces: it listed without throwing
+    // (warn-and-continue), so only `status` separates it from an empty repo.
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 20, resolvedTokens: 20, concepts: 2, sources: 1 },
+      sources: [
+        {
+          name: 'repo', level: 3, kind: 'github', conceptCount: 2, tokens: 20, latestUpdated: null,
+          status: 'degraded', error: 'GitHub API 403 on /repos/acme/payments',
+          lastErrorAt: '2026-07-28T10:05:00.000Z', lastSuccessAt: '2026-07-28T09:00:00.000Z',
+        },
+      ],
+      concepts: [],
+    }
+    const [repo] = adaptSources(graph)
+    expect(repo.status).toBe('degraded')
+    expect(repo.focus).toContain('GitHub API 403')
+    expect(repo.focus).toContain('2026-07-28T09:00:00.000Z') // how stale what it serves is
+    expect(repo.coverage).toBe(100) // it is still serving those two concepts
+  })
+
+  it('gives a source contributing nothing an empty coverage bar', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 0, resolvedTokens: 0, concepts: 0, sources: 1 },
+      sources: [
+        { name: 'repo', level: 3, kind: 'github', conceptCount: 0, tokens: 0, latestUpdated: null, status: 'ok', error: null },
+      ],
+      concepts: [],
+    }
+    expect(adaptSources(graph)[0].coverage).toBe(0)
+  })
+
   it('falls back to level-based layer inference for non-canonical source names', () => {
     const graph: GraphSummary = {
       totals: { sourceTokens: 10, resolvedTokens: 10, concepts: 1, sources: 1 },

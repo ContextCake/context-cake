@@ -52,8 +52,16 @@ export interface GraphSource {
   conceptCount: number
   tokens: number
   latestUpdated: string | null
-  status: string // 'ok' | 'error'
+  /**
+   * 'ok' | 'degraded' | 'error'. 'degraded' is a source that listed but whose
+   * adapter reports its last request failed — it is serving cached or partial
+   * content and still resolves, unlike 'error', which contributed nothing.
+   */
+  status: string
   error: string | null
+  /** ISO timestamps from adapters that track health (remote sources); else null. */
+  lastErrorAt?: string | null
+  lastSuccessAt?: string | null
 }
 
 /** A concept index entry in the graph summary (lighter than a full resolve). */

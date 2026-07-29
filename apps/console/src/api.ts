@@ -236,15 +236,24 @@ export function adaptConcept(r: ResolvedConcept): Concept {
 export function adaptSources(g: GraphSummary): Source[] {
   return g.sources.map((s: GraphSource) => {
     const errored = s.status === 'error'
+    // A remote source that can't reach its API doesn't throw — it answers with
+    // nothing. The engine marks that 'degraded'; surfacing it as healthy would
+    // put a green dot over an outage, which is the one thing this row is for.
+    const degraded = s.status === 'degraded'
+    const count = `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'}`
     return {
       name: s.name,
       kind: s.kind === 'mcp' ? 'mcp' : 'okf-local',
       layer: layerOf(s.name, s.level),
-      coverage: errored ? 0 : 100,
+      // A source contributing nothing shouldn't show a full bar, however it
+      // got there — errored, degraded to empty, or genuinely empty.
+      coverage: errored || s.conceptCount === 0 ? 0 : 100,
       focus: errored
         ? (s.error ?? 'unreachable')
-        : `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'} · ${s.kind}`,
-      status: errored ? 'error' : s.kind === 'mcp' ? 'serving' : 'synced',
+        : degraded
+          ? `${count} · ${s.lastSuccessAt ? `as of ${s.lastSuccessAt} · ` : ''}${s.error ?? 'source unreachable'}`
+          : `${count} · ${s.kind}`,
+      status: errored ? 'error' : degraded ? 'degraded' : s.kind === 'mcp' ? 'serving' : 'synced',
     }
   })
 }

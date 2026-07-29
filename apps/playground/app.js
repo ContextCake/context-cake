@@ -1244,15 +1244,31 @@ function renderSourcesTable() {
     b.addEventListener("click", () => removeSource(b.dataset.remove)));
 }
 
+// The tooltip on an unhealthy row. A degraded source is the case where "when
+// did this last work" matters most — the row still shows concepts, and without
+// the timestamp there is no way to tell how old they are.
+function statusDetail(s) {
+  const parts = [s.error ?? "unavailable"];
+  if (s.lastSuccessAt) parts.push(`last succeeded ${s.lastSuccessAt}`);
+  else if (s.status === "degraded") parts.push("no successful read yet");
+  if (s.lastErrorAt) parts.push(`failed ${s.lastErrorAt}`);
+  return parts.join(" · ");
+}
+
 function sourceRow(s, total) {
   const color = state.colors[s.name] ?? "#4a463d";
   const pct = total ? (s.tokens / total) * 100 : 0;
   const loc = s.kind === "github" && s.origin
     ? `<a href="${escapeAttr(s.origin.replace(/\.git$/, ""))}" target="_blank" rel="noopener">${escapeHtml(s.origin.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, ""))}</a>`
     : escapeHtml(s.location ?? "—");
+  // "degraded" is a source that answered but is failing behind the answer —
+  // stale or partial, still in the cascade. Distinct from "error", which
+  // contributed nothing at all.
   const status = s.status === "ok"
     ? `<span class="status status--ok"><i></i>ok</span>`
-    : `<span class="status status--error"><i></i><span class="status__err" title="${escapeAttr(s.error ?? "")}">error</span></span>`;
+    : s.status === "degraded"
+      ? `<span class="status status--warn"><i></i><span class="status__err" title="${escapeAttr(statusDetail(s))}">degraded</span></span>`
+      : `<span class="status status--error"><i></i><span class="status__err" title="${escapeAttr(statusDetail(s))}">error</span></span>`;
   const syncBtn = s.kind === "github"
     ? `<button class="iconbtn" data-sync="${escapeAttr(s.name)}" title="Sync (git pull)" type="button">${ICON_SYNC}</button>` : "";
   return `<tr>

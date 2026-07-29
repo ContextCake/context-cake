@@ -1,13 +1,16 @@
 // GitHub source adapter: turns the markdown a team already keeps in a repo
 // (CLAUDE.md, AGENTS.md, README.md, docs/**, .context/**) into a context layer
-// — no clone, no OKF authoring. Read-only: one recursive git-tree call builds
-// the id index, then raw content plus the file's last commit date per concept.
-// Document parsing is delegated to files.mjs so a repo-hosted doc and a local
-// one produce identical section keys and merge in the cascade.
+// — no clone, no OKF authoring. Read-only: git-tree calls scoped to the
+// configured selectors build the id index, then raw content plus the file's
+// last commit date per concept. Document parsing is delegated to files.mjs so
+// a repo-hosted doc and a local one produce identical section keys and merge
+// in the cascade.
 //
 // Resilience (integrations spec §5): an unreachable, rate-limited, or
 // unauthorized GitHub degrades to a warning and an empty result. It is never a
-// hard failure — the remaining layers still resolve.
+// hard failure — the remaining layers still resolve. Because that degradation
+// is indistinguishable from an empty repo at the read API, health() reports the
+// last swallowed failure out of band for callers that need to tell them apart.
 //
 // Credentials arrive by value from the caller (sources/index.mjs). This module
 // never reads a keychain, an environment variable, or a manifest.
@@ -16,6 +19,7 @@
 //   loadConcept(id) -> { frontmatter, sections } | null
 //   listConceptIds() -> string[]         ids are "<owner>/<repo>/<path minus ext>"
 //   sync() -> invalidates the index      close() -> noop
+//   health() -> { ok, lastError, ... }   diagnostics only; never gates a read
 
 import path from "node:path";
 import { isTraversal } from "./okf-local.mjs";
@@ -48,7 +52,11 @@ export function createGithubSource({
   now = Date.now,
 }) {
   const slug = assertRepoSlug(repo, name);
-  const matchers = (paths.length ? paths : DEFAULT_PATHS).map(globToRegExp);
+  const selectors = paths.length ? paths : DEFAULT_PATHS;
+  const matchers = selectors.map(globToRegExp);
+  // The selectors decide which trees are even requested, not just which entries
+  // survive — see treeScopes.
+  const scopes = treeScopes(selectors);
   const base = String(apiBase).replace(/\/+$/, "");
 
   // The last index that loaded successfully. Deliberately kept past its TTL: if
@@ -59,8 +67,13 @@ export function createGithubSource({
   // start with an empty date memo or an upstream edit would keep reporting its
   // old date for the life of the process.
   let index = null; // { entries: Map<conceptId,{path,ext}>, dates: Map, branch, pushedAt, at }
-  let failure = null; // { at, error } — most recent refresh failure
+  let failure = null; // { at, error } — most recent refresh failure, drives the retry cooldown
   let warnedAt = 0;
+  // Everything above is about staying up; this one is about being honest. Reads
+  // swallow API failures, so "no concepts" covers both an empty repo and an
+  // unreachable one. lastError is the swallowed failure, kept until the next
+  // successful index refresh or an explicit sync(), and reported by health().
+  let lastError = null; // { at, scope: "index" | "content", message } — message is scrubbed
 
   // The token never reaches a log line, and a credential embedded in a custom
   // apiBase (https://user:pass@host) never survives an error message either.
@@ -79,6 +92,12 @@ export function createGithubSource({
 
   function warn(e) {
     warnOnce(`unavailable: ${scrub(e.message)} — resolving without it`);
+  }
+
+  // Scrubbed at the point of record: health() is handed to an HTTP client, and
+  // an error string must not become the one place a token escapes.
+  function recordFailure(e, scope) {
+    lastError = { at: now(), scope, message: scrub(e.message) };
   }
 
   async function api(pathname, { raw = false, search = null } = {}) {
@@ -105,9 +124,9 @@ export function createGithubSource({
     return text;
   }
 
-  // One recursive tree call yields every candidate path, so loadConcept never
-  // has to guess an extension. Memoized with its own TTL: without it a search
-  // sweep (list + load every concept) would re-fetch the tree per concept.
+  // Tree calls yield every candidate path, so loadConcept never has to guess an
+  // extension. Memoized with its own TTL: without it a search sweep (list +
+  // load every concept) would re-fetch the trees per concept.
   //
   // On a failed refresh the previous index is served rather than dropped, and
   // retries pause for the cooldown — a rate-limited repo must not be hit once
@@ -122,45 +141,79 @@ export function createGithubSource({
       index = await fetchIndex();
       failure = null;
       warnedAt = 0;
+      lastError = null;
       return index;
     } catch (e) {
       failure = { at: now(), error: e };
+      recordFailure(e, "index");
       if (!index) throw e;
       warnOnce(`unreachable: ${scrub(e.message)} — serving the index cached ${ageLabel(now() - index.at)} ago`);
       return index;
     }
   }
 
+  // One tree call per scope, in parallel — a scope is a directory the selectors
+  // actually reach into (treeScopes). A scope GitHub doesn't have is a miss,
+  // not a failure: selectors are written for a family of repos ("docs/**" for
+  // every repo in the org), and the ones without a docs/ still index the rest.
+  // Only when NOTHING resolves is it an error, because at that point "empty
+  // layer" and "wrong ref" are the same silence and the user deserves the
+  // question asked out loud.
   async function fetchIndex() {
     const meta = await api(`/repos/${slug}`);
     if (!meta) throw new Error(`repository ${slug} not found (or not visible to this token)`);
     const branch = ref ?? meta.default_branch ?? "HEAD";
-    const tree = await api(`/repos/${slug}/git/trees/${encodeURIComponent(branch)}`, { search: { recursive: "1" } });
-    if (!tree) throw new Error(`ref "${branch}" not found in ${slug}`);
-    if (tree.truncated) {
-      // `paths` filters locally after this response, so narrowing selectors
-      // cannot recover entries GitHub omitted. Never publish a partial index as
-      // complete: loadIndex will retain the last complete generation, or the
-      // source will degrade to an empty result when none exists yet.
-      throw new Error(`GitHub API returned a truncated tree for ${slug}; refusing to index incomplete context`);
+    const trees = await Promise.all(scopes.map((scope) => fetchScope(branch, scope)));
+    if (trees.every((tree) => tree === null)) {
+      throw new Error(`ref "${branch}" not found in ${slug}, or it holds none of the selected paths`);
     }
+
     const entries = new Map();
-    for (const node of tree.tree ?? []) {
-      if (node.type !== "blob") continue;
-      const ext = DOC_EXTENSIONS.find((candidate) => node.path.endsWith(candidate));
-      if (!ext || node.path === ext) continue; // ".md" is an extension, not a document
-      if (Number(node.size) > maxFileBytes) continue;
-      if (!matchers.some((re) => re.test(node.path))) continue;
-      const id = `${slug}/${node.path.slice(0, -ext.length)}`;
-      // a.md and a.txt collapse to the same id. Break the tie by DOC_EXTENSIONS
-      // order, exactly as files.mjs does — otherwise the winner depends on the
-      // order GitHub happened to return the tree in, and the same collision
-      // resolves differently on disk and on GitHub.
-      const held = entries.get(id);
-      if (held && DOC_EXTENSIONS.indexOf(held.ext) <= DOC_EXTENSIONS.indexOf(ext)) continue;
-      entries.set(id, { path: node.path, ext });
-    }
+    scopes.forEach((scope, i) => {
+      // Subtree responses are relative to the subtree, so paths come back
+      // "runbook.md" where the repo (and every concept id) says "docs/runbook.md".
+      const prefix = scope.prefix ? `${scope.prefix}/` : "";
+      for (const node of trees[i]?.tree ?? []) {
+        if (node.type !== "blob") continue;
+        const repoPath = prefix + node.path;
+        const ext = DOC_EXTENSIONS.find((candidate) => repoPath.endsWith(candidate));
+        if (!ext || repoPath === ext) continue; // ".md" is an extension, not a document
+        if (Number(node.size) > maxFileBytes) continue;
+        if (!matchers.some((re) => re.test(repoPath))) continue;
+        const id = `${slug}/${repoPath.slice(0, -ext.length)}`;
+        // a.md and a.txt collapse to the same id. Break the tie by DOC_EXTENSIONS
+        // order, exactly as files.mjs does — otherwise the winner depends on the
+        // order GitHub happened to return the tree in, and the same collision
+        // resolves differently on disk and on GitHub.
+        const held = entries.get(id);
+        if (held && DOC_EXTENSIONS.indexOf(held.ext) <= DOC_EXTENSIONS.indexOf(ext)) continue;
+        entries.set(id, { path: repoPath, ext });
+      }
+    });
     return { entries, dates: new Map(), branch, pushedAt: dateOnly(meta.pushed_at), at: now() };
+  }
+
+  async function fetchScope(branch, scope) {
+    // "{ref}:{dir}" is GitHub's syntax for the tree object at a path — the
+    // whole point of scoping, since it is the request itself that shrinks.
+    const treeRef = scope.prefix
+      ? `${encodeURIComponent(branch)}:${encodePath(scope.prefix)}`
+      : encodeURIComponent(branch);
+    const tree = await api(
+      `/repos/${slug}/git/trees/${treeRef}`,
+      scope.recursive ? { search: { recursive: "1" } } : {},
+    );
+    if (!tree) return null; // this repo doesn't have that directory
+    if (tree.truncated) {
+      // Publishing a partial index as complete would silently hide context, so
+      // this stays a refusal even now that scoping exists: loadIndex retains
+      // the last complete generation, or the source degrades to an empty
+      // result when none exists yet. Naming the scope is what makes it
+      // actionable — the fix is a narrower selector for THAT directory.
+      const where = scope.prefix ? `${slug}:${scope.prefix}` : slug;
+      throw new Error(`GitHub API returned a truncated tree for ${where}; refusing to index incomplete context`);
+    }
+    return tree;
   }
 
   // The section date users actually care about is when the doc last changed,
@@ -188,10 +241,16 @@ export function createGithubSource({
     async loadConcept(id) {
       const repoPath = withinRepo(id, slug);
       if (!repoPath) return null;
+      let generation;
       try {
-        const generation = await loadIndex();
-        const entry = generation.entries.get(`${slug}/${repoPath}`);
-        if (!entry) return null;
+        generation = await loadIndex(); // records its own failure, as scope "index"
+      } catch (e) {
+        warn(e);
+        return null;
+      }
+      const entry = generation.entries.get(`${slug}/${repoPath}`);
+      if (!entry) return null;
+      try {
         const content = await api(`/repos/${slug}/contents/${encodePath(entry.path)}`, {
           raw: true,
           search: { ref: generation.branch },
@@ -205,6 +264,7 @@ export function createGithubSource({
           ext: entry.ext,
         });
       } catch (e) {
+        recordFailure(e, "content"); // the index is fine; this one file isn't readable
         warn(e);
         return null;
       }
@@ -218,13 +278,32 @@ export function createGithubSource({
       }
     },
     lastSynced: null,
+    // What the read path refuses to say. A resolve must never fail on a down
+    // repo, so listConceptIds answers [] whether the repo is empty or GitHub
+    // returned 403 — fine for a resolve, wrong for a user who just clicked
+    // Sync on this one repo and got a green checkmark. health() is that answer,
+    // out of band: a plain snapshot of already-recorded state, no request, no
+    // effect on what a read returns.
+    health() {
+      return {
+        ok: lastError === null,
+        lastError: lastError ? lastError.message : null,
+        lastErrorScope: lastError ? lastError.scope : null, // "index" (repo/tree) | "content" (one file)
+        lastErrorAt: lastError ? new Date(lastError.at).toISOString() : null,
+        lastSuccessAt: index ? new Date(index.at).toISOString() : null,
+        indexedConcepts: index ? index.entries.size : 0,
+      };
+    },
     // Explicit refresh: drop the index, the commit-date memo, and any failure
     // cooldown so the next read re-fetches immediately. The cache wrapper calls
-    // through to this on its own sync().
+    // through to this on its own sync(). lastError goes too, so whatever
+    // health() reports afterwards belongs to this sync and not to an outage the
+    // user has already been told about.
     sync() {
       index = null; // the commit-date memo lives inside it and goes with it
       failure = null;
       warnedAt = 0;
+      lastError = null;
       source.lastSynced = new Date(now()).toISOString();
       return source.lastSynced;
     },
@@ -276,6 +355,67 @@ function ageLabel(ms) {
   if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
   const hours = Math.round(minutes / 60);
   return `${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
+// The selectors, read as a fetch plan instead of a filter.
+//
+// GitHub truncates a recursive tree listing at roughly 100k entries or 7MB and
+// flags it `truncated`. Filtering `paths` locally can't recover what the
+// response omitted, so a repo that big used to be unindexable outright: every
+// refresh asked for the whole tree, got a truncated one, and refused it. The
+// request is what has to shrink.
+//
+// Each selector contributes the directory it can't escape — everything before
+// its first wildcard segment:
+//
+//   "docs/**"    -> { docs, recursive }   one subtree call
+//   "docs/*.md"  -> { docs, recursive }   a superset; the matchers still filter
+//   "CLAUDE.md"  -> { "", flat }          a literal path lives in its parent
+//   "**/*.md"    -> { "", recursive }     no prefix to stand on
+//
+// That last form is the honest fallback: a selector whose first segment is a
+// wildcard means the whole tree, exactly as before. When one is present it
+// subsumes every other scope, so the plan collapses back to a single whole-tree
+// request. The default selectors have no such form — they ask for the root
+// level plus docs/ and .context/, and never see the middle of a monorepo.
+//
+// Exported for tests: this is where a wrong prefix would silently narrow a
+// layer, and from the outside a narrowed index just looks like a smaller repo.
+export function treeScopes(globs) {
+  const scopes = [];
+  for (const glob of globs) {
+    const segments = String(glob).split("/").filter((s) => s.length && s !== ".");
+    const wild = segments.findIndex((s) => s.includes("*") || s.includes("?"));
+    const head = wild === -1 ? segments.slice(0, -1) : segments.slice(0, wild);
+    // A prefix goes into a request path, so it gets the same treatment the repo
+    // slug gets: no path syntax. ".." would be normalized away by the URL
+    // parser and silently retarget the call at a different endpoint. Such a
+    // selector can't match a git path anyway — git has no ".." entries — so it
+    // contributes no scope rather than a rewritten one. When it was the only
+    // selector, nothing resolves and fetchIndex says so.
+    if (head.includes("..")) continue;
+    scopes.push(
+      wild === -1
+        ? { prefix: head.join("/"), recursive: false }
+        : { prefix: head.join("/"), recursive: true },
+    );
+  }
+
+  const recursive = [...new Set(scopes.filter((s) => s.recursive).map((s) => s.prefix))];
+  if (recursive.includes("")) return [{ prefix: "", recursive: true }];
+  // A recursive scope already covers everything below it, so "docs/**" plus
+  // "docs/adr/**" is one call, not two overlapping ones.
+  const roots = recursive.filter((p) => !recursive.some((other) => other !== p && isUnder(p, other)));
+  const flat = [...new Set(scopes.filter((s) => !s.recursive).map((s) => s.prefix))]
+    .filter((p) => !roots.some((root) => p === root || isUnder(p, root)));
+  return [
+    ...roots.map((prefix) => ({ prefix, recursive: true })),
+    ...flat.map((prefix) => ({ prefix, recursive: false })),
+  ];
+}
+
+function isUnder(child, parent) {
+  return parent !== "" && child.startsWith(`${parent}/`);
 }
 
 // Minimal glob: "**" spans whole segments, "*" and "?" stay inside one. Covers

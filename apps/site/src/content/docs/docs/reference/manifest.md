@@ -28,10 +28,15 @@ registry is bookkeeping for rollback; the resolver reads only the explicit layer
 |-------|----------|------------|---------|
 | `name` | yes | all | Layer identifier. Used in provenance (`sourceLayer`, `contributors`) and as the `layer` argument to `read_file`. |
 | `level` | yes | all | Precedence. Higher wins per section. Personal is 3, Team is 2, Company is 0 by convention, but any integer works. |
-| `source` | no | all | `okf-local` (default when omitted), `files`, or `mcp`. |
+| `source` | no | all | `okf-local` (default when omitted), `files`, `github`, or `mcp`. |
 | `path` | for `okf-local` / `files` | `okf-local`, `files` | Directory of the OKF bundle or existing document folder. |
 | `command` | for `mcp` | `mcp` | Executable to spawn as a stdio MCP server. |
 | `args` | for `mcp` | `mcp` | Argument array passed to `command`. |
+| `repo` | for `github` | `github` | `owner/name` of the repository to read. |
+| `ref` | no | `github` | Branch or tag to read. Defaults to the repository's default branch. |
+| `paths` | no | `github` | Glob selectors for which files become concepts. Replaces the defaults when set. |
+| `auth` | no | `github` | A credential *reference* — `"keychain:<alias>"` or `{"tokenEnv": "NAME"}`. Never a token. |
+| `cache` | no | all | `{ "ttlSeconds": N, "dir": "..." }`. Strongly recommended for `github`. |
 
 ## Precedence is by level
 
@@ -89,6 +94,51 @@ have OKF frontmatter keep their full structured behavior.
 ```json
 { "name": "work-notes", "level": 3, "source": "files", "path": "/Users/you/Documents/Obsidian" }
 ```
+
+### `github`
+
+A repository read directly over the GitHub API — no clone, no checkout. The
+markdown your team already keeps in the repo becomes a layer: by default
+`CLAUDE.md`, `AGENTS.md`, `README.md`, `docs/**`, and `.context/**`. Documents
+parse by exactly the same rules as `files`, so a `CLAUDE.md` on GitHub and one on
+disk merge section-for-section instead of splitting into parallel sections.
+
+```json
+{
+  "name": "payments-repo",
+  "level": 3,
+  "source": "github",
+  "repo": "acme/payments",
+  "paths": ["CLAUDE.md", "docs/**"],
+  "auth": "keychain:github",
+  "cache": { "ttlSeconds": 900 }
+}
+```
+
+Concept ids are repo-qualified — `acme/payments/docs/runbook` — so several repos
+can be layered without colliding. Section dates come from each file's last commit
+rather than the repo's last push, so staleness is per document.
+
+`paths` accepts `*` (within one path segment), `?`, and `**` (spanning segments).
+Setting it replaces the defaults rather than adding to them. Only `.md`, `.mdx`,
+and `.txt` files are indexed.
+
+Reads are read-only and degrade rather than fail: if GitHub is unreachable, rate
+limited, or the token lacks access, the layer warns on stderr and the remaining
+layers still resolve. Add a `cache` block — a search sweeps every concept in
+every layer, and the cache is what keeps that inside your API rate limit.
+
+#### Credentials
+
+The manifest never holds a token. `auth` may only *name* one:
+
+- `"keychain:<alias>"` — the desktop app resolves the alias from the macOS
+  Keychain and injects the secret at build time. The engine never opens a keychain.
+- `{"tokenEnv": "NAME"}` — for CLI and CI runs, read from that environment variable.
+
+Any other shape is rejected outright, so a raw credential cannot sit in a manifest
+by accident. A repository you can read without a token needs no `auth` at all; an
+alias with nothing injected reads anonymously rather than failing.
 
 ## How paths resolve
 

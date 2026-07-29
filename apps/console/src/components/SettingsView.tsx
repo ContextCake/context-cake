@@ -3,8 +3,9 @@ import { useThemeMode } from '../theme-mode'
 import { isUpdateCheckEnabled, setUpdateCheckEnabled } from '../update'
 import type { Mode } from '../api'
 import { AccountPanel } from './AccountPanel'
+import { IndexingSettings } from './IndexingSettings'
 
-type SettingsPane = 'general' | 'account'
+type SettingsPane = 'general' | 'indexing' | 'account'
 
 const GearIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
@@ -12,6 +13,10 @@ const GearIcon = () => (
 
 const AccountIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.4" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" /></svg>
+)
+
+const IndexingIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6" /><path d="M4.5 12v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6" /></svg>
 )
 
 export function SettingsView({ appMode, onClose }: { appMode: Mode; onClose: () => void }) {
@@ -48,6 +53,12 @@ export function SettingsView({ appMode, onClose }: { appMode: Mode; onClose: () 
             <GearIcon />
             General
           </button>
+          {appMode === 'live' && (
+            <button type="button" aria-current={pane === 'indexing' ? 'page' : undefined} onClick={() => setPane('indexing')}>
+              <IndexingIcon />
+              Indexing
+            </button>
+          )}
           <button type="button" aria-current={pane === 'account' ? 'page' : undefined} onClick={() => setPane('account')}>
             <AccountIcon />
             Account
@@ -57,7 +68,16 @@ export function SettingsView({ appMode, onClose }: { appMode: Mode; onClose: () 
 
       <main className="cc-settings-content">
         <div className="cc-settings-column">
-          {pane === 'general' ? (
+          {pane === 'indexing' ? (
+            <>
+              <header className="cc-settings-header">
+                <p>Settings</p>
+                <h1>Indexing</h1>
+                <span>Control how much of each source ContextCake reads.</span>
+              </header>
+              <IndexingSettings />
+            </>
+          ) : pane === 'general' ? (
             <>
               <header className="cc-settings-header">
                 <p>Settings</p>

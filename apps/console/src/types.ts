@@ -42,6 +42,16 @@ export interface ResolvedConcept {
   sections: ResolvedSection[]
 }
 
+/** Background-index progress for one source. */
+export interface IndexProgress {
+  status: 'indexing' | 'ready' | 'error'
+  /** 'queued' | 'scanning' | 'loading' | 'ready' | 'error' */
+  phase: string
+  loaded: number
+  total: number | null
+  elapsedMs: number
+}
+
 /** A source (layer) row in the graph summary. */
 export interface GraphSource {
   name: string
@@ -52,8 +62,9 @@ export interface GraphSource {
   conceptCount: number
   tokens: number
   latestUpdated: string | null
-  status: string // 'ok' | 'error'
+  status: string // 'ok' | 'indexing' | 'error'
   error: string | null
+  indexing?: IndexProgress
 }
 
 /** A concept index entry in the graph summary (lighter than a full resolve). */
@@ -71,9 +82,63 @@ export interface GraphConcept {
 export interface GraphSummary {
   manifest?: { path: string }
   tokenizer?: string
+  /** True while any source is still being read; the payload is partial. */
+  indexing?: boolean
+  indexingSources?: string[]
   totals: { sourceTokens: number; resolvedTokens: number; concepts: number; sources: number }
   sources: GraphSource[]
   concepts: GraphConcept[]
+}
+
+/** One configurable engine setting — GET /api/settings `catalog`. */
+export interface SettingDef {
+  key: string
+  label: string
+  help: string
+  min: number
+  max: number
+  default: number
+}
+
+/** GET /api/settings. `settings` is effective, `stored` is what the manifest holds. */
+export interface SettingsPayload {
+  settings: Record<string, number>
+  stored: Record<string, number>
+  catalog: SettingDef[]
+}
+
+/** A file inside a layer — GET /api/files. */
+export interface LayerFile {
+  path: string
+  name: string
+  rel: string
+  ext: string
+  kind: string // 'text' | 'image' | 'svg' | 'pdf' | 'binary'
+  markdown: boolean
+}
+
+export interface LayerFiles {
+  layer: string
+  kind: string
+  root: string
+  fileCount: number
+  truncated: boolean
+  files: LayerFile[]
+}
+
+/** GET /api/file — one file's content and metadata. */
+export interface FileContent {
+  path: string
+  layer: string
+  rel: string
+  ext: string
+  kind: string
+  editable: boolean
+  markdown: boolean
+  bytes: number
+  modified: string
+  text?: string
+  reason?: string
 }
 
 /** The shape build-demo-data.mjs emits and DemoSource imports. */

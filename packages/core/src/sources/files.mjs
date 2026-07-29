@@ -13,7 +13,7 @@ import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading, 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
 export const FILES_EXTENSIONS = [".md", ".mdx", ".txt"];
 
-export function createFilesSource({ name, level, root }) {
+export function createFilesSource({ name, level, root, limits = null }) {
   return {
     name,
     level,
@@ -37,7 +37,7 @@ export function createFilesSource({ name, level, root }) {
       return null;
     },
     async listConceptIds() {
-      const files = await walkDocs(root, FILES_EXTENSIONS);
+      const files = await walkDocs(root, FILES_EXTENSIONS, limits);
       const ids = files.map((filePath) =>
         toPosix(path.relative(root, filePath)).replace(/\.(md|mdx|txt)$/, ""),
       );

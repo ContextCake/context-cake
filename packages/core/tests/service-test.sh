@@ -74,11 +74,14 @@ code 401 "$(C -H 'Authorization: Bearer wrong' "$BASE/api/graph")" "read with wr
 code 200 "$(C "${AUTH[@]}" "$BASE/api/graph")" "read with correct Bearer accepted"
 code 200 "$(C -H 'Authorization: Bearer   sekrit' "$BASE/api/graph")" "extra separator whitespace still accepted"
 code 401 "$(C -H 'Authorization: Bearer      ' "$BASE/api/graph")" "all-whitespace token rejected (ReDoS-safe parse)"
-G="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const g=JSON.parse(s);process.stdout.write(`${g.tokenizer}:${g.totals.sources}:${g.totals.sourceTokens>0}`)})')"
+# ?wait= — token totals only exist once the background index has read the
+# source, so a payload assertion has to ask for a settled index.
+G="$(curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const g=JSON.parse(s);process.stdout.write(`${g.tokenizer}:${g.totals.sources}:${g.totals.sourceTokens>0}`)})')"
 [ "$G" = "o200k_base:1:true" ] && pass "graph payload intact behind auth" || fail "graph payload ($G)"
 code 401 "$(C "$BASE/api/resolve?concept=note")" "resolve without header rejected"
 code 200 "$(C "${AUTH[@]}" "$BASE/api/resolve?concept=note")" "resolve with Bearer accepted"
-code 401 "$(C "$BASE/api/files")" "unknown /api/* path still gated without token"
+code 401 "$(C "$BASE/api/host-only")" "unknown /api/* path still gated without token"
+code 401 "$(C "$BASE/api/files")" "layer file API gated without token"
 
 echo "console mount is static UI, not gated data"
 curl -s "$BASE/console/" | grep -q CONSOLE_OK && pass "/console/ serves without auth" || fail "/console/ without auth"
@@ -86,7 +89,9 @@ curl -s "$BASE/console/" | grep -q CONSOLE_OK && pass "/console/ serves without 
 echo "caller fall-through"
 FT="$(curl -s "$BASE/nope")"
 grep -q host-fallthrough <<<"$FT" && pass "unknown path falls through to the host" || fail "fall-through ($FT)"
-FT="$(curl -s "${AUTH[@]}" "$BASE/api/files")"
+# A path the service genuinely doesn't own — /api/files is now a service route
+# (the layer file explorer moved out of the playground into the engine).
+FT="$(curl -s "${AUTH[@]}" "$BASE/api/host-only")"
 grep -q host-fallthrough <<<"$FT" && pass "unclaimed /api/* falls through once authed" || fail "authed /api fall-through ($FT)"
 
 echo "sources CRUD through the service (authed)"

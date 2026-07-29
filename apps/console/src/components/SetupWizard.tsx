@@ -21,23 +21,36 @@ interface AddedLayer {
 // 120s there) — give these mutations more headroom than apiFetch's default.
 const MUTATION_TIMEOUT_MS = 150_000
 
-async function postSource(body: Record<string, unknown>): Promise<{ docCount?: number }> {
+interface AddResult {
+  /** The engine spotted at least one document without indexing the folder. */
+  hasDocuments?: boolean
+  /** False when the quick look stopped early — "none found" is then unproven. */
+  scanComplete?: boolean
+}
+
+async function postSource(body: Record<string, unknown>): Promise<AddResult> {
   const res = await apiFetch('/api/sources', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
   })
-  const data = await res.json().catch(() => ({}) as { error?: string; docCount?: number })
+  const data = await res.json().catch(() => ({}) as { error?: string })
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
-  return data as { docCount?: number }
+  return data as AddResult
 }
 
-/** "…/notes · 12 docs", or an honest nudge when the folder has none yet. */
-function describeFolder(path: string, docCount: number | undefined): string {
-  if (docCount === undefined) return path
-  if (docCount === 0) return `${path} · no documents found yet — add Markdown files and reload`
-  return `${path} · ${docCount} doc${docCount === 1 ? '' : 's'}`
+/**
+ * Adding a source no longer waits for it to be read, so there is no document
+ * count yet — the engine indexes in the background and the app shows progress.
+ * The one thing worth saying here is when a quick look found nothing, which
+ * usually means the wrong folder was picked.
+ */
+function describeFolder(path: string, result: AddResult): string {
+  if (result.hasDocuments === false && result.scanComplete) {
+    return `${path} · no documents found — check this is the right folder`
+  }
+  return `${path} · indexing in the background`
 }
 
 async function syncSource(name: string): Promise<void> {
@@ -288,8 +301,8 @@ export function SetupWizard({
     setPersonalBusy(true)
     setPersonalErr(null)
     try {
-      const { docCount } = await postSource({ kind: personalKind, name: personalName.trim(), level: 3, path: personalPath.trim() })
-      setAdded((prev) => [...prev, { kind: personalKind, name: personalName.trim(), level: 3, detail: describeFolder(personalPath.trim(), docCount) }])
+      const result = await postSource({ kind: personalKind, name: personalName.trim(), level: 3, path: personalPath.trim() })
+      setAdded((prev) => [...prev, { kind: personalKind, name: personalName.trim(), level: 3, detail: describeFolder(personalPath.trim(), result) }])
       goNext()
     } catch (e) {
       setPersonalErr(e instanceof Error ? e.message : String(e))
@@ -304,8 +317,8 @@ export function SetupWizard({
     try {
       if (teamKind === 'local' || teamKind === 'files') {
         if (!teamPath.trim()) { setTeamErr('Provide a folder path.'); setTeamBusy(false); return }
-        const { docCount } = await postSource({ kind: teamKind, name: 'team', level: 2, path: teamPath.trim() })
-        setAdded((prev) => [...prev, { kind: teamKind, name: 'team', level: 2, detail: describeFolder(teamPath.trim(), docCount) }])
+        const result = await postSource({ kind: teamKind, name: 'team', level: 2, path: teamPath.trim() })
+        setAdded((prev) => [...prev, { kind: teamKind, name: 'team', level: 2, detail: describeFolder(teamPath.trim(), result) }])
       } else {
         if (!teamRepo.trim()) { setTeamErr('Provide a repo as owner/name.'); setTeamBusy(false); return }
         await postSource({ kind: 'github', name: 'team', level: 2, repo: teamRepo.trim() })

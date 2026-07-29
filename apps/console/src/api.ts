@@ -39,6 +39,9 @@ export class LiveDataError extends Error {
 export interface ResolveAllResult {
   concepts: ResolvedConcept[]
   errors: { concept: string; error: string }[]
+  /** Sources still being read — the result is partial until this clears. */
+  indexing?: boolean
+  indexingSources?: string[]
 }
 
 export interface DataSource {

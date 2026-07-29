@@ -19,111 +19,31 @@
 // rebuilds the sources — the CRUD routes call it after every mutation.
 
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { buildSources } from "./sources/index.mjs";
-import { walkDocs } from "./sources/okf-local.mjs";
+import { probeDocs } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createMcpSource } from "./sources/mcp.mjs";
 import { resolveConcept } from "./resolver.mjs";
 import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
+import { resolveSettings, walkLimitsFrom, validateSettingsPatch, settingsCatalog } from "./settings.mjs";
+import {
+  assertInsideRoot, guardMutatingRequest, httpError, json, MIME, parseJson, readBody,
+} from "./http-util.mjs";
+import {
+  layerRootMap, listFilesApi, readFileApi, serveRawApi, writeFileApi, writeSectionApi,
+} from "./layer-files.mjs";
+
+// Re-exported so hosts (apps/playground/server.mjs) keep importing the shared
+// HTTP internals from the service, wherever they are actually defined.
+export { assertInsideRoot, guardMutatingRequest, httpError, json, MIME, readBody };
 
 const execFileP = promisify(execFile);
-
-// ---- shared HTTP internals (also used by the playground wrapper) ------------
-
-export const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".woff2": "font/woff2",
-  ".ico": "image/x-icon",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".avif": "image/avif",
-  ".bmp": "image/bmp",
-  ".pdf": "application/pdf",
-};
-
-const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
-
-export function json(res, status, body) {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  res.end(payload);
-}
-
-export function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
-}
-
-export function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.on("data", (c) => { data += c; if (data.length > 5_000_000) reject(httpError(413, "Body too large")); });
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
-  });
-}
-
-/**
- * Guard for state-changing requests, shared by the service routes and the
- * playground's editor endpoints. No-op for non-mutating methods. Returns true
- * if it wrote a 403 (caller must stop), false to proceed.
- */
-export function guardMutatingRequest(req, res) {
-  if (!MUTATING.has(req.method)) return false;
-  // DNS-rebinding defense: a rebound domain can make a remote page's request
-  // look same-origin, so the Host must be a loopback name (we bind 127.0.0.1).
-  const hostname = (req.headers.host || "").replace(/:\d+$/, "");
-  if (!LOCAL_HOSTS.has(hostname)) { json(res, 403, { error: "Untrusted Host header" }); return true; }
-  // CSRF: block cross-origin state-changing requests (add MCP source = command
-  // spawn, git clone, file/section write). Same-origin and non-browser callers
-  // (curl/tests send neither header) are allowed.
-  const site = req.headers["sec-fetch-site"];
-  const origin = req.headers.origin;
-  let blocked = false;
-  if (site !== undefined) blocked = site !== "same-origin" && site !== "none";
-  else if (origin !== undefined) {
-    try { blocked = new URL(origin).host !== req.headers.host; } catch { blocked = true; }
-  }
-  if (blocked) { json(res, 403, { error: "Cross-origin request blocked" }); return true; }
-  return false;
-}
-
-/**
- * The canonical containment guard, shared by every path that serves or writes
- * files (the playground's layer file APIs, the /console/ static mount). Two
- * checks: lexical prefix on the resolved path, then symlink defense — the
- * lexical check trusts the path text, but a symlink inside the root could
- * still point outside it, so compare realpaths (of the existing target, or of
- * the parent dir for a not-yet-existing file). Returns the realpath'd target.
- */
-export function assertInsideRoot(abs, root, message) {
-  if (abs !== root && !abs.startsWith(root + path.sep)) throw httpError(403, message);
-  const realRoot = safeRealpath(root);
-  const realAbs = fs.existsSync(abs)
-    ? safeRealpath(abs)
-    : path.join(safeRealpath(path.dirname(abs)), path.basename(abs));
-  if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) throw httpError(403, message);
-  return realAbs;
-}
-
-function safeRealpath(p) {
-  try { return fs.realpathSync.native(p); } catch { return path.resolve(p); }
-}
 
 // Constant-time bearer comparison (hash both sides so lengths never diverge).
 // Parsed without a regex on purpose: `/^Bearer\s+(.+)$/` backtracks
@@ -160,29 +80,20 @@ function expandHome(p) {
   return p;
 }
 
-function parseJson(raw) {
-  try { return JSON.parse(raw || "{}"); } catch { throw httpError(400, "Body must be JSON"); }
-}
-
-// ---- bounded source snapshots ----------------------------------------------
+// ---- background source indexing ---------------------------------------------
 //
-// The read API used to load every concept once for token counting and then
-// again inside resolveConcept — every file read and parsed twice per request,
-// with no upper bound on how long one source could take. A snapshot reads each
-// source exactly once per request; resolution then runs over the in-memory
-// snapshot. Yields keep the event loop breathing during long loads (the
-// desktop app runs this in the Electron main process), and a per-source time
-// budget turns a stalled source (dead network mount, wedged MCP server) into
-// an errored source instead of a hung request.
+// Reading a source is the expensive part of the cascade: list every concept,
+// parse it, count its tokens. Doing that inside a request meant the first
+// /api/graph after setup could take minutes on a big folder, and the app sat
+// on a "Resolving…" screen for all of it.
+//
+// Instead each source is indexed by a background job and every request answers
+// from whatever is ready *right now*. A source that is still working reports
+// its phase and progress; a source that fails or exceeds its budget reports an
+// error. Nothing a request does can block on a slow source — the UI comes up
+// immediately and fills in as sources land.
 
-const SOURCE_BUDGET_MS = envMs("CONTEXTCAKE_SOURCE_BUDGET_MS", 30_000);
 const YIELD_EVERY = 25;
-
-function envMs(name, fallback) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
 const yieldNow = () => new Promise((resolve) => setImmediate(resolve));
 
 export function withDeadline(promise, ms, message) {
@@ -196,8 +107,13 @@ export function withDeadline(promise, ms, message) {
   });
 }
 
-async function snapshotSource(source) {
+// Reads one source end to end, reporting progress into `entry` as it goes so
+// the UI can show "Indexed 340 of 1,500" instead of an opaque spinner.
+async function snapshotSource(source, entry) {
+  entry.phase = "scanning";
   const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds() : [];
+  entry.phase = "loading";
+  entry.total = ids.length;
   const concepts = new Map();
   let tokens = 0;
   let n = 0;
@@ -205,26 +121,13 @@ async function snapshotSource(source) {
     const concept = await source.loadConcept(id);
     concepts.set(id, concept);
     tokens += countTokens(conceptText(concept));
-    if (++n % YIELD_EVERY === 0) await yieldNow();
+    if (++n % YIELD_EVERY === 0) {
+      entry.loaded = n;
+      await yieldNow();
+    }
   }
+  entry.loaded = n;
   return { ids, concepts, tokens };
-}
-
-function snapshotSources(sources) {
-  return Promise.all(
-    sources.map(async (source) => {
-      try {
-        const snap = await withDeadline(
-          snapshotSource(source),
-          SOURCE_BUDGET_MS,
-          `Source "${source.name}" took longer than ${Math.round(SOURCE_BUDGET_MS / 1000)}s to respond`,
-        );
-        return { source, snap, status: "ok", error: null };
-      } catch (err) {
-        return { source, snap: null, status: "error", error: err.message };
-      }
-    }),
-  );
 }
 
 // A source view resolveConcept can consume that serves from the snapshot —
@@ -236,6 +139,8 @@ function snapshotView(source, snap) {
     async loadConcept(id) { return snap.concepts.get(id) ?? null; },
   };
 }
+
+const sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
 
 // ---- the service -------------------------------------------------------------
 
@@ -264,7 +169,10 @@ export function createEngineService({
   // until the manifest changes, reload(), or close().
 
   let closed = false;
-  let cache = null; // { stamp, manifest, sources }
+  let cache = null; // { stamp, manifest, settings, sources, keys }
+  // Background index entries, keyed by the layer's own configuration so that
+  // adding a second source does NOT re-index the first — the common setup flow.
+  let indexes = new Map();
 
   // Pay the tokenizer's one-time init at boot, right after creation, instead
   // of blocking the first /api/graph for ~800ms mid-setup.
@@ -305,10 +213,21 @@ export function createEngineService({
     const stamp = manifestStamp();
     if (cache && cache.stamp === stamp) return cache;
     const manifest = readManifest(); // throws while the manifest is missing/invalid
-    const next = { stamp, manifest, sources: buildSources(manifest, MANIFEST_DIR) };
+    const settings = resolveSettings(manifest);
+    const layers = manifest.layers ?? [];
+    const next = {
+      stamp,
+      manifest,
+      settings,
+      sources: buildSources(manifest, MANIFEST_DIR),
+      // Identity of a source's *configuration* (plus the settings that govern
+      // indexing), so an unrelated manifest edit doesn't discard a finished index.
+      keys: layers.map((l) => `${JSON.stringify(l)}::${JSON.stringify(settings)}`),
+    };
     const prev = cache;
     cache = next;
     deferClose(prev);
+    pruneIndexes(next.keys);
     return next;
   }
 
@@ -327,7 +246,101 @@ export function createEngineService({
     closed = true;
     const prev = cache;
     cache = null;
+    indexes = new Map();
     if (prev) for (const s of prev.sources) s.close?.();
+  }
+
+  // ---- background index ------------------------------------------------------
+
+  function pruneIndexes(keys) {
+    const live = new Set(keys);
+    for (const key of [...indexes.keys()]) if (!live.has(key)) indexes.delete(key);
+  }
+
+  /**
+   * The current index entry for every source, starting background jobs for any
+   * source that doesn't have one yet. Never awaits a job — callers read
+   * whatever state exists right now.
+   */
+  function ensureIndexes() {
+    const open = openSources();
+    const entries = open.sources.map((source, i) => {
+      const key = open.keys[i];
+      let entry = indexes.get(key);
+      if (!entry) {
+        entry = startIndex(source, key, open.settings);
+        indexes.set(key, entry);
+      }
+      return { source, key, entry, layer: (open.manifest.layers ?? [])[i] ?? {} };
+    });
+    return { ...open, entries };
+  }
+
+  function startIndex(source, key, settings) {
+    const entry = {
+      status: "indexing",
+      phase: "queued",
+      loaded: 0,
+      total: null,
+      snap: null,
+      error: null,
+      startedAt: Date.now(),
+      finishedAt: null,
+    };
+    const budget = settings.sourceBudgetMs;
+    withDeadline(
+      snapshotSource(source, entry),
+      budget,
+      `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
+    )
+      .then((snap) => {
+        if (indexes.get(key) !== entry) return; // superseded by a newer config
+        entry.snap = snap;
+        entry.status = "ready";
+        entry.phase = "ready";
+      })
+      .catch((err) => {
+        if (indexes.get(key) !== entry) return;
+        entry.status = "error";
+        entry.phase = "error";
+        entry.error = err.message;
+      })
+      .finally(() => { entry.finishedAt = Date.now(); });
+    return entry;
+  }
+
+  /**
+   * Wait (up to `ms`) for every source to finish indexing. Requests never call
+   * this by default — it exists for clients that explicitly ask (`?wait=`) and
+   * for tests that need a settled graph to assert on.
+   */
+  async function awaitIndexes(ms) {
+    const deadline = Date.now() + Math.max(0, ms);
+    for (;;) {
+      const { entries } = ensureIndexes();
+      if (!entries.some((e) => e.entry.status === "indexing")) return;
+      if (Date.now() >= deadline) return;
+      await sleep(25);
+    }
+  }
+
+  // How long a client asked us to wait for indexing before answering. Bounded
+  // by the source budget so `?wait=` can never become a new way to hang.
+  function waitParam(url) {
+    const raw = Number(url.searchParams.get("wait"));
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    const { settings } = openSources();
+    return Math.min(raw, settings.sourceBudgetMs);
+  }
+
+  function indexProgress(entry) {
+    return {
+      status: entry.status,
+      phase: entry.phase,
+      loaded: entry.loaded,
+      total: entry.total,
+      elapsedMs: (entry.finishedAt ?? Date.now()) - entry.startedAt,
+    };
   }
 
   // ---- request dispatch ------------------------------------------------------
@@ -361,9 +374,37 @@ export function createEngineService({
         return true;
       }
 
-      if (p === "/api/graph") { json(res, 200, await buildGraph()); return true; }
+      if (p === "/api/graph") { json(res, 200, await buildGraph(waitParam(url))); return true; }
       if (p === "/api/resolve") { json(res, 200, await resolveOne(url.searchParams.get("concept"))); return true; }
-      if (p === "/api/resolve-all") { json(res, 200, await resolveAllApi()); return true; }
+      if (p === "/api/resolve-all") { json(res, 200, await resolveAllApi(waitParam(url))); return true; }
+      if (p === "/api/settings") {
+        if (req.method === "GET") { json(res, 200, getSettingsApi()); return true; }
+        if (req.method === "PATCH" || req.method === "PUT") {
+          if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
+          json(res, 200, patchSettingsApi(await readBody(req)));
+          return true;
+        }
+      }
+      if (p === "/api/files") { json(res, 200, await listFilesApi(fileRoots(), walkLimits())); return true; }
+      if (p === "/api/file") {
+        if (req.method === "PUT" || req.method === "POST") {
+          if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
+          const out = await writeFileApi(await readBody(req), fileRoots());
+          reload(); // the edited file is layer content — re-index so reads see it
+          json(res, 200, out);
+          return true;
+        }
+        json(res, 200, await readFileApi(url.searchParams.get("path"), fileRoots()));
+        return true;
+      }
+      if (p === "/api/file/raw") { serveRawApi(url.searchParams.get("path"), fileRoots(), res); return true; }
+      if (p === "/api/section" && (req.method === "PUT" || req.method === "POST")) {
+        if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
+        const out = await writeSectionApi(await readBody(req), fileRoots());
+        reload();
+        json(res, 200, out);
+        return true;
+      }
       if (p === "/api/sources" && (req.method === "POST" || req.method === "DELETE" || req.method === "PATCH")) {
         if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
         if (req.method === "POST") { json(res, 200, await addSourceApi(await readBody(req))); return true; }
@@ -387,18 +428,25 @@ export function createEngineService({
 
   // Everything the canvas needs in one shot: the source topology + a concept
   // index annotated with which layers contribute and how many sections conflict.
-  async function buildGraph() {
-    const { manifest, sources } = openSources();
+  async function buildGraph(waitMs = 0) {
+    if (waitMs > 0) await awaitIndexes(waitMs);
+    const { manifest, entries } = ensureIndexes();
     const layerMeta = new Map((manifest.layers ?? []).map((l) => [l.name, l]));
 
-    // Per-source snapshot: one bounded read of every source. A source that
-    // fails or stalls (a down MCP server, a missing clone, an over-sized
-    // folder) is recorded as errored, not fatal.
-    const perSource = await snapshotSources(sources);
+    // Answer from whatever is indexed right now. A source that is still
+    // working reports its progress; one that failed reports why. Neither
+    // blocks this response.
+    const perSource = entries.map(({ source, entry }) => ({
+      source,
+      entry,
+      snap: entry.snap,
+      status: entry.status === "ready" ? "ok" : entry.status,
+      error: entry.error,
+    }));
 
-    // Resolve only over healthy sources so one bad source can't blank the
-    // index — over the snapshots, so nothing is read twice.
-    const healthy = perSource.filter((p) => p.status === "ok").map((p) => snapshotView(p.source, p.snap));
+    // Resolve only over ready sources so one slow or bad source can't blank
+    // the index — over the snapshots, so nothing is read twice.
+    const healthy = perSource.filter((p) => p.snap).map((p) => snapshotView(p.source, p.snap));
     const allIds = [...new Set(perSource.flatMap((p) => p.snap?.ids ?? []))].sort();
 
     const concepts = [];
@@ -428,34 +476,42 @@ export function createEngineService({
       });
     }
 
-    const sourcesOut = sources.map((s) => {
+    const sourcesOut = perSource.map(({ source: s, entry, snap, status, error }) => {
       const meta = layerMeta.get(s.name) ?? {};
       const kind = meta.source ?? "okf-local";
-      const ps = perSource.find((p) => p.source === s);
       return {
         name: s.name,
         level: s.level,
         kind,
         location: kind === "mcp" ? [meta.command, ...(meta.args ?? [])].join(" ") : meta.path,
         origin: meta.origin ?? null, // e.g. a github repo a clone came from
-        conceptCount: ps?.snap?.ids.length ?? 0,
-        tokens: ps?.snap?.tokens ?? 0,
+        conceptCount: snap?.ids.length ?? 0,
+        tokens: snap?.tokens ?? 0,
         latestUpdated: latestPerSource.get(s.name) ?? null,
-        status: ps?.status ?? "error",
-        error: ps?.error ?? null,
+        status,
+        error: error ?? null,
+        indexing: indexProgress(entry),
       };
     });
 
     const sourceTokens = sourcesOut.reduce((n, s) => n + s.tokens, 0);
+    const pending = perSource.filter((p) => p.entry.status === "indexing").map((p) => p.source.name);
     return {
       manifest: { path: MANIFEST },
       tokenizer: TOKENIZER,
+      // True while any source is still being read. Clients render what they
+      // have and poll — this is never a reason to show a blocking spinner.
+      indexing: pending.length > 0,
+      indexingSources: pending,
       totals: { sourceTokens, resolvedTokens, concepts: concepts.length, sources: sourcesOut.length },
       sources: sourcesOut,
       concepts,
     };
   }
 
+  // Single-concept resolve reads live sources (not the index): it touches at
+  // most one file per layer, so it stays fast even mid-index and always
+  // reflects an edit made a moment ago in the file editor.
   async function resolveOne(conceptId) {
     if (!conceptId) throw httpError(400, "Provide ?concept=<id>");
     const { sources } = openSources();
@@ -464,14 +520,15 @@ export function createEngineService({
     return resolved;
   }
 
-  // Resolve every concept in one pass over one set of open sources. The console's
-  // initial load calls this instead of one /api/resolve per concept.
-  // Per-concept failures are reported alongside the successes, never fatal.
-  async function resolveAllApi() {
-    const { sources } = openSources();
-    const perSource = await snapshotSources(sources);
-    const healthy = perSource.filter((p) => p.status === "ok").map((p) => snapshotView(p.source, p.snap));
-    const allIds = [...new Set(perSource.flatMap((p) => p.snap?.ids ?? []))].sort();
+  // Resolve every indexed concept in one pass. The console's initial load calls
+  // this instead of one /api/resolve per concept. Per-concept failures are
+  // reported alongside the successes, never fatal; sources still indexing are
+  // named so the client knows the answer is partial and can poll.
+  async function resolveAllApi(waitMs = 0) {
+    if (waitMs > 0) await awaitIndexes(waitMs);
+    const { entries } = ensureIndexes();
+    const healthy = entries.filter((e) => e.entry.snap).map((e) => snapshotView(e.source, e.entry.snap));
+    const allIds = [...new Set(entries.flatMap((e) => e.entry.snap?.ids ?? []))].sort();
     const concepts = [];
     const errors = [];
     let sinceYield = 0;
@@ -485,7 +542,48 @@ export function createEngineService({
         errors.push({ concept: id, error: err.message });
       }
     }
-    return { concepts, errors };
+    const pending = entries.filter((e) => e.entry.status === "indexing").map((e) => e.source.name);
+    return { concepts, errors, indexing: pending.length > 0, indexingSources: pending };
+  }
+
+  // ---- settings ---------------------------------------------------------------
+
+  function getSettingsApi() {
+    const { manifest, settings } = openSources();
+    return { settings, stored: manifest.settings ?? {}, catalog: settingsCatalog() };
+  }
+
+  function patchSettingsApi(rawBody) {
+    const body = parseJson(rawBody);
+    let clean;
+    try {
+      clean = validateSettingsPatch(body.settings ?? body);
+    } catch (err) {
+      throw httpError(400, err.message);
+    }
+    const manifest = readManifest();
+    const next = { ...(manifest.settings ?? {}) };
+    for (const key of Object.keys(body.settings ?? body)) {
+      if (clean[key] === undefined) delete next[key]; // null = reset to default
+      else next[key] = clean[key];
+    }
+    if (Object.keys(next).length === 0) delete manifest.settings;
+    else manifest.settings = next;
+    writeManifest(manifest);
+    // New limits change how sources are read, so their indexes are stale: the
+    // settings are part of the index key, so reload() rebuilds them.
+    reload();
+    return { ok: true, ...getSettingsApi() };
+  }
+
+  // ---- layer files -------------------------------------------------------------
+
+  function fileRoots() {
+    return layerRootMap(openSources().manifest, MANIFEST_DIR);
+  }
+
+  function walkLimits() {
+    return walkLimitsFrom(openSources().settings);
   }
 
   // ---- source configuration (manifest CRUD + GitHub clone) -------------------
@@ -500,11 +598,11 @@ export function createEngineService({
     const level = Number.isFinite(+b.level) ? +b.level : 1;
 
     let layer;
-    let docCount = null;
+    let folder = null;
     if (b.kind === "local" || b.kind === "files") {
       if (!b.path) throw httpError(400, "Local source needs a path");
       const given = expandHome(String(b.path).trim());
-      docCount = await probeFolder(path.resolve(MANIFEST_DIR, given), b.kind === "files" ? FILES_EXTENSIONS : [".md"]);
+      folder = await probeFolder(path.resolve(MANIFEST_DIR, given), b.kind === "files" ? FILES_EXTENSIONS : [".md"]);
       layer = {
         name,
         level,
@@ -532,7 +630,7 @@ export function createEngineService({
         abs = path.resolve(dir, sub);
         if (abs !== dir && !abs.startsWith(dir + path.sep)) throw httpError(400, "Sub-directory escapes the repository");
       }
-      docCount = await probeFolder(abs, [".md"]);
+      folder = await probeFolder(abs, [".md"]);
       layer = { name, level, path: path.relative(MANIFEST_DIR, abs), origin: url, ref: b.ref || null };
     } else {
       throw httpError(400, `Unknown source kind: ${b.kind}`);
@@ -550,28 +648,30 @@ export function createEngineService({
       }
     }
     writeManifest(manifest);
-    reload();
-    return { ok: true, added: name, ...(docCount !== null ? { docCount } : {}) };
+    reload(); // starts this source's background index
+    return {
+      ok: true,
+      added: name,
+      indexing: true, // counts arrive via /api/graph as the index lands
+      ...(folder ? { hasDocuments: folder.found, scanComplete: folder.complete } : {}),
+    };
   }
 
-  // Add-time folder validation. The wizard used to accept any string here and
-  // let the first resolve discover the problem — as a hang, when the folder
-  // was a home directory or a monorepo checkout. Fail while the user is still
-  // on the form instead: the folder must exist, be a directory, and stay
-  // inside the same walk bounds resolution enforces.
+  // Add-time folder validation, deliberately cheap. Only the two things the
+  // user can fix on the form are errors here: the folder has to exist and be a
+  // folder. Size is NOT checked — a big folder is a normal thing to add, and
+  // making the user wait for a full walk before the app opens is the hang this
+  // whole path exists to avoid. The shallow probe just reports whether any
+  // documents were spotted, so the wizard can warn about an empty folder
+  // without indexing it.
   async function probeFolder(abs, extensions) {
     let st;
-    try { st = fs.statSync(abs); } catch { throw httpError(400, `Folder not found: ${abs}`); }
+    try { st = await fsp.stat(abs); } catch { throw httpError(400, `Folder not found: ${abs}`); }
     if (!st.isDirectory()) throw httpError(400, `Not a folder: ${abs}`);
     try {
-      const files = await withDeadline(
-        walkDocs(abs, extensions),
-        SOURCE_BUDGET_MS,
-        `Indexing this folder took longer than ${Math.round(SOURCE_BUDGET_MS / 1000)}s. Choose a smaller, more specific folder.`,
-      );
-      return files.length;
-    } catch (err) {
-      throw httpError(400, err.message);
+      return await withDeadline(probeDocs(abs, extensions), 5_000, "probe timed out");
+    } catch {
+      return { found: false, scanned: 0, complete: false }; // slow disk — let the background index decide
     }
   }
 

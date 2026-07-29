@@ -6,8 +6,9 @@
 
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { resolveSettings, walkLimitsFrom } from "../settings.mjs";
 
-export function createOkfLocalSource({ name, level, root }) {
+export function createOkfLocalSource({ name, level, root, limits = null }) {
   return {
     name,
     level,
@@ -23,7 +24,7 @@ export function createOkfLocalSource({ name, level, root }) {
       return parseConcept(content);
     },
     async listConceptIds() {
-      const files = await walkDocs(root, [".md"]);
+      const files = await walkDocs(root, [".md"], limits);
       return files.map((filePath) =>
         toPosix(path.relative(root, filePath)).replace(/\.md$/i, ""),
       );
@@ -139,20 +140,43 @@ export function isTraversal(normalized) {
 // fails fast with an actionable message instead of grinding for minutes.
 // Same skip posture as before: dot-entries and node_modules are skipped, and
 // symlinks are never followed (Dirent.isDirectory/isFile are false for them).
+//
+// The caps are user-facing settings (settings.mjs): the manifest's `settings`
+// block wins, the environment is the fallback, and callers that already know
+// the effective settings pass `limits` explicitly.
 
-export const WALK_LIMITS = {
-  maxFiles: envLimit("CONTEXTCAKE_MAX_DOC_FILES", 10_000),
-  maxEntries: envLimit("CONTEXTCAKE_MAX_SCAN_ENTRIES", 150_000),
-};
-
-function envLimit(name, fallback) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+export function defaultWalkLimits() {
+  return walkLimitsFrom(resolveSettings({}));
 }
 
-export async function walkDocs(root, extensions, limits = WALK_LIMITS) {
+/**
+ * Cheap "does this folder hold any documents?" check for the add-source form.
+ * Stops at the first hit and at a small scan ceiling, so it answers in
+ * milliseconds on a normal folder and stays bounded on a huge one. Never
+ * throws on size — being too big is an indexing outcome, not a form error.
+ */
+export async function probeDocs(root, extensions, maxEntries = 4_000) {
+  let scanned = 0;
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let dirents;
+    try { dirents = await fsp.readdir(current, { withFileTypes: true }); } catch { continue; }
+    for (const dirent of dirents) {
+      if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
+      if (++scanned > maxEntries) return { found: false, scanned, complete: false };
+      if (dirent.isDirectory()) stack.push(path.join(current, dirent.name));
+      else if (dirent.isFile() && extensions.some((ext) => dirent.name.endsWith(ext))) {
+        return { found: true, scanned, complete: true };
+      }
+    }
+  }
+  return { found: false, scanned, complete: true };
+}
+
+export async function walkDocs(root, extensions, limits = null) {
   if (!root) return [];
-  const { maxFiles, maxEntries } = { ...WALK_LIMITS, ...limits };
+  const { maxFiles, maxEntries } = { ...defaultWalkLimits(), ...(limits ?? {}) };
   const files = [];
   let scanned = 0;
   const stack = [root];

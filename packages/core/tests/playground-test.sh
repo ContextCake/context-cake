@@ -44,7 +44,7 @@ for _ in $(seq 1 30); do curl -sf "$BASE/api/graph" >/dev/null 2>&1 && break; sl
 C() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
 echo "token accounting"
-TOK="$(curl -s "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const g=JSON.parse(s);process.stdout.write(`${g.tokenizer}:${g.totals.sourceTokens>0}`)})')"
+TOK="$(curl -s "$BASE/api/graph?wait=15000" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const g=JSON.parse(s);process.stdout.write(`${g.tokenizer}:${g.totals.sourceTokens>0}`)})')"
 [ "$TOK" = "o200k_base:true" ] && pass "graph reports o200k tokens" || fail "token accounting ($TOK)"
 
 echo "path + symlink sandbox"
@@ -68,7 +68,9 @@ grep -q 'roll back.' "$TMP/bundle/deploy.md" && pass "next section survived" || 
 grep -q 'a comment' "$TMP/bundle/deploy.md" && fail "fenced comment leaked (boundary bug)" || pass "fenced comment replaced cleanly"
 
 echo "bulk resolve (/api/resolve-all)"
-RA="$(curl -s "$BASE/api/resolve-all" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s);process.stdout.write(`${r.concepts.length}:${r.errors.length}:${r.concepts[0]?.id}`)})')"
+# ?wait= — reads answer from the background index and are partial until it
+# lands, so a completeness assertion has to ask for a settled index.
+RA="$(curl -s "$BASE/api/resolve-all?wait=15000" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s);process.stdout.write(`${r.concepts.length}:${r.errors.length}:${r.concepts[0]?.id}`)})')"
 [ "$RA" = "1:0:deploy" ] && pass "resolve-all returns all concepts in one pass" || fail "resolve-all ($RA)"
 
 echo "console not mounted → friendly notice (default server)"

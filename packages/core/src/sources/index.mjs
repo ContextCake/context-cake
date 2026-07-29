@@ -11,16 +11,20 @@ import { createFilesSource } from "./files.mjs";
 import { createMcpSource } from "./mcp.mjs";
 import { withCache } from "./cache.mjs";
 import { withGitSync } from "./git-sync.mjs";
+import { resolveSettings, walkLimitsFrom } from "../settings.mjs";
 
 export function buildSources(manifest, manifestDir) {
+  // Indexing limits are user settings, so they must reach the adapters that
+  // enforce them — changing the limit in the app and reloading has to matter.
+  const limits = walkLimitsFrom(resolveSettings(manifest));
   return (manifest.layers ?? []).map((layer) => {
     const kind = layer.source ?? "okf-local";
     const base = { name: layer.name, level: Number(layer.level) };
     let source;
     if (kind === "okf-local") {
-      source = createOkfLocalSource({ ...base, root: path.resolve(manifestDir, layer.path) });
+      source = createOkfLocalSource({ ...base, root: path.resolve(manifestDir, layer.path), limits });
     } else if (kind === "files") {
-      source = createFilesSource({ ...base, root: path.resolve(manifestDir, layer.path) });
+      source = createFilesSource({ ...base, root: path.resolve(manifestDir, layer.path), limits });
     } else if (kind === "mcp") {
       source = createMcpSource({
         ...base,

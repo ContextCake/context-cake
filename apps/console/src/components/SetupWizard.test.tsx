@@ -119,9 +119,29 @@ describe('SetupWizard connection handoff', () => {
     expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
   })
 
-  it('shows the indexed document count on the review step', async () => {
+  it('warns on the review step when a folder holds no documents', async () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
-      JSON.stringify(url === '/api/sources' && init?.method === 'POST' ? { ok: true, added: 'personal', docCount: 3 } : {}),
+      JSON.stringify(url === '/api/sources' && init?.method === 'POST'
+        ? { ok: true, added: 'personal', indexing: true, hasDocuments: false, scanComplete: true }
+        : {}),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ))
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/empty-vault')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+    await act(async () => button('Skip for now').click())
+
+    expect(container.textContent).toContain('no documents found')
+  })
+
+  it('says indexing continues in the background rather than blocking setup', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
+      JSON.stringify(url === '/api/sources' && init?.method === 'POST'
+        ? { ok: true, added: 'personal', indexing: true, hasDocuments: true, scanComplete: true }
+        : { concepts: [{ id: 'systems/app' }] }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     ))
     await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
@@ -132,7 +152,7 @@ describe('SetupWizard connection handoff', () => {
     await act(async () => button('Skip').click())
     await act(async () => button('Skip for now').click())
 
-    expect(container.textContent).toContain('/tmp/work-vault · 3 docs')
+    expect(container.textContent).toContain('indexing in the background')
   })
 
   it('keeps advanced MCP fields hidden until the user chooses to connect a server', async () => {

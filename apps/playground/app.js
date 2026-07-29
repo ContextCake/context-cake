@@ -98,8 +98,25 @@ async function refreshGraphData() {
   applyGraph(await fetchJSON("/api/graph"), { relayout: false });
 }
 
+// Sources are read by a background index, so the first graph can be partial
+// (`indexing: true`). Poll until it settles instead of leaving the workbench
+// showing a half-empty cascade.
+let indexPoll = null;
+function pollWhileIndexing(graph) {
+  if (!graph?.indexing) {
+    if (indexPoll) { clearTimeout(indexPoll); indexPoll = null; }
+    return;
+  }
+  if (indexPoll) return;
+  indexPoll = setTimeout(async () => {
+    indexPoll = null;
+    try { await refreshGraphData(); } catch { /* transient — the next load retries */ }
+  }, 700);
+}
+
 function applyGraph(graph, { relayout }) {
   state.graph = graph;
+  pollWhileIndexing(graph);
 
   // Assign a color per layer by precedence rank (highest level first).
   const byPrecedence = [...graph.sources].sort((a, b) => b.level - a.level);

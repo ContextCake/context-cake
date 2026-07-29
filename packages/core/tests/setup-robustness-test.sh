@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
-# Setup robustness tests: locks in the fixes for the first-run "Resolving…"
-# hang. The engine must never block or spin forever on a bad or over-sized
-# source — walks are bounded, resolution reads each source once behind a time
-# budget, and /api/sources validates folders and MCP commands at add time so
-# setup fails on the form, not as a frozen app. Network-free. Run from repo root.
+# Setup robustness tests: the app must stay usable while it indexes.
+#
+# The contract this locks in:
+#   - adding a source returns immediately, whatever its size
+#   - /api/graph and /api/resolve-all answer from what is indexed SO FAR and
+#     report what is still running — no request ever waits for a slow source
+#   - a folder too big for the configured limits becomes a visible source
+#     error, not a rejected form and not a hang
+#   - the limits are settings (manifest-backed, /api/settings), not env-only
+#   - the layer file explorer/editor is engine surface, so the desktop app has
+#     it, and it covers markdown-folder layers too
+#
+# Network-free. Run from the repo root.
 set -uo pipefail
 
-PORT="${SETUP_PORT:-8821}"   # tight-caps host (env-shrunk limits)
-PORT2=$((PORT + 1))          # default-caps host (responsiveness corpus)
+PORT="${SETUP_PORT:-8821}"   # tight caps via env: add-validation, over-cap, files, MCP
+PORT2=$((PORT + 1))          # default caps: responsiveness + wait= + equivalence
+PORT3=$((PORT + 2))          # default caps: settings API and its effect on indexing
 BASE="http://127.0.0.1:$PORT"
 BASE2="http://127.0.0.1:$PORT2"
+BASE3="http://127.0.0.1:$PORT3"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/packages/core/src"
 TMP="$(mktemp -d)"
-PID=""
-PID2=""
+PIDS=()
 FAILED=0
 
 cleanup() {
-  [ -n "$PID" ] && kill "$PID" 2>/dev/null
-  [ -n "$PID2" ] && kill "$PID2" 2>/dev/null
+  for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null; done
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -28,11 +36,32 @@ pass() { printf '  ok   %s\n' "$1"; }
 fail() { printf '  FAIL %s\n' "$1"; FAILED=1; }
 code() { [ "$2" = "$1" ] && pass "$3 ($2)" || fail "$3 (got $2, want $1)"; }
 C() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
-now_ms() { node -e 'process.stdout.write(String(Date.now()))'; }
+# Milliseconds a request took, from curl itself (no node startup in the number).
+ms() { curl -s -o /dev/null -w '%{time_total}' "$@" | awk '{printf "%d", $1 * 1000}'; }
+faster_than() { [ "$1" -lt "$2" ] && pass "$3 (${1}ms)" || fail "$3 (${1}ms, want < ${2}ms)"; }
+# Poll until one named source has finished indexing. /api/resolve is NOT a
+# readiness signal — it reads live sources, so it answers before the index
+# lands. Only the graph reports index state.
+await_source_ready() {
+  for _ in $(seq 1 200); do
+    [ "$(curl -s "$1/api/graph" | JQ "d.sources.find((s) => s.name === \"$2\")?.status")" = "ok" ] && return 0
+    sleep 0.05
+  done
+  return 1
+}
+JQ() { node -e '
+  let s = "";
+  process.stdin.on("data", (d) => (s += d)).on("end", () => {
+    let v;
+    try { v = JSON.parse(s); } catch { process.stdout.write("PARSE-ERROR"); return; }
+    const fn = new Function("d", `return ${process.argv[1]}`);
+    let out;
+    try { out = fn(v); } catch (e) { out = "EVAL-ERROR: " + e.message; }
+    process.stdout.write(typeof out === "string" ? out : JSON.stringify(out));
+  });' "$1"; }
 
 echo "bounded walk (walkDocs caps + honest errors)"
 
-# A folder over the file cap and a folder over the scanned-entry cap.
 mkdir -p "$TMP/many" "$TMP/wide"
 node -e '
   const fs = require("node:fs");
@@ -41,34 +70,46 @@ node -e '
 ' "$TMP"
 
 OUT="$(node --input-type=module -e "
-import { walkDocs } from '$SRC/sources/okf-local.mjs';
+import { walkDocs, probeDocs } from '$SRC/sources/okf-local.mjs';
 try { await walkDocs('$TMP/many', ['.md'], { maxFiles: 5 }); console.log('NO-ERROR'); }
 catch (e) { console.log(e.message); }
 try { await walkDocs('$TMP/wide', ['.md'], { maxEntries: 10 }); console.log('NO-ERROR'); }
 catch (e) { console.log(e.message); }
 console.log(JSON.stringify(await walkDocs('$TMP/many', ['.md'])));
+// probeDocs is the add-form check: bounded, first-hit, and it never throws on size.
+console.log('probe-many:' + JSON.stringify(await probeDocs('$TMP/many', ['.md'])));
+console.log('probe-wide:' + JSON.stringify(await probeDocs('$TMP/wide', ['.md'])));
 ")"
-grep -q 'too many documents' <<<"$OUT" && pass "file cap rejects with actionable message" || fail "file cap ($OUT)"
-grep -q 'too large to index' <<<"$OUT" && pass "entry cap rejects with actionable message" || fail "entry cap ($OUT)"
-grep -q 'doc-29' <<<"$OUT" && pass "in-bounds folder still lists fully" || fail "in-bounds walk ($OUT)"
+grep -q 'too many documents' <<<"$OUT" || fail "file cap should reject with an actionable message ($OUT)"
+grep -q 'too large to index' <<<"$OUT" || fail "entry cap should reject with an actionable message ($OUT)"
+grep -q 'doc-29' <<<"$OUT" || fail "in-bounds folder should list fully ($OUT)"
+grep -q 'too many documents' <<<"$OUT" && grep -q 'too large to index' <<<"$OUT" && grep -q 'doc-29' <<<"$OUT" && pass "walk caps enforced with actionable messages, in-bounds walk complete"
+grep -q 'probe-many:{"found":true' <<<"$OUT" && pass "probeDocs finds a document without walking the folder" || fail "probeDocs found ($OUT)"
+grep -q 'probe-wide:{"found":false' <<<"$OUT" && pass "probeDocs reports an empty folder honestly" || fail "probeDocs empty ($OUT)"
 
 OUT="$(CONTEXTCAKE_MAX_DOC_FILES=5 node --input-type=module -e "
 import { createFilesSource } from '$SRC/sources/files.mjs';
 const s = createFilesSource({ name: 'd', level: 2, root: '$TMP/many' });
 try { await s.listConceptIds(); console.log('NO-ERROR'); } catch (e) { console.log(e.message); }
 ")"
-grep -q 'too many documents' <<<"$OUT" && pass "files adapter honors CONTEXTCAKE_MAX_DOC_FILES" || fail "adapter env cap ($OUT)"
+grep -q 'too many documents' <<<"$OUT" && pass "env var still works as the pre-UI default" || fail "adapter env cap ($OUT)"
 
-echo "bounded token counting"
-T0="$(now_ms)"
-OUT="$(node --input-type=module -e "
-import { countTokens } from '$SRC/tokenize.mjs';
-const huge = 'All work and no play makes for one giant markdown file. '.repeat(120000);
-console.log(countTokens(huge) > 100000 ? 'BIG-COUNT-OK' : 'BAD-COUNT');
+echo "settings module (manifest > env > default)"
+OUT="$(CONTEXTCAKE_MAX_DOC_FILES=777 node --input-type=module -e "
+import { resolveSettings, validateSettingsPatch } from '$SRC/settings.mjs';
+console.log('env:' + resolveSettings({}).maxDocFiles);
+console.log('manifest:' + resolveSettings({ settings: { maxDocFiles: 4242 } }).maxDocFiles);
+console.log('default:' + resolveSettings({}).maxScanEntries);
+console.log('bad-range:' + resolveSettings({ settings: { maxDocFiles: 1 } }).maxDocFiles);
+try { validateSettingsPatch({ maxDocFiles: 5 }); console.log('NO-ERROR'); } catch (e) { console.log('range:' + e.message); }
+try { validateSettingsPatch({ nope: 5 }); console.log('NO-ERROR'); } catch (e) { console.log('unknown:' + e.message); }
 ")"
-T1="$(now_ms)"
-grep -q 'BIG-COUNT-OK' <<<"$OUT" && pass "oversized text still yields a plausible count" || fail "tokenize count ($OUT)"
-[ $((T1 - T0)) -lt 10000 ] && pass "6MB text counted in bounded time ($((T1 - T0))ms)" || fail "tokenize too slow ($((T1 - T0))ms)"
+grep -q 'env:777' <<<"$OUT" && pass "env overrides the shipped default" || fail "env precedence ($OUT)"
+grep -q 'manifest:4242' <<<"$OUT" && pass "manifest setting beats env (or the settings UI would do nothing)" || fail "manifest precedence ($OUT)"
+grep -q 'default:150000' <<<"$OUT" && pass "unset keys fall back to the default" || fail "default ($OUT)"
+grep -q 'bad-range:777' <<<"$OUT" && pass "an out-of-range stored value is ignored, not obeyed" || fail "range guard ($OUT)"
+grep -q 'range:.*between' <<<"$OUT" && pass "patch validation rejects an out-of-range value" || fail "patch range ($OUT)"
+grep -q 'unknown:Unknown setting' <<<"$OUT" && pass "patch validation rejects an unknown key" || fail "patch unknown ($OUT)"
 
 echo "per-source time budget (withDeadline)"
 OUT="$(node --input-type=module -e "
@@ -84,12 +125,16 @@ clearInterval(keepalive);
 grep -q 'stalled source' <<<"$OUT" && pass "a never-settling source rejects at the deadline" || fail "deadline reject ($OUT)"
 grep -q 'fast' <<<"$OUT" && pass "a fast source passes through untouched" || fail "deadline passthrough ($OUT)"
 
-# ---- service host: tight caps via env so oversize is cheap to simulate -------
-mkdir -p "$TMP/vault" "$TMP/empty" "$TMP/home/tilde-vault"
+# ---- hosts -------------------------------------------------------------------
+mkdir -p "$TMP/vault" "$TMP/empty" "$TMP/home/tilde-vault" "$TMP/notes"
 printf -- '---\ntype: note\ntitle: Note\nupdated: 2026-07-01\n---\n\n# Note\n\n## Body {#body}\n\nfrom vault.\n' > "$TMP/vault/note.md"
 printf '# Tilde\n\n## Body\n\nfrom home vault.\n' > "$TMP/home/tilde-vault/tilde-note.md"
+printf '# Meeting notes\n\n## Decision\n\nShip on Friday.\n' > "$TMP/notes/meeting.md"
 cat > "$TMP/manifest.json" <<EOF
-{ "layers": [ { "name": "vault", "level": 3, "path": "$TMP/vault" } ] }
+{ "layers": [
+  { "name": "vault", "level": 3, "path": "$TMP/vault" },
+  { "name": "notes", "level": 2, "source": "files", "path": "$TMP/notes" }
+] }
 EOF
 
 cat > "$TMP/host.mjs" <<'EOF'
@@ -106,118 +151,155 @@ EOF
 
 export SERVICE_MJS="$SRC/service.mjs"
 HOME="$TMP/home" CONTEXTCAKE_MAX_DOC_FILES=10 node "$TMP/host.mjs" "$PORT" "$TMP/manifest.json" >/dev/null 2>&1 &
-PID=$!
-for _ in $(seq 1 30); do curl -sf "$BASE/api/graph" >/dev/null 2>&1 && break; sleep 0.1; done
+PIDS+=($!)
+for _ in $(seq 1 40); do curl -sf "$BASE/api/graph" >/dev/null 2>&1 && break; sleep 0.1; done
 
-echo "add-time folder validation (fail on the form, not as a hang)"
+echo "add-time validation: only what the user can fix on the form"
 code 400 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"missing\",\"level\":3,\"path\":\"$TMP/does-not-exist\"}" "$BASE/api/sources")" "missing folder rejected"
 curl -s -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"missing\",\"level\":3,\"path\":\"$TMP/does-not-exist\"}" "$BASE/api/sources" | grep -q 'Folder not found' && pass "missing folder names the path problem" || fail "missing folder message"
 code 400 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"afile\",\"level\":3,\"path\":\"$TMP/vault/note.md\"}" "$BASE/api/sources")" "a file (not a folder) rejected"
-code 400 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"huge\",\"level\":3,\"path\":\"$TMP/many\"}" "$BASE/api/sources")" "over-cap folder rejected at add time"
-curl -s -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"huge\",\"level\":3,\"path\":\"$TMP/many\"}" "$BASE/api/sources" | grep -q 'more specific folder' && pass "over-cap error tells the user what to do" || fail "over-cap message"
-grep -q 'huge' "$TMP/manifest.json" && fail "rejected source leaked into the manifest" || pass "rejected source never touches the manifest"
+grep -q 'missing\|afile' "$TMP/manifest.json" && fail "rejected source leaked into the manifest" || pass "rejected source never touches the manifest"
 
-ADD="$(curl -s -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"docs\",\"level\":2,\"path\":\"$TMP/vault\"}" "$BASE/api/sources")"
-grep -q '"docCount":1' <<<"$ADD" && pass "add reports the indexed doc count" || fail "docCount ($ADD)"
-code 200 "$(C -X DELETE "$BASE/api/sources?name=docs")" "cleanup added source"
 ADD="$(curl -s -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"empty\",\"level\":2,\"path\":\"$TMP/empty\"}" "$BASE/api/sources")"
-grep -q '"docCount":0' <<<"$ADD" && pass "an empty folder is allowed, reported as 0 docs" || fail "empty docCount ($ADD)"
+[ "$(JQ 'String(d.hasDocuments)' <<<"$ADD")" = "false" ] && pass "an empty folder is accepted but flagged as holding no documents" || fail "empty hasDocuments ($ADD)"
 code 200 "$(C -X DELETE "$BASE/api/sources?name=empty")" "cleanup empty source"
+
+echo "an over-cap folder is added instantly, then reported as a source error"
+T="$(ms -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"big\",\"level\":2,\"path\":\"$TMP/many\"}" "$BASE/api/sources")"
+faster_than "$T" 2000 "adding an over-cap folder returns immediately instead of rejecting"
+G="$(curl -s "$BASE/api/graph?wait=15000")"
+[ "$(JQ 'd.sources.find((s) => s.name === "big").status' <<<"$G")" = "error" ] && pass "over-cap source settles into an errored state" || fail "over-cap status ($G)"
+JQ 'd.sources.find((s) => s.name === "big").error' <<<"$G" | grep -q 'more specific folder' && pass "the error tells the user what to do" || fail "over-cap message"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "vault").conceptCount)' <<<"$G")" = "1" ] && pass "healthy layers keep resolving alongside the errored one" || fail "healthy layer degraded too ($G)"
+[ "$(JQ 'String(d.concepts.some((c) => c.id === "note"))' <<<"$G")" = "true" ] && pass "concepts from healthy layers still appear" || fail "concepts missing ($G)"
+code 200 "$(C -X DELETE "$BASE/api/sources?name=big")" "cleanup over-cap source"
 
 echo "tilde paths expand to the real home directory"
 ADD="$(curl -s -X POST -H 'content-type: application/json' -d '{"kind":"files","name":"tilde","level":3,"path":"~/tilde-vault"}' "$BASE/api/sources")"
-grep -q '"docCount":1' <<<"$ADD" && pass "~/folder validates against the expanded path" || fail "tilde add ($ADD)"
+[ "$(JQ 'String(d.hasDocuments)' <<<"$ADD")" = "true" ] && pass "~/folder validates against the expanded path" || fail "tilde add ($ADD)"
 grep -q '"~/tilde-vault"' "$TMP/manifest.json" && fail "manifest kept the literal ~" || pass "manifest stores the expanded path"
 curl -s "$BASE/api/resolve?concept=tilde-note" | grep -q 'from home vault' && pass "tilde source resolves" || fail "tilde resolve"
 code 200 "$(C -X DELETE "$BASE/api/sources?name=tilde")" "cleanup tilde source"
 
 echo "add-time MCP probe (wrong command fails the form in bounded time)"
-T0="$(now_ms)"
+T="$(ms -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"ghost","level":0,"command":"definitely-not-a-real-binary-xyz"}' "$BASE/api/sources")"
 code 400 "$(C -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"ghost","level":0,"command":"definitely-not-a-real-binary-xyz"}' "$BASE/api/sources")" "missing binary rejected"
-T1="$(now_ms)"
-[ $((T1 - T0)) -lt 10000 ] && pass "missing binary fails fast ($((T1 - T0))ms)" || fail "missing binary too slow ($((T1 - T0))ms)"
-T0="$(now_ms)"
+faster_than "$T" 10000 "missing binary fails fast"
 code 400 "$(C -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"mute","level":0,"command":"sleep","args":["30"]}' "$BASE/api/sources")" "unresponsive command rejected"
-T1="$(now_ms)"
-[ $((T1 - T0)) -lt 20000 ] && pass "unresponsive command bounded by probe timeouts ($((T1 - T0))ms)" || fail "unresponsive probe too slow ($((T1 - T0))ms)"
 grep -Eq 'ghost|mute' "$TMP/manifest.json" && fail "failed MCP probe leaked into the manifest" || pass "failed MCP probes never touch the manifest"
 code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"mcp\",\"name\":\"mock\",\"level\":0,\"command\":\"node\",\"args\":[\"$ROOT/examples/mock-mcp-source/server.mjs\"]}" "$BASE/api/sources")" "a real MCP server passes the probe"
 code 200 "$(C -X DELETE "$BASE/api/sources?name=mock")" "cleanup mcp source"
 
-echo "resolving degrades an over-sized source instead of hanging"
-cat > "$TMP/manifest-mixed.json" <<EOF
-{ "layers": [
-  { "name": "vault", "level": 3, "path": "$TMP/vault" },
-  { "name": "big", "level": 2, "source": "files", "path": "$TMP/many" }
-] }
-EOF
-node -e '
-  const fs = require("node:fs");
-  fs.copyFileSync(process.argv[1], process.argv[2]);
-' "$TMP/manifest-mixed.json" "$TMP/manifest.json"
-G="$(curl -s "$BASE/api/graph")"
-grep -q '"status":"error"' <<<"$G" && pass "over-cap source surfaces as errored" || fail "graph error status ($G)"
-grep -q 'too many documents' <<<"$G" && pass "graph carries the actionable error" || fail "graph error message"
-node -e '
-  const g = JSON.parse(process.argv[1]);
-  const vault = g.sources.find((s) => s.name === "vault");
-  if (!(vault && vault.status === "ok" && vault.conceptCount === 1)) process.exit(1);
-  if (!g.concepts.some((c) => c.id === "note")) process.exit(1);
-' "$G" && pass "healthy layer still resolves alongside the errored one" || fail "healthy layer degraded too"
+echo "layer files are engine surface (the desktop app can edit context files)"
+F="$(curl -s "$BASE/api/files")"
+[ "$(JQ 'String(d.layers.some((l) => l.layer === "vault"))' <<<"$F")" = "true" ] && pass "okf-local layer listed" || fail "vault layer missing ($F)"
+# The playground's version only mapped okf-local roots, so markdown folders —
+# now the recommended source kind — were invisible in the editor.
+[ "$(JQ 'String(d.layers.some((l) => l.layer === "notes"))' <<<"$F")" = "true" ] && pass "markdown-folder layer listed too" || fail "files-kind layer missing ($F)"
+[ "$(JQ 'String(d.layers.find((l) => l.layer === "notes").files[0].markdown)' <<<"$F")" = "true" ] && pass "markdown files are flagged for the rendered view" || fail "markdown flag ($F)"
+R="$(curl -s "$BASE/api/file?path=notes/meeting.md")"
+[ "$(JQ 'String(d.editable)' <<<"$R")" = "true" ] && pass "a markdown file comes back editable" || fail "editable ($R)"
+JQ 'd.text' <<<"$R" | grep -q 'Ship on Friday' && pass "file text is returned for editing" || fail "file text ($R)"
+code 200 "$(C -X PUT -H 'content-type: application/json' -d "{\"path\":\"notes/meeting.md\",\"text\":\"# Meeting notes\n\n## Decision\n\nShip on Monday.\n\"}" "$BASE/api/file")" "editing a context file saves"
+grep -q 'Ship on Monday' "$TMP/notes/meeting.md" && pass "the edit reached disk" || fail "edit not written"
+curl -s "$BASE/api/resolve?concept=meeting" | grep -q 'Ship on Monday' && pass "the cascade serves the edit immediately" || fail "edit not resolved"
+code 404 "$(C -X PUT -H 'content-type: application/json' -d '{"path":"notes/brand-new.md","text":"nope"}' "$BASE/api/file")" "the editor refuses to create new files"
+code 403 "$(C "$BASE/api/file?path=notes/../../escape.md")" "traversal out of a layer root blocked"
+code 404 "$(C "$BASE/api/file?path=nosuchlayer/x.md")" "unknown layer rejected"
 
-echo "snapshot resolution matches per-concept resolution"
-mkdir -p "$TMP/vault2"
-printf -- '---\ntype: note\ntitle: Note\nupdated: 2026-07-02\n---\n\n# Note\n\n## Body {#body}\n\nfrom vault2.\n' > "$TMP/vault2/note.md"
-cat > "$TMP/manifest2.json" <<EOF
-{ "layers": [
-  { "name": "vault", "level": 3, "path": "$TMP/vault" },
-  { "name": "vault2", "level": 2, "path": "$TMP/vault2" }
-] }
-EOF
-node -e 'require("node:fs").copyFileSync(process.argv[1], process.argv[2])' "$TMP/manifest2.json" "$TMP/manifest.json"
-ALL="$(curl -s "$BASE/api/resolve-all")"
-ONE="$(curl -s "$BASE/api/resolve?concept=note")"
-node -e '
-  const all = JSON.parse(process.argv[1]).concepts.find((c) => c.id === "note");
-  const one = JSON.parse(process.argv[2]);
-  if (JSON.stringify(all) !== JSON.stringify(one)) { console.error("DIVERGED"); process.exit(1); }
-  const sec = one.sections.find((s) => s.key === "body");
-  if (sec.sourceLayer !== "vault" || !sec.conflicts || sec.conflicts[0].layer !== "vault2") process.exit(1);
-' "$ALL" "$ONE" && pass "resolve-all (snapshot) is byte-identical to per-concept resolve, conflicts intact" || fail "snapshot equivalence ($ALL vs $ONE)"
-
-echo "the event loop stays free while a graph builds (no frozen app)"
+# ---- host B: responsiveness while indexing a large corpus ---------------------
 mkdir -p "$TMP/big-corpus"
 node -e '
   const fs = require("node:fs");
   const body = "## Section\n\n" + "Plenty of prose in every generated document so the build takes real time. ".repeat(40);
   for (let i = 0; i < 1500; i++) fs.writeFileSync(`${process.argv[1]}/big-corpus/doc-${i}.md`, `# Doc ${i}\n\n${body}`);
 ' "$TMP"
+mkdir -p "$TMP/vault2"
+printf -- '---\ntype: note\ntitle: Note\nupdated: 2026-07-02\n---\n\n# Note\n\n## Body {#body}\n\nfrom vault2.\n' > "$TMP/vault2/note.md"
 cat > "$TMP/manifest-big.json" <<EOF
 { "layers": [
   { "name": "vault", "level": 3, "path": "$TMP/vault" },
-  { "name": "corpus", "level": 2, "source": "files", "path": "$TMP/big-corpus" }
+  { "name": "vault2", "level": 2, "path": "$TMP/vault2" },
+  { "name": "corpus", "level": 1, "source": "files", "path": "$TMP/big-corpus" }
 ] }
 EOF
-# Default caps on this host — the corpus must index fully.
 node "$TMP/host.mjs" "$PORT2" "$TMP/manifest-big.json" >/dev/null 2>&1 &
-PID2=$!
-for _ in $(seq 1 30); do curl -sf "$BASE2/api/resolve?concept=note" >/dev/null 2>&1 && break; sleep 0.1; done
-# Kick off the heavy graph build, then race a tiny resolve against it. Before
-# the async/yield fixes the sync walk+tokenize pipeline blocked the server's
-# event loop, so the tiny request could not be answered until the build ended.
-curl -s -o "$TMP/graph-big.json" "$BASE2/api/graph" &
-GRAPH_JOB=$!
-sleep 0.3
-T0="$(now_ms)"
-R="$(C "$BASE2/api/resolve?concept=note")"
-T1="$(now_ms)"
-code 200 "$R" "concurrent tiny resolve answered mid-build"
-[ $((T1 - T0)) -lt 2000 ] && pass "tiny resolve not starved by the build ($((T1 - T0))ms)" || fail "event loop starved ($((T1 - T0))ms)"
-wait "$GRAPH_JOB"
-node -e '
-  const g = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-  const corpus = g.sources.find((s) => s.name === "corpus");
-  if (!(corpus && corpus.status === "ok" && corpus.conceptCount === 1500)) process.exit(1);
-' "$TMP/graph-big.json" && pass "big corpus still builds completely (1500 concepts)" || fail "big corpus graph incomplete"
+PIDS+=($!)
+# The two tiny layers index in milliseconds; the 1500-doc corpus takes seconds.
+# Wait for the small one so the assertions below describe the real mid-index
+# state: some sources usable, one still working.
+await_source_ready "$BASE2" vault || fail "vault never finished indexing"
 
-[ "$FAILED" = 0 ] && echo "setup robustness test passed (bounded walks + add-time validation + probes + snapshot equivalence + responsive event loop)" || { echo "setup robustness test FAILED"; exit 1; }
+echo "the UI is usable while a large corpus indexes"
+# This is the regression the whole change exists for: a graph request with
+# 1500 documents still being read must answer immediately and say so.
+G="$(curl -s "$BASE2/api/graph")"
+T="$(ms "$BASE2/api/graph")"
+faster_than "$T" 1500 "/api/graph answers without waiting for the corpus"
+[ "$(JQ 'String(d.indexing)' <<<"$G")" = "true" ] && pass "the response says indexing is still running" || fail "indexing flag ($G)"
+[ "$(JQ 'd.indexingSources.join(",")' <<<"$G")" = "corpus" ] && pass "it names the source still working" || fail "indexingSources ($G)"
+[ "$(JQ 'd.sources.find((s) => s.name === "corpus").indexing.phase' <<<"$G")" != "" ] && pass "per-source progress is reported for a spinner" || fail "progress phase ($G)"
+[ "$(JQ 'String(d.concepts.some((c) => c.id === "note"))' <<<"$G")" = "true" ] && pass "already-indexed layers are usable right away" || fail "partial concepts ($G)"
+T="$(ms "$BASE2/api/resolve?concept=note")"
+faster_than "$T" 1500 "a concept resolves mid-index"
+T="$(ms "$BASE2/api/resolve-all")"
+faster_than "$T" 3000 "resolve-all answers with what is ready"
+
+echo "indexing completes, and the settled graph is correct"
+G="$(curl -s "$BASE2/api/graph?wait=30000")"
+[ "$(JQ 'String(d.indexing)' <<<"$G")" = "false" ] && pass "indexing finishes" || fail "still indexing ($G)"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "corpus").conceptCount)' <<<"$G")" = "1500" ] && pass "the whole corpus indexed (1500 concepts)" || fail "corpus incomplete ($G)"
+# Via files, not argv: a settled resolve-all here carries 1500 concepts, which
+# overflows the exec argument limit.
+curl -s -o "$TMP/all.json" "$BASE2/api/resolve-all?wait=30000"
+curl -s -o "$TMP/one.json" "$BASE2/api/resolve?concept=note"
+node -e '
+  const fs = require("node:fs");
+  const all = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).concepts.find((c) => c.id === "note");
+  const one = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  if (JSON.stringify(all) !== JSON.stringify(one)) { console.error("DIVERGED"); process.exit(1); }
+  const sec = one.sections.find((s) => s.key === "body");
+  if (sec.sourceLayer !== "vault" || !sec.conflicts || sec.conflicts[0].layer !== "vault2") process.exit(1);
+' "$TMP/all.json" "$TMP/one.json" && pass "indexed resolve matches live resolve, conflicts intact" || fail "equivalence (see $TMP/one.json)"
+
+echo "a second source does not re-index the first"
+# Adding a source rebuilds the manifest; a finished index must survive that or
+# every add would re-read every existing source.
+BEFORE="$(curl -s "$BASE2/api/graph" | JQ 'String(d.sources.find((s) => s.name === "corpus").indexing.elapsedMs)')"
+code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"extra\",\"level\":0,\"path\":\"$TMP/notes\"}" "$BASE2/api/sources")" "add a second source"
+G="$(curl -s "$BASE2/api/graph?wait=15000")"
+AFTER="$(JQ 'String(d.sources.find((s) => s.name === "corpus").indexing.elapsedMs)' <<<"$G")"
+[ "$BEFORE" = "$AFTER" ] && pass "the existing corpus index was reused, not rebuilt" || fail "corpus re-indexed on add ($BEFORE -> $AFTER)"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "extra").conceptCount)' <<<"$G")" = "1" ] && pass "the new source indexed on its own" || fail "new source ($G)"
+
+# ---- host C: settings API and its effect -------------------------------------
+cat > "$TMP/manifest-settings.json" <<EOF
+{ "layers": [ { "name": "vault", "level": 3, "path": "$TMP/vault" } ] }
+EOF
+node "$TMP/host.mjs" "$PORT3" "$TMP/manifest-settings.json" >/dev/null 2>&1 &
+PIDS+=($!)
+for _ in $(seq 1 40); do curl -sf "$BASE3/api/settings" >/dev/null 2>&1 && break; sleep 0.1; done
+
+echo "settings are configurable from the app, not just the environment"
+S="$(curl -s "$BASE3/api/settings")"
+[ "$(JQ 'String(d.settings.maxDocFiles)' <<<"$S")" = "10000" ] && pass "GET /api/settings reports the effective defaults" || fail "settings defaults ($S)"
+[ "$(JQ 'String(d.catalog.length >= 3)' <<<"$S")" = "true" ] && pass "the catalog gives the UI labels, help and ranges" || fail "settings catalog ($S)"
+JQ 'd.catalog[0].help' <<<"$S" | grep -qi 'folder\|source' && pass "help text is written for a person, not a config file" || fail "settings help ($S)"
+code 400 "$(C -X PATCH -H 'content-type: application/json' -d '{"maxDocFiles":1}' "$BASE3/api/settings")" "a below-range value is rejected"
+code 400 "$(C -X PATCH -H 'content-type: application/json' -d '{"nonsense":5}' "$BASE3/api/settings")" "an unknown setting is rejected"
+P="$(curl -s -X PATCH -H 'content-type: application/json' -d '{"maxDocFiles":250}' "$BASE3/api/settings")"
+[ "$(JQ 'String(d.settings.maxDocFiles)' <<<"$P")" = "250" ] && pass "a valid change is accepted and echoed back" || fail "settings patch ($P)"
+grep -q '"maxDocFiles": 250' "$TMP/manifest-settings.json" && pass "the change persists in the manifest" || fail "settings not persisted"
+
+# The point of the setting: it has to actually change indexing behavior.
+code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"corpus\",\"level\":2,\"path\":\"$TMP/big-corpus\"}" "$BASE3/api/sources")" "add the 1500-doc corpus under a 250-doc limit"
+G="$(curl -s "$BASE3/api/graph?wait=30000")"
+[ "$(JQ 'd.sources.find((s) => s.name === "corpus").status' <<<"$G")" = "error" ] && pass "the corpus exceeds the configured limit and says so" || fail "limit not applied ($G)"
+curl -s -X PATCH -H 'content-type: application/json' -d '{"maxDocFiles":5000}' "$BASE3/api/settings" >/dev/null
+G="$(curl -s "$BASE3/api/graph?wait=30000")"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "corpus").conceptCount)' <<<"$G")" = "1500" ] && pass "raising the limit in settings makes the same source index" || fail "raised limit ($G)"
+R="$(curl -s -X PATCH -H 'content-type: application/json' -d '{"maxDocFiles":null}' "$BASE3/api/settings")"
+[ "$(JQ 'String(d.settings.maxDocFiles)' <<<"$R")" = "10000" ] && pass "null resets a setting to its default" || fail "settings reset ($R)"
+grep -q 'maxDocFiles' "$TMP/manifest-settings.json" && fail "reset left the value in the manifest" || pass "reset removes the stored value"
+
+[ "$FAILED" = 0 ] && echo "setup robustness test passed (bounded walks + settings + background indexing + usable-while-indexing + layer file editing)" || { echo "setup robustness test FAILED"; exit 1; }

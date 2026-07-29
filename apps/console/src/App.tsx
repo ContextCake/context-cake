@@ -8,6 +8,7 @@ import { Overview } from './views/Overview'
 import { Triage } from './views/Triage'
 import { Conflicts } from './views/Conflicts'
 import { Concepts } from './views/Concepts'
+import { Files } from './views/Files'
 import { ChatPanel } from './components/ChatPanel'
 import { SetupWizard } from './components/SetupWizard'
 import { ConnectAgentDialog } from './components/ConnectAgentDialog'
@@ -20,6 +21,9 @@ const ERROR_COPY: Record<LiveErrorKind, (msg: string) => string> = {
   'bad-shape': (msg) => msg,
 }
 
+// Shown only while the source topology is unknown — a few milliseconds, since
+// the engine answers /api/graph from its background index. Reading sources
+// happens after the shell is up (see the indexing banner), never in front of it.
 function LoadingState() {
   return (
     <div style={css(`display:grid; place-items:center; height:100vh; width:100%; background:${C.page};`)}>
@@ -32,8 +36,29 @@ function LoadingState() {
             />
           ))}
         </div>
-        <div style={css(`font-family:${MONO}; font-size:12.5px; color:${C.caption}; letter-spacing:0.02em;`)}>Resolving the cascade…</div>
+        <div style={css(`font-family:${MONO}; font-size:12.5px; color:${C.caption}; letter-spacing:0.02em;`)}>Starting ContextCake…</div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * A non-blocking status strip: the app is fully usable while sources are read.
+ * It names what is still being indexed so the count changing under the user is
+ * explained rather than mysterious.
+ */
+function IndexingBanner({ names }: { names: string[] }) {
+  const label = names.length === 1
+    ? `Indexing ${names[0]}`
+    : `Indexing ${names.length} sources (${names.slice(0, 3).join(', ')}${names.length > 3 ? ', …' : ''})`
+  return (
+    <div role="status" style={css(`display:flex; align-items:center; gap:9px; padding:7px 16px; background:${C.tealFill}; border-bottom:1px solid ${C.tealStroke}; font-size:12px; color:${C.tealText};`)}>
+      <span aria-hidden="true" style={css('display:flex; gap:3px;')}>
+        {[0, 1, 2].map((i) => (
+          <span key={i} style={css(`width:5px; height:5px; border-radius:999px; background:${C.tealStroke}; animation:ccPulse 1.1s ease-in-out ${i * 0.15}s infinite;`)} />
+        ))}
+      </span>
+      <span>{label} — everything here stays usable, and results fill in as they land.</span>
     </div>
   )
 }
@@ -59,7 +84,7 @@ function ErrorState({ kind, message, reload }: { kind: LiveErrorKind; message: s
 }
 
 export function App() {
-  const { view, chatOpen, route, loading, error, reload, mode, sources, loadErrors } = useStore()
+  const { view, chatOpen, route, loading, load, error, reload, mode, sources, loadErrors } = useStore()
   // Undefined = not yet decided by the auto-trigger effect below; true/false
   // once the user (or the trigger) has taken an explicit stance. Kept separate
   // from `needsSetup` so the wizard's own Success step stays visible even
@@ -177,6 +202,7 @@ export function App() {
           />
           <div className="cc-content">
             <Header onOpenMenu={() => setDrawerOpen(true)} />
+            {load.indexingSources.length > 0 && <IndexingBanner names={load.indexingSources} />}
             {loadErrors.length > 0 && (
               <div role="status" style={css(`display:flex; align-items:center; gap:8px; padding:8px 16px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; font-size:12px; color:${C.amberText};`)}>
                 <span aria-hidden="true">⚠</span>
@@ -196,6 +222,7 @@ export function App() {
                 {view === 'triage' && <Triage />}
                 {view === 'conflicts' && <Conflicts />}
                 {view === 'concepts' && <Concepts />}
+                {view === 'files' && <Files />}
               </main>
             )}
           </div>

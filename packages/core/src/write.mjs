@@ -13,6 +13,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertInsideRoot, writeFileInRoot } from "./capture.mjs";
+import { withManifestLock } from "./manifest.mjs";
+import { loadProfileRuntime } from "./profile-runtime.mjs";
+import { normalizeConceptId } from "./sources/okf-local.mjs";
 
 if (isMainModule(import.meta.url)) {
   main();
@@ -30,18 +34,27 @@ function main() {
   if (!args.manifest) throw new Error("--manifest <file> is required");
 
   const signals = readJson(args.signals);
-  const manifest = JSON.parse(fs.readFileSync(args.manifest, "utf8"));
-  const layers = (manifest.layers ?? []).map((layer) => ({
-    name: layer.name,
-    level: Number(layer.level),
-    root: path.resolve(path.dirname(args.manifest), layer.path),
-  }));
-
-  const targetLayer = selectTargetLayer(layers, args["target-layer"]);
   const dryRun = args["dry-run"] === true || args["dry-run"] === "true";
   const date = new Date().toISOString().slice(0, 10);
+  const results = withManifestLock(args.manifest, () => {
+    const runtime = loadProfileRuntime(args.manifest, {
+      requestedProfile: args.profile ?? null,
+      cwd: process.cwd(),
+    });
+    const layers = runtime.selection.layers
+      // Plain Markdown folders and live repositories are read/capture surfaces,
+      // not batch-ingest targets. Only curated OKF layers are writable here.
+      .filter((layer) => (layer.source ?? "okf-local") === "okf-local" && layer.live !== true)
+      .filter((layer) => typeof layer.path === "string")
+      .map((layer) => ({
+        name: layer.name,
+        level: Number(layer.level),
+        root: path.resolve(runtime.manifestDir, layer.path),
+      }));
 
-  const results = writeSignals(signals, targetLayer, { dryRun, date });
+    const targetLayer = selectTargetLayer(layers, args["target-layer"]);
+    return writeSignals(signals, targetLayer, { dryRun, date });
+  });
 
   const written = results.filter((r) => r.status === "written");
   const staged = results.filter((r) => r.status === "staged");
@@ -80,23 +93,30 @@ function processSignal(signal, targetLayer, { dryRun, date }) {
   if (!destination) {
     return { signalId: signal.id, status: "skipped", reason: "no destination" };
   }
+  if (typeof destination !== "string") throw new Error(`Signal ${signal.id ?? "<unknown>"} destination must be a concept id.`);
+  const normalizedDestination = normalizeConceptId(destination);
 
   // review_required goes into _review/ staging; team_candidate goes directly.
-  const conceptPath = isReview
-    ? path.join(targetLayer.root, "_review", destination.replace(/^review\//, ""))
-    : path.join(targetLayer.root, destination);
+  const relativeConcept = isReview
+    ? path.posix.join("_review", normalizedDestination.replace(/^review\//, ""))
+    : normalizedDestination;
+  const relativeFile = `${relativeConcept}.md`;
+  let conceptFile = path.resolve(targetLayer.root, relativeFile);
 
-  const conceptFile = `${conceptPath}.md`;
-
-  if (!dryRun && fs.existsSync(conceptFile)) {
-    return { signalId: signal.id, status: "skipped", reason: "already exists", path: conceptFile };
+  if (!dryRun) {
+    conceptFile = assertInsideRoot(targetLayer.root, relativeFile);
+    if (fs.existsSync(conceptFile)) {
+      const stat = fs.lstatSync(conceptFile);
+      if (stat.isSymbolicLink()) throw new Error(`Refusing to inspect or overwrite a symlink: ${relativeFile}`);
+      if (!stat.isFile()) throw new Error(`Write target is not a regular file: ${relativeFile}`);
+      return { signalId: signal.id, status: "skipped", reason: "already exists", path: conceptFile };
+    }
   }
 
   const content = generateConcept(signal, date, isReview);
 
   if (!dryRun) {
-    fs.mkdirSync(path.dirname(conceptFile), { recursive: true });
-    fs.writeFileSync(conceptFile, content, "utf8");
+    writeFileInRoot(targetLayer.root, relativeFile, content);
   }
 
   return {
@@ -195,16 +215,19 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log(`Usage:
-  node write.mjs --signals signals.json --manifest layers.json
-  node write.mjs --signals signals.json --manifest layers.json --target-layer team
+  node write.mjs --signals signals.json --manifest manifest.json [--profile <id>]
+  node write.mjs --signals signals.json --manifest manifest.json --target-layer team
   node write.mjs --signals signals.json --manifest layers.json --dry-run
 
-Writes captured OKF concepts from ingest signals into a target layer bundle.
+Writes captured OKF concepts from ingest signals into a curated local OKF layer.
   team_candidate  → written directly to the target layer directory
   review_required → staged under _review/ for human approval
   ignore / local  → skipped
 
 Default target layer: highest level < 3 in the manifest (team, group, or company).
-Pass --target-layer <name> to specify explicitly.
+Pass --target-layer <name> to specify explicitly. Profile selection order is
+explicit --profile, deepest project mapping for the current working directory,
+then default. Plain Markdown-folder sources and live layers are never batch
+write targets; traversal and symlink destinations are rejected.
 `);
 }

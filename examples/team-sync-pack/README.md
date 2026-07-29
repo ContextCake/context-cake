@@ -93,9 +93,9 @@ promotion:
 
 ```bash
 # request (stages under _review/promotions/ in the curated bundle)
-node promote.mjs --from-live ~/kb-live --capture captures/investigation/<id> --target ~/kb-team
+node promote.mjs --legacy-paths --from-live ~/kb-live --capture captures/investigation/<id> --target ~/kb-team
 # approve (writes the curated concept durably, THEN cleans up)
-node promote.mjs --from-live ~/kb-live --target ~/kb-team --approve ~/kb-team/_review/promotions/<slug>.md
+node promote.mjs --legacy-paths --from-live ~/kb-live --target ~/kb-team --approve ~/kb-team/_review/promotions/<slug>.md
 ```
 
 Defaults: `decision` → `decisions/`, `investigation` → `systems/`; `gotcha`

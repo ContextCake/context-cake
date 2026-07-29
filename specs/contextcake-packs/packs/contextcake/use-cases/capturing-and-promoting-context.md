@@ -56,7 +56,7 @@ team, or team to company. `promote.mjs` does that as a direct bundle-to-
 bundle operation, not through the manifest:
 
 ```bash
-node promote.mjs --personal ~/kb-personal --shared ~/kb-team --file decisions/primary-db
+node promote.mjs --legacy-paths --personal ~/kb-personal --shared ~/kb-team --file decisions/primary-db
 ```
 
 It copies the file, rewrites any `personal:`-scoped links to shared-relative

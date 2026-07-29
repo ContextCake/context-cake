@@ -22,6 +22,7 @@ import {
   validateContextManifest,
   verifyManifestBackup,
   withManifestLock,
+  withManifestLockAsync,
   writeContextManifest,
 } from "../src/manifest.mjs";
 import { withCache } from "../src/sources/cache.mjs";
@@ -430,6 +431,36 @@ test("manifest mutation locking preserves concurrent updates and times out safel
   });
   assert.equal(JSON.parse(fs.readFileSync(`${manifestPath}.lock`, "utf8")).token, "replacement");
   fs.rmSync(`${manifestPath}.lock`);
+});
+
+test("async profile write leases exclude concurrent manifest mutation", async (t) => {
+  const root = temporaryDirectory(t);
+  const manifestPath = path.join(root, "manifest.json");
+  writeContextManifest(manifestPath, { layers: [] });
+
+  let entered;
+  const enteredPromise = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const releasePromise = new Promise((resolve) => { release = resolve; });
+  const holder = withManifestLockAsync(manifestPath, async () => {
+    entered();
+    await releasePromise;
+  });
+  await enteredPromise;
+
+  const writerScript = `
+    import { mutateContextManifest } from ${JSON.stringify(pathToFileURL(manifestModule).href)};
+    const [manifestPath] = process.argv.slice(1);
+    mutateContextManifest(manifestPath, (manifest) => { manifest.writerCompleted = true; });
+  `;
+  let writerCompleted = false;
+  const writer = runNode(writerScript, [manifestPath]).then(() => { writerCompleted = true; });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(writerCompleted, false, "manifest mutation entered during the async write lease");
+
+  release();
+  await Promise.all([holder, writer]);
+  assert.equal(readContextManifest(manifestPath).writerCompleted, true);
 });
 
 test("concurrent source, Pack, and first-profile mutations cannot lose an update", async (t) => {

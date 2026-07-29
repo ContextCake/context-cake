@@ -83,8 +83,8 @@ The server-side account data includes:
 - Supabase Auth audit logs, which can include the user ID, IP address, user agent,
   provider metadata, and event timestamps;
 - one owner-only `user_settings` row. Its JSON blob is limited to 1,000,000 bytes
-  and can contain only `theme`, `updateCheck`, `activeProfile`, `profiles`, and
-  `sources`. Profile metadata is limited to names/labels, source membership,
+  and can contain only `theme`, `updateCheck`, `profiles`, and `sources`.
+  Profile metadata is limited to names/labels, source membership,
   theme preference, and manifest layers. Source metadata is limited to its
   name, kind, precedence, repository/ref/origin, cache policy, and scrubbed
   placeholders for machine-local execution or credentials.
@@ -99,6 +99,13 @@ ContextCake never syncs knowledge or document content, resolved output, integrat
 tokens, environment-variable values, absolute local paths, analytics, or telemetry.
 Those stay on the Mac. Deleting the account removes the Supabase Auth user and the
 cascading settings row; local ContextCake files and settings are left untouched.
+Project-folder mappings, matched roots, and the app's active profile are also
+local-only. A remote settings row cannot activate a profile or redirect a trusted
+local executable source.
+Profile-aware promotion keeps a small machine-local binding record containing
+opaque ids, configuration fingerprints, and a capture hash until approval
+finishes. It contains no context body and is never part of settings sync or the
+team live repository.
 Supabase-managed operational and audit logs follow the project's configured retention
 and are not necessarily removed when the account is deleted.
 

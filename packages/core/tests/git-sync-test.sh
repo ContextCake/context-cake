@@ -305,7 +305,7 @@ out="$(node_run "
 import { resolveLiveLayer } from '$core/sources/git-sync.mjs';
 import fs from 'node:fs';
 const m = JSON.parse(fs.readFileSync('$tmpdir/m-good.json', 'utf8'));
-console.log(JSON.stringify(resolveLiveLayer(m, '$tmpdir')));
+console.log(JSON.stringify(resolveLiveLayer(m.layers, '$tmpdir')));
 ")"
 grep -q '"name":"team-live"' <<<"$out" || fail "resolveLiveLayer should find the live layer" "$out"
 grep -q '"pullTtlMs":90000' <<<"$out" || fail "resolveLiveLayer should expose pullTtlMs" "$out"
@@ -319,7 +319,7 @@ EOF
 out="$(node_run "
 import { resolveLiveLayer } from '$core/sources/git-sync.mjs';
 import fs from 'node:fs';
-try { resolveLiveLayer(JSON.parse(fs.readFileSync('$tmpdir/m-two.json', 'utf8')), '$tmpdir'); console.log('NO_ERROR'); }
+try { resolveLiveLayer(JSON.parse(fs.readFileSync('$tmpdir/m-two.json', 'utf8')).layers, '$tmpdir'); console.log('NO_ERROR'); }
 catch (e) { console.log('ERR:' + e.message); }
 ")"
 grep -q 'ERR:' <<<"$out" || fail "two live layers must be rejected" "$out"
@@ -332,14 +332,14 @@ EOF
 out="$(node_run "
 import { resolveLiveLayer } from '$core/sources/git-sync.mjs';
 import fs from 'node:fs';
-try { resolveLiveLayer(JSON.parse(fs.readFileSync('$tmpdir/m-nogit.json', 'utf8')), '$tmpdir'); console.log('NO_ERROR'); }
+try { resolveLiveLayer(JSON.parse(fs.readFileSync('$tmpdir/m-nogit.json', 'utf8')).layers, '$tmpdir'); console.log('NO_ERROR'); }
 catch (e) { console.log('ERR:' + e.message); }
 ")"
 grep -q 'ERR:' <<<"$out" || fail "live layer without git block must be rejected" "$out"
 
 out="$(node_run "
 import { resolveLiveLayer } from '$core/sources/git-sync.mjs';
-console.log(JSON.stringify(resolveLiveLayer({ layers: [ { name: 'x', level: 1, source: 'okf-local', path: 'bob' } ] }, '$tmpdir')));
+console.log(JSON.stringify(resolveLiveLayer([ { name: 'x', level: 1, source: 'okf-local', path: 'bob' } ], '$tmpdir')));
 ")"
 grep -q 'null' <<<"$out" || fail "no live layer should resolve to null" "$out"
 

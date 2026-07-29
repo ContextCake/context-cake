@@ -232,7 +232,7 @@ grep -q '"hasToken":true' <<<"$out" || fail "review_required should still stage"
 grep -qi 'review' <<<"$out" || fail "review_required should carry a warning" "$out"
 
 # ---- promotion: request stages under _review/promotions --------------------------------
-node "$promote" --from-live "$live" --capture captures/investigation/alice-example--timeout-the-webhook-mystery --target "$curated" > /dev/null
+node "$promote" --legacy-paths --from-live "$live" --capture captures/investigation/alice-example--timeout-the-webhook-mystery --target "$curated" > /dev/null
 review_file="$curated/_review/promotions/timeout-the-webhook-mystery.md"
 [ -f "$review_file" ] || fail "promotion request should stage under _review/promotions"
 grep -q 'promoteTo: systems/timeout-the-webhook-mystery' "$review_file" || fail "investigation should default to systems/ dest" "$(cat "$review_file")"
@@ -240,14 +240,14 @@ grep -q 'promoteTo: systems/timeout-the-webhook-mystery' "$review_file" || fail 
 
 # gotcha without --dest errors
 set +e
-node "$promote" --from-live "$live" --capture captures/gotcha/alice-example--reuse-token --target "$curated" 2>"$tmpdir/err.txt"
+node "$promote" --legacy-paths --from-live "$live" --capture captures/gotcha/alice-example--reuse-token --target "$curated" 2>"$tmpdir/err.txt"
 rc=$?
 set -e
 [ $rc -ne 0 ] || fail "gotcha promotion without --dest must error"
 grep -q -- '--dest' "$tmpdir/err.txt" || fail "error should mention --dest" "$(cat "$tmpdir/err.txt")"
 
 # ---- promotion: approve = durable write, then cleanup ----------------------------------
-node "$promote" --from-live "$live" --target "$curated" --approve "$review_file" --telemetry > /dev/null
+node "$promote" --legacy-paths --from-live "$live" --target "$curated" --approve "$review_file" --telemetry > /dev/null
 [ -f "$curated/systems/timeout-the-webhook-mystery.md" ] || fail "approve should write the curated concept"
 grep -q 'status:' "$curated/systems/timeout-the-webhook-mystery.md" && fail "curated concept must not keep unreviewed status"
 grep -q 'promoted from' "$curated/systems/timeout-the-webhook-mystery.md" || fail "curated concept should carry provenance"
@@ -267,14 +267,14 @@ if (!events.some(e => e.event === 'promote' && e.concept === 'captures/investiga
 " "$promote_telemetry" || fail "promote telemetry event"
 
 # ---- promotion: failure between curated write and cleanup is recoverable ----------------
-node "$promote" --from-live "$live" --capture captures/investigation/alice-example--timeout-the-webhook-mystery-2 --target "$curated" --dest systems/retry-durable > /dev/null
+node "$promote" --legacy-paths --from-live "$live" --capture captures/investigation/alice-example--timeout-the-webhook-mystery-2 --target "$curated" --dest systems/retry-durable > /dev/null
 review2="$curated/_review/promotions/retry-durable.md"
 mv "$bare" "$bare.away"   # push will fail; approve reports partial
-node "$promote" --from-live "$live" --target "$curated" --approve "$review2" > "$tmpdir/approve1.txt" 2>&1 || true
+node "$promote" --legacy-paths --from-live "$live" --target "$curated" --approve "$review2" > "$tmpdir/approve1.txt" 2>&1 || true
 [ -f "$curated/systems/retry-durable.md" ] || fail "curated write must stand even when live push fails" "$(cat "$tmpdir/approve1.txt")"
 mv "$bare.away" "$bare"
 # re-approve is idempotent: curated already valid → cleanup only, no duplicate
-node "$promote" --from-live "$live" --target "$curated" --approve "$review2" > /dev/null 2>&1 || true
+node "$promote" --legacy-paths --from-live "$live" --target "$curated" --approve "$review2" > /dev/null 2>&1 || true
 count="$(grep -c 'promoted from' "$curated/systems/retry-durable.md")"
 [ "$count" = "1" ] || fail "re-approve must not duplicate provenance" "$count"
 

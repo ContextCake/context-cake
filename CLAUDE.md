@@ -18,8 +18,8 @@ node mcp-server.mjs --personal ~/kb-personal --shared ~/kb-shared
 node mcp-server.mjs --manifest layers.json --capture --telemetry --harness claude-code
 
 # Promote a live capture through the review queue (request, then approve)
-node promote.mjs --from-live ~/kb-live --capture captures/investigation/<id> --target ~/kb-team
-node promote.mjs --from-live ~/kb-live --target ~/kb-team --approve ~/kb-team/_review/promotions/<slug>.md
+node promote.mjs --legacy-paths --from-live ~/kb-live --capture captures/investigation/<id> --target ~/kb-team
+node promote.mjs --legacy-paths --from-live ~/kb-live --target ~/kb-team --approve ~/kb-team/_review/promotions/<slug>.md
 
 # Team activity dashboard data (feed + cross-brain-hit metrics)
 node team-activity.mjs --live-root ~/kb-live --out apps/control-surface/team-activity.json

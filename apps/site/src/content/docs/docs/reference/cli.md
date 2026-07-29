@@ -16,13 +16,14 @@ merge, level precedence, provenance, and per-section conflicts — and prints it
 JSON.
 
 ```
-node resolver.mjs --manifest <file> --concept <id>
+node resolver.mjs --manifest <file> --concept <id> [--profile <id>]
 ```
 
 | Flag | Required | Meaning |
 |------|----------|---------|
 | `--manifest <file>` | yes | Path to the [layers manifest](/docs/reference/manifest). |
 | `--concept <id>` | yes | Concept ID to resolve, e.g. `decisions/primary-db`. |
+| `--profile <id>` | no | Select this profile before inspecting the working directory. |
 | `--help`, `-h` | no | Print usage and exit. |
 
 ```bash
@@ -41,13 +42,14 @@ cascade mode (a manifest) or the legacy two-layer mode (explicit personal + shar
 directories).
 
 ```
-node mcp-server.mjs --manifest <file>
+node mcp-server.mjs --manifest <file> [--profile <id>]
 node mcp-server.mjs --personal <dir> --shared <dir>
 ```
 
 | Flag | Required | Meaning |
 |------|----------|---------|
 | `--manifest <file>` | one mode | Cascade mode: resolve the full stack in the manifest. |
+| `--profile <id>` | no | Explicit profile override. Otherwise the server uses its startup working directory, then `default`. |
 | `--personal <dir>` | one mode | Legacy mode: personal bundle directory (level 3). Use with `--shared`. |
 | `--shared <dir>` | one mode | Legacy mode: shared bundle directory (level 0). Use with `--personal`. |
 | `--help`, `-h` | no | Print usage and exit. |
@@ -61,6 +63,32 @@ node mcp-server.mjs --manifest apps/playground/manifest.json
 The server speaks MCP over stdin/stdout. See [MCP tools](/docs/reference/mcp-tools)
 for the tools it exposes and [Connect an agent](/docs/getting-started/connect-an-agent)
 for wiring it into a client.
+
+The MCP initialization instructions identify the stable profile id and reason
+(`explicit`, `project`, `default`, or `legacy-default`) without including a
+local project path. The human-readable label is returned as structured
+initialization metadata rather than instruction prose, so synced display text
+cannot become an agent directive. Selection is fixed for that process lifetime.
+
+## profile
+
+Inspects and manages local Project Profiles without opening source adapters:
+
+```bash
+contextcake profile current [--profile <id>] [--json]
+contextcake profile list [--json]
+contextcake profile create <label> [--project <path>]
+contextcake profile map <id> <path>
+contextcake profile unmap <path>
+contextcake profile delete <id> [--confirm]
+```
+
+`current` reports the selected id, label, reason, and matched root when one
+applies. `create` is the deliberate migration point for a flat manifest and
+returns the verified backup path. Project folders are canonicalized locally and
+never synced. `delete` refuses `default`, previews affected mappings and Pack
+assignments, and requires `--confirm`; it removes references but never source,
+Pack, overlay, cache, or live-repository files.
 
 ## ingest.mjs
 
@@ -127,14 +155,15 @@ bundle. `team_candidate` signals are written directly; `review_required` signals
 staged under `_review/` for human approval; `ignore` and `local` are skipped.
 
 ```
-node write.mjs --signals <file> --manifest <file> --target-layer <name>
+node write.mjs --signals <file> --manifest <file> [--profile <id>] --target-layer <name>
 ```
 
 | Flag | Required | Meaning |
 |------|----------|---------|
 | `--signals <file>` | yes | The `signals.json` produced by `ingest.mjs`. |
 | `--manifest <file>` | yes | Manifest whose layers name the write targets. |
-| `--target-layer <name>` | no | Layer to write into. Defaults to the highest level below 3 (team, company, etc.). |
+| `--profile <id>` | no | Explicit profile override; otherwise use cwd mapping then `default`. |
+| `--target-layer <name>` | no | Curated local OKF layer to write into. Plain Markdown folders and live layers are rejected. Defaults to the highest eligible level below 3. |
 | `--dry-run` | no | Report what would be written without touching disk. |
 | `--help`, `-h` | no | Print usage and exit. |
 
@@ -146,26 +175,24 @@ See [The capture write path](/docs/guides/capture-write-path).
 
 ## promote.mjs
 
-Copies one markdown concept from a personal OKF bundle into a shared bundle,
-rewriting personal links and rebuilding the shared `index.md`. It works over two
-**directories**, not a manifest.
-
-```
-node promote.mjs --personal <dir> --shared <dir> --file <concept-or-path>
-```
-
-| Flag | Required | Meaning |
-|------|----------|---------|
-| `--personal <dir>` | yes | Source personal bundle directory. |
-| `--shared <dir>` | yes | Destination shared bundle directory. |
-| `--file <concept-or-path>` | yes | Concept ID or path to promote (`.md` optional). |
-| `--branch <name>` | no | Branch name suggested by `--print-git`. Defaults to `promote/<concept-slug>` — `.md` dropped and every character outside `[a-zA-Z0-9._-]` (including `/`) collapsed to a hyphen, e.g. `decisions/primary-db` → `promote/decisions-primary-db`. |
-| `--dry-run` | no | Print the planned operations and promoted content as JSON; write nothing. |
-| `--print-git` | no | After writing, print suggested `git` commands to open a PR. |
-| `--help`, `-h` | no | Print usage and exit. |
+Profile-aware live promotion resolves both the live source and curated target
+from one selected profile:
 
 ```bash
-node promote.mjs --personal ~/kb-personal --shared ~/kb-team --file decisions/primary-db --print-git
+node promote.mjs --manifest <file> [--profile <id>] --capture <id> --target-layer <name> [--dest <id>]
+node promote.mjs --manifest <file> [--profile <id>] --approve <review-file> --target-layer <name> [--telemetry]
+```
+
+The review file records the profile id, manifest revision, live-layer and
+target-layer fingerprints, capture id, destination, and capture-content hash.
+Approval fails closed if configuration or capture content changed after staging.
+
+The old directory-to-directory commands remain available only as an explicit
+advanced compatibility mode and carry no Project Profile isolation guarantee:
+
+```bash
+node promote.mjs --legacy-paths --from-live <root> --capture <id> --target <root>
+node promote.mjs --legacy-paths --personal <dir> --shared <dir> --file <concept-or-path> [--dry-run] [--print-git]
 ```
 
 See [Promoting concepts](/docs/guides/promoting-concepts).

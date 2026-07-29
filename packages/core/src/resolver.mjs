@@ -13,14 +13,12 @@
 //   - Per-section suppression: `{#anchor override=none}` tombstone hides a section.
 //
 // Usage:
-//   node resolver.mjs --manifest layers.json --concept decisions/primary-db
+//   node resolver.mjs --manifest manifest.json --concept decisions/primary-db [--profile work]
 //
 // manifest.json: { "layers": [ {"name":"company","level":0,"path":"..."}, ... ] }
 
-import fs from "node:fs";
-import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildSources } from "./sources/index.mjs";
+import { buildProfileSources, loadProfileRuntime } from "./profile-runtime.mjs";
 
 if (isMainModule(import.meta.url)) {
   main().catch((e) => { console.error(e.message); process.exit(1); });
@@ -34,12 +32,15 @@ async function main() {
     return;
   }
 
-  if (!args.concept) {
+  if (!args.concept || !args.manifest) {
     throw new Error("Provide --concept <id> and --manifest <file>.");
   }
 
-  const manifest = JSON.parse(fs.readFileSync(args.manifest, "utf8"));
-  const sources = buildSources(manifest, path.dirname(args.manifest));
+  const runtime = loadProfileRuntime(args.manifest, {
+    requestedProfile: args.profile ?? null,
+    cwd: process.cwd(),
+  });
+  const sources = buildProfileSources(runtime);
 
   try {
     const resolved = await resolveConcept(args.concept, sources);
@@ -172,12 +173,14 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log(`Usage:
-  node resolver.mjs --manifest layers.json --concept <id>
+  node resolver.mjs --manifest manifest.json --concept <id> [--profile <id>]
 
 Resolves an OKF concept across an ordered source stack (level desc), merging per
 section and per frontmatter field with provenance. Higher level wins per section;
 per-section suppression via {#anchor override=none}.
 
-manifest.json: { "layers": [ {"name":"company","level":0,"path":"..."}, ... ] }
+Profile selection order: explicit --profile, deepest project mapping containing
+the current working directory, then default. Flat manifests remain the virtual
+default profile.
 `);
 }

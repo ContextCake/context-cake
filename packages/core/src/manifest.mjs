@@ -52,11 +52,16 @@ export function validateContextManifest(manifest, { validatePacks = true } = {})
       assertObject(profile, `Profile ${profileId}`);
       if (profile.label !== undefined) normalizeProfileLabel(profile.label);
       if (!Array.isArray(profile.layers)) throw new Error(`Profile ${profileId} does not have a layers array.`);
-      if (mode === "transitional") validateTransitionalProfileLayers(profile.layers, `profile ${profileId}`);
-      else validateLayers(profile.layers, `profile ${profileId}`);
+      if (mode === "transitional") {
+        validateTransitionalProfileLayers(profile.layers, `profile ${profileId}`);
+        for (const layer of profile.layers) {
+          if (!isRunnableLayer(layer)) warnings.push({ code: "pending-source", profileId, sourceName: layer.name });
+        }
+      } else validateLayers(profile.layers, `profile ${profileId}`);
       if (profile.pendingSources !== undefined) {
         if (!Array.isArray(profile.pendingSources)) throw new Error(`Profile ${profileId} pendingSources must be an array.`);
         validatePendingSources(profile.pendingSources, `profile ${profileId}`);
+        for (const source of profile.pendingSources) warnings.push({ code: "pending-source", profileId, sourceName: source.name });
       }
     }
   }
@@ -64,6 +69,7 @@ export function validateContextManifest(manifest, { validatePacks = true } = {})
   if (manifest.pendingSources !== undefined) {
     if (!Array.isArray(manifest.pendingSources)) throw new Error("ContextCake manifest pendingSources must be an array.");
     validatePendingSources(manifest.pendingSources, "legacy default");
+    for (const source of manifest.pendingSources) warnings.push({ code: "pending-source", profileId: "default", sourceName: source.name });
   }
 
   if (manifest.projects !== undefined) {
@@ -119,11 +125,12 @@ export function selectManifestProfile(manifest, {
   cwd = process.cwd(),
   realpath = fs.realpathSync.native,
 } = {}) {
-  const { mode, warnings } = validateContextManifest(manifest);
+  const { mode, warnings } = validateContextManifest(manifest, { validatePacks: false });
   if (mode === "legacy" || mode === "transitional") {
     if (requestedProfile !== null && requestedProfile !== "default") {
       throw new Error(`Profile ${requestedProfile} requires migration to Manifest v2.`);
     }
+    validatePackRegistry(manifest, mode, warnings, { strict: false, selectedProfile: "default" });
     return {
       mode,
       profileId: "default",
@@ -169,7 +176,8 @@ export function selectManifestProfile(manifest, {
 }
 
 export function listManifestProfiles(manifest) {
-  const { mode, warnings } = validateContextManifest(manifest);
+  const { mode, warnings } = validateContextManifest(manifest, { validatePacks: false });
+  validatePackRegistry(manifest, mode, warnings, { strict: false });
   if (mode === "legacy") {
     return [{ id: "default", label: "Default", sourceCount: manifest.layers?.length ?? 0, mappingCount: 0, mode, valid: true }];
   }
@@ -335,6 +343,7 @@ export function verifyManifestBackup(backupPath, expectedHash) {
 
 function selectedV2Profile(manifest, profileId, reason, matchedProjectRoot, warnings) {
   if (!Object.hasOwn(manifest.profiles, profileId)) throw new Error(`Unknown ContextCake profile: ${profileId}`);
+  validatePackRegistry(manifest, "v2", warnings, { strict: false, selectedProfile: profileId });
   const profile = manifest.profiles[profileId];
   return {
     mode: "v2",
@@ -355,7 +364,7 @@ function profileSummary(id, profile, projects, mode, warnings) {
     pendingSourceCount: profile.pendingSources?.length ?? 0,
     mappingCount: Object.values(projects ?? {}).filter((profileId) => profileId === id).length,
     mode,
-    valid: !warnings.some((warning) => warning.profileId === id),
+    valid: !warnings.some((warning) => warning.profileId === id && warning.code !== "pending-source"),
   };
 }
 
@@ -417,7 +426,7 @@ function validatePendingSources(sources, owner) {
   }
 }
 
-function validatePackRegistry(manifest, mode, warnings) {
+function validatePackRegistry(manifest, mode, warnings, { strict = true, selectedProfile = null } = {}) {
   if (manifest.packs === undefined) return;
   assertObject(manifest.packs, "ContextCake manifest packs registry");
   const assignedLayers = new Set();
@@ -450,16 +459,38 @@ function validatePackRegistry(manifest, mode, warnings) {
       try {
         layers = getLayersWithoutValidation(manifest, mode, profileId);
       } catch (error) {
-        warnings.push({ code: "dangling-pack-profile", packId, profileId, message: error.message });
+        reportPackInvariant(error.message, { code: "dangling-pack-profile", packId, profileId: normalizedProfileId }, warnings, { strict, selectedProfile });
         continue;
       }
-      if (!versions.has(assignment.activeVersion)) throw new Error(`Pack ${packId} assignment references missing version ${assignment.activeVersion}.`);
+      if (!versions.has(assignment.activeVersion)) {
+        reportPackInvariant(
+          `Pack ${packId} assignment references missing version ${assignment.activeVersion}.`,
+          { code: "missing-pack-version", packId, profileId: normalizedProfileId },
+          warnings,
+          { strict, selectedProfile },
+        );
+        continue;
+      }
       const matches = layers.filter((layer) => layer.name === assignment.layerName);
-      if (matches.length !== 1) throw new Error(`Pack ${packId} assignment must match exactly one layer named ${assignment.layerName}.`);
+      if (matches.length !== 1) {
+        reportPackInvariant(
+          `Pack ${packId} assignment must match exactly one layer named ${assignment.layerName}.`,
+          { code: "missing-pack-layer", packId, profileId: normalizedProfileId, layerName: assignment.layerName },
+          warnings,
+          { strict, selectedProfile },
+        );
+        continue;
+      }
       const layer = matches[0];
       const expectedOrigin = `pack:${packId}@${assignment.activeVersion}`;
       if (layer.origin !== expectedOrigin || Number(layer.level) !== Number(assignment.level)) {
-        throw new Error(`Pack ${packId} assignment does not match layer ${assignment.layerName}.`);
+        reportPackInvariant(
+          `Pack ${packId} assignment does not match layer ${assignment.layerName}.`,
+          { code: "pack-layer-drift", packId, profileId: normalizedProfileId, layerName: assignment.layerName },
+          warnings,
+          { strict, selectedProfile },
+        );
+        continue;
       }
       assignedLayers.add(`${normalizedProfileId}\0${layer.name}\0${layer.origin}`);
     }
@@ -468,10 +499,20 @@ function validatePackRegistry(manifest, mode, warnings) {
     for (const layer of layers) {
       if (typeof layer.origin !== "string" || !layer.origin.startsWith("pack:")) continue;
       if (!assignedLayers.has(`${profileId}\0${layer.name}\0${layer.origin}`)) {
-        throw new Error(`Pack layer ${layer.name} in profile ${profileId} has no matching registry assignment.`);
+        reportPackInvariant(
+          `Pack layer ${layer.name} in profile ${profileId} has no matching registry assignment.`,
+          { code: "orphan-pack-layer", profileId, layerName: layer.name },
+          warnings,
+          { strict, selectedProfile },
+        );
       }
     }
   }
+}
+
+function reportPackInvariant(message, details, warnings, { strict, selectedProfile }) {
+  if (strict || (selectedProfile !== null && details.profileId === selectedProfile)) throw new Error(message);
+  warnings.push({ ...details, message });
 }
 
 function getLayersWithoutValidation(manifest, mode, profile) {

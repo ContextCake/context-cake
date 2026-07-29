@@ -30,9 +30,9 @@ The main top-level key is `layers`, an array of layer objects. The local Pack ma
 may also maintain a `packs` registry of installed versions and assignments. That
 registry is bookkeeping for rollback; resolution reads only explicit layer entries.
 
-Reading a flat manifest creates an in-memory virtual profile with id `default`. It
-does not alter the file. Creating the first additional profile is the deliberate
-migration point described below.
+The shared profile selector treats a flat manifest as an in-memory virtual profile
+with id `default`. Selection does not alter the file. Creating the first additional
+profile is the deliberate migration point described below.
 
 ## Manifest v2: Project Profiles
 
@@ -74,7 +74,8 @@ The v2 rules are intentionally strict:
 - `projects` maps absolute, machine-local folders to profile ids. The paths are
   never uploaded by settings sync.
 - `pendingSources` holds synced descriptors that are incomplete or not yet
-  trusted on this machine. They are visible repair tasks, never runnable layers.
+  trusted on this machine. The later profile UI will present them as repair tasks;
+  the engine never treats them as runnable layers.
 - Canonical v2 has `profiles` and no top-level `layers`.
 
 ### Selection order

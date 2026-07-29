@@ -175,6 +175,29 @@ test("manifest validation rejects unsafe keys, duplicate layers, invalid labels,
   }), /duplicate assignment/);
 });
 
+test("inactive Pack drift warns while selecting the affected profile fails closed", () => {
+  const manifest = {
+    profiles: {
+      default: profile(),
+      work: profile("Work", [{ name: "pack-demo", level: 1, path: "packs/demo/1.0.0", origin: "pack:demo@1.0.0" }]),
+    },
+    packs: {
+      demo: {
+        installedVersions: [{ version: "1.0.0" }],
+        assignments: [{ profile: "work", layerName: "pack-demo", activeVersion: "1.0.0", level: 0 }],
+      },
+    },
+  };
+  assert.throws(() => validateContextManifest(manifest), /does not match layer/);
+  const healthy = selectManifestProfile(manifest, { requestedProfile: "default" });
+  assert.equal(healthy.profileId, "default");
+  assert(healthy.warnings.some((warning) => warning.code === "pack-layer-drift" && warning.profileId === "work"));
+  assert.throws(() => selectManifestProfile(manifest, { requestedProfile: "work" }), /does not match layer/);
+  const summaries = listManifestProfiles(manifest);
+  assert.equal(summaries.find((entry) => entry.id === "default").valid, true);
+  assert.equal(summaries.find((entry) => entry.id === "work").valid, false);
+});
+
 test("transitional migration preserves runnable data, quarantines incomplete sources, and creates a verified backup", (t) => {
   const root = temporaryDirectory(t);
   const manifestPath = path.join(root, "manifest.json");
@@ -458,6 +481,8 @@ test("profile summaries and revisions are deterministic without opening sources"
   const summaries = listManifestProfiles(manifest);
   assert.equal(summaries.find((entry) => entry.id === "work").mappingCount, 1);
   assert.equal(summaries.find((entry) => entry.id === "work").pendingSourceCount, 1);
+  assert.equal(summaries.find((entry) => entry.id === "work").valid, true);
+  assert(selectManifestProfile(manifest, { requestedProfile: "work" }).warnings.some((warning) => warning.code === "pending-source"));
   assert.equal(manifestRevision(manifest), manifestRevision(structuredClone(manifest)));
   assert.notEqual(manifestRevision(manifest), manifestRevision({ ...manifest, projects: {} }));
 });

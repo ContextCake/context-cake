@@ -17,6 +17,11 @@ Point it at the bundled demo:
 node mcp-server.mjs --manifest apps/playground/manifest.json
 ```
 
+With a Project Profiles manifest, register this command once. The server selects
+`--profile` when explicitly supplied; otherwise it uses the deepest project
+mapping that contains the MCP process's startup working directory, then falls
+back to `default`.
+
 Or use the legacy two-layer form, no manifest file required:
 
 ```bash
@@ -43,6 +48,27 @@ claude mcp add contextcake -- node /ABS/PATH/mcp-server.mjs --manifest /ABS/PATH
 The server identifies itself over the MCP `initialize` handshake as
 `contextcake`. Any MCP-compatible client — not just Claude Code — can spawn it
 the same way: `command` is `node`, `args` are the script path and flags.
+
+## Verify automatic selection
+
+From a mapped project folder, first confirm the CLI selection:
+
+```bash
+cd /ABS/PATH/TO/MAPPED/PROJECT
+contextcake profile current
+```
+
+Start a new agent session from that folder. Its MCP initialization instructions
+should name the same stable profile id and `reason: project`; the display label
+is available in structured initialization metadata. Then call `list_concepts`
+and confirm only that profile's concepts appear. The project path itself is
+never included in MCP instructions.
+
+Some clients do not start a global stdio server with the project as its working
+directory. For those clients, automatic folder mapping is unavailable. Use the
+default profile, or create a separately named opt-in registration whose command
+is `contextcake mcp --profile <id>`. Do not replace the one global automatic
+registration unless that client requires it.
 
 ## Tools
 

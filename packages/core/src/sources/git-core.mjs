@@ -152,14 +152,47 @@ function identityArgs(author) {
 // per-invocation -c pair — never writes config.
 export async function commitPaths(root, paths, message, { author = null, lockRetryMs, lockRetries } = {}) {
   if (!Array.isArray(paths) || paths.length === 0) throw new Error("commitPaths requires at least one path");
+  return withRepoLock(root, "commit", () => commitPathsUnlocked(root, paths, message, author), { lockRetryMs, lockRetries });
+}
+
+// Acquires the repo lock before a caller mutates the working tree, then commits
+// only the named paths. If add/commit fails, rollback runs while the same lock
+// is still held so the operation can remain safely retryable.
+export async function commitPathsWithMutation(root, paths, message, {
+  mutate,
+  rollback,
+  author = null,
+  lockRetryMs,
+  lockRetries,
+} = {}) {
+  if (!Array.isArray(paths) || paths.length === 0) throw new Error("commitPathsWithMutation requires at least one path");
+  if (typeof mutate !== "function" || typeof rollback !== "function") {
+    throw new Error("commitPathsWithMutation requires mutate and rollback callbacks");
+  }
   return withRepoLock(root, "commit", async () => {
-    await runGit(root, ["add", "--", ...paths]);
-    const ident = (await hasIdentity(root)) ? [] : identityArgs(author);
-    // Pathspec commit: commit ONLY these paths, so a pre-existing staged change
-    // (e.g. a prior failed op) can't be swept into this commit's message.
-    await runGit(root, [...ident, "commit", "-m", message, "--", ...paths]);
-    return { committed: true };
+    await mutate();
+    try {
+      return await commitPathsUnlocked(root, paths, message, author);
+    } catch (error) {
+      try {
+        await rollback(error);
+      } catch (rollbackError) {
+        const combined = new Error(`${error.message}; rollback failed: ${rollbackError.message}`);
+        combined.code = "RollbackFailed";
+        throw combined;
+      }
+      throw error;
+    }
   }, { lockRetryMs, lockRetries });
+}
+
+async function commitPathsUnlocked(root, paths, message, author) {
+  await runGit(root, ["add", "--", ...paths]);
+  const ident = (await hasIdentity(root)) ? [] : identityArgs(author);
+  // Pathspec commit: commit ONLY these paths, so a pre-existing staged change
+  // (e.g. a prior failed op) can't be swept into this commit's message.
+  await runGit(root, [...ident, "commit", "-m", message, "--", ...paths]);
+  return { committed: true };
 }
 
 async function pushOnce(root) {

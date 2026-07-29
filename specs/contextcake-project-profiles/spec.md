@@ -236,8 +236,9 @@ registration.
 ### 5.6 Agent connection and verification
 
 - [ ] WHEN an MCP process initializes THE SYSTEM SHALL include the selected
-  profile label, id, and selection reason in its non-secret usage instructions
-  without changing the existing read-tool schemas.
+  profile id and selection reason in its non-secret usage instructions, return
+  the human-readable label only as structured initialization metadata, and
+  SHALL NOT change the existing read-tool schemas.
 - [ ] WHEN a user runs `contextcake profile current` THE SYSTEM SHALL report the
   selected profile, selection reason, and matched project root if applicable;
   machine-readable JSON SHALL be available.

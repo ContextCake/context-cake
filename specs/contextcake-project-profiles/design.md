@@ -315,8 +315,10 @@ telemetry.
   capture context, link traversal, and telemetry initialization.
 - Make `resolveLiveLayer()` accept selected layers rather than search the full
   manifest.
-- Add the profile label, id, and non-sensitive selection reason to MCP
-  initialization instructions. Do not include a project path.
+- Add the stable profile id and non-sensitive selection reason to MCP
+  initialization instructions. Return the human-readable label only as
+  structured initialization metadata so synced display text cannot become
+  instruction prose. Do not include a project path.
 - Keep the four baseline read-tool schemas byte-for-byte stable and preserve the
   two additional team-sync read tools.
 - Keep capture opt-in. The selector must complete before the server exposes

@@ -111,6 +111,97 @@ that resolves live and target layers by identity from one selected manifest and
 revalidates before writing. Raw-path promotion remains an explicitly separate
 legacy/advanced mode without a profile-isolation claim.
 
+### B8. Batch destinations could escape the selected profile
+
+**Finding:** Runtime selection alone did not make `write.mjs` safe. Classifier
+destinations were joined directly to a layer root, generic Markdown-folder
+sources were treated as writable, and symlinked parents could be followed.
+
+**Impact:** Crafted signal data could overwrite a sibling profile or mutate a
+read-only source. A recursive directory creation could even touch an external
+tree before the later containment check rejected the final write.
+
+**Resolution:** Accepted. Batch writes now target only non-live local OKF
+layers, normalize destinations as concept ids, validate every existing parent
+before creating one directory component at a time, and use no-follow writes.
+Traversal, nested outward-symlink, final-symlink, and Markdown-folder fixtures
+all fail closed.
+
+### B9. Editable promotion metadata was not an authoritative binding
+
+**Finding:** Storing capture id, destination, and content hash only in the
+editable review file made the binding self-authored. An editor could change both
+visible field pairs and the hash together.
+
+**Impact:** A malicious review change could substitute another in-profile live
+capture or curated destination while retaining valid profile fingerprints.
+
+**Resolution:** Accepted. Profile-aware staging writes an opaque nonce into the
+review and stores the authoritative tuple in machine-local runtime state keyed
+by the manifest and nonce. Approval compares profile/layer fingerprints,
+capture, destination, capture hash, and review identity against that independent
+record. Reserved and duplicate promotion keys and symlinked source/review files
+are rejected.
+
+### B10. Revalidation and writes had a manifest race
+
+**Finding:** Capture and promotion re-read the manifest before writing, but did
+not exclude a concurrent profile deletion or retarget between the check and the
+filesystem mutation.
+
+**Impact:** A stale-root write could land despite the documented fail-closed
+binding promise.
+
+**Resolution:** Accepted. The shared manifest lock now has an async write lease.
+Capture confirmation holds it from binding revalidation through the local git
+commit; profile-aware promotion and batch write hold the same boundary across
+selection and local mutation. A barrier-controlled test proves concurrent
+manifest mutation waits for the lease.
+
+### B11. Promotion failure could destroy its retry surface
+
+**Finding:** Approval removed the review and live capture before the deletion
+commit succeeded. A later push-lock failure also left a committed deletion whose
+retry path skipped the push and cleared the review.
+
+**Impact:** Lock or git failures could make approval unresumable or silently
+leave cleanup only in a local commit.
+
+**Resolution:** Accepted. The repo lock is acquired before deleting the capture;
+commit failure restores the exact bytes and index state while retaining the
+review. The local binding records a durable cleanup commit, so a retry with an
+already-absent capture must retry the push before clearing the review. Forced
+pre-commit and post-commit lock tests cover both paths. If the process stops in
+the narrow interval after commit and before that state update, retry reconciles
+the exact expected deletion commit from git history before continuing.
+
+### B12. Synced labels could become agent instructions
+
+**Finding:** Profile labels are safe display strings but can originate in synced
+metadata. Quoting or labeling arbitrary prose as untrusted does not stop semantic
+prompt injection when that prose remains inside MCP `instructions`.
+
+**Impact:** A remote label change could influence a newly started agent session
+despite `activeProfile` correctly remaining local-only.
+
+**Resolution:** Accepted. MCP instructions contain only the regex-constrained
+profile id and enum selection reason. The label is returned separately as
+structured initialization metadata. The spec and design now state that boundary.
+
+### B13. Foreign MCP children could outlive the harness session
+
+**Finding:** Closing harness stdin flushed telemetry but did not reliably close
+selected adapters, and a foreign MCP child could ignore `SIGTERM`.
+
+**Impact:** ContextCake could remain alive after its harness disconnected,
+retaining a trusted executable child and stale process-bound profile snapshot.
+
+**Resolution:** Accepted. Shutdown drains already-received requests, awaits all
+adapter closes, ends child stdin, waits for bounded `SIGTERM`, and escalates to
+`SIGKILL`. Cache and git-sync decorators return the underlying async close so
+the wait cannot be dropped. The cached integration fixture deliberately ignores
+`SIGTERM` and still proves bounded exit without cutting off its final response.
+
 ## 2. Non-Blocking Findings and Resolutions
 
 | Finding | Disposition |

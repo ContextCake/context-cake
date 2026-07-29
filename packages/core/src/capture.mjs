@@ -195,18 +195,42 @@ export function renderCapture(capture, { author, capturedAt }) {
 // parent dir is created — a symlinked parent that escapes root. The final
 // component is handled at write time by writeFileInRoot (O_NOFOLLOW).
 export function assertInsideRoot(root, relFilePath) {
-  const target = path.resolve(root, relFilePath);
-  const rel = path.relative(root, target);
+  const absoluteRoot = path.resolve(root);
+  const target = path.resolve(absoluteRoot, relFilePath);
+  const rel = path.relative(absoluteRoot, target);
   if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new Error(`Path escapes live root: ${relFilePath}`);
   }
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  const realDir = fs.realpathSync(path.dirname(target));
-  const realRoot = fs.realpathSync(root);
-  if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) {
-    throw new Error(`Path escapes live root: ${relFilePath}`);
-  }
+  fs.mkdirSync(absoluteRoot, { recursive: true, mode: 0o700 });
+  ensureSafeParentDirectories(absoluteRoot, path.dirname(target), relFilePath);
   return target;
+}
+
+function ensureSafeParentDirectories(absoluteRoot, parent, relFilePath) {
+  const realRoot = fs.realpathSync(absoluteRoot);
+  const relativeParent = path.relative(absoluteRoot, parent);
+  let current = absoluteRoot;
+  for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      // Create one component only after its parent has been verified. A
+      // recursive mkdir here would follow a committed outward symlink and
+      // mutate that external tree before the later realpath check.
+      fs.mkdirSync(current, { mode: 0o700 });
+      stat = fs.lstatSync(current);
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`Path escapes live root through a non-directory or symlink: ${relFilePath}`);
+    }
+    const realCurrent = fs.realpathSync(current);
+    if (realCurrent !== realRoot && !realCurrent.startsWith(realRoot + path.sep)) {
+      throw new Error(`Path escapes live root: ${relFilePath}`);
+    }
+  }
 }
 
 // Writes inside root without following a symlinked final component. O_NOFOLLOW
@@ -251,9 +275,38 @@ export function appendFileInRoot(root, relFilePath, data) {
   return target;
 }
 
+// Reads an existing regular file without following a symlinked parent or final
+// component. Team live repositories are a trust boundary, so promotion must
+// never turn a committed symlink into an arbitrary local-file disclosure.
+export function readFileInRoot(root, relFilePath, encoding = "utf8") {
+  const target = path.resolve(root, relFilePath);
+  const rel = path.relative(root, target);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`Path escapes live root: ${relFilePath}`);
+  }
+  const realRoot = fs.realpathSync(root);
+  const realDir = fs.realpathSync(path.dirname(target));
+  if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) {
+    throw new Error(`Path escapes live root: ${relFilePath}`);
+  }
+  let fd;
+  try {
+    fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (error) {
+    if (error.code === "ELOOP") throw new Error(`Refusing to read through a symlink: ${relFilePath}`);
+    throw error;
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`Read target is not a regular file: ${relFilePath}`);
+    return fs.readFileSync(fd, encoding);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 // ---- two-phase staging ---------------------------------------------------------------
 
-const staged = new Map(); // token -> { capture, id, author, capturedAt, stagedAt }
+const staged = new Map(); // token -> { capture, id, author, capturedAt, stagedAt, binding }
 
 function sweep(now) {
   for (const [token, entry] of staged) {
@@ -275,7 +328,7 @@ function uniqueId(root, kind, author, title) {
 }
 
 export async function stageCapture(payload, ctx) {
-  const { root, profileName = null, policyPath = defaultCapturePolicyPath, now = Date.now } = ctx;
+  const { root, profileName = null, policyPath = defaultCapturePolicyPath, now = Date.now, binding = null } = ctx;
   sweep(now);
 
   const validation = validateCapture(payload);
@@ -316,37 +369,73 @@ export async function stageCapture(payload, ctx) {
     const oldest = [...staged.entries()].sort((a, b) => a[1].stagedAt - b[1].stagedAt)[0];
     if (oldest) staged.delete(oldest[0]);
   }
-  staged.set(token, { capture: payload, id, author, capturedAt, stagedAt: now() });
+  staged.set(token, {
+    capture: payload,
+    id,
+    author,
+    capturedAt,
+    stagedAt: now(),
+    binding: binding ? { ...binding } : null,
+  });
 
   const preview = warnings.length > 0 ? `> ⚠ ${warnings.join("\n> ⚠ ")}\n\n${rendered}` : rendered;
   return { staged: true, token, id, preview, warnings, route: routed.route };
 }
 
 export async function confirmCapture(token, ctx) {
-  const { root, now = Date.now, onEvent = null } = ctx;
+  const {
+    root,
+    now = Date.now,
+    onEvent = null,
+    binding = null,
+    revalidateBinding = null,
+    withBindingLock = null,
+  } = ctx;
   sweep(now);
 
   const entry = staged.get(token);
   staged.delete(token); // single-use, consumed even if the write below fails
   if (!entry) throw new Error("Unknown, expired, or already-used staging token — stage the capture again.");
 
-  // Re-check uniqueness at confirm time (a teammate's capture may have landed).
-  const id = fs.existsSync(path.join(root, `${entry.id}.md`)) ? uniqueId(root, entry.capture.kind, entry.author, entry.capture.title) : entry.id;
-  normalizeConceptId(id);
-  writeFileInRoot(root, `${id}.md`, renderCapture(entry.capture, { author: entry.author, capturedAt: entry.capturedAt }));
-
-  const extraPaths = typeof onEvent === "function"
-    ? (onEvent({ event: "confirm", concept: id, captureKind: entry.capture.kind, user: entry.author }) ?? [])
-    : [];
-  try {
-    await commitPaths(root, [`${id}.md`, ...extraPaths], `feat: capture ${id}`, { author: entry.author });
-  } catch (error) {
-    // Commit failed (lock contention, etc.): don't strand an untracked file
-    // that a later commit could sweep up. The token is already consumed —
-    // the caller re-stages.
-    try { fs.rmSync(path.join(root, `${id}.md`), { force: true }); } catch { /* best effort */ }
-    throw error;
+  if (entry.binding && typeof withBindingLock !== "function") {
+    const current = typeof revalidateBinding === "function"
+      ? revalidateBinding(entry.binding)
+      : binding;
+    if (!current || !sameBinding(entry.binding, current)) {
+      throw new Error("The selected profile or live-layer configuration changed after staging. Stage the capture again in a new session.");
+    }
   }
+
+  const persist = async () => {
+    // Re-check uniqueness at confirm time (a teammate's capture may have landed).
+    const id = fs.existsSync(path.join(root, `${entry.id}.md`)) ? uniqueId(root, entry.capture.kind, entry.author, entry.capture.title) : entry.id;
+    normalizeConceptId(id);
+    writeFileInRoot(root, `${id}.md`, renderCapture(entry.capture, { author: entry.author, capturedAt: entry.capturedAt }));
+
+    const extraPaths = typeof onEvent === "function"
+      ? (onEvent({ event: "confirm", concept: id, captureKind: entry.capture.kind, user: entry.author }) ?? [])
+      : [];
+    try {
+      await commitPaths(root, [`${id}.md`, ...extraPaths], `feat: capture ${id}`, { author: entry.author });
+    } catch (error) {
+      // Commit failed (lock contention, etc.): don't strand an untracked file
+      // that a later commit could sweep up. The token is already consumed —
+      // the caller re-stages.
+      try { fs.rmSync(path.join(root, `${id}.md`), { force: true }); } catch { /* best effort */ }
+      throw error;
+    }
+    return id;
+  };
+
+  const id = entry.binding && typeof withBindingLock === "function"
+    ? await withBindingLock(entry.binding, persist)
+    : await persist();
   const pushed = await push(root);
   return { id, pushed: pushed.pushed === true, ...(pushed.queued ? { queued: true } : {}) };
+}
+
+function sameBinding(left, right) {
+  return left.profileId === right.profileId
+    && left.manifestRevision === right.manifestRevision
+    && left.liveLayerFingerprint === right.liveLayerFingerprint;
 }

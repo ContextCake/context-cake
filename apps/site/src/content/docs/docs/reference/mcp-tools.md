@@ -6,7 +6,7 @@ description: search, read_file, list_concepts, get_links, find_captures, whats_n
 `mcp-server.mjs` is a stdio MCP server that exposes the resolved cascade to AI
 agents as one effective, read-time OKF graph. Reads resolve through the same
 section/field merge as the CLI — level precedence, provenance, per-section
-conflicts — over every source in the manifest.
+conflicts — over only the sources in the profile selected at process startup.
 
 ## The read tools
 
@@ -30,6 +30,12 @@ default server stays read-only. Both feed the two-phase show-before-share flow:
 |------|--------------|
 | `log_capture` | Validates a capture, scans for credentials, and returns a rendered preview plus a single-use staging token. Nothing is shared yet. |
 | `confirm_capture` | Commits and shares a staged capture — call only after the user has seen the preview and approved. |
+
+The server finds a live layer only inside the selected profile. A staging token
+is bound to the profile id, manifest revision, and live-layer fingerprint;
+confirmation re-reads that configuration and rejects the write if it changed.
+The shared manifest lock stays held through the local write and commit, so a
+concurrent profile edit cannot retarget the operation between check and write.
 
 ## search
 
@@ -155,7 +161,7 @@ Start it against a manifest (cascade mode) or an explicit two-layer stack (legac
 mode):
 
 ```bash
-node mcp-server.mjs --manifest apps/playground/manifest.json
+node mcp-server.mjs --manifest apps/playground/manifest.json [--profile <id>]
 ```
 
 ```bash

@@ -46,6 +46,7 @@ Operational checklist for login incidents.
 EOF
 
 node "$repo_root/promote.mjs" \
+  --legacy-paths \
   --personal "$personal" \
   --shared "$shared" \
   --file scratch/auth-notes

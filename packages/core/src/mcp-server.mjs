@@ -5,19 +5,23 @@
 // resolver.mjs (level precedence, provenance, per-section conflicts) over the
 // source adapters in sources/ (OKF-local bundles + foreign graphs over MCP).
 //
-//   node mcp-server.mjs --manifest layers.json
+//   node mcp-server.mjs --manifest manifest.json [--profile work]
 //   node mcp-server.mjs --personal <dir> --shared <dir>   # legacy 2-layer stack
 
-import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { resolveConcept } from "./resolver.mjs";
 import { buildSources } from "./sources/index.mjs";
 import { isTraversal } from "./sources/okf-local.mjs";
-import { resolveLiveLayer } from "./sources/git-sync.mjs";
 import { commitPaths, push } from "./sources/git-core.mjs";
 import { appendFileInRoot, stageCapture, confirmCapture, resolveAuthor } from "./capture.mjs";
 import { slugify } from "./classify-context.mjs";
+import {
+  buildProfileSources,
+  loadProfileRuntime,
+  resolveProfileLiveLayer,
+  withProfileLiveBinding,
+} from "./profile-runtime.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -26,15 +30,25 @@ if (args.help) {
   process.exit(0);
 }
 
-const layers = buildLayers(args);
+const runtime = args.manifest
+  ? loadProfileRuntime(args.manifest, { requestedProfile: args.profile ?? null, cwd: process.cwd() })
+  : null;
+const selection = runtime?.selection ?? {
+  mode: "legacy-paths",
+  profileId: "default",
+  profileLabel: "Default",
+  reason: "legacy-default",
+  matchedProjectRoot: null,
+};
+const layers = runtime ? buildProfileSources(runtime) : buildLegacyLayers(args);
 if (layers.length === 0) {
-  printHelp();
+  console.error(`Selected profile "${selection.profileLabel}" (${selection.profileId}) has no usable sources.`);
   process.exit(1);
 }
 
-const liveLayer = args.manifest
-  ? resolveLiveLayer(JSON.parse(fs.readFileSync(args.manifest, "utf8")), path.dirname(args.manifest))
-  : null;
+const { liveLayer, binding: liveLayerBinding } = runtime
+  ? resolveProfileLiveLayer(runtime)
+  : { liveLayer: null, binding: null };
 if ((args.capture || args.telemetry) && !liveLayer) {
   console.error(
     "--capture/--telemetry require a live layer: mark exactly one okf-local layer with \"live\": true and a \"git\" block in the manifest.",
@@ -46,6 +60,7 @@ const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
 const serverInfo = { name: "contextcake", version: "0.1.0" };
 const serverInstructions = [
   "Consult ContextCake before answering project-specific questions.",
+  `Selected ContextCake profile id: ${selection.profileId}; reason: ${selection.reason}.`,
   "Start with list_concepts or search, then read the relevant resolved concept.",
   "Treat sourceLayer as precedence rather than certainty, preserve provenance, and surface conflicting guidance with its layers instead of silently reconciling it.",
   "Check find_captures before starting an investigation — captures are unreviewed teammate findings; weigh author and date.",
@@ -249,8 +264,16 @@ async function commitAndPushTelemetry() {
 }
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const inFlight = new Set();
+let shutdownPromise = null;
 
-rl.on("line", async (line) => {
+rl.on("line", (line) => {
+  const pending = processLine(line);
+  inFlight.add(pending);
+  void pending.finally(() => inFlight.delete(pending));
+});
+
+async function processLine(line) {
   if (!line.trim()) return;
   let message;
   try {
@@ -265,15 +288,33 @@ rl.on("line", async (line) => {
   } catch (error) {
     write({ jsonrpc: "2.0", id: message.id ?? null, error: { code: -32000, message: error.message } });
   }
-});
+}
 
-// On stdin close (session end) flush accumulated telemetry to the shared repo.
-// Fire-and-forget: the pending promise keeps the loop alive until the git op
-// finishes, then the process exits naturally (no forced exit that could cut
-// off an in-flight response).
-rl.on("close", () => {
-  if (args.telemetry) void commitAndPushTelemetry();
-});
+async function shutdown() {
+  if (!shutdownPromise) {
+    shutdownPromise = (async () => {
+      if (args.telemetry) await commitAndPushTelemetry();
+      await Promise.allSettled(layers.map((layer) => Promise.resolve().then(() => layer.close?.())));
+    })();
+  }
+  return shutdownPromise;
+}
+
+async function drainAndShutdown() {
+  await Promise.allSettled([...inFlight]);
+  await shutdown();
+}
+
+// Finish already-received requests before closing spawned source adapters.
+// This lets piped stdio clients close stdin immediately without cutting off
+// their final response, while ensuring a long-lived foreign MCP child cannot
+// keep ContextCake alive after the harness disconnects.
+rl.on("close", () => { void drainAndShutdown(); });
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => {
+    void drainAndShutdown().finally(() => process.exit(0));
+  });
+}
 
 async function handleMessage(message) {
   const { id, method, params = {} } = message;
@@ -287,6 +328,15 @@ async function handleMessage(message) {
         capabilities: { tools: {} },
         serverInfo,
         instructions: serverInstructions,
+        _meta: {
+          contextcake: {
+            selectedProfile: {
+              id: selection.profileId,
+              label: selection.profileLabel,
+              reason: selection.reason,
+            },
+          },
+        },
       },
     };
   }
@@ -392,6 +442,7 @@ function captureContext() {
     root: liveLayer.root,
     profileName: liveLayer.profileName,
     retentionDays: liveLayer.retentionDays,
+    binding: liveLayerBinding,
   };
 }
 
@@ -404,6 +455,7 @@ async function logCapture(toolArgs) {
 async function confirmCaptureTool({ token }) {
   const result = await confirmCapture(token, {
     ...captureContext(),
+    withBindingLock: (expected, mutate) => withProfileLiveBinding(runtime, expected, mutate),
     onEvent: ({ concept, captureKind }) => {
       emitTelemetry({ event: "confirm", concept, layer: liveLayer.name, captureKind });
       // Deliberately do NOT ride telemetry along on the capture commit: that
@@ -532,11 +584,7 @@ async function getLinks({ concept_id }) {
 
 // ---- helpers --------------------------------------------------------------
 
-function buildLayers(parsed) {
-  if (parsed.manifest) {
-    const manifest = JSON.parse(fs.readFileSync(parsed.manifest, "utf8"));
-    return buildSources(manifest, path.dirname(parsed.manifest));
-  }
+function buildLegacyLayers(parsed) {
   if (parsed.personal && parsed.shared) {
     return buildSources(
       {
@@ -699,12 +747,14 @@ function write(message) {
 
 function printHelp() {
   console.log(`Usage:
-  node mcp-server.mjs --manifest layers.json
+  node mcp-server.mjs --manifest manifest.json [--profile <id>]
   node mcp-server.mjs --personal <dir> --shared <dir>
 
 Stdio MCP server exposing a cascade of knowledge sources (OKF-local bundles +
 foreign graphs over MCP) as one effective read-time OKF graph. read_file
 resolves the effective concept (section/field merge + provenance + per-section
-conflicts); pass a layer name to read a single layer's raw concept.
+conflicts); pass a layer name to read a single layer's raw concept. With a
+manifest, selection order is explicit --profile, deepest project mapping for
+the process working directory, then default.
 `);
 }

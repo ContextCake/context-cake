@@ -65,16 +65,20 @@ export function withGitSync(source, { root, pullTtlMs = 90000, retentionDays = 1
       return wrapped.lastSynced;
     },
     close() {
-      source.close();
+      return source.close();
     },
   };
   return wrapped;
 }
 
-// Narrow data facade over the manifest: callers get paths and config for the
-// single live layer, never a mutable source. Mutations go through git-core.
-export function resolveLiveLayer(manifest, manifestDir) {
-  const live = (manifest.layers ?? []).filter((layer) => layer.live === true);
+// Narrow data facade over an already-selected layer stack: callers get paths
+// and config for the single live layer, never the full manifest or a mutable
+// source. Mutations go through git-core.
+export function resolveLiveLayer(selectedLayers, manifestDir) {
+  if (!Array.isArray(selectedLayers)) {
+    throw new Error("resolveLiveLayer requires an already-selected layer array.");
+  }
+  const live = selectedLayers.filter((layer) => layer.live === true);
   if (live.length === 0) return null;
   if (live.length > 1) {
     throw new Error(`Manifest declares ${live.length} live layers (${live.map((l) => l.name).join(", ")}); exactly one is allowed`);
@@ -87,6 +91,7 @@ export function resolveLiveLayer(manifest, manifestDir) {
     throw new Error(`Live layer "${layer.name}" requires a "git" block ({ pullTtlSeconds, retentionDays, profileName })`);
   }
   return {
+    layer,
     name: layer.name,
     root: path.resolve(manifestDir, layer.path),
     pullTtlMs: (Number(layer.git.pullTtlSeconds ?? 90)) * 1000,

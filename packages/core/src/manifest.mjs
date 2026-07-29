@@ -287,6 +287,30 @@ export function withManifestLock(manifestPath, mutate, {
   }
 }
 
+// Async counterpart for profile-bound runtime writes. Holding the same lock
+// across revalidation and the resulting filesystem/git mutation closes the
+// race where a concurrent profile edit could retarget a write after the check.
+export async function withManifestLockAsync(manifestPath, mutate, {
+  timeoutMs = MANIFEST_LOCK_TIMEOUT_MS,
+  staleMs = MANIFEST_LOCK_STALE_MS,
+} = {}) {
+  const resolved = path.resolve(manifestPath);
+  const lockPath = `${resolved}.lock`;
+  fs.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + timeoutMs;
+  let token = tryAcquireManifestLock(lockPath, staleMs);
+  while (token === null) {
+    if (Date.now() >= deadline) throw new Error(`Timed out acquiring the ContextCake manifest lock at ${lockPath}.`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    token = tryAcquireManifestLock(lockPath, staleMs);
+  }
+  try {
+    return await mutate();
+  } finally {
+    releaseManifestLock(lockPath, token);
+  }
+}
+
 export function mutateContextManifest(manifestPath, mutate, {
   allowMissing = true,
   allowLegacy = true,

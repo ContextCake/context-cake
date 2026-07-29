@@ -1,31 +1,62 @@
 ---
 title: Promoting concepts
-description: Move a concept up the stack — personal to shared.
+description: Promote a live capture into a curated layer without crossing profile boundaries.
 ---
 
-A concept that started as a personal note often deserves to become team
-knowledge. `promote.mjs` copies a concept from a personal OKF bundle into a
-shared bundle, rewrites its links, and rebuilds the shared index — it doesn't
-touch the resolver or the manifest at all; it operates directly on two
-bundle directories.
+A useful live capture often deserves to become curated team knowledge.
+`promote.mjs` uses the same Project Profile selection as MCP, resolves both
+the live source and curated target from that one profile, and stages a review
+before it removes anything from the live repository.
 
 ## Usage
 
-```bash
-node promote.mjs --personal <dir> --shared <dir> --file <concept-or-path> [--dry-run] [--print-git]
-```
-
-`--personal <dir>` and `--shared <dir>` are the two bundle roots (required).
-`--file <concept-or-path>` is the concept to promote — a bare id like
-`decisions/primary-db` or a path, with or without `.md` (required).
+Request a promotion:
 
 ```bash
-node promote.mjs --personal ~/kb-personal --shared ~/kb-team --file decisions/primary-db
+contextcake promote --capture captures/investigation/<id> --target-layer team --dest systems/<id>
 ```
 
-This copies `~/kb-personal/decisions/primary-db.md` to
-`~/kb-team/decisions/primary-db.md`, preserving its relative path, and
-rewrites the shared bundle's `index.md` to include it.
+The command selects an explicit `--profile <id>`, the deepest project mapping
+for the current directory, or `default`, in that order. The selected profile
+must contain exactly one `live: true` local OKF layer and the named curated
+`--target-layer`.
+
+After reviewing the generated file under the curated layer's
+`_review/promotions/` directory, approve it:
+
+```bash
+contextcake promote --approve /ABS/PATH/team/_review/promotions/<slug>.md --target-layer team
+```
+
+The review carries the profile id, manifest revision, live-layer and
+target-layer fingerprints, capture id, destination, and capture-content hash
+from the request. Approval reselects the same profile and fails if configuration
+or capture content changed. ContextCake holds the manifest boundary across that
+check and the local mutation. Only after the curated write verifies and the
+live deletion commits does it remove the review entry; a failed commit restores
+the capture and leaves the review retryable.
+
+Live captures and review entries must be regular files inside their selected
+layer roots. Symlinked files and any parent path that escapes its selected root
+are rejected rather than followed.
+The editable review carries an opaque binding id; its authoritative tuple is
+kept in ContextCake's machine-local state, not in the team repository. This
+lets people edit the proposed prose without letting the review redefine its
+source capture, destination, or trust boundary.
+
+## Legacy raw-directory mode
+
+The original personal-to-shared copy and raw live-root flow remain available
+for advanced compatibility. They require `--legacy-paths` so a command that
+bypasses Project Profile isolation is explicit:
+
+```bash
+node promote.mjs --legacy-paths --personal ~/kb-personal --shared ~/kb-team --file decisions/primary-db
+node promote.mjs --legacy-paths --from-live ~/kb-live --capture captures/investigation/<id> --target ~/kb-team
+```
+
+The remaining options on this page describe that legacy personal-to-shared
+copy mode.
 
 ## Link rewriting
 
@@ -54,7 +85,7 @@ the shared index authoritative without hand-maintaining it.
 touching disk:
 
 ```bash
-node promote.mjs --personal ~/kb-personal --shared ~/kb-team --file decisions/primary-db --dry-run
+node promote.mjs --legacy-paths --personal ~/kb-personal --shared ~/kb-team --file decisions/primary-db --dry-run
 ```
 
 ```json
@@ -74,7 +105,7 @@ node promote.mjs --personal ~/kb-personal --shared ~/kb-team --file decisions/pr
 — it doesn't run them for you:
 
 ```bash
-node promote.mjs --personal ~/kb-personal --shared ~/kb-team --file decisions/primary-db --print-git
+node promote.mjs --legacy-paths --personal ~/kb-personal --shared ~/kb-team --file decisions/primary-db --print-git
 ```
 
 ```
@@ -95,13 +126,13 @@ override it. Since the shared bundle is its own git repo, promotion becomes a
 normal reviewable PR against team or company knowledge — nothing is written
 straight to a shared main branch unreviewed.
 
-## Why directories, not a manifest
+## Why the legacy mode still exists
 
-`promote.mjs` takes `--personal`/`--shared` directories rather than
-`--manifest`/`--target-layer` like `write.mjs`. Promotion is a bundle-to-bundle
-file operation between two known OKF roots you already have local paths to
-— it doesn't need the full source-adapter machinery that lets a manifest
-layer be `mcp` or a remote clone.
+Older scripts may already know two explicit bundle roots and may not use a
+ContextCake manifest. `--legacy-paths` preserves that workflow, but it cannot
+claim cross-profile isolation or bind an approval to a manifest revision. New
+team-sync workflows should use `--manifest`/`--target-layer` (or the packaged
+CLI defaults) instead.
 
 ## Next
 

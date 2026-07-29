@@ -8,11 +8,9 @@ project mappings, layer stacks, and Pack assignments. Every command that resolve
 knowledge is pointed at one with `--manifest`.
 
 ContextCake still reads the original flat `layers` shape without rewriting it.
-The Project Profiles rollout adds a canonical v2 shape with a required `default`
-profile. The shared manifest and Pack code understand v2 now; automatic profile
-selection in `resolver.mjs` and `mcp-server.mjs` arrives in the next implementation
-slice. Until that wiring ships, keep agent-facing manifests flat rather than
-manually converting them.
+The canonical v2 shape adds a required `default` profile. `resolver.mjs`,
+`mcp-server.mjs`, `write.mjs`, live capture, telemetry, and profile-aware
+promotion all select one profile before they open or write a source.
 
 ## Current flat schema
 
@@ -74,8 +72,7 @@ The v2 rules are intentionally strict:
 - `projects` maps absolute, machine-local folders to profile ids. The paths are
   never uploaded by settings sync.
 - `pendingSources` holds synced descriptors that are incomplete or not yet
-  trusted on this machine. The later profile UI will present them as repair tasks;
-  the engine never treats them as runnable layers.
+  trusted on this machine. The engine never treats them as runnable layers.
 - Canonical v2 has `profiles` and no top-level `layers`.
 
 ### Selection order
@@ -90,6 +87,12 @@ Profile-aware commands use one deterministic order:
 An explicit or matched unknown profile fails closed. It never falls through to
 unrelated default context. Symlink aliases are resolved to real paths; two equally
 specific aliases that name different profiles are a configuration error.
+
+The selection is bound for the lifetime of an MCP process. Changing a mapping or
+the app's visible profile does not redirect an already-running agent. Restart the
+agent session after configuration changes. Pending capture and promotion approvals
+also revalidate the manifest revision and live/target layer identities before they
+write, and hold the manifest mutation lock through the local write boundary.
 
 ### Migration and transitional manifests
 

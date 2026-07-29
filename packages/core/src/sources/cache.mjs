@@ -90,7 +90,7 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
       return wrapped.lastSynced;
     },
     close() {
-      source.close();
+      return source.close();
     },
   };
   return wrapped;

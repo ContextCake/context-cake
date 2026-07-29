@@ -152,12 +152,40 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
       await ready;
       return send("tools/list", {});
     },
-    close() {
+    async close() {
       closed = true;
       if (rl) { try { rl.close(); } catch {} rl = null; }
-      if (child) { try { child.kill(); } catch {} child = null; }
+      const running = child;
+      if (!running) return;
+      try { running.stdin.end(); } catch {}
+      try { running.kill("SIGTERM"); } catch {}
+      if (!(await waitForExit(running, 300))) {
+        try { running.kill("SIGKILL"); } catch {}
+        await waitForExit(running, 700);
+      }
+      try { running.stdin.destroy(); } catch {}
+      try { running.stdout.destroy(); } catch {}
+      if (child === running) child = null;
     },
   };
+}
+
+function waitForExit(child, timeoutMs) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    timer.unref?.();
+    child.once("exit", onExit);
+  });
 }
 
 // The translation: arbitrary foreign shape -> OKF { frontmatter, sections }.

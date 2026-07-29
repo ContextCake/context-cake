@@ -100,6 +100,8 @@ Flags: `--signals <file>` (required), `--manifest <file>` (required),
 `--target-layer <name>` (defaults to the highest layer level below 3 — i.e.
 not personal — or level 3 if that's the only layer available),
 `--dry-run` (prints what would be written without touching disk), `--help`.
+The target must be a non-live local OKF layer; plain Markdown-folder sources
+and live capture repositories are not batch-write targets.
 
 Per signal:
 
@@ -110,6 +112,10 @@ Per signal:
   layer instead of written live — `_review/payment-api/add-retry-runbook.md`
   — pending a human decision. A signal that already resolves to an existing
   file is skipped rather than overwritten.
+
+Destinations are validated as concept ids. Traversal and symlinked parents or
+files are rejected before a write, so classifier output cannot escape the
+selected profile's target root.
 
 Every written or staged concept carries `draft: true`, `source: <repo>`, and
 an `updated` date in its frontmatter, plus a `## Context {#context}` section

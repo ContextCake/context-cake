@@ -33,8 +33,9 @@ const COMMANDS = {
   resolve: { entry: 'resolver.mjs', manifest: true, blurb: 'resolve a concept across layers' },
   ingest: { entry: 'ingest.mjs', manifest: false, blurb: 'classify repo events into signals' },
   write: { entry: 'write.mjs', manifest: true, blurb: 'write captured signals into a layer' },
-  promote: { entry: 'promote.mjs', manifest: false, blurb: 'promote a concept up one layer' },
+  promote: { entry: 'promote.mjs', manifest: true, blurb: 'promote a live capture inside one profile' },
   pack: { entry: 'pack-cli.mjs', manifest: false, blurb: 'inspect, install, update, and roll back local Packs' },
+  profile: { entry: 'profile-cli.mjs', manifest: true, blurb: 'inspect and manage project profiles' },
 }
 
 function usage() {
@@ -72,7 +73,8 @@ if (!command) {
 }
 
 const args = [...rest]
-if (command.manifest && !args.includes('--manifest') && !args.includes('--personal')) {
+const isHelp = args.some((arg) => ['help', '--help', '-h'].includes(arg))
+if (command.manifest && !isHelp && !args.includes('--manifest') && !args.includes('--personal') && !args.includes('--legacy-paths')) {
   if (!fs.existsSync(DEFAULT_MANIFEST)) {
     console.error(`contextcake: no manifest at ${DEFAULT_MANIFEST}`)
     console.error('Open the ContextCake app to run first-time setup, or pass --manifest.')

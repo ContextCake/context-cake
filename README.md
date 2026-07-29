@@ -274,7 +274,7 @@ npm --prefix apps/desktop run smoke:bootfail
 
 ## Contributing
 
-Contributions are welcome. Before opening a pull request, please read [CONTRIBUTING.md](CONTRIBUTING.md), keep `packages/core/` dependency-free, and run the checks relevant to the surface you changed. For security issues, use [private vulnerability reporting](https://github.com/ContextCake/context-cake/security/advisories/new) rather than a public issue.
+Contributions are welcome. Before opening a pull request, please read [CONTRIBUTING.md](CONTRIBUTING.md), keep `packages/core/` dependency-free, and run the checks relevant to the surface you changed. Commits must be signed off with `git commit -s` to certify the [Developer Certificate of Origin](DCO) — there is no CLA. For security issues, use [private vulnerability reporting](https://github.com/ContextCake/context-cake/security/advisories/new) rather than a public issue.
 
 ## License
 

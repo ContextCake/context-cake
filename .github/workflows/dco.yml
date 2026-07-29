@@ -1,0 +1,55 @@
+name: DCO
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sign-off:
+    name: sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history: the check compares against the fork point with the base
+          # branch, so both parents of the pull request merge ref must be
+          # reachable.
+          fetch-depth: 0
+
+      - name: Test the check script
+        run: bash .github/scripts/check-dco-test.sh
+
+      - name: Identify GitHub-verified bot commits
+        id: bots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # A commit's local git author name is whatever the contributor set
+          # before pushing — never trust it for a security decision. The API's
+          # per-commit `author` object instead reflects GitHub's own account
+          # lookup, so `author.type == "Bot"` cannot be spoofed the same way.
+          shas="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" --paginate \
+            --jq '.[] | select(.author != null and .author.type == "Bot") | .sha' \
+            | tr '\n' ' ')"
+          echo "shas=${shas}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify sign-off on every commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DCO_BOT_SHAS: ${{ steps.bots.outputs.shas }}
+        run: bash .github/scripts/check-dco.sh "$BASE_SHA" "$HEAD_SHA"

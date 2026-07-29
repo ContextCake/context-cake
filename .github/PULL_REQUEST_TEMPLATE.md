@@ -25,3 +25,8 @@
 - [ ] Root commands still work, or the PR explains the migration path.
 - [ ] No root npm dependencies were added.
 - [ ] Generated files are ignored or intentionally committed.
+
+## Sign-off
+
+- [ ] Every commit is signed off (`git commit -s`) per the
+      [Developer Certificate of Origin](https://github.com/ContextCake/context-cake/blob/main/DCO).

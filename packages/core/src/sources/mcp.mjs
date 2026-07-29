@@ -18,7 +18,9 @@ function spawnTrustedMcpCommand(command, args) {
   // `shell: false` keeps command/args as an argv vector, so metacharacters have
   // no meaning unless the trusted command deliberately launches a shell.
   // See apps/site/src/content/docs/docs/concepts/trust-boundary.md.
+
   // codeql[js/command-line-injection]
+  // lgtm[js/command-line-injection]
   return spawn(command.trim(), args, { stdio: ["pipe", "pipe", "inherit"], shell: false });
 }
 

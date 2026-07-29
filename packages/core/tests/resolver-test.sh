@@ -220,6 +220,20 @@ EOF
 shallow="$(node "$resolver" --manifest "$tmpdir/shallow-layers.json" --concept decisions/legacy)"
 grep -q '"sourceUpdated": null' <<<"$shallow" || fail "a shallow clone cannot date its history and must say so, not invent the boundary date" "$shallow"
 
+# A git that fails inside a real repo means the dates are unknown — it does not
+# make the mtime trustworthy. Falling back to it here would date every doc today,
+# which is the failure this whole path exists to prevent.
+mkdir -p "$tmpdir/shim"
+cat > "$tmpdir/shim/git" <<EOF
+#!/bin/sh
+# Absolute path: the shim is first on PATH, so a bare \`git\` would re-enter it.
+if [ "\$3" = "log" ]; then echo "simulated git failure" >&2; exit 128; fi
+exec "$(command -v git)" "\$@"
+EOF
+chmod +x "$tmpdir/shim/git"
+broken="$(PATH="$tmpdir/shim:$PATH" node "$resolver" --manifest "$tmpdir/git-layers.json" --concept decisions/legacy 2>/dev/null)"
+grep -q '"sourceUpdated": null' <<<"$broken" || fail "an unreadable git history should leave sections undated, not fall back to the mtime" "$broken"
+
 # --- Path-traversal guard: a concept id must not escape its layer root ---
 for evil in ".." "../secrets" "decisions/../../etc/passwd" "a/.." "/etc/passwd"; do
   if node "$resolver" --manifest "$tmpdir/conf-layers.json" --concept "$evil" 2>/dev/null; then

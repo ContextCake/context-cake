@@ -55,7 +55,7 @@ export function createOkfLocalSource({ name, level, root }) {
       if (!/not a git repository/i.test(where.stderr)) {
         warnOnce(`cannot read git history (${where.stderr}) — sections will fall back to file mtimes`);
       }
-      return { dates, tracked: null };
+      return { dates, inRepo: false, tracked: null };
     }
     const boundary = readShallowBoundary(path.resolve(root, where.stdout));
 
@@ -71,9 +71,12 @@ export function createOkfLocalSource({ name, level, root }) {
       ["-c", "core.quotePath=false", "log", "--format=%x00%as%x00%H", "--name-only", "--relative", "--", "."],
       { allowFailure: true },
     );
+    // Inside a repo, a failed history read means the dates are unknown — NOT
+    // that the mtime is now trustworthy. Returning an empty tracked set here
+    // would date every doc today, the exact lie this path exists to prevent.
     if (!log.ok) {
-      warnOnce(`cannot read commit dates (${log.stderr}) — sections will fall back to file mtimes`);
-      return { dates, tracked: null };
+      warnOnce(`cannot read commit dates (${log.stderr}) — sections in this layer will be undated`);
+      return { dates, inRepo: true, tracked: null };
     }
     // Newest-first, so the first date seen for a path is its latest.
     let date = null;
@@ -92,21 +95,30 @@ export function createOkfLocalSource({ name, level, root }) {
     // Needed to tell "untracked, so the mtime is the true edit time" apart from
     // "tracked but the history could not date it", where the mtime is a lie.
     const listed = await runGit(root, ["-c", "core.quotePath=false", "ls-files"], { allowFailure: true });
-    return { dates, tracked: listed.ok ? new Set(listed.stdout.split("\n").filter(Boolean)) : null };
+    if (!listed.ok) {
+      warnOnce(`cannot list tracked files (${listed.stderr}) — undatable sections will be undated`);
+    }
+    return { dates, inRepo: true, tracked: listed.ok ? new Set(listed.stdout.split("\n").filter(Boolean)) : null };
   }
 
   async function documentDate(filePath) {
-    const { dates, tracked } = await commitHistory();
+    const { dates, inRepo, tracked } = await commitHistory();
     const rel = toPosix(path.relative(root, filePath));
     const authored = dates.get(rel);
     if (authored) return authored;
-    // Tracked but undated: history was truncated (shallow clone) or the change
-    // only ever landed inside a merge commit. The mtime is a checkout time here,
-    // so there is no honest date to give — say nothing rather than claim today.
-    if (tracked?.has(rel)) return null;
-    // Untracked, or no history at all: the mtime IS the real edit time, the same
-    // signal files.mjs uses for the plain folders it points at.
-    return localDate(fs.statSync(filePath).mtime);
+    // Inside a repo with no date for this path, the mtime is a checkout time,
+    // not an edit time. That covers a truncated history (shallow clone), a change
+    // that only landed inside a merge commit, and a history we could not read at
+    // all (tracked === null, so we cannot rule any of it out). None of them has
+    // an honest date — say nothing rather than claim today.
+    if (inRepo && (tracked === null || tracked.has(rel))) return null;
+    // Untracked, or no repo at all: here the mtime IS the real edit time, the
+    // same signal files.mjs uses for the plain folders it points at.
+    try {
+      return localDate(fs.statSync(filePath).mtime);
+    } catch {
+      return null; // vanished between read and stat — undated beats crashing the resolve
+    }
   }
 
   return {

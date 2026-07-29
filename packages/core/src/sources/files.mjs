@@ -8,7 +8,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading } from "./okf-local.mjs";
+import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading, withDocumentDate, localDate } from "./okf-local.mjs";
 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
 const EXTENSIONS = [".md", ".mdx", ".txt"];
@@ -49,7 +49,7 @@ export function createFilesSource({ name, level, root }) {
 
 function parseFile(filePath, ext) {
   const content = fs.readFileSync(filePath, "utf8");
-  const mtime = fs.statSync(filePath).mtime.toISOString().slice(0, 10);
+  const mtime = localDate(fs.statSync(filePath).mtime);
   return parseDocument({ content, stem: path.basename(filePath, ext), updated: mtime, ext });
 }
 
@@ -58,21 +58,10 @@ function parseFile(filePath, ext) {
 // mtime) so a GitHub-hosted CLAUDE.md and a local one resolve identically.
 export function parseDocument({ content, stem, updated, ext = ".md" }) {
   if (ext === ".txt") return parsePlainText(content, stem, updated);
-  if (hasFrontmatter(content)) {
-    const parsed = parseConcept(content);
-    // Explicit per-section dates remain authoritative. Otherwise an OKF-level
-    // date wins, then the adapter's document date (mtime or remote commit).
-    // Without this fallback, structured remote docs silently lose the
-    // per-document staleness metadata that plain documents receive.
-    const fallback = parsed.frontmatter.updated ?? updated;
-    return {
-      ...parsed,
-      sections: parsed.sections.map((section) => ({
-        ...section,
-        updated: section.updated ?? fallback,
-      })),
-    };
-  }
+  // Undated sections inherit the OKF-level date, then this adapter's document
+  // date — same rule okf-local applies, so structured docs never lose the
+  // per-document staleness metadata that plain documents receive.
+  if (hasFrontmatter(content)) return withDocumentDate(parseConcept(content), updated);
   return parsePlainMarkdown(content, stem, updated);
 }
 

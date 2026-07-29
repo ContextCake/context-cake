@@ -74,7 +74,11 @@ else console.log(JSON.stringify(await s.loadConcept(process.argv[3])));
 EOF
 
 # Section dates come from file mtime — compute the expected date from the file itself.
-guide_date="$(node -e 'console.log(require("node:fs").statSync(process.argv[1]).mtime.toISOString().slice(0,10))' "$docs/guide.md")"
+# These fixtures were written moments ago, so their mtime date is today's LOCAL
+# date. Deriving it from `date` rather than from the adapter's own formula is
+# what makes this able to catch a UTC-vs-local slip: an evening run under
+# toISOString() reports tomorrow, and this comparison fails.
+guide_date="$(date +%Y-%m-%d)"
 
 # --- 1. Plain .md: synthesized frontmatter, okf-normalized keys, mtime dates --
 
@@ -107,6 +111,39 @@ grep -q 'STRUCTURE-PRESERVED' <<<"$okf_out" || fail "OKF-frontmatter structure a
 grep -q '"key":"engine"' <<<"$okf_out" || fail "OKF {#key} attr should be honored" "$okf_out"
 grep -q '"updated":"2026-04-01"' <<<"$okf_out" || fail "OKF updated= attr should be honored" "$okf_out"
 grep -q '"override":"none"' <<<"$okf_out" || fail "OKF override= attr should be honored" "$okf_out"
+
+# --- 2b. Adapter parity: same bytes, same dates, whichever adapter reads them --
+# An OKF doc with no `updated:` anywhere used to resolve to the mtime through a
+# files layer and to null through an okf-local layer. $docs is a plain folder,
+# not a git repo, so okf-local has no commit date to prefer and lands on the
+# same mtime files.mjs uses. The git-backed case — where the two legitimately
+# differ, because only one of them can see the real authorship date — is
+# resolver-test.sh's commit-date step.
+
+cat > "$docs/undated.md" <<'EOF'
+---
+type: decision
+title: Undated doc
+---
+
+## Engine {#engine}
+
+Postgres.
+EOF
+
+cat > "$tmpdir/parity.mjs" <<EOF
+import { createFilesSource } from "${sources_dir}/files.mjs";
+import { createOkfLocalSource } from "${sources_dir}/okf-local.mjs";
+const root = process.argv[2];
+const viaFiles = await createFilesSource({ name: "docs", level: 2, root }).loadConcept("undated");
+const viaOkf = await createOkfLocalSource({ name: "okf", level: 2, root }).loadConcept("undated");
+if (JSON.stringify(viaFiles) !== JSON.stringify(viaOkf)) {
+  throw new Error("adapters disagree: " + JSON.stringify({ viaFiles, viaOkf }));
+}
+console.log(JSON.stringify(viaOkf.sections[0].updated));
+EOF
+parity="$(node "$tmpdir/parity.mjs" "$docs")"
+grep -q "\"$guide_date\"" <<<"$parity" || fail "an undated OKF doc in a plain folder should fall back to the file mtime in both adapters" "$parity"
 
 # --- 3. .txt, nested ids, exclusions ------------------------------------------
 

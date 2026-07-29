@@ -147,9 +147,12 @@ describe('Files view', () => {
   })
 
   it('loads a non-text preview through the authenticated API', async () => {
+    let releasePreview: (response: Response) => void = () => {}
     mocks.apiFetch.mockImplementation(async (url: string) => {
       if (url === '/api/files') return json(FILES)
-      if (url.startsWith('/api/file/raw?')) return new Response(new Blob(['image']), { status: 200, headers: { 'content-type': 'image/png' } })
+      if (url.startsWith('/api/file/raw?')) {
+        return new Promise<Response>((resolve) => { releasePreview = resolve })
+      }
       return json({
         path: 'personal/logo.png', layer: 'personal', rel: 'logo.png', ext: '.png',
         kind: 'image', editable: false, markdown: false, bytes: 900, modified: '2026-07-01T10:00:00.000Z',
@@ -159,9 +162,10 @@ describe('Files view', () => {
     await act(async () => button('logo.png').click())
 
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/file/raw?path=personal%2Flogo.png')
-    await vi.waitFor(() => {
-      expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:preview')
+    await act(async () => {
+      releasePreview(new Response(new Blob(['image']), { status: 200, headers: { 'content-type': 'image/png' } }))
     })
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:preview')
     expect(container.querySelector('textarea')).toBeNull()
   })
 

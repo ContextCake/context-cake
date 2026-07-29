@@ -169,7 +169,11 @@ git -C "$gitrepo" init -q .
 git -C "$gitrepo" config user.email test@example.com
 git -C "$gitrepo" config user.name Test
 git -C "$gitrepo" add -A
-GIT_COMMITTER_DATE="2019-03-01T12:00:00" git -C "$gitrepo" commit -q --date="2019-03-01T12:00:00" -m "the original decision"
+# Author date 2019, committer date today — the shape `git pull --rebase` leaves
+# behind, and git-core runs exactly that as its divergence recovery. Reading the
+# committer date would re-date the whole bundle to today on the flow team-sync
+# depends on, so the author date is the one that must win.
+GIT_COMMITTER_DATE="2026-01-15T12:00:00" git -C "$gitrepo" commit -q --date="2019-03-01T12:00:00" -m "the original decision"
 # What a clone/checkout does to the mtime.
 touch "$gitrepo/decisions/legacy.md" "$gitrepo/nested/decisions/legacy.md"
 
@@ -192,6 +196,29 @@ grep -q '"sourceUpdated": "2019-03-01"' <<<"$nested" || fail "a layer rooted in 
 
 untracked="$(node "$resolver" --manifest "$tmpdir/git-layers.json" --concept decisions/uncommitted)"
 grep -q "\"sourceUpdated\": \"$(date +%Y-%m-%d)\"" <<<"$untracked" || fail "an uncommitted doc has no commit date and should fall back to its mtime" "$untracked"
+
+# Concurrent reads must agree with sequential ones. mcp-server does not await its
+# request handler, so reads overlap; a history memo published before its own
+# await would leave every concurrent reader with the mtime instead.
+cat > "$tmpdir/concurrent.mjs" <<EOF
+import { createOkfLocalSource } from "$repo_root/packages/core/src/sources/okf-local.mjs";
+const ids = ["decisions/legacy", "decisions/legacy", "decisions/legacy"];
+const source = createOkfLocalSource({ name: "team", level: 2, root: "$gitrepo" });
+const loaded = await Promise.all(ids.map((id) => source.loadConcept(id)));
+console.log(JSON.stringify(loaded.map((c) => c.sections[0].updated)));
+EOF
+concurrent="$(node "$tmpdir/concurrent.mjs")"
+[ "$concurrent" = '["2019-03-01","2019-03-01","2019-03-01"]' ] || fail "concurrent loads should all get the commit date, not the mtime" "$concurrent"
+
+# A shallow clone's boundary commit lists the whole tree as added at the
+# truncation date. Dating from it would claim every file was written at clone
+# time — mtime's lie by another route — so those sections stay undated.
+git clone -q --depth 1 "file://$gitrepo" "$tmpdir/shallow"
+cat > "$tmpdir/shallow-layers.json" <<'EOF'
+{ "layers": [ { "name": "team", "level": 2, "path": "shallow" } ] }
+EOF
+shallow="$(node "$resolver" --manifest "$tmpdir/shallow-layers.json" --concept decisions/legacy)"
+grep -q '"sourceUpdated": null' <<<"$shallow" || fail "a shallow clone cannot date its history and must say so, not invent the boundary date" "$shallow"
 
 # --- Path-traversal guard: a concept id must not escape its layer root ---
 for evil in ".." "../secrets" "decisions/../../etc/passwd" "a/.." "/etc/passwd"; do

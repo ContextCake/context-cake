@@ -8,53 +8,105 @@ import fs from "node:fs";
 import path from "node:path";
 import { runGit } from "./git-core.mjs";
 
+// A read-path memo of the layer's git history must not outlive the history —
+// mcp-server is a session-lifetime process, so a boot-time snapshot would serve
+// stale dates all session. Short enough to pick up local commits, long enough
+// that a search sweep is one `git log`, not one per concept.
+const HISTORY_TTL_MS = 30000;
+
 export function createOkfLocalSource({ name, level, root }) {
-  let commitDates = null; // Map<posix relpath, "YYYY-MM-DD">; null until first read
+  let history = null; // { at, promise } — see commitHistory
+  let warned = false;
+
+  function warnOnce(message) {
+    if (warned) return;
+    warned = true;
+    console.error(`[okf-local source "${name}"] ${message}`); // stderr: stdout is the MCP protocol
+  }
+
+  // Memoize the PROMISE, never the map. Publishing a half-built map before the
+  // await would let every concurrent reader find it empty, miss, and fall back
+  // to the mtime — which is the precise wrong answer this whole path exists to
+  // prevent, and mcp-server handles requests concurrently.
+  function commitHistory() {
+    if (!history || Date.now() - history.at >= HISTORY_TTL_MS) {
+      history = { at: Date.now(), promise: readHistory() };
+    }
+    return history.promise;
+  }
 
   // A section date has to say when the CONTENT last changed. An okf-local
   // bundle is a git repo, and git does not preserve mtimes — clone, checkout
   // and pull all stamp the working tree with the operation time — so an mtime
   // would report "today" for a decision written years ago, in the one field the
-  // product sells as the staleness signal. Read the last-commit date per path
-  // instead, which is what github.mjs reports for the same bytes.
+  // product sells as the staleness signal. Read the commit history instead.
   //
-  // One batched `git log` per generation, not one per file: mcp-server sweeps
-  // loadConcept over every id for search/list, so a per-file spawn is not
-  // affordable. Output is newest-first, so the first date seen for a path wins.
-  async function loadCommitDates() {
-    if (commitDates) return commitDates;
-    commitDates = new Map();
-    // A layer root is often a subdirectory of a bigger repo. git reports paths
-    // from the REPO root, so without this prefix every lookup would miss and
-    // silently fall back to the mtime — the exact failure this replaces.
-    const prefix = await runGit(root, ["rev-parse", "--show-prefix"], { allowFailure: true });
-    if (!prefix.ok) return commitDates; // not a git repo (or no git) — mtime is the only signal
-    // core.quotePath=false keeps non-ASCII paths literal so they match the
-    // relative paths we look them up by. %x00 marks the date lines apart from
-    // the --name-only paths that follow them. `-- .` bounds the walk to this
-    // layer, so a layer inside a monorepo does not pay for the whole history.
+  // Batched per generation, not per file: mcp-server sweeps loadConcept over
+  // every id for search/list, so a per-file spawn is not affordable.
+  async function readHistory() {
+    const dates = new Map();
+    // --git-path resolves even when the git dir is not ".git" (worktrees, GIT_DIR).
+    const where = await runGit(root, ["rev-parse", "--git-path", "shallow"], { allowFailure: true });
+    if (!where.ok) {
+      // A plain folder is a legitimate okf-local root, so "not a repository" is
+      // not worth a word. Anything else — no git on PATH, a safe.directory
+      // refusal — means dates silently degrade to mtimes, and that must be said
+      // out loud or the layer just quietly starts claiming everything is new.
+      if (!/not a git repository/i.test(where.stderr)) {
+        warnOnce(`cannot read git history (${where.stderr}) — sections will fall back to file mtimes`);
+      }
+      return { dates, tracked: null };
+    }
+    const boundary = readShallowBoundary(path.resolve(root, where.stdout));
+
+    // %as is the AUTHOR date, not the committer date: git-core runs
+    // `pull --rebase` as its standard divergence recovery, and a rebase rewrites
+    // every committer date to now — which would re-date the whole bundle to
+    // today on the very flow team-sync depends on. Author dates survive it.
+    // --relative prints paths relative to this layer root, so a layer inside a
+    // bigger repo needs no prefix arithmetic; `-- .` bounds the walk to it.
+    // core.quotePath=false keeps non-ASCII paths literal so they match our keys.
     const log = await runGit(
       root,
-      ["-c", "core.quotePath=false", "log", "--format=%x00%cs", "--name-only", "--", "."],
+      ["-c", "core.quotePath=false", "log", "--format=%x00%as%x00%H", "--name-only", "--relative", "--", "."],
       { allowFailure: true },
     );
-    if (!log.ok) return commitDates;
+    if (!log.ok) {
+      warnOnce(`cannot read commit dates (${log.stderr}) — sections will fall back to file mtimes`);
+      return { dates, tracked: null };
+    }
+    // Newest-first, so the first date seen for a path is its latest.
     let date = null;
     for (const line of log.stdout.split("\n")) {
-      if (line.startsWith("\0")) date = line.slice(1);
-      else if (line !== "" && date) {
-        const rel = line.startsWith(prefix.stdout) ? line.slice(prefix.stdout.length) : line;
-        if (!commitDates.has(rel)) commitDates.set(rel, date);
+      if (line.startsWith("\0")) {
+        const [, authored, hash] = line.split("\0");
+        // A shallow clone's boundary commit lists the ENTIRE tree as added at
+        // the truncation date. Trusting it would date every untouched file to
+        // the clone — mtime's lie by another route. Leave those paths undated.
+        date = boundary.has(hash) ? null : authored;
+      } else if (line !== "" && date && !dates.has(line)) {
+        dates.set(line, date);
       }
     }
-    return commitDates;
+    // ls-files prints cwd-relative paths, matching the log's --relative keys.
+    // Needed to tell "untracked, so the mtime is the true edit time" apart from
+    // "tracked but the history could not date it", where the mtime is a lie.
+    const listed = await runGit(root, ["-c", "core.quotePath=false", "ls-files"], { allowFailure: true });
+    return { dates, tracked: listed.ok ? new Set(listed.stdout.split("\n").filter(Boolean)) : null };
   }
 
-  // Untracked files have no commit date, and there the mtime IS the real edit
-  // time — same signal files.mjs uses for the plain folders it points at.
   async function documentDate(filePath) {
-    const tracked = (await loadCommitDates()).get(toPosix(path.relative(root, filePath)));
-    return tracked ?? localDate(fs.statSync(filePath).mtime);
+    const { dates, tracked } = await commitHistory();
+    const rel = toPosix(path.relative(root, filePath));
+    const authored = dates.get(rel);
+    if (authored) return authored;
+    // Tracked but undated: history was truncated (shallow clone) or the change
+    // only ever landed inside a merge commit. The mtime is a checkout time here,
+    // so there is no honest date to give — say nothing rather than claim today.
+    if (tracked?.has(rel)) return null;
+    // Untracked, or no history at all: the mtime IS the real edit time, the same
+    // signal files.mjs uses for the plain folders it points at.
+    return localDate(fs.statSync(filePath).mtime);
   }
 
   return {
@@ -75,13 +127,23 @@ export function createOkfLocalSource({ name, level, root }) {
     // withGitSync calls this after a pull that changed something — new commits
     // mean new dates, so the memo must not outlive them.
     sync() {
-      commitDates = null;
+      history = null;
     },
     close() {},
   };
 }
 
 // ---- document dates --------------------------------------------------------
+
+// The commits a shallow clone truncated at. Their diff is the whole tree, so
+// their date describes the clone, not the content.
+function readShallowBoundary(shallowFile) {
+  try {
+    return new Set(fs.readFileSync(shallowFile, "utf8").split("\n").filter(Boolean));
+  } catch {
+    return new Set(); // absent = a complete clone, the common case
+  }
+}
 
 // Fills in section dates the document did not state. Explicit per-section attrs
 // ({updated=}) stay authoritative; otherwise an OKF-level `updated` wins, then

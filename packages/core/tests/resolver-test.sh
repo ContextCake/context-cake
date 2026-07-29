@@ -144,6 +144,55 @@ grep -q 'Postgres' <<<"$conf" || fail "conflict — company dissent value should
 grep -q '"layer": "company"' <<<"$conf" || fail "conflict — dissent should name the company layer" "$conf"
 grep -q '2026-06-01' <<<"$conf" || fail "conflict — dissent should carry the company updated date" "$conf"
 
+# --- Commit dates: an undated section reports when the CONTENT last changed ---
+# An okf-local bundle is a git repo, and git does not preserve mtimes — a clone
+# stamps every file with the clone time. If the section date came from the mtime,
+# a decision written in 2019 would present as written today, in the field the
+# cascade offers as the staleness signal. It must be the last-commit date.
+
+gitrepo="$tmpdir/gitrepo"; mkdir -p "$gitrepo/decisions" "$gitrepo/nested/decisions"
+cat > "$gitrepo/decisions/legacy.md" <<'EOF'
+---
+type: decision
+title: Legacy decision
+---
+
+## Engine
+
+MySQL. Written years ago, never re-dated.
+EOF
+# A layer rooted at a subdirectory of the repo: git reports paths from the repo
+# root, so this is the shape that silently falls back to mtime if the adapter
+# forgets to account for its own prefix.
+cp "$gitrepo/decisions/legacy.md" "$gitrepo/nested/decisions/legacy.md"
+git -C "$gitrepo" init -q .
+git -C "$gitrepo" config user.email test@example.com
+git -C "$gitrepo" config user.name Test
+git -C "$gitrepo" add -A
+GIT_COMMITTER_DATE="2019-03-01T12:00:00" git -C "$gitrepo" commit -q --date="2019-03-01T12:00:00" -m "the original decision"
+# What a clone/checkout does to the mtime.
+touch "$gitrepo/decisions/legacy.md" "$gitrepo/nested/decisions/legacy.md"
+
+# An uncommitted sibling: no commit date exists, and there the mtime IS the real
+# edit time — the same signal a files layer uses for a plain folder.
+cp "$gitrepo/decisions/legacy.md" "$gitrepo/decisions/uncommitted.md"
+
+cat > "$tmpdir/git-layers.json" <<'EOF'
+{ "layers": [ { "name": "team", "level": 2, "path": "gitrepo" } ] }
+EOF
+cat > "$tmpdir/git-nested-layers.json" <<'EOF'
+{ "layers": [ { "name": "team", "level": 2, "path": "gitrepo/nested" } ] }
+EOF
+
+dated="$(node "$resolver" --manifest "$tmpdir/git-layers.json" --concept decisions/legacy)"
+grep -q '"sourceUpdated": "2019-03-01"' <<<"$dated" || fail "an undated section in a git bundle should carry the last-commit date, not the mtime" "$dated"
+
+nested="$(node "$resolver" --manifest "$tmpdir/git-nested-layers.json" --concept decisions/legacy)"
+grep -q '"sourceUpdated": "2019-03-01"' <<<"$nested" || fail "a layer rooted in a subdirectory of a repo should still get commit dates" "$nested"
+
+untracked="$(node "$resolver" --manifest "$tmpdir/git-layers.json" --concept decisions/uncommitted)"
+grep -q "\"sourceUpdated\": \"$(date +%Y-%m-%d)\"" <<<"$untracked" || fail "an uncommitted doc has no commit date and should fall back to its mtime" "$untracked"
+
 # --- Path-traversal guard: a concept id must not escape its layer root ---
 for evil in ".." "../secrets" "decisions/../../etc/passwd" "a/.." "/etc/passwd"; do
   if node "$resolver" --manifest "$tmpdir/conf-layers.json" --concept "$evil" 2>/dev/null; then
@@ -151,4 +200,4 @@ for evil in ".." "../secrets" "decisions/../../etc/passwd" "a/.." "/etc/passwd";
   fi
 done
 
-echo "resolver test passed (section merge + provenance + vertical precedence + suppression + conflicts + traversal guard)"
+echo "resolver test passed (section merge + provenance + vertical precedence + suppression + conflicts + commit dates + traversal guard)"

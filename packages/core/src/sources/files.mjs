@@ -8,7 +8,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading, withDocumentDate } from "./okf-local.mjs";
+import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading, withDocumentDate, localDate } from "./okf-local.mjs";
 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
 const EXTENSIONS = [".md", ".mdx", ".txt"];
@@ -49,7 +49,7 @@ export function createFilesSource({ name, level, root }) {
 
 function parseFile(filePath, ext) {
   const content = fs.readFileSync(filePath, "utf8");
-  const mtime = fs.statSync(filePath).mtime.toISOString().slice(0, 10);
+  const mtime = localDate(fs.statSync(filePath).mtime);
   return parseDocument({ content, stem: path.basename(filePath, ext), updated: mtime, ext });
 }
 

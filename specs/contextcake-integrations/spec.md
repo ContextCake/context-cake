@@ -51,6 +51,7 @@ serves and marks staleness.
 
 | Kind | Concept id | Sections | `updated` | Auth (read-only scopes) |
 |---|---|---|---|---|
+| `okf-local` | relative path minus `.md` | OKF frontmatter and heading attrs, authoritative | OKF attr, then frontmatter `updated`, then the file's last-commit date; file mtime only when the doc is untracked or the root is not a repo | none |
 | `files` | relative path minus extension | OKF frontmatter honored when present; plain markdown → `##` headings (keys via okf-local's `normalizeHeading`, so sections merge across adapter kinds), preamble → `overview`; `.txt` → `body` | file mtime unless OKF attr | none |
 | `github` | `<owner>/<repo>/<path minus ext>` within the layer | same plain-markdown rules as `files` | latest commit date for the file (cached; repo `pushed_at` fallback) | GitHub App **device flow**, `contents:read` |
 | `slack` | `<channel>/<pin-or-canvas-slug>` + one `<channel>/channel` concept (topic/purpose) | canvas headings → sections; a pinned message → `body` | message/canvas edit timestamp | Slack app user token: `channels:read`, `pins:read`, `canvases:read` |

@@ -74,7 +74,11 @@ else console.log(JSON.stringify(await s.loadConcept(process.argv[3])));
 EOF
 
 # Section dates come from file mtime — compute the expected date from the file itself.
-guide_date="$(node -e 'console.log(require("node:fs").statSync(process.argv[1]).mtime.toISOString().slice(0,10))' "$docs/guide.md")"
+# These fixtures were written moments ago, so their mtime date is today's LOCAL
+# date. Deriving it from `date` rather than from the adapter's own formula is
+# what makes this able to catch a UTC-vs-local slip: an evening run under
+# toISOString() reports tomorrow, and this comparison fails.
+guide_date="$(date +%Y-%m-%d)"
 
 # --- 1. Plain .md: synthesized frontmatter, okf-normalized keys, mtime dates --
 
@@ -110,7 +114,11 @@ grep -q '"override":"none"' <<<"$okf_out" || fail "OKF override= attr should be 
 
 # --- 2b. Adapter parity: same bytes, same dates, whichever adapter reads them --
 # An OKF doc with no `updated:` anywhere used to resolve to the mtime through a
-# files layer and to null through an okf-local layer.
+# files layer and to null through an okf-local layer. $docs is a plain folder,
+# not a git repo, so okf-local has no commit date to prefer and lands on the
+# same mtime files.mjs uses. The git-backed case — where the two legitimately
+# differ, because only one of them can see the real authorship date — is
+# resolver-test.sh's commit-date step.
 
 cat > "$docs/undated.md" <<'EOF'
 ---
@@ -134,9 +142,8 @@ if (JSON.stringify(viaFiles) !== JSON.stringify(viaOkf)) {
 }
 console.log(JSON.stringify(viaOkf.sections[0].updated));
 EOF
-undated_date="$(node -e 'console.log(require("node:fs").statSync(process.argv[1]).mtime.toISOString().slice(0,10))' "$docs/undated.md")"
 parity="$(node "$tmpdir/parity.mjs" "$docs")"
-grep -q "\"$undated_date\"" <<<"$parity" || fail "an undated OKF doc should fall back to the file mtime in both adapters" "$parity"
+grep -q "\"$guide_date\"" <<<"$parity" || fail "an undated OKF doc in a plain folder should fall back to the file mtime in both adapters" "$parity"
 
 # --- 3. .txt, nested ids, exclusions ------------------------------------------
 

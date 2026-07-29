@@ -72,7 +72,7 @@ Key files:
 |------|------|
 | `packages/core/src/resolver.mjs` | Core cascade engine: section merge, precedence, provenance, conflict surfacing |
 | `packages/core/src/mcp-server.mjs` | stdio MCP server; resolves via resolver.mjs; renders conflicts in markdown |
-| `packages/core/src/sources/okf-local.mjs` | OKF-local source adapter: reads OKF markdown bundles from disk |
+| `packages/core/src/sources/okf-local.mjs` | OKF-local source adapter: reads OKF markdown bundles from disk. Owns `withDocumentDate` (the section-date fallback chain, shared with every other adapter) and dates undated sections by last-commit date, not mtime |
 | `packages/core/src/sources/mcp.mjs` | MCP source adapter: spawns a foreign stdio MCP server, translates to OKF |
 | `packages/core/src/sources/files.mjs` | Files source adapter: any plain folder of `.md`/`.mdx`/`.txt` docs becomes a layer (OKF parsing when frontmatter present, synthesized sections otherwise). Owns `parseDocument`, shared with remote adapters so section keys match |
 | `packages/core/src/sources/github.mjs` | GitHub source adapter: a repo's `CLAUDE.md`/`AGENTS.md`/`README.md`/`docs/**` become a layer without a clone — recursive tree index, raw content, last-commit dates, warn-and-continue on API failure |
@@ -103,7 +103,7 @@ Key files:
 
 - `layers.json` contains absolute paths — gitignored, each developer has their own.
 - `apps/control-surface/signals.json` is generated — gitignored, produced by `ingest.mjs`.
-- Staleness is surfaced via per-section `conflicts[]` + last-updated dates (the shadow/hash subsystem was removed in the core re-arch; see `specs/contextcake-core/design.md`).
+- Staleness is surfaced via per-section `conflicts[]` + last-updated dates (the shadow/hash subsystem was removed in the core re-arch; see `specs/contextcake-core/design.md`). A section with no authored date falls back to a *content* date — the last-commit date for git-backed layers (`okf-local`, `github`), the file mtime only where no VCS history exists. Never date a section by mtime in a git-backed layer: git does not preserve mtimes, so every doc in a fresh clone would claim to be written today.
 - **The manifest is a trust boundary.** An `mcp` layer spawns `command` with `args` from the manifest — a manifest you did not author can run arbitrary commands as your user. Only point `--manifest` at configs you trust (same model as any MCP client config).
 - **A manifest names credentials, never carries them.** A remote layer's `auth` may only be `"keychain:<alias>"` (resolved from the `tokens` map the caller injects into `buildSources` — the app owns the keychain, the engine never opens it) or `{"tokenEnv": "NAME"}` for headless runs. Any other shape throws, which is what structurally keeps a raw token out of a manifest. An alias with no injected secret reads anonymously rather than failing.
 - **A manifest still decides where a named credential is *sent*.** A `github` layer's `apiBase` (the GitHub Enterprise knob) plus a valid `auth` alias means an untrusted manifest can direct a real token at a host it chooses. This is inside the existing manifest trust boundary, not a separate one — but when the desktop app writes manifests it should only ever emit the default `apiBase`.

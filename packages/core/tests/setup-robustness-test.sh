@@ -190,12 +190,14 @@ curl -s "$BASE/api/resolve?concept=tilde-note" | grep -q 'from home vault' && pa
 code 200 "$(C -X DELETE "$BASE/api/sources?name=tilde")" "cleanup tilde source"
 
 echo "add-time MCP probe (wrong command fails the form in bounded time)"
-T="$(ms -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"ghost","level":0,"command":"definitely-not-a-real-binary-xyz"}' "$BASE/api/sources")"
-code 400 "$(C -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"ghost","level":0,"command":"definitely-not-a-real-binary-xyz"}' "$BASE/api/sources")" "missing binary rejected"
+UNTRUSTED="$(curl -s -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"untrusted","level":0,"command":"node"}' "$BASE/api/sources")"
+JQ 'd.error' <<<"$UNTRUSTED" | grep -q 'trusted source' && pass "MCP mutation requires explicit trust" || fail "MCP trust acknowledgement missing ($UNTRUSTED)"
+T="$(ms -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"ghost","level":0,"command":"definitely-not-a-real-binary-xyz","trusted":true}' "$BASE/api/sources")"
+code 400 "$(C -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"ghost","level":0,"command":"definitely-not-a-real-binary-xyz","trusted":true}' "$BASE/api/sources")" "missing binary rejected"
 faster_than "$T" 10000 "missing binary fails fast"
-code 400 "$(C -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"mute","level":0,"command":"sleep","args":["30"]}' "$BASE/api/sources")" "unresponsive command rejected"
+code 400 "$(C -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"mute","level":0,"command":"sleep","args":["30"],"trusted":true}' "$BASE/api/sources")" "unresponsive command rejected"
 grep -Eq 'ghost|mute' "$TMP/manifest.json" && fail "failed MCP probe leaked into the manifest" || pass "failed MCP probes never touch the manifest"
-code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"mcp\",\"name\":\"mock\",\"level\":0,\"command\":\"node\",\"args\":[\"$ROOT/examples/mock-mcp-source/server.mjs\"]}" "$BASE/api/sources")" "a real MCP server passes the probe"
+code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"mcp\",\"name\":\"mock\",\"level\":0,\"command\":\"node\",\"args\":[\"$ROOT/examples/mock-mcp-source/server.mjs\"],\"trusted\":true}" "$BASE/api/sources")" "a real MCP server passes the probe"
 code 200 "$(C -X DELETE "$BASE/api/sources?name=mock")" "cleanup mcp source"
 
 echo "layer files are engine surface (the desktop app can edit context files)"

@@ -350,7 +350,10 @@ export function SetupWizard({
     setMcpErr(null)
     try {
       const [command, ...args] = parts
-      await postSource({ kind: 'mcp', name: 'company', level: 0, command, args })
+      // The API also requires this explicit acknowledgement. Keeping the
+      // consent bit in the request prevents a caller from bypassing the UI's
+      // trust checkbox and turning source creation into an accidental RCE API.
+      await postSource({ kind: 'mcp', name: 'company', level: 0, command, args, trusted: true })
       setAdded((prev) => [...prev, { kind: 'mcp', name: 'company', level: 0, detail: mcpCommandLine.trim() }])
       goNext()
     } catch (e) {

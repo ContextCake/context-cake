@@ -714,6 +714,9 @@ export function createEngineService({
       };
     } else if (b.kind === "mcp") {
       if (!b.command) throw httpError(400, "MCP source needs a command");
+      if (b.trusted !== true) {
+        throw httpError(400, "Confirm that this MCP command came from a trusted source");
+      }
       const args = Array.isArray(b.args) ? b.args.map(String) : String(b.args ?? "").split(/\s+/).filter(Boolean);
       const command = String(b.command);
       // Probe with the same arg resolution buildSources applies, so the check

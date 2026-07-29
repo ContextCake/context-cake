@@ -172,6 +172,24 @@ describe('SetupWizard connection handoff', () => {
     expect(button('Connect server').disabled).toBe(true)
   })
 
+  it('carries the explicit trust acknowledgement to the command-executing API', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/contextcake-personal')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+    await act(async () => button('Connect an MCP server').click())
+    await enter('#wiz-mcp-command', 'npx -y @company/context-mcp')
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.click())
+    await act(async () => button('Connect server').click())
+
+    const call = mocks.apiFetch.mock.calls.find(([url, init]) => url === '/api/sources' && init?.method === 'POST'
+      && JSON.parse(String(init.body)).kind === 'mcp')
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      kind: 'mcp', command: 'npx', args: ['-y', '@company/context-mcp'], trusted: true,
+    })
+  })
+
   it('uses the native folder browser when the desktop bridge is available', async () => {
     const chooseFolder = vi.fn().mockResolvedValue('/Users/person/ContextCake/personal')
     window.__CC_DESKTOP = {

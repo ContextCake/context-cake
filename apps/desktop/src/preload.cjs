@@ -10,8 +10,9 @@ function arg(name) {
 }
 
 contextBridge.exposeInMainWorld('__CC_DESKTOP', {
-  // Per-launch bearer token the local engine service requires on /api/*.
-  token: arg('cc-token'),
+  // Per-launch bearer token the local engine service requires on /api/*. It is
+  // fetched through trusted IPC, never renderer argv (visible through `ps`).
+  getApiToken: () => ipcRenderer.invoke('contextcake:get-api-token'),
   // App version, for display. Updates are owned by the native updater.
   version: arg('cc-version'),
   // Initial, non-PII snapshot. The live state (including optional email) is

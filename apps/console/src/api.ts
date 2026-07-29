@@ -60,17 +60,30 @@ export const API_TIMEOUT_MS = 60_000
 
 /**
  * fetch for the same-origin engine API. Inside the desktop app the preload
- * script injects a per-launch bearer token (`window.__CC_DESKTOP`) that the
- * local service requires on every /api route; in a browser this is a plain
- * fetch. All renderer code hitting /api/* must go through this.
+ * bridge retrieves a per-launch bearer token through trusted IPC; the local
+ * service requires it on every /api route. In a browser this is a plain fetch.
+ * All renderer code hitting /api/* must go through this.
  *
  * Every call carries an abort deadline (callers can pass their own `signal`
  * to tighten it) so a stalled backend surfaces as a typed error instead of an
  * eternal spinner — the setup wizard's "Resolving…" hang.
  */
-export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+let desktopTokenPromise: Promise<string> | null = null
+
+async function desktopToken(): Promise<string | undefined> {
+  if (typeof window === 'undefined' || !window.__CC_DESKTOP) return undefined
+  if (!desktopTokenPromise) {
+    desktopTokenPromise = window.__CC_DESKTOP.getApiToken().catch((error) => {
+      desktopTokenPromise = null
+      throw error
+    })
+  }
+  return desktopTokenPromise
+}
+
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const withSignal: RequestInit = { ...init, signal: init.signal ?? AbortSignal.timeout(API_TIMEOUT_MS) }
-  const token = typeof window !== 'undefined' ? window.__CC_DESKTOP?.token : undefined
+  const token = await desktopToken()
   if (!token) return fetch(path, withSignal)
   const headers = new Headers(init.headers)
   headers.set('authorization', `Bearer ${token}`)

@@ -388,6 +388,11 @@ async function initializeAccounts() {
 // processes or select a path without the user approving the native panel.
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
 handleTrustedIpc('contextcake:cli-install', () => installCli(win, { showSuccess: false }))
+// The API token is a credential: never put it in BrowserWindow
+// additionalArguments, which become renderer process argv and are visible to
+// other local users through process inspection. The sandboxed preload asks for
+// it over the same exact-window, exact-origin IPC gate as every native action.
+handleTrustedIpc('contextcake:get-api-token', () => service?.token ?? '')
 handleTrustedIpc('contextcake:choose-folder', async () => {
   const result = await dialog.showOpenDialog(win, {
     title: 'Choose a ContextCake folder',
@@ -416,7 +421,6 @@ async function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       additionalArguments: [
-        `--cc-token=${service.token}`,
         `--cc-version=${app.getVersion()}`,
         `--cc-signed-in=${currentAuthState().signedIn ? '1' : '0'}`,
       ],

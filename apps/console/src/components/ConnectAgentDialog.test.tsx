@@ -16,7 +16,7 @@ function desktop(status: 'installed' | 'missing' = 'installed') {
   getStatus = vi.fn<CliBridge['getStatus']>().mockResolvedValue({ status, message: `CLI is ${status}.` })
   install = vi.fn<CliBridge['install']>().mockResolvedValue({ status: 'installed', message: 'Command-line tool installed.' })
   window.__CC_DESKTOP = {
-    token: 'test',
+    getApiToken: async () => 'test',
     version: '0.1.0',
     authState: { signedIn: false },
     cli: {

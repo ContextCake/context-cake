@@ -133,9 +133,9 @@ export function isTraversal(normalized) {
 // ---- shared bounded walk ----------------------------------------------------
 //
 // One async walker for every disk-backed adapter (okf-local, files, and the
-// service's add-time folder probe). Async so a big tree never blocks the event
-// loop — inside the desktop app this code runs in the Electron main process,
-// where a synchronous walk freezes the whole UI. Bounded so a folder that is
+// service's add-time folder probe). Async so a big tree never monopolizes its
+// process's event loop. The desktop runs this work in an isolated utility
+// process, keeping it off the Electron UI thread. Bounded so a folder that is
 // too large to be a context layer (a home directory, a monorepo checkout)
 // fails fast with an actionable message instead of grinding for minutes.
 // Same skip posture as before: dot-entries and node_modules are skipped, and

@@ -30,7 +30,7 @@ let root: Root
 
 /** Renders the store's load state so assertions read it from the DOM. */
 function Probe() {
-  const { load, concepts, sources } = useStore()
+  const { load, concepts, sources, reload } = useStore()
   return (
     <div
       data-shell={String(load.shell)}
@@ -38,7 +38,7 @@ function Probe() {
       data-indexing={load.indexingSources.join(',')}
       data-count={String(concepts.length)}
       data-sources={String(sources.length)}
-    />
+    ><button type="button" onClick={reload}>reload</button></div>
   )
 }
 
@@ -100,6 +100,7 @@ describe('store load state', () => {
     })
     expect(probe().dataset.count).toBe('1')
     expect(probe().dataset.concepts).toBe('false')
+    expect(probe().dataset.indexing).toBe('')
   })
 
   it('reports which sources are still indexing so the UI can say so', async () => {
@@ -110,6 +111,22 @@ describe('store load state', () => {
 
     expect(probe().dataset.indexing).toBe('team,company')
     expect(probe().dataset.shell).toBe('false')
+  })
+
+  it('keeps an already-loaded shell mounted during a refresh', async () => {
+    let releaseRefresh: (v: unknown) => void = () => {}
+    mocks.graph
+      .mockResolvedValueOnce(graphPayload([]))
+      .mockReturnValueOnce(new Promise((resolve) => { releaseRefresh = resolve }))
+    mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    expect(probe().dataset.shell).toBe('false')
+
+    await act(async () => container.querySelector<HTMLButtonElement>('button')?.click())
+    expect(probe().dataset.shell).toBe('false')
+
+    await act(async () => releaseRefresh(graphPayload([])))
   })
 
   it('polls while indexing and fills in concepts as they land', async () => {

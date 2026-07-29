@@ -23,8 +23,8 @@
 
 The spec's §9 tentatively named Tauri. Two facts decided against it:
 
-1. **The engine is dependency-free Node.** In Electron it runs in the main
-   process as-is. Tauri would require shipping Node as a sidecar binary
+1. **The engine is dependency-free Node.** Electron can run it as-is in a
+   supervised utility process. Tauri would require shipping Node as a sidecar binary
    (Node SEA, ~80MB) — erasing most of Tauri's size advantage while adding a
    second artifact to sign, notarize, version, and update, plus an IPC layer
    between the Rust shell and the sidecar.
@@ -70,8 +70,9 @@ isolated versus ~694ms when the same work shares the loop
 Consequences that are part of the contract:
 
 - The **bearer token is generated in the engine process** and passed up its
-  message port, never down through argv — process arguments are readable by
-  other local users via `ps`.
+  message port, then exposed to the sandboxed preload through trusted IPC.
+  It never travels through engine or renderer argv — process arguments are
+  readable by other local users via `ps`.
 - The supervisor's handle stays `{ origin, token, reload(), close() }`;
   `reload()` is now an acknowledged round-trip, so callers must await it.
 - The app cannot function without the engine, and a loaded window cannot be
@@ -90,8 +91,8 @@ explorer/editor endpoints (`/api/files`, `/api/file`, `/api/section`) moved
 there too — the desktop app needs them to edit context files, so they cannot
 stay playground-only. The playground now wraps the module and adds nothing but
 its workbench UI. The desktop app gets exactly one addition: **bearer-token
-auth on every `/api/*` route** (random per-launch token, injected into the
-renderer via preload) — loopback + Origin checks alone don't isolate other
+auth on every `/api/*` route** (random per-launch token, requested by the
+preload through exact-window/exact-origin IPC) — loopback + Origin checks alone don't isolate other
 local users on shared Macs.
 
 ## 5. User data layout (spec §5 "config preservation")

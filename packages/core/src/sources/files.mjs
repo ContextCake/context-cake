@@ -11,7 +11,12 @@ import path from "node:path";
 import { parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading, walkDocs } from "./okf-local.mjs";
 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
-export const FILES_EXTENSIONS = [".md", ".mdx", ".txt"];
+export const FILES_EXTENSIONS = Object.freeze([".md", ".mdx", ".txt"]);
+
+// Remote adapters ingest the same document shapes through parseDocument.
+// Keep the shared name for those adapters and the settings-facing name used
+// by the local service as aliases of one immutable precedence list.
+export const DOC_EXTENSIONS = FILES_EXTENSIONS;
 
 export function createFilesSource({ name, level, root, limits = null }) {
   return {
@@ -48,9 +53,30 @@ export function createFilesSource({ name, level, root, limits = null }) {
 }
 
 function parseFile(content, mtime, stem, ext) {
-  if (ext === ".txt") return parsePlainText(content, stem, mtime);
-  if (hasFrontmatter(content)) return parseConcept(content); // full OKF behavior, untouched
-  return parsePlainMarkdown(content, stem, mtime);
+  return parseDocument({ content, stem, updated: mtime, ext });
+}
+
+// The document-shape rules, independent of where the bytes came from. Remote
+// adapters call this with their own `updated` (a commit date rather than an
+// mtime) so a GitHub-hosted CLAUDE.md and a local one resolve identically.
+export function parseDocument({ content, stem, updated, ext = ".md" }) {
+  if (ext === ".txt") return parsePlainText(content, stem, updated);
+  if (hasFrontmatter(content)) {
+    const parsed = parseConcept(content);
+    // Explicit per-section dates remain authoritative. Otherwise an OKF-level
+    // date wins, then the adapter's document date (mtime or remote commit).
+    // Without this fallback, structured remote docs silently lose the
+    // per-document staleness metadata that plain documents receive.
+    const fallback = parsed.frontmatter.updated ?? updated;
+    return {
+      ...parsed,
+      sections: parsed.sections.map((section) => ({
+        ...section,
+        updated: section.updated ?? fallback,
+      })),
+    };
+  }
+  return parsePlainMarkdown(content, stem, updated);
 }
 
 // Mirrors okf-local's parseFrontmatter detection: opening --- fence with a closer.

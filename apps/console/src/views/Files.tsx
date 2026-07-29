@@ -46,8 +46,12 @@ export function Files() {
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<string | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
   const editorRef = useRef<HTMLTextAreaElement>(null)
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
 
   const live = mode === 'live'
   const dirty = file?.text !== undefined && draft !== file.text
@@ -102,20 +106,77 @@ export function Files() {
     return () => { cancelled = true }
   }, [selected])
 
+  // Images and PDFs must be fetched through apiFetch so the desktop bearer is
+  // present; putting /api/file/raw directly in src would 401 inside the app.
+  // Object URLs let authenticated responses feed inert image/PDF containers
+  // without putting the bearer in a URL.
+  useEffect(() => {
+    let cancelled = false
+    let objectUrl: string | null = null
+    setPreviewUrl(null)
+    setPreviewError(null)
+    if (!file || (file.kind !== 'image' && file.kind !== 'pdf')) return undefined
+    void (async () => {
+      try {
+        const res = await apiFetch(`/api/file/raw?path=${encodeURIComponent(file.path)}`)
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}) as { error?: string })
+          throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
+        }
+        const blob = await res.blob()
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setPreviewUrl(objectUrl)
+      } catch (e) {
+        if (!cancelled) setPreviewError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [file])
+
+  useEffect(() => {
+    if (!dirty) return undefined
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    const guardNavigation = (event: Event) => {
+      if (!window.confirm(`Discard unsaved changes to ${file?.path ?? 'this file'}?`)) event.preventDefault()
+    }
+    window.addEventListener('beforeunload', warn)
+    window.addEventListener('contextcake:before-navigate', guardNavigation)
+    return () => {
+      window.removeEventListener('beforeunload', warn)
+      window.removeEventListener('contextcake:before-navigate', guardNavigation)
+    }
+  }, [dirty, file?.path])
+
+  const chooseFile = (path: string) => {
+    if (path === selected) return
+    if (dirty && !window.confirm(`Discard unsaved changes to ${file?.path ?? 'this file'}?`)) return
+    setSelected(path)
+  }
+
   const save = useCallback(async () => {
     if (!file || !dirty || saving) return
+    const savePath = file.path
+    const saveDraft = draft
     setSaving(true)
     setFileError(null)
     try {
       const res = await apiFetch('/api/file', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: file.path, text: draft }),
+        body: JSON.stringify({ path: savePath, text: saveDraft, modified: file.modified }),
       })
       const data = await res.json().catch(() => ({}) as { error?: string; modified?: string })
       if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
-      setFile({ ...file, text: draft, modified: (data as { modified?: string }).modified ?? file.modified })
-      setSavedAt(new Date().toLocaleTimeString())
+      if (selectedRef.current === savePath) {
+        setFile((current) => current?.path === savePath
+          ? { ...current, text: saveDraft, modified: (data as { modified?: string }).modified ?? current.modified }
+          : current)
+        setSavedAt(new Date().toLocaleTimeString())
+      }
       reload() // the cascade changed — re-resolve so every other view agrees
     } catch (e) {
       setFileError(e instanceof Error ? e.message : String(e))
@@ -189,7 +250,7 @@ export function Files() {
                     <button
                       key={f.path}
                       type="button"
-                      onClick={() => setSelected(f.path)}
+                      onClick={() => chooseFile(f.path)}
                       aria-current={active ? 'true' : undefined}
                       title={f.path}
                       style={css(`display:block; width:100%; text-align:left; padding:6px 8px; margin-bottom:2px; border:none; border-radius:7px; cursor:pointer; font:inherit; font-family:${MONO}; font-size:11.5px; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:${active ? C.tealFill : 'transparent'}; color:${active ? C.tealText : C.body};`)}
@@ -248,9 +309,19 @@ export function Files() {
             )}
 
             <div style={css('flex:1; min-height:0; overflow:auto;')}>
-              {!file.editable ? (
+              {!file.editable && (file.kind === 'image' || file.kind === 'pdf') ? (
+                previewError ? (
+                  <Empty title="Couldn't preview this file" detail={previewError} />
+                ) : previewUrl ? (
+                  file.kind === 'image'
+                    ? <img src={previewUrl} alt={file.path} style={css('display:block; max-width:100%; max-height:100%; margin:auto; object-fit:contain; padding:20px; box-sizing:border-box;')} />
+                    : <iframe sandbox="" src={previewUrl} title={`Preview ${file.path}`} style={css('display:block; width:100%; height:100%; min-height:420px; border:0;')} />
+                ) : (
+                  <Empty title="Loading preview…" detail="ContextCake is reading this file from its source folder." />
+                )
+              ) : !file.editable ? (
                 <Empty
-                  title={file.kind === 'image' || file.kind === 'pdf' ? 'Preview only' : 'Not editable here'}
+                  title="Not editable here"
                   detail={file.reason ?? 'This file type is stored alongside your notes but is not text ContextCake can edit.'}
                 />
               ) : tab === 'rendered' && file.markdown ? (

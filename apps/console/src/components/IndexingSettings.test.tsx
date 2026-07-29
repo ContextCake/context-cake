@@ -65,7 +65,8 @@ describe('IndexingSettings', () => {
   })
 
   it('saves a changed limit on blur', async () => {
-    await act(async () => root.render(<IndexingSettings />))
+    const onChanged = vi.fn()
+    await act(async () => root.render(<IndexingSettings onChanged={onChanged} />))
     mocks.apiFetch.mockImplementation(async () => payload({ maxDocFiles: 50000 }, { maxDocFiles: 50000 }))
 
     await type(field('maxDocFiles'), '50000')
@@ -75,6 +76,7 @@ describe('IndexingSettings', () => {
       method: 'PATCH',
       body: JSON.stringify({ maxDocFiles: 50000 }),
     }))
+    expect(onChanged).toHaveBeenCalledOnce()
   })
 
   it('rejects an out-of-range value in the form without calling the server', async () => {

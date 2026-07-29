@@ -44,8 +44,17 @@ export function httpError(status, message) {
 export function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = "";
-    req.on("data", (c) => { data += c; if (data.length > 5_000_000) reject(httpError(413, "Body too large")); });
-    req.on("end", () => resolve(data));
+    let rejected = false;
+    req.on("data", (c) => {
+      if (rejected) return;
+      data += c;
+      if (data.length > 5_000_000) {
+        rejected = true;
+        data = "";
+        reject(httpError(413, "Body too large"));
+      }
+    });
+    req.on("end", () => { if (!rejected) resolve(data); });
     req.on("error", reject);
   });
 }

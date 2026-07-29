@@ -107,7 +107,7 @@ describe('App settings surface', () => {
 
   it('does not open Settings over the Connect Agent dialog', async () => {
     window.__CC_DESKTOP = {
-      token: 'test',
+      getApiToken: async () => 'test',
       version: '0.1.0',
       authState: { signedIn: false },
       cli: {

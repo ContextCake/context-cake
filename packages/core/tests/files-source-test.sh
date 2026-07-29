@@ -87,7 +87,7 @@ grep -q '"key":"advanced topics & tips"' <<<"$guide" || fail "normalized keys ke
 if grep -q '"heading":"# Onboarding Guide"' <<<"$guide"; then fail "the H1 line must not be a section" "$guide"; fi
 grep -q "\"updated\":\"$guide_date\"" <<<"$guide" || fail "plain md sections should carry the file mtime date" "$guide"
 
-# --- 2. OKF frontmatter: parsing is delegated to okf-local (identical output) -
+# --- 2. OKF frontmatter: structured attrs win, document dates fill gaps ------
 
 cat > "$tmpdir/delegate.mjs" <<EOF
 import fs from "node:fs";
@@ -96,11 +96,14 @@ import { parseConcept } from "${sources_dir}/okf-local.mjs";
 const s = createFilesSource({ name: "docs", level: 2, root: process.argv[2] });
 const viaFiles = await s.loadConcept("okf");
 const viaOkf = parseConcept(fs.readFileSync(process.argv[2] + "/okf.md", "utf8"));
-console.log(JSON.stringify(viaFiles) === JSON.stringify(viaOkf) ? "IDENTICAL" : "DIVERGED");
+if (JSON.stringify(viaFiles.frontmatter) !== JSON.stringify(viaOkf.frontmatter)) throw new Error("frontmatter diverged");
+if (viaFiles.sections[0].updated !== viaOkf.sections[0].updated) throw new Error("explicit section date diverged");
+if (viaFiles.sections[1].updated !== viaFiles.frontmatter.updated) throw new Error("frontmatter date did not fill the undated section");
+console.log("STRUCTURE-PRESERVED");
 console.log(JSON.stringify(viaFiles));
 EOF
 okf_out="$(node "$tmpdir/delegate.mjs" "$docs")"
-grep -q 'IDENTICAL' <<<"$okf_out" || fail "OKF-frontmatter file should parse identically to okf-local" "$okf_out"
+grep -q 'STRUCTURE-PRESERVED' <<<"$okf_out" || fail "OKF-frontmatter structure and explicit attrs should be preserved" "$okf_out"
 grep -q '"key":"engine"' <<<"$okf_out" || fail "OKF {#key} attr should be honored" "$okf_out"
 grep -q '"updated":"2026-04-01"' <<<"$okf_out" || fail "OKF updated= attr should be honored" "$okf_out"
 grep -q '"override":"none"' <<<"$okf_out" || fail "OKF override= attr should be honored" "$okf_out"

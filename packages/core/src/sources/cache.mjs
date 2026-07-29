@@ -65,9 +65,12 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null } = {}) {
       return cached("list", () => source.listConceptIds());
     },
     // Drop everything cached (memory + disk) so the next reads hit the source.
+    // Remote adapters keep their own index memo, so the refresh has to reach
+    // them too or a user-triggered Sync only clears the outer half.
     sync() {
       memory.clear();
       if (dir) fs.rmSync(dir, { recursive: true, force: true });
+      source.sync?.();
       wrapped.lastSynced = new Date().toISOString();
       return wrapped.lastSynced;
     },

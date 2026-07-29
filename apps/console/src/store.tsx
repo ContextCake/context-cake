@@ -136,6 +136,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [indexingSources, setIndexingSources] = useState<string[]>([])
   const [error, setError] = useState<LiveDataError | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const shellReadyRef = useRef(false)
 
   const [concepts, setConcepts] = useState<Concept[]>([])
   const [sources, setSources] = useState<Source[]>([])
@@ -178,9 +179,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setSources(adaptSources(g))
         setIndexingSources(g.indexingSources ?? [])
         setError(null)
+        shellReadyRef.current = true
         setLoading(false) // the shell can render now — everything else streams in
 
-        const { concepts: raw, errors, indexing } = await source.resolveAll()
+        const { concepts: raw, errors, indexing, indexingSources: resolvingSources } = await source.resolveAll()
         if (cancelled) return
         // Only fail the whole page when nothing resolved AND nothing is still
         // being read; a partial pass mid-index is expected, not an error.
@@ -188,6 +190,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           throw new LiveDataError('bad-shape', `No concept resolved (first error: ${errors[0].concept}: ${errors[0].error})`)
         }
         setLoadErrors(errors)
+        // The graph and resolve-all requests are separate snapshots. Indexing
+        // can finish between them; use the later answer so a stale graph never
+        // leaves the banner running after polling has stopped.
+        setIndexingSources(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
         setConcepts(raw.map(adaptConcept))
         const derivedConflicts = adaptConflicts(raw)
         setConflicts(derivedConflicts)
@@ -209,7 +215,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         if (cancelled) return
         // A failure on a background refresh must not blow away a working page.
-        if (first) {
+        if (first && !shellReadyRef.current) {
           setError(e instanceof LiveDataError ? e : new LiveDataError('bad-shape', e instanceof Error ? e.message : String(e)))
           setLoading(false)
           setConceptsLoading(false)
@@ -228,7 +234,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    setLoading(true)
+    // A refresh must not replace an already-usable shell with a full-page
+    // loader. Besides the visual regression, doing so unmounts the Files editor
+    // and can discard an unsaved draft. Only the initial bootstrap owns the
+    // shell-level loading state.
+    if (!shellReadyRef.current) setLoading(true)
     setConceptsLoading(true)
     setError(null)
     void pass(true)

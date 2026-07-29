@@ -110,6 +110,11 @@ grep -q 'default:150000' <<<"$OUT" && pass "unset keys fall back to the default"
 grep -q 'bad-range:777' <<<"$OUT" && pass "an out-of-range stored value is ignored, not obeyed" || fail "range guard ($OUT)"
 grep -q 'range:.*between' <<<"$OUT" && pass "patch validation rejects an out-of-range value" || fail "patch range ($OUT)"
 grep -q 'unknown:Unknown setting' <<<"$OUT" && pass "patch validation rejects an unknown key" || fail "patch unknown ($OUT)"
+OUT="$(CONTEXTCAKE_MAX_DOC_FILES=999999999 node --input-type=module -e "
+import { resolveSettings } from '$SRC/settings.mjs';
+console.log(resolveSettings({}).maxDocFiles);
+")"
+[ "$OUT" = "10000" ] && pass "out-of-range env values fall back safely" || fail "env range guard ($OUT)"
 
 echo "per-source time budget (withDeadline)"
 OUT="$(node --input-type=module -e "
@@ -117,12 +122,15 @@ import { withDeadline } from '$SRC/service.mjs';
 // The deadline timer is unref'd (it must never hold the real service open at
 // exit), so a bare script needs its own keepalive to observe the rejection.
 const keepalive = setInterval(() => {}, 50);
-try { await withDeadline(new Promise(() => {}), 200, 'stalled source'); console.log('NO-ERROR'); }
+let cancelled = false;
+try { await withDeadline(new Promise(() => {}), 200, 'stalled source', () => { cancelled = true; }); console.log('NO-ERROR'); }
 catch (e) { console.log(e.message); }
+console.log('cancelled:' + cancelled);
 console.log(await withDeadline(Promise.resolve('fast'), 200, 'nope'));
 clearInterval(keepalive);
 ")"
 grep -q 'stalled source' <<<"$OUT" && pass "a never-settling source rejects at the deadline" || fail "deadline reject ($OUT)"
+grep -q 'cancelled:true' <<<"$OUT" && pass "the deadline cancels underlying indexing work" || fail "deadline cancellation ($OUT)"
 grep -q 'fast' <<<"$OUT" && pass "a fast source passes through untouched" || fail "deadline passthrough ($OUT)"
 
 # ---- hosts -------------------------------------------------------------------
@@ -200,9 +208,18 @@ F="$(curl -s "$BASE/api/files")"
 R="$(curl -s "$BASE/api/file?path=notes/meeting.md")"
 [ "$(JQ 'String(d.editable)' <<<"$R")" = "true" ] && pass "a markdown file comes back editable" || fail "editable ($R)"
 JQ 'd.text' <<<"$R" | grep -q 'Ship on Friday' && pass "file text is returned for editing" || fail "file text ($R)"
-code 200 "$(C -X PUT -H 'content-type: application/json' -d "{\"path\":\"notes/meeting.md\",\"text\":\"# Meeting notes\n\n## Decision\n\nShip on Monday.\n\"}" "$BASE/api/file")" "editing a context file saves"
+SAVE="$(curl -s -X PUT -H 'content-type: application/json' -d "{\"path\":\"notes/meeting.md\",\"text\":\"# Meeting notes\n\n## Decision\n\nShip on Monday.\n\",\"modified\":\"$(JQ 'd.modified' <<<"$R")\"}" "$BASE/api/file")"
+[ "$(JQ 'd.layer' <<<"$SAVE")" = "notes" ] && pass "a save identifies the one layer whose index is stale" || fail "save layer ($SAVE)"
 grep -q 'Ship on Monday' "$TMP/notes/meeting.md" && pass "the edit reached disk" || fail "edit not written"
 curl -s "$BASE/api/resolve?concept=meeting" | grep -q 'Ship on Monday' && pass "the cascade serves the edit immediately" || fail "edit not resolved"
+OPEN="$(curl -s "$BASE/api/file?path=notes/meeting.md")"
+printf '# Meeting notes\n\n## Decision\n\nExternal edit wins.\n' > "$TMP/notes/meeting.md"
+STALE_BODY="{\"path\":\"notes/meeting.md\",\"text\":\"stale editor text\",\"modified\":\"$(JQ 'd.modified' <<<"$OPEN")\"}"
+code 409 "$(C -X PUT -H 'content-type: application/json' -d "$STALE_BODY" "$BASE/api/file")" "a stale editor cannot overwrite an external edit"
+grep -q 'External edit wins' "$TMP/notes/meeting.md" && pass "the external edit remains intact after the conflict" || fail "stale save overwrote disk"
+# Restore the fixture for the indexed-read assertions below. Omitting modified
+# remains a supported compatibility path for older playground clients.
+code 200 "$(C -X PUT -H 'content-type: application/json' -d "{\"path\":\"notes/meeting.md\",\"text\":\"# Meeting notes\n\n## Decision\n\nShip on Monday.\n\"}" "$BASE/api/file")" "legacy save without a revision remains supported"
 code 404 "$(C -X PUT -H 'content-type: application/json' -d '{"path":"notes/brand-new.md","text":"nope"}' "$BASE/api/file")" "the editor refuses to create new files"
 code 403 "$(C "$BASE/api/file?path=notes/../../escape.md")" "traversal out of a layer root blocked"
 code 404 "$(C "$BASE/api/file?path=nosuchlayer/x.md")" "unknown layer rejected"

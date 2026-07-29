@@ -31,6 +31,7 @@ const state = {
   mode: "canvas",
   files: null,
   openFilePath: null,
+  openFileModified: null,
   editor: null,
   dirty: false,
   fview: "split",
@@ -1037,6 +1038,7 @@ async function openFile(apiPath) {
   }
 
   state.openFilePath = apiPath;
+  state.openFileModified = data.modified ?? null;
   renderFileTree();
   fx.empty.hidden = true;
   fx.head.hidden = false;
@@ -1159,7 +1161,11 @@ async function saveFile() {
   const text = state.editor.getValue();
   fx.save.disabled = true;
   try {
-    await fetchJSON("/api/file", { method: "PUT", body: JSON.stringify({ path: state.openFilePath, text }) });
+    const saved = await fetchJSON("/api/file", {
+      method: "PUT",
+      body: JSON.stringify({ path: state.openFilePath, text, modified: state.openFileModified }),
+    });
+    state.openFileModified = saved.modified ?? state.openFileModified;
   } catch (err) {
     toast(`Save failed: ${err.message}`);
     fx.save.disabled = false;

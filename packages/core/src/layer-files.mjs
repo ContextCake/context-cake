@@ -8,7 +8,7 @@
 //   GET  /api/files                 → { layers: [{ layer, kind, root, fileCount, files[] }] }
 //   GET  /api/file?path=<l>/<rel>   → { path, layer, rel, ext, kind, editable, text? }
 //   GET  /api/file/raw?path=…       → the bytes (images/PDF preview)
-//   PUT  /api/file                  → { path, text } overwrite an existing text file
+//   PUT  /api/file                  → { path, text, modified? } overwrite an existing text file
 //   PUT  /api/section               → write one resolved section across layers
 //
 // Every path is resolved against its layer root and checked with
@@ -29,6 +29,7 @@ const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".
 // Rendered as markdown by the console's Files view; everything else is raw text.
 const MARKDOWN_EXT = new Set([".md", ".markdown", ".mdx"]);
 const MAX_EDITABLE_BYTES = 2_000_000;
+const MAX_PREVIEW_BYTES = 25_000_000;
 
 export function fileKind(ext) {
   if (ext === ".pdf") return "pdf";
@@ -68,8 +69,8 @@ export function resolveLayerFile(apiPath, roots) {
   const entry = roots.get(layer);
   if (!entry) throw httpError(404, `Unknown layer: ${layer}`);
   const abs = path.resolve(entry.root, rel);
-  assertInsideRoot(abs, entry.root, "Path escapes its layer root");
-  return { abs, layer, rel, root: entry.root, ext: path.extname(abs).toLowerCase() };
+  const guardedAbs = assertInsideRoot(abs, entry.root, "Path escapes its layer root");
+  return { abs: guardedAbs, layer, rel, root: entry.root, ext: path.extname(abs).toLowerCase() };
 }
 
 // Bounded, async, symlink-skipping walk for the file tree. Unlike walkDocs
@@ -146,25 +147,46 @@ export async function readFileApi(apiPath, roots) {
 
 export function serveRawApi(apiPath, roots, res) {
   const { abs, ext } = resolveLayerFile(apiPath, roots);
-  fs.readFile(abs, (err, data) => {
-    if (err) return json(res, 404, { error: "Not found" });
-    res.writeHead(200, { "content-type": MIME[ext] ?? "application/octet-stream", "cache-control": "no-store" });
-    res.end(data);
+  if (!IMAGE_EXT.has(ext) && ext !== ".pdf") {
+    throw httpError(415, "Raw preview is only available for images and PDFs");
+  }
+  fs.stat(abs, (statErr, stat) => {
+    if (statErr || !stat.isFile()) return json(res, 404, { error: "Not found" });
+    if (stat.size > MAX_PREVIEW_BYTES) {
+      return json(res, 413, { error: `Preview is limited to ${Math.round(MAX_PREVIEW_BYTES / 1_000_000)} MB` });
+    }
+    res.writeHead(200, {
+      "content-type": MIME[ext] ?? "application/octet-stream",
+      "content-length": stat.size,
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+      ...(ext === ".svg" ? { "content-disposition": 'attachment; filename="contextcake-preview.svg"' } : {}),
+    });
+    if (stat.size === 0) return res.end();
+    // Bound the stream to the size we approved above even if another process
+    // grows the file between stat and open.
+    const stream = fs.createReadStream(abs, { end: stat.size - 1 });
+    stream.on("error", () => { if (!res.writableEnded) res.destroy(); });
+    stream.pipe(res);
   });
 }
 
 export async function writeFileApi(rawBody, roots) {
   const body = parseJson(rawBody);
-  const { abs, ext, path: apiPath } = { ...resolveLayerFile(body.path, roots), path: body.path };
+  const { abs, ext, layer, path: apiPath } = { ...resolveLayerFile(body.path, roots), path: body.path };
   if (!TEXT_EXT.has(ext)) throw httpError(415, `Not an editable text file: ${ext || "(no ext)"}`);
   if (typeof body.text !== "string") throw httpError(400, "Provide text: string");
   if (Buffer.byteLength(body.text) > MAX_EDITABLE_BYTES) throw httpError(413, "File is too large to save from the editor");
   let stat;
   try { stat = await fsp.stat(abs); } catch { throw httpError(404, `Refusing to create new files: ${apiPath}`); }
   if (!stat.isFile()) throw httpError(400, `Not a file: ${apiPath}`);
+  if (body.modified !== undefined && body.modified !== stat.mtime.toISOString()) {
+    throw httpError(409, `This file changed on disk after you opened it. Reopen ${apiPath} and merge your edit.`);
+  }
   await fsp.writeFile(abs, body.text, "utf8");
   const after = await fsp.stat(abs);
-  return { ok: true, path: apiPath, bytes: Buffer.byteLength(body.text), modified: after.mtime.toISOString() };
+  return { ok: true, path: apiPath, layer, bytes: Buffer.byteLength(body.text), modified: after.mtime.toISOString() };
 }
 
 /**

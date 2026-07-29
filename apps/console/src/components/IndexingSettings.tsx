@@ -18,7 +18,7 @@ function format(n: number): string {
   return String(n)
 }
 
-export function IndexingSettings() {
+export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
   const [payload, setPayload] = useState<SettingsPayload | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [rows, setRows] = useState<Record<string, RowState>>({})
@@ -60,6 +60,7 @@ export function IndexingSettings() {
       const data = await res.json().catch(() => ({}) as { error?: string })
       if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
       apply(data as SettingsPayload)
+      onChanged?.()
     } catch (e) {
       setRow(def.key, { error: e instanceof Error ? e.message : String(e), saving: false })
     }

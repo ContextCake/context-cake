@@ -32,6 +32,8 @@ FENCE='```'
   printf -- '---\ntype: runbook\ntitle: Deploy\nupdated: 2026-07-01\n---\n\n# Deploy\n\n## Trigger {#trigger}\n\nRun:\n\n'
   printf '%sbash\n# a comment\necho hi\n%s\n\ndone.\n\n## Rollback {#rollback}\n\nroll back.\n' "$FENCE" "$FENCE"
 } > "$TMP/bundle/deploy.md"
+printf '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>\n' > "$TMP/bundle/pixel.svg"
+printf '<script>document.body.textContent="unsafe"</script>\n' > "$TMP/bundle/page.html"
 cat > "$TMP/manifest.json" <<EOF
 { "layers": [ { "name": "t", "level": 1, "path": "$TMP/bundle" } ] }
 EOF
@@ -51,7 +53,14 @@ echo "path + symlink sandbox"
 code 403 "$(C "$BASE/api/file?path=t/../../../etc/hosts")" "traversal read blocked"
 code 403 "$(C "$BASE/api/file?path=t/escape.md")" "symlink read blocked"
 code 403 "$(C -X PUT -H 'content-type: application/json' -d '{"path":"t/escape.md","text":"x"}' "$BASE/api/file")" "symlink write blocked"
+code 403 "$(C "$BASE/api/file/raw?path=t/escape.md")" "symlink raw preview blocked"
 grep -q SECRET "$TMP/outside/secret.txt" && pass "secret not overwritten" || fail "secret overwritten"
+
+echo "raw preview sandbox"
+code 415 "$(C "$BASE/api/file/raw?path=t/page.html")" "non-preview content blocked"
+RAW_HEADERS="$(curl -s -D - -o /dev/null "$BASE/api/file/raw?path=t/pixel.svg" | tr -d '\r')"
+grep -qi '^content-security-policy: sandbox' <<<"$RAW_HEADERS" && pass "raw preview CSP" || fail "raw preview CSP missing"
+grep -qi '^content-disposition: attachment' <<<"$RAW_HEADERS" && pass "SVG direct navigation downloads" || fail "SVG direct navigation not contained"
 
 echo "CSRF + DNS-rebinding guard"
 code 403 "$(C -X POST -H 'content-type: application/json' -H 'Sec-Fetch-Site: cross-site' -d '{}' "$BASE/api/sources")" "cross-site POST blocked"

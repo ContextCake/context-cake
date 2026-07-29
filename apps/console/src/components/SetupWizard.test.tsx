@@ -175,7 +175,7 @@ describe('SetupWizard connection handoff', () => {
   it('uses the native folder browser when the desktop bridge is available', async () => {
     const chooseFolder = vi.fn().mockResolvedValue('/Users/person/ContextCake/personal')
     window.__CC_DESKTOP = {
-      token: 'test',
+      getApiToken: async () => 'test',
       version: '0.1.0',
       authState: { signedIn: false },
       chooseFolder,
@@ -210,6 +210,26 @@ describe('SetupWizard connection handoff', () => {
     await act(async () => button('Connect an agent').click())
     expect(onClose).toHaveBeenCalledOnce()
     expect(onConnectAgent).toHaveBeenCalledOnce()
+  })
+
+  it('does not tell users to add content while their source is still indexing', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
+      JSON.stringify(url === '/api/sources' && init?.method === 'POST'
+        ? { ok: true, added: 'personal', indexing: true, hasDocuments: true, scanComplete: true }
+        : { concepts: [], indexing: true, indexingSources: ['personal'] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ))
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/contextcake-personal')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+    await act(async () => button('Skip for now').click())
+    await act(async () => button('Finish').click())
+
+    expect(container.textContent).toContain('still indexing in the background')
+    expect(container.textContent).not.toContain('Add content to a layer')
   })
 })
 

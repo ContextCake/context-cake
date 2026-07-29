@@ -86,9 +86,10 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   store polls while the engine reports `indexing`. The full-page
   "Resolving the cascade…" gate was the first-run hang — don't add another one.
   A failed *background* refresh must not clear a working page.
-- **`src/markdown.ts` is escape-first and has no dependencies.** It escapes all
-  input before emitting markup and only writes its own tags, so document
-  content can never inject HTML; link/image URLs go through a scheme
-  allowlist. If you extend it, keep that order — see `markdown.test.ts`.
+- **`src/markdown.ts` parses to typed data and has no dependencies.** It never
+  emits HTML; `components/Markdown.tsx` renders document strings as React text
+  nodes, so source content cannot become markup. Link/image URLs still go
+  through a scheme allowlist. Preserve that no-HTML boundary when extending it
+  — see `markdown.test.ts` and `components/Markdown.test.tsx`.
 - `project/` holds the original Claude Design handoff (prototype HTML, chat,
   assets). It's provenance, not part of the build — don't import from it.

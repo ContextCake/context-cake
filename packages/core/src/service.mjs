@@ -96,9 +96,12 @@ function expandHome(p) {
 const YIELD_EVERY = 25;
 const yieldNow = () => new Promise((resolve) => setImmediate(resolve));
 
-export function withDeadline(promise, ms, message) {
+export function withDeadline(promise, ms, message, onTimeout = null) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
+    const timer = setTimeout(() => {
+      try { onTimeout?.(); } catch { /* cancellation is best effort */ }
+      reject(new Error(message));
+    }, ms);
     timer.unref?.();
     promise.then(
       (value) => { clearTimeout(timer); resolve(value); },
@@ -109,16 +112,23 @@ export function withDeadline(promise, ms, message) {
 
 // Reads one source end to end, reporting progress into `entry` as it goes so
 // the UI can show "Indexed 340 of 1,500" instead of an opaque spinner.
-async function snapshotSource(source, entry) {
+async function snapshotSource(source, entry, signal = null) {
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw signal.reason ?? new Error("Indexing cancelled");
+  };
+  throwIfAborted();
   entry.phase = "scanning";
   const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds() : [];
+  throwIfAborted();
   entry.phase = "loading";
   entry.total = ids.length;
   const concepts = new Map();
   let tokens = 0;
   let n = 0;
   for (const id of ids) {
+    throwIfAborted();
     const concept = await source.loadConcept(id);
+    throwIfAborted();
     concepts.set(id, concept);
     tokens += countTokens(conceptText(concept));
     if (++n % YIELD_EVERY === 0) {
@@ -162,9 +172,9 @@ export function createEngineService({
   //
   // One live set of adapters, rebuilt whenever the manifest file changes on
   // disk (a stat per request — cheap) or reload() is called. This keeps the
-  // playground's edit-and-refresh semantics: okf-local adapters read from disk
-  // on every call, so bundle edits are always live, and manifest edits (by the
-  // CRUD routes or by hand) invalidate the set. Unlike the old per-request
+  // playground's edit-and-refresh semantics: single-concept reads are live,
+  // file writes/watchers invalidate aggregate snapshots, and manifest edits
+  // (by the CRUD routes or by hand) invalidate the set. Unlike the old per-request
   // rebuild it does NOT re-spawn MCP children on every request — they live
   // until the manifest changes, reload(), or close().
 
@@ -250,6 +260,7 @@ export function createEngineService({
     closeWatchers();
     const prev = cache;
     cache = null;
+    for (const entry of indexes.values()) entry.cancel?.();
     indexes = new Map();
     if (prev) for (const s of prev.sources) s.close?.();
   }
@@ -258,7 +269,11 @@ export function createEngineService({
 
   function pruneIndexes(keys) {
     const live = new Set(keys);
-    for (const key of [...indexes.keys()]) if (!live.has(key)) indexes.delete(key);
+    for (const key of [...indexes.keys()]) {
+      if (live.has(key)) continue;
+      indexes.get(key)?.cancel?.();
+      indexes.delete(key);
+    }
   }
 
   /**
@@ -283,6 +298,7 @@ export function createEngineService({
   // `previousSnap` keeps the last good answer readable while a re-index runs,
   // so a file edit refreshes the cascade without the UI blinking to empty.
   function startIndex(source, key, settings, previousSnap = null) {
+    const controller = new AbortController();
     const entry = {
       status: "indexing",
       phase: "queued",
@@ -292,12 +308,14 @@ export function createEngineService({
       error: null,
       startedAt: Date.now(),
       finishedAt: null,
+      cancel: () => controller.abort(new Error("Indexing superseded")),
     };
     const budget = settings.sourceBudgetMs;
     withDeadline(
-      snapshotSource(source, entry),
+      snapshotSource(source, entry, controller.signal),
       budget,
       `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
+      () => controller.abort(new Error("Indexing timed out")),
     )
       .then((snap) => {
         if (indexes.get(key) !== entry) return; // superseded by a newer config
@@ -357,6 +375,7 @@ export function createEngineService({
       if (layerName !== null && source.name !== layerName) return;
       const key = open.keys[i];
       const previous = indexes.get(key);
+      previous?.cancel?.();
       indexes.set(key, startIndex(source, key, open.settings, previous?.snap ?? null));
     });
   }
@@ -813,8 +832,21 @@ export function createEngineService({
 
   async function syncSourceApi(name) {
     if (!name) throw httpError(400, "Provide ?name=");
-    const layer = (readManifest().layers ?? []).find((l) => l.name === name);
+    const { manifest, sources } = openSources();
+    const layer = (manifest.layers ?? []).find((l) => l.name === name);
     if (!layer) throw httpError(404, `No source named "${name}"`);
+    if (layer.source === "github") {
+      const source = sources.find((candidate) => candidate.name === name);
+      if (!source || typeof source.sync !== "function") {
+        throw httpError(400, `"${name}" does not support Sync`);
+      }
+      const lastSynced = await source.sync();
+      // sync() invalidates both the outer cache and the adapter's internal
+      // index. Refresh now so a successful API response means the remote index
+      // has actually bypassed TTL rather than merely being marked dirty.
+      await source.listConceptIds();
+      return { ok: true, synced: name, lastSynced: source.lastSynced ?? lastSynced ?? null };
+    }
     if (!layer.origin) throw httpError(400, `"${name}" is not a git-backed source`);
     const { url, slug } = normalizeRepo(layer.origin);
     await gitCloneOrPull(url, path.join(CACHE_DIR, slug), layer.ref ?? null);

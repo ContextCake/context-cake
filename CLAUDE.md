@@ -6,7 +6,7 @@
 # Run all tests
 npm test
 # or directly (mirrors the npm test chain):
-bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/pack-test.sh && bash packages/core/tests/git-sync-test.sh && bash packages/core/tests/capture-test.sh && bash packages/core/tests/team-sync-mcp-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh && bash packages/core/tests/setup-robustness-test.sh
+bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/github-source-test.sh && bash packages/core/tests/pack-test.sh && bash packages/core/tests/git-sync-test.sh && bash packages/core/tests/capture-test.sh && bash packages/core/tests/team-sync-mcp-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh && bash packages/core/tests/setup-robustness-test.sh
 
 # Run the MCP server (cascade mode)
 node mcp-server.mjs --manifest layers.json
@@ -59,7 +59,7 @@ cd apps/desktop && npm run smoke      # headless boot + token-guard check
 
 See `docs/architecture/README.md` for the full design. Short version:
 
-- **Storage is federated** — each layer is a `source` behind a uniform adapter: an `okf-local` bundle (git repo of OKF markdown) or an `mcp` foreign graph translated into OKF at read time.
+- **Storage is federated** — each layer is a `source` behind a uniform adapter: an `okf-local` bundle, a plain `files` folder, a remote `github` repository, or an `mcp` foreign graph translated into OKF at read time.
 - **Reading is unified** — `resolver.mjs` stitches the sources into one effective OKF concept at read time.
 - **Layer precedence** — Personal (3) > Team (2) > Company (0). Higher wins per section. Levels are configurable per layer in the manifest.
 - **Section/field merge** — not whole-document replacement. A higher layer speaks to what it knows; the rest is inherited. Where layers disagree, the primary value carries per-section `conflicts[]` (dissenting layer + date) — surfaced, not hidden.
@@ -78,7 +78,8 @@ Key files:
 | `packages/core/src/mcp-server.mjs` | stdio MCP server; resolves via resolver.mjs; renders conflicts in markdown |
 | `packages/core/src/sources/okf-local.mjs` | OKF-local source adapter: reads OKF markdown bundles from disk |
 | `packages/core/src/sources/mcp.mjs` | MCP source adapter: spawns a foreign stdio MCP server, translates to OKF |
-| `packages/core/src/sources/files.mjs` | Files source adapter: any plain folder of `.md`/`.mdx`/`.txt` docs becomes a layer (OKF parsing when frontmatter present, synthesized sections otherwise) |
+| `packages/core/src/sources/files.mjs` | Files source adapter: any plain folder of `.md`/`.mdx`/`.txt` docs becomes a layer (OKF parsing when frontmatter present, synthesized sections otherwise). Owns `parseDocument`, shared with remote adapters so section keys match |
+| `packages/core/src/sources/github.mjs` | GitHub source adapter: a repo's `CLAUDE.md`/`AGENTS.md`/`README.md`/`docs/**` become a layer without a clone — recursive tree index, raw content, last-commit dates, warn-and-continue on API failure |
 | `packages/core/src/sources/cache.mjs` | TTL cache wrapper for any source adapter (memory + optional disk, `sync()` to invalidate) — opt-in per layer via a manifest `cache` block |
 | `packages/core/src/sources/git-core.mjs` | Locked git mutation coordinator for live layers: intended-paths commits, push with offline queue + rebase retry, URL-scrubbed errors |
 | `packages/core/src/sources/git-sync.mjs` | withGitSync wrapper (TTL-gated pull, 14-day capture decay, sync() lands queued pushes) + `resolveLiveLayer` manifest contract |
@@ -86,7 +87,7 @@ Key files:
 | `packages/core/src/team-activity.mjs` | Aggregates live-layer captures + telemetry NDJSON into control-surface feed and reuse metrics (cross-brain hits) |
 | `packages/core/fixtures/capture-policy.json` | Routing policy for agent-session captures (kinds → team_candidate; review keywords warn; dominant scratch signals → ignore) |
 | `examples/team-sync-pack/` | Capture pack: Claude Code plugin (skill + Stop-hook nudge), Cursor rules, Copilot snippet, operator runbook |
-| `packages/core/src/sources/index.mjs` | Source factory: builds adapters from a manifest (`okf-local` default, `files`, or `mcp`) |
+| `packages/core/src/sources/index.mjs` | Source factory: builds adapters from a manifest (`okf-local` default, `files`, `github`, or `mcp`) |
 | `examples/mock-mcp-source/server.mjs` | Runnable non-OKF foreign MCP server for integration tests |
 | `packages/core/src/classify-context.mjs` | Classifies repo events into ignore / local / team_candidate / review_required |
 | `packages/core/src/ingest.mjs` | Batch classifier: events → signals.json |
@@ -97,7 +98,7 @@ Key files:
 | `apps/okf-browser/` | OKF graph browser |
 | `apps/playground/` | Interactive playground: dependency-free HTTP server (`server.mjs`) over the engine + canvas/files/sources UI, merge resolver, per-source token budget. See `apps/playground/README.md`. |
 | `apps/console/` | React + Vite + TS web UI (ContextCake Console) — its own npm package with a build step, deployed to Cloudflare Pages. See `apps/console/README.md` + `apps/console/CLAUDE.md`. |
-| `apps/desktop/` | ContextCake for Mac: Electron shell — engine in the main process behind a token-guarded loopback service, console build as renderer, `contextcake` CLI shim, electron-updater. See `apps/desktop/CLAUDE.md` + `specs/contextcake-distribution/design.md`. |
+| `apps/desktop/` | ContextCake for Mac: Electron shell — engine in an isolated utility process behind a token-guarded loopback service, console build as renderer, `contextcake` CLI shim, electron-updater. See `apps/desktop/CLAUDE.md` + `specs/contextcake-distribution/design.md`. |
 | `apps/site/` | Public product site (Astro + Starlight). Spec + boundaries: `specs/contextcake-site/`. Site deps live in `apps/site/package.json` only — the engine stays dependency-free. |
 | `specs/contextcake-packs/` | Public spec and private-repo template for ContextCake Packs, a separately sold product line whose paid content lives outside this public-bound engine repo. |
 | `docs/architecture/README.md` | Historical design spec (partially superseded — see note at top) |
@@ -108,14 +109,16 @@ Key files:
 - `apps/control-surface/signals.json` is generated — gitignored, produced by `ingest.mjs`.
 - Staleness is surfaced via per-section `conflicts[]` + last-updated dates (the shadow/hash subsystem was removed in the core re-arch; see `specs/contextcake-core/design.md`).
 - **The manifest is a trust boundary.** An `mcp` layer spawns `command` with `args` from the manifest — a manifest you did not author can run arbitrary commands as your user. Only point `--manifest` at configs you trust (same model as any MCP client config).
+- **A manifest names credentials, never carries them.** A remote layer's `auth` may only be `"keychain:<alias>"` (resolved from the `tokens` map the caller injects into `buildSources` — the app owns the keychain, the engine never opens it) or `{"tokenEnv": "NAME"}` for headless runs. Any other shape throws, which is what structurally keeps a raw token out of a manifest. An alias with no injected secret reads anonymously rather than failing.
+- **A manifest still decides where a named credential is *sent*.** A `github` layer's `apiBase` (the GitHub Enterprise knob) plus a valid `auth` alias means an untrusted manifest can direct a real token at a host it chooses. This is inside the existing manifest trust boundary, not a separate one — but when the desktop app writes manifests it should only ever emit the default `apiBase`.
 - **The live layer's git repo is inside the team trust boundary.** Push access = the ability to inject unreviewed context into every teammate's agent; scope repo membership accordingly.
 - Capture tools (`log_capture`/`confirm_capture`) exist only behind `mcp-server.mjs --capture`. The default server exposes 6 read-only tools (the original `search`/`read_file`/`list_concepts`/`get_links` stay byte-identical to the committed `fixtures/mcp-tools-baseline.json`, plus always-on read-only `find_captures`/`whats_new`); `--capture` adds the two write tools for 8. Telemetry (`--telemetry`) records concept ids and enums only — never content.
 - All git mutations against a live root go through `git-core.mjs` (advisory `.contextcake.lock`, per-repo serialization) — never call git directly against a live layer from engine code.
 - The engine (`packages/core/src/`) is dependency-free — plain Node.js built-ins only. Do not add npm dependencies without discussion. The exceptions are `apps/console/`, `apps/site/`, and `apps/desktop/` — self-contained npm packages. Console and site never import from the engine; the desktop app imports engine modules by path (one-way: app → engine, never the reverse) and must never cause a dependency to leak into `packages/core`.
 - `apps/console/` and `apps/site/` each have their own `package.json`, build, and tests; run their commands from that subdirectory, not the repo root. Console CI lives at `.github/workflows/console-*.yml`, path-filtered to `apps/console/**` (production deploys on `console-v*` tags).
 - Tests create temp directories and clean up with `trap`. Run from the repo root.
-- **Disk-backed source walks are async and bounded** (`walkDocs` in `okf-local.mjs`). Never reintroduce sync fs walks or unbounded per-source reads in the read path — the desktop app runs the engine on the Electron main process, where one blocking walk freezes the whole UI (the setup "Resolving…" hang).
-- **Sources are read by a background index, so reads are never blocking and are often partial.** `/api/graph` and `/api/resolve-all` answer from whatever is indexed right now and report `indexing` / `indexingSources`; clients render what they have and poll. Any assertion about completeness (tests, scripts) must pass `?wait=<ms>`. An index entry is keyed by its layer config + settings, so adding a source never re-indexes the existing ones.
+- **Disk-backed source walks are async and bounded** (`walkDocs` in `okf-local.mjs`). Never reintroduce sync fs walks or unbounded per-source reads. The desktop app isolates the engine in an Electron utility process so engine work cannot freeze the main/UI process; bounded work still matters because the engine API must remain responsive.
+- **Aggregate reads come from a background index and are often partial.** `/api/graph` and `/api/resolve-all` answer from whatever is indexed right now and report `indexing` / `indexingSources`; clients render what they have and poll. Any assertion about completeness (tests, scripts) must pass `?wait=<ms>`. `/api/resolve` deliberately reads one concept live. An index entry is keyed by its layer config + settings, so adding a source never re-indexes the existing ones.
 - **The indexing limits are user settings, not env-only** (`settings.mjs`, `GET`/`PATCH /api/settings`, Settings → Indexing in the console). Precedence is manifest > env > default — the manifest has to win or the settings UI would silently do nothing. Env vars (`CONTEXTCAKE_MAX_DOC_FILES`, `CONTEXTCAKE_MAX_SCAN_ENTRIES`, `CONTEXTCAKE_SOURCE_BUDGET_MS`) remain the headless/CI fallback.
 - **Add-source validation is deliberately cheap**: only "folder is missing" and "that's a file" fail the form. A too-big folder is a normal thing to add — it becomes a visible source error after indexing, with a pointer at Settings. Don't reintroduce a full walk on the add path. MCP sources still probe (`tools/list`) at add time, which is bounded and catches a wrong command.
 - **Layer file APIs live in the engine, not the playground** (`layer-files.mjs`), so the desktop app can browse and edit context files. They cover `files`-kind layers too — the playground's old copy only mapped `okf-local` roots, which made markdown folders invisible in the editor.

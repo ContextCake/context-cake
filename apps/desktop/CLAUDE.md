@@ -1,7 +1,7 @@
 # ContextCake Desktop
 
-Electron shell for the ContextCake Mac app. Engine in the main process behind
-a token-guarded loopback service; console build as the renderer. Read
+Electron shell for the ContextCake Mac app. Engine in an isolated utility
+process behind a token-guarded loopback service; console build as the renderer. Read
 `specs/contextcake-distribution/design.md` before changing process
 architecture, packaging, or update behavior.
 
@@ -34,8 +34,9 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   not share the UI thread — that was the "Resolving…" freeze.
   `npm run test:isolation` fails if that work moves back (400ms main-loop
   ceiling; measured ~30ms isolated vs ~694ms sharing the loop). The child has
-  no `electron` module: pass it plain paths via argv, and note the bearer
-  token travels UP the message port (argv is visible in `ps`).
+  no `electron` module: pass it plain paths via argv. The bearer token travels
+  up the engine message port and reaches the preload only through trusted IPC;
+  it must never appear in engine or renderer argv (visible in `ps`).
 - **Every path that ends the app must stop the engine first** via
   `shutdownEngine()` in `main.mjs`. `app.exit()` does not fire `before-quit`,
   so skipping it makes a normal shutdown look like a crash and reports a

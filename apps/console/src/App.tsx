@@ -235,7 +235,7 @@ export function App() {
   return (
     <>
       <div className="cc-app-layer" aria-hidden={settingsOpen || undefined} inert={settingsOpen || undefined}>{body}</div>
-      {settingsOpen && <SettingsView appMode={mode} onClose={closeSettings} />}
+      {settingsOpen && <SettingsView appMode={mode} onClose={closeSettings} onIndexingChange={reload} />}
       {showWizard && <SetupWizard addingSource={sources.length > 0} onClose={closeWizard} onConnectAgent={isDesktop ? () => {
         setSourceSetupComplete(true)
         setWizardOpen(false)

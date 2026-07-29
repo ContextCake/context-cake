@@ -42,7 +42,12 @@ export const SETTING_KEYS = Object.keys(SETTING_DEFS);
 
 function fromEnv(def) {
   const value = Number(process.env[def.env]);
-  return Number.isFinite(value) && value > 0 ? value : null;
+  // Environment overrides are also useful for tightly bounded tests and
+  // constrained deployments, so accept positive values below the UI minimum.
+  // Still enforce the safety ceiling: an env var must not bypass the cap.
+  return Number.isFinite(value) && value > 0 && value <= def.max
+    ? Math.round(value)
+    : null;
 }
 
 /** The effective settings for a manifest: manifest value, else env, else default. */

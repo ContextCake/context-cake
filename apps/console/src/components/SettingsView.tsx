@@ -19,7 +19,13 @@ const IndexingIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6" /><path d="M4.5 12v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6" /></svg>
 )
 
-export function SettingsView({ appMode, onClose }: { appMode: Mode; onClose: () => void }) {
+export function SettingsView({
+  appMode, onClose, onIndexingChange,
+}: {
+  appMode: Mode
+  onClose: () => void
+  onIndexingChange?: () => void
+}) {
   const [pane, setPane] = useState<SettingsPane>('general')
   const [updatesEnabled, setUpdatesEnabled] = useState(() => isUpdateCheckEnabled(appMode))
   const { mode: theme, toggle: toggleTheme } = useThemeMode()
@@ -75,7 +81,7 @@ export function SettingsView({ appMode, onClose }: { appMode: Mode; onClose: () 
                 <h1>Indexing</h1>
                 <span>Control how much of each source ContextCake reads.</span>
               </header>
-              <IndexingSettings />
+              <IndexingSettings onChanged={onIndexingChange} />
             </>
           ) : pane === 'general' ? (
             <>

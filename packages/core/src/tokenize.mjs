@@ -21,15 +21,16 @@ function encoder() {
 }
 
 // Building the encoder is a one-time ~800ms synchronous block (2.3MB rank
-// table). Hosts that run on a UI-owning event loop (the desktop app's main
-// process) call this at boot so the cost is never paid mid-request.
+// table). Hosts call this at boot so the cost is never paid mid-request. The
+// desktop engine is isolated from the UI in a utility process, but its own HTTP
+// loop still benefits from paying this cost before the first indexed read.
 export function warmTokenizer() {
   try { encoder(); } catch { /* countTokens degrades to 0 on a broken vendor file */ }
 }
 
 // Exact BPE beyond this many characters is CPU-bound for seconds per megabyte —
-// and countTokens runs on every doc during /api/graph, inside the desktop app's
-// main process. Encode a prefix exactly and extrapolate for oversized texts:
+// and countTokens runs on every doc during background indexing. Encode a prefix
+// exactly and extrapolate for oversized texts:
 // the count is a budgeting proxy either way (o200k vs Claude), and a bounded
 // estimate beats pinning the UI on a giant generated markdown file.
 const EXACT_ENCODE_LIMIT = 200_000;

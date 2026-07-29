@@ -88,7 +88,12 @@ export function Sidebar({
   const openConflicts = conflicts.filter((c) => c.status === 'open').length
   const badgeFor = (id: ViewId) => (id === 'triage' ? triageCount : id === 'conflicts' ? openConflicts : 0)
 
-  const go = (id: ViewId) => { setView(id); onNavigate?.() }
+  const go = (id: ViewId) => {
+    const allowed = window.dispatchEvent(new Event('contextcake:before-navigate', { cancelable: true }))
+    if (!allowed) return
+    setView(id)
+    onNavigate?.()
+  }
 
   useEffect(() => {
     try { window.localStorage.setItem(SIDEBAR_PREF_KEY, JSON.stringify(sidebar)) } catch { /* local persistence is optional */ }

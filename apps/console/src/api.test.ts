@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  adaptConcept, adaptConflicts, adaptSources, LiveDataError, selectMode,
+  adaptConcept, adaptConflicts, adaptSources, apiFetch, LiveDataError, selectMode,
 } from './api'
 import type { GraphSummary, ResolvedConcept } from './types'
 
@@ -102,6 +102,32 @@ describe('LiveSource error taxonomy', () => {
     expect(source.mode).toBe('live')
     await expect(source.graph()).rejects.toBeInstanceOf(LiveDataError)
     // Confirm the rejection is not silently swallowed into some demo-shaped value.
+  })
+})
+
+describe('desktop API credential transport', () => {
+  afterEach(() => {
+    delete window.__CC_DESKTOP
+    vi.unstubAllGlobals()
+  })
+
+  it('gets the bearer through trusted IPC instead of renderer process arguments', async () => {
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('launch-secret'),
+      version: '0.2.0',
+      authState: { signedIn: false },
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}')))
+
+    await apiFetch('/api/graph')
+
+    expect(window.__CC_DESKTOP.getApiToken).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledWith('/api/graph', expect.objectContaining({
+      headers: expect.any(Headers),
+    }))
+    const [, init] = vi.mocked(fetch).mock.calls[0]
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer launch-secret')
   })
 })
 

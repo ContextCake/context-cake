@@ -278,6 +278,7 @@ export function SetupWizard({
   const [mcpBusy, setMcpBusy] = useState(false)
 
   const [successConcept, setSuccessConcept] = useState<string | null>(null)
+  const [successIndexing, setSuccessIndexing] = useState(false)
   const [successBusy, setSuccessBusy] = useState(false)
 
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -375,9 +376,11 @@ export function SetupWizard({
       if (res.ok) {
         const graph = (await res.json()) as GraphSummary
         setSuccessConcept(graph.concepts[0]?.id ?? null)
+        setSuccessIndexing(Boolean(graph.indexing))
       }
     } catch {
       setSuccessConcept(null)
+      setSuccessIndexing(false)
     } finally {
       setSuccessBusy(false)
       goNext()
@@ -626,6 +629,8 @@ export function SetupWizard({
               <div style={css(`padding:12px 14px; border-radius:10px; background:${C.tealFill}; border:1px solid ${C.tealStroke}; font-size:13px; color:${C.tealText};`)}>
                 Your agent can now read: <strong style={css(`font-family:${MONO};`)}>{successConcept}</strong>
               </div>
+            ) : successIndexing ? (
+              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Setup complete — your sources are still indexing in the background. Concepts will appear here automatically.</p>
             ) : (
               <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Setup complete — no concepts resolved yet. Add content to a layer and reload.</p>
             )}

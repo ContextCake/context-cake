@@ -1,9 +1,9 @@
 # ContextCake for Mac
 
-The desktop shell: the dependency-free engine (`packages/core`) runs in the
-Electron main process behind a loopback HTTP service with a per-launch bearer
-token, and the console (`apps/console`) is the renderer, served at
-`/console/` so its live mode engages unchanged. Spec:
+The desktop shell: the dependency-free engine (`packages/core`) runs in an
+isolated Electron utility process behind a loopback HTTP service with a
+per-launch bearer token. The console (`apps/console`) is the renderer, served
+at `/console/` so its live mode engages unchanged. Spec:
 `specs/contextcake-distribution/spec.md` + `design.md`, and
 `specs/contextcake-auth/spec.md` for optional accounts.
 
@@ -20,6 +20,7 @@ npm run test:navigation # exact-origin navigation and IPC guards
 npm run test:cli-status # CLI installation-state detection
 npm run smoke      # boot headlessly, verify the token-guarded service, exit
 npm run smoke:bootfail # startup failures exit instead of hanging
+npm run test:isolation # prove indexing cannot stall the Electron UI thread
 npm run pack       # unpacked .app in dist/ (ad-hoc signed)
 npm run dist       # DMG + zip in dist/ (ad-hoc signed until release secrets exist)
 ```
@@ -29,12 +30,13 @@ npm run dist       # DMG + zip in dist/ (ad-hoc signed until release secrets exi
 | Path | Role |
 |---|---|
 | `src/main/main.mjs` | App lifecycle, window, deep-link hook (`contextcake://`) |
-| `src/main/service-host.mjs` | Boots `packages/core/src/service.mjs` on 127.0.0.1 with a bearer token |
+| `src/main/service-host.mjs` | Supervises the utility-process engine and its loopback service |
+| `src/main/engine-process.mjs` | Runs `packages/core/src/service.mjs` off the Electron UI thread |
 | `src/main/auth.mjs` | Main-process OAuth broker, PKCE callback, encrypted session lifecycle |
 | `src/main/settings-sync.mjs` | Owner-scoped settings sync with path/secret scrub-and-reject checks |
 | `src/main/updater.mjs` | electron-updater against GitHub Releases (`app-v*`), settings-gated |
 | `src/main/cli-install.mjs` | Symlinks the CLI shim into `/usr/local/bin` |
-| `src/preload.cjs` | Sandboxed bridges: launch metadata, native folder picker, and CLI actions in `window.__CC_DESKTOP`; auth/settings IPC in `window.__CC_AUTH` |
+| `src/preload.cjs` | Sandboxed bridges: trusted bearer-token IPC, launch metadata, native folder picker, and CLI actions in `window.__CC_DESKTOP`; auth/settings IPC in `window.__CC_AUTH` |
 | `src/cli/cli.mjs` | `contextcake` dispatcher over the bundled engine entrypoints |
 | `resources/bin/contextcake` | Shell shim installed for the CLI |
 | `electron-builder.yml` | Packaging: DMG/zip, arm64, hardened runtime, protocols |

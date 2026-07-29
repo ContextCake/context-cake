@@ -62,8 +62,11 @@ beforeEach(() => {
   mocks.reload.mockReset()
   mocks.store.mode = 'live'
   mocks.store.sources = []
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview')
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
   mocks.apiFetch.mockImplementation(async (url: string) => {
     if (url === '/api/files') return json(FILES)
+    if (url.startsWith('/api/file/raw?')) return new Response(new Blob(['image']), { status: 200, headers: { 'content-type': 'image/png' } })
     if (url.startsWith('/api/file?')) return json(MEETING)
     return json({})
   })
@@ -72,6 +75,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
+  vi.restoreAllMocks()
 })
 
 describe('Files view', () => {
@@ -114,6 +118,8 @@ describe('Files view', () => {
     await act(async () => button('Save').click())
 
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/file', expect.objectContaining({ method: 'PUT' }))
+    const saveCall = mocks.apiFetch.mock.calls.find(([url, init]) => url === '/api/file' && init?.method === 'PUT')
+    expect(JSON.parse(String(saveCall?.[1]?.body))).toMatchObject({ modified: MEETING.modified })
     // An edit changes the resolved cascade — every other view has to re-read it.
     expect(mocks.reload).toHaveBeenCalled()
     expect(container.textContent).not.toContain('unsaved changes')
@@ -140,9 +146,10 @@ describe('Files view', () => {
     expect(container.textContent).toContain('unsaved changes')
   })
 
-  it('explains that a non-text file is preview-only', async () => {
+  it('loads a non-text preview through the authenticated API', async () => {
     mocks.apiFetch.mockImplementation(async (url: string) => {
       if (url === '/api/files') return json(FILES)
+      if (url.startsWith('/api/file/raw?')) return new Response(new Blob(['image']), { status: 200, headers: { 'content-type': 'image/png' } })
       return json({
         path: 'personal/logo.png', layer: 'personal', rel: 'logo.png', ext: '.png',
         kind: 'image', editable: false, markdown: false, bytes: 900, modified: '2026-07-01T10:00:00.000Z',
@@ -151,8 +158,41 @@ describe('Files view', () => {
     await act(async () => root.render(<Files />))
     await act(async () => button('logo.png').click())
 
-    expect(container.textContent).toContain('Preview only')
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/file/raw?path=personal%2Flogo.png')
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:preview')
     expect(container.querySelector('textarea')).toBeNull()
+  })
+
+  it('does not discard a dirty file when the user cancels navigation', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await act(async () => root.render(<Files />))
+    await act(async () => button('raw').click())
+    const editor = container.querySelector<HTMLTextAreaElement>('textarea')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(editor, 'unsaved')
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+      button('logo.png').click()
+    })
+
+    expect(window.confirm).toHaveBeenCalled()
+    expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('unsaved')
+  })
+
+  it('can block app navigation while the current file has unsaved changes', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await act(async () => root.render(<Files />))
+    await act(async () => button('raw').click())
+    const editor = container.querySelector<HTMLTextAreaElement>('textarea')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(editor, 'unsaved')
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const allowed = window.dispatchEvent(new Event('contextcake:before-navigate', { cancelable: true }))
+    expect(allowed).toBe(false)
+    expect(window.confirm).toHaveBeenCalled()
   })
 
   it('tells demo users why there is nothing to edit', async () => {

@@ -49,6 +49,19 @@ jobs:
             exit 1
           fi
 
+      - name: Verify no release gate is open
+        run: |
+          # A gate declared only in a GitHub issue is enforceable only by
+          # someone remembering it, which is exactly how the hosted-OAuth
+          # checks in #44 came to be deferred through three releases. The
+          # gates live in docs/release-gates.md; an open one stops the build.
+          if grep -q '^## Open:' docs/release-gates.md; then
+            echo "::error::Release gate open in docs/release-gates.md:"
+            grep '^## Open:' docs/release-gates.md >&2
+            echo "Close the gate (move it under '## Closed:' with its evidence) or, to ship anyway, say so explicitly in that file." >&2
+            exit 1
+          fi
+
       - name: Setup Node
         uses: actions/setup-node@v7
         with:

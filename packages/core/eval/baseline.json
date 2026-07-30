@@ -1,0 +1,18 @@
+{
+  "label": "BM25F over Porter-stemmed tokens; best-layer aggregation",
+  "questions": 38,
+  "recall@1": 0.895,
+  "recall@5": 1,
+  "mrr": 0.947,
+  "conflict": 1,
+  "history": [
+    {
+      "label": "substring occurrence counting (pre-BM25)",
+      "questions": 38,
+      "recall@1": 0.263,
+      "recall@5": 0.5,
+      "mrr": 0.348,
+      "conflict": 1
+    }
+  ]
+}

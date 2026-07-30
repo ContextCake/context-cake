@@ -30,6 +30,9 @@ export function SettingsView({
   const [updatesEnabled, setUpdatesEnabled] = useState(() => isUpdateCheckEnabled(appMode))
   const { mode: theme, toggle: toggleTheme } = useThemeMode()
   const desktop = Boolean(window.__CC_DESKTOP)
+  // Builds ship without accounts by default, so the pane is hidden rather than
+  // shown empty. Browser and demo builds never had sign-in to offer.
+  const accountsAvailable = window.__CC_DESKTOP?.authState?.available === true && Boolean(window.__CC_AUTH)
 
   const chooseTheme = (next: 'light' | 'dark') => {
     if (next !== theme) toggleTheme()
@@ -65,10 +68,12 @@ export function SettingsView({
               Indexing
             </button>
           )}
-          <button type="button" aria-current={pane === 'account' ? 'page' : undefined} onClick={() => setPane('account')}>
-            <AccountIcon />
-            Account
-          </button>
+          {accountsAvailable && (
+            <button type="button" aria-current={pane === 'account' ? 'page' : undefined} onClick={() => setPane('account')}>
+              <AccountIcon />
+              Account
+            </button>
+          )}
         </nav>
       </aside>
 
@@ -135,22 +140,16 @@ export function SettingsView({
                 </div>
               </section>
             </>
-          ) : (
+          ) : accountsAvailable && window.__CC_AUTH ? (
             <>
               <header className="cc-settings-header">
                 <p>Settings</p>
                 <h1>Account</h1>
                 <span>Sign in to keep preferences and source metadata consistent across Macs.</span>
               </header>
-              {window.__CC_AUTH ? (
-                <AccountPanel />
-              ) : (
-                <div className="cc-settings-empty">
-                  Account sign-in is available in the ContextCake desktop app. Local features still work without an account.
-                </div>
-              )}
+              <AccountPanel />
             </>
-          )}
+          ) : null}
         </div>
       </main>
     </div>

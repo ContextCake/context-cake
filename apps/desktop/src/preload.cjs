@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   version: arg('cc-version'),
   // Initial, non-PII snapshot. The live state (including optional email) is
   // delivered through __CC_AUTH so it never appears in process arguments.
-  authState: { signedIn: arg('cc-signed-in') === '1' },
+  authState: { signedIn: arg('cc-signed-in') === '1', available: arg('cc-accounts') === '1' },
   chooseFolder: () => ipcRenderer.invoke('contextcake:choose-folder'),
   cli: {
     getStatus: () => ipcRenderer.invoke('contextcake:cli-status'),

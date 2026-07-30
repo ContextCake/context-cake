@@ -424,6 +424,10 @@ async function createWindow() {
       additionalArguments: [
         `--cc-version=${app.getVersion()}`,
         `--cc-signed-in=${currentAuthState().signedIn ? '1' : '0'}`,
+        // Whether this build ships accounts at all. Static for the process, so
+        // the renderer can drop the Account pane on first paint rather than
+        // rendering it and then discovering there is nothing behind it.
+        `--cc-accounts=${currentAuthState().available ? '1' : '0'}`,
       ],
     },
   })

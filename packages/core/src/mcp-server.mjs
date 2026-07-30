@@ -11,6 +11,7 @@
 import path from "node:path";
 import readline from "node:readline";
 import { resolveConcept } from "./resolver.mjs";
+import { searchConcepts, searchCaptures } from "./search.mjs";
 import { buildSources } from "./sources/index.mjs";
 import { isTraversal } from "./sources/okf-local.mjs";
 import { commitPaths, push } from "./sources/git-core.mjs";
@@ -363,47 +364,8 @@ async function callTool(name, toolArgs) {
 
 // ---- team-sync tools --------------------------------------------------------
 
-const DAY_MS = 86400000;
-
 async function findCaptures({ query, kinds = null, limit = 10 }) {
-  if (!query || typeof query !== "string") throw new Error("find_captures requires a non-empty query string");
-  const tokens = tokenize(query);
-  if (tokens.length === 0) throw new Error("find_captures query must contain at least one searchable token");
-
-  const rows = [];
-  for (const source of layers) {
-    for (const id of await source.listConceptIds()) {
-      if (!id.startsWith("captures/")) continue;
-      const entry = await source.loadConcept(id);
-      if (!entry) continue;
-      const { frontmatter, sections } = entry;
-      if (kinds && !kinds.includes(frontmatter.kind)) continue;
-      const sectionText = sections.map((s) => s.lines.join("\n")).join("\n");
-      const base = scoreText(tokens, [id, frontmatter.title ?? "", "", "", sectionText]);
-      if (base <= 0) continue;
-      const capturedAt = frontmatter.captured ?? null;
-      const capturedTime = capturedAt ? new Date(capturedAt).getTime() : NaN;
-      // An unparseable `captured` must not poison scoring with NaN (which makes
-      // the sort unstable). Treat it as age 0 (freshest) — it still surfaces.
-      const ageDays = Number.isNaN(capturedTime) ? 0 : Math.max(0, (Date.now() - capturedTime) / DAY_MS);
-      rows.push({
-        id,
-        title: frontmatter.title ?? null,
-        kind: frontmatter.kind ?? null,
-        author: frontmatter.author ?? null,
-        capturedAt,
-        ageDays: Math.round(ageDays * 10) / 10,
-        status: frontmatter.status ?? "unreviewed",
-        score: base * 2 ** (-ageDays / 7), // true 7-day half-life
-        snippet: makeSnippet(sectionText, tokens),
-        layer: source.name,
-      });
-    }
-  }
-
-  const result = rows
-    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
-    .slice(0, Number(limit) || 10);
+  const result = await searchCaptures(layers, { query, kinds, limit });
   for (const row of result) emitTelemetry({ event: "search_hit", concept: row.id, layer: row.layer, captureKind: row.kind });
   return result;
 }
@@ -472,35 +434,7 @@ async function confirmCaptureTool({ token }) {
 // ---- tools ----------------------------------------------------------------
 
 async function search({ query, limit = 10 }) {
-  if (!query || typeof query !== "string") throw new Error("search requires a non-empty query string");
-  const tokens = tokenize(query);
-  if (tokens.length === 0) throw new Error("search query must contain at least one searchable token");
-
-  const byId = new Map();
-  for (const source of layers) {
-    for (const id of await source.listConceptIds()) {
-      const entry = await source.loadConcept(id);
-      if (!entry) continue;
-      const { frontmatter, sections } = entry;
-      const sectionText = sections.map((s) => s.lines.join("\n")).join("\n");
-      const score = scoreText(tokens, [id, frontmatter.title ?? "", frontmatter.description ?? "", String(frontmatter.tags ?? ""), sectionText]);
-      if (score <= 0) continue;
-
-      const existing = byId.get(id);
-      if (!existing) {
-        byId.set(id, { id, title: frontmatter.title ?? null, score, layers: [source.name], snippet: makeSnippet(sectionText, tokens) });
-      } else {
-        existing.score += score;
-        existing.layers.push(source.name);
-        if (!existing.title) existing.title = frontmatter.title ?? null;
-      }
-    }
-  }
-
-  return [...byId.values()]
-    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
-    .slice(0, Number(limit) || 10)
-    .map((entry) => ({ ...entry, layers: orderLayerNames(entry.layers) }));
+  return await searchConcepts(layers, { query, limit });
 }
 
 async function readFileTool({ concept_id, layer }) {
@@ -683,39 +617,6 @@ function assembleMarkdown(resolved) {
       return `${head}\n\n${notes}`;
     });
   return front + bodyParts.join("\n\n");
-}
-
-function scoreText(tokens, haystacks) {
-  return tokens.reduce((total, token) => {
-    return total + haystacks.reduce((subtotal, haystack, index) => {
-      const weight = index <= 2 ? 4 : index === 3 ? 2 : 1;
-      return subtotal + countOccurrences(String(haystack).toLowerCase(), token) * weight;
-    }, 0);
-  }, 0);
-}
-
-function tokenize(query) {
-  return query.toLowerCase().match(/[a-z0-9_-]+/g) ?? [];
-}
-
-function countOccurrences(haystack, needle) {
-  if (!needle) return 0;
-  let count = 0;
-  let index = haystack.indexOf(needle);
-  while (index !== -1) {
-    count += 1;
-    index = haystack.indexOf(needle, index + needle.length);
-  }
-  return count;
-}
-
-function makeSnippet(body, tokens) {
-  const lower = body.toLowerCase();
-  const positions = tokens.map((token) => lower.indexOf(token)).filter((index) => index >= 0);
-  if (positions.length === 0) return body.trim().slice(0, 240);
-  const start = Math.max(0, Math.min(...positions) - 80);
-  const end = Math.min(body.length, start + 240);
-  return `${start > 0 ? "..." : ""}${body.slice(start, end).trim()}${end < body.length ? "..." : ""}`;
 }
 
 function stripDecoration(value) {

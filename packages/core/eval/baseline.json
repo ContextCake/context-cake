@@ -1,0 +1,9 @@
+{
+  "label": "substring occurrence counting (pre-BM25)",
+  "questions": 38,
+  "recall@1": 0.263,
+  "recall@5": 0.5,
+  "mrr": 0.348,
+  "conflict": 1,
+  "history": []
+}

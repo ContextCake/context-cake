@@ -1,0 +1,237 @@
+{
+  "readme": "Golden question set for retrieval. `expect` lists the concept ids that answer the question — a hit on any of them counts, so a question with two legitimate answers is not penalized for picking either. `conflict` asserts that resolving the concept surfaces dissent from the named layers, which is the thing ContextCake claims to do that a flat wiki cannot. `probes` records why the question is in the set; when a question starts passing or failing, that note is what tells you whether the change was real.",
+  "questions": [
+    {
+      "id": "q01",
+      "question": "what language should I use for a new service?",
+      "expect": ["decisions/service-stack"],
+      "conflict": { "concept": "decisions/service-stack", "layers": ["team", "company"] },
+      "probes": "natural phrasing with stopwords; three layers disagree and all three must survive"
+    },
+    {
+      "id": "q02",
+      "question": "which database do we use for service state?",
+      "expect": ["decisions/data-storage"],
+      "probes": "direct lexical match on a distinctive term"
+    },
+    {
+      "id": "q03",
+      "question": "what databases are we allowed to use?",
+      "expect": ["decisions/data-storage"],
+      "probes": "plural form of a term the corpus writes in the singular"
+    },
+    {
+      "id": "q04",
+      "question": "where should analytics queries run?",
+      "expect": ["decisions/data-storage"],
+      "conflict": { "concept": "decisions/data-storage", "layers": ["company"] },
+      "probes": "team overrides the org answer; the org position must still be visible"
+    },
+    {
+      "id": "q05",
+      "question": "how do I store secrets?",
+      "expect": ["policies/security-baseline"],
+      "probes": "short natural question, single strong term"
+    },
+    {
+      "id": "q06",
+      "question": "what TLS version is required?",
+      "expect": ["policies/security-baseline"],
+      "probes": "acronym plus a common noun"
+    },
+    {
+      "id": "q07",
+      "question": "how long do we keep logs?",
+      "expect": ["policies/data-retention"],
+      "probes": "the doc says retained, the question says keep — no lexical overlap on the verb"
+    },
+    {
+      "id": "q08",
+      "question": "how long are customer records retained?",
+      "expect": ["policies/data-retention"],
+      "probes": "same concept as q07 with the document's own vocabulary, to isolate vocabulary effects"
+    },
+    {
+      "id": "q09",
+      "question": "when does a Sev1 page someone?",
+      "expect": ["policies/incident-response"],
+      "probes": "distinctive token that appears in exactly one document"
+    },
+    {
+      "id": "q10",
+      "question": "do we need a postmortem for a Sev2?",
+      "expect": ["policies/incident-response"],
+      "probes": "two distinctive tokens, both in the same document"
+    },
+    {
+      "id": "q11",
+      "question": "how do I get production access?",
+      "expect": ["policies/access-control"],
+      "probes": "production also appears in deploy, observability and security docs"
+    },
+    {
+      "id": "q12",
+      "question": "how many approvals does a pull request need?",
+      "expect": ["standards/code-review"],
+      "probes": "the corpus says change and review, never pull request"
+    },
+    {
+      "id": "q13",
+      "question": "who reviews changes to billing code?",
+      "expect": ["standards/code-review"],
+      "probes": "reviews vs review — morphological variant of the key term"
+    },
+    {
+      "id": "q14",
+      "question": "how do I roll back a bad deploy?",
+      "expect": ["runbooks/deploy-standard"],
+      "probes": "roll back vs rollback — tokenization boundary"
+    },
+    {
+      "id": "q15",
+      "question": "can I deploy on a Friday afternoon?",
+      "expect": ["runbooks/deploy-standard"],
+      "conflict": { "concept": "runbooks/deploy-standard", "layers": ["company"] },
+      "probes": "team explicitly reverses the org rule; both answers must be present"
+    },
+    {
+      "id": "q16",
+      "question": "what are the deployment windows?",
+      "expect": ["runbooks/deploy-standard"],
+      "probes": "deployment vs deploys — morphological variant"
+    },
+    {
+      "id": "q17",
+      "question": "what metrics should my service export?",
+      "expect": ["standards/observability"],
+      "conflict": { "concept": "standards/observability", "layers": ["company"] },
+      "probes": "streaming metrics override request metrics; the org list must still show"
+    },
+    {
+      "id": "q18",
+      "question": "how should I paginate a collection endpoint?",
+      "expect": ["standards/api-design"],
+      "probes": "paginate vs pagination — morphological variant"
+    },
+    {
+      "id": "q19",
+      "question": "how do we version breaking API changes?",
+      "expect": ["standards/api-design"],
+      "probes": "version and breaking both appear in schema-evolution as a distractor"
+    },
+    {
+      "id": "q20",
+      "question": "why are my Spark executors getting killed?",
+      "expect": ["gotchas/spark-memory"],
+      "probes": "executors vs executor; killed appears in the target document"
+    },
+    {
+      "id": "q21",
+      "question": "executor exit code 137 during a join",
+      "expect": ["gotchas/spark-memory"],
+      "probes": "keyword-style query pasted from an error, no natural language"
+    },
+    {
+      "id": "q22",
+      "question": "how do we handle skewed join keys?",
+      "expect": ["gotchas/spark-memory"],
+      "probes": "skewed vs skew — morphological variant on the decisive term"
+    },
+    {
+      "id": "q23",
+      "question": "my consumer group keeps rebalancing after a deploy",
+      "expect": ["gotchas/kafka-rebalance"],
+      "probes": "rebalancing vs rebalance; deploy is a strong distractor term"
+    },
+    {
+      "id": "q24",
+      "question": "how do I stop rebalance storms?",
+      "expect": ["gotchas/kafka-rebalance"],
+      "probes": "exact title vocabulary — should be the easiest question in the set"
+    },
+    {
+      "id": "q25",
+      "question": "how should Kafka topics be named?",
+      "expect": ["decisions/streaming-platform"],
+      "probes": "named vs naming/names — morphological variant"
+    },
+    {
+      "id": "q26",
+      "question": "should I partition by timestamp?",
+      "expect": ["decisions/streaming-platform"],
+      "probes": "the answer is a warning against the thing asked about"
+    },
+    {
+      "id": "q27",
+      "question": "do we use exactly-once delivery?",
+      "expect": ["decisions/streaming-platform"],
+      "probes": "hyphenated term; tokenizer keeps hyphens so exactly-once splits differently than expected"
+    },
+    {
+      "id": "q28",
+      "question": "can I rename a field in an Avro schema?",
+      "expect": ["decisions/schema-evolution"],
+      "probes": "rename vs renaming; field appears across many documents"
+    },
+    {
+      "id": "q29",
+      "question": "which schema changes are backward compatible?",
+      "expect": ["decisions/schema-evolution"],
+      "probes": "compatible vs compatibility — morphological variant"
+    },
+    {
+      "id": "q30",
+      "question": "the pipeline is stalled, what do I do?",
+      "expect": ["runbooks/pipeline-oncall"],
+      "probes": "heavy stopword load around two content words"
+    },
+    {
+      "id": "q31",
+      "question": "consumer lag is growing overnight",
+      "expect": ["runbooks/pipeline-oncall", "gotchas/kafka-rebalance"],
+      "probes": "genuinely two-answer question; either is a correct first hit"
+    },
+    {
+      "id": "q32",
+      "question": "how do I run a backfill safely?",
+      "expect": ["runbooks/backfill"],
+      "probes": "distinctive term, but run appears everywhere"
+    },
+    {
+      "id": "q33",
+      "question": "can I reuse the checkpoint when reprocessing?",
+      "expect": ["runbooks/backfill"],
+      "probes": "checkpoint appears in three documents; reprocessing only in the target"
+    },
+    {
+      "id": "q34",
+      "question": "how do I run the pipeline on my laptop?",
+      "expect": ["notes/local-dev"],
+      "probes": "laptop appears once; pipeline appears in six documents"
+    },
+    {
+      "id": "q35",
+      "question": "kafka advertised listener localhost problem",
+      "expect": ["notes/local-dev"],
+      "probes": "keyword query where the strongest term is in a low-priority personal note"
+    },
+    {
+      "id": "q36",
+      "question": "how do I bucket timestamps in ClickHouse?",
+      "expect": ["notes/query-cheatsheet"],
+      "probes": "timestamps vs timestamp; bucket vs bucketing/buckets"
+    },
+    {
+      "id": "q37",
+      "question": "approximate distinct count in ClickHouse",
+      "expect": ["notes/query-cheatsheet"],
+      "probes": "the document says approximate and uniq, never distinct count"
+    },
+    {
+      "id": "q38",
+      "question": "why is my ClickHouse query slow?",
+      "expect": ["notes/query-cheatsheet"],
+      "probes": "query and slow both appear in the target; ClickHouse also appears in two team docs"
+    }
+  ]
+}

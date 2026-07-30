@@ -18,10 +18,19 @@ export function isPublicSupabaseKey(value) {
   }
 }
 
+const UNCONFIGURED = { url: '', anonKey: '' }
+
 /**
  * Resolve public Supabase project credentials without baking secrets into the
  * repository. Packaged builds may provision supabase.json in userData; local
  * development uses SUPABASE_* (with VITE_* accepted for the shared dev env).
+ *
+ * A packaged build that declares `accounts: "disabled"` stays disabled no
+ * matter what else is set. That marker is a statement about the artifact users
+ * downloaded, so it has to outrank the environment — otherwise a stale
+ * VITE_SUPABASE_* left in a shell silently re-enables sign-in in a build that
+ * was published without it. Development is unaffected: `npm run dev` never
+ * generates a packaged config, so env resolution still applies there.
  */
 export function loadSupabaseConfig(configDir, env = process.env, packagedConfigPath = '') {
   let packaged = {}
@@ -29,6 +38,7 @@ export function loadSupabaseConfig(configDir, env = process.env, packagedConfigP
   try {
     if (packagedConfigPath) packaged = JSON.parse(fs.readFileSync(packagedConfigPath, 'utf8'))
   } catch { /* an unconfigured build remains fully usable locally */ }
+  if (packaged.accounts === 'disabled') return UNCONFIGURED
   try {
     user = JSON.parse(fs.readFileSync(path.join(configDir, 'supabase.json'), 'utf8'))
   } catch { /* an unconfigured build remains fully usable locally */ }
@@ -42,7 +52,7 @@ export function loadSupabaseConfig(configDir, env = process.env, packagedConfigP
     const parsed = new URL(url)
     if (parsed.protocol !== 'https:') return { url: '', anonKey: '' }
   } catch {
-    return { url: '', anonKey: '' }
+    return UNCONFIGURED
   }
   return { url, anonKey }
 }

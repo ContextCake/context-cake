@@ -8,11 +8,41 @@ the answer to "was this validated?" is a file rather than a memory.
 `## Closed:` with its evidence — not deleting it. To ship with a gate knowingly
 unmet, say so in the file; the point is that the decision is written down.
 
-## Open: hosted OAuth and settings sync (#44)
+## Closed: hosted OAuth and settings sync (#44)
 
-**Status: breached.** PR #38 merged 2026-07-15 deferring three hosted acceptance
-checks to #44 with the note that they "remain required before publishing the
-desktop account-sync release." Three releases have shipped since:
+**Resolved 2026-07-30 by not shipping the feature.** Accounts are off by default
+(`CC_ACCOUNTS`, see below), so there is no hosted account system in a published
+build to validate. The three manual checks below stay written down because they
+become due again the moment anyone packages with `CC_ACCOUNTS=1`.
+
+The hosted project had **zero rows in `user_settings`** when this was decided —
+nobody had signed in, so disabling stranded no one.
+
+### Why the feature was disabled rather than validated
+
+Everything the sync path can safely carry is scrubbed before upload:
+`scrubSettings` replaces `command`, `args`, `path`, `dir`, anything containing an
+absolute path, and anything secret-shaped with markers. What crosses machines is
+a preference blob and profile shapes with holes in them, which you then re-point
+by hand on the second Mac.
+
+That is a thin return for a hosted Postgres holding user rows in a product whose
+claim is that context stays on your machine — and it was the only thing making
+that claim need an asterisk. The stated justification was a hook for
+entitlements, and Packs shipped as a free preview with payments dormant behind
+`paymentsLive`, so nothing is being entitled yet.
+
+The code, migrations and tests are all still here and still run in CI. Turning
+accounts back on is one environment variable, and the better version — settings
+sync over the user's own git repo, on the `git-core.mjs` / `git-sync.mjs` rails
+team sync already uses — needs no hosted service at all.
+
+### What was actually shipped unvalidated
+
+Kept as the record of the process failure. PR #38 merged 2026-07-15 deferring
+three hosted acceptance checks to #44 with the note that they "remain required
+before publishing the desktop account-sync release." Three releases shipped
+since:
 
 | Release | Date | Account sync reachable? |
 |---|---|---|
@@ -20,14 +50,14 @@ desktop account-sync release." Three releases have shipped since:
 | 0.2.0 | 2026-07-20 | yes |
 | 0.3.0 | 2026-07-29 | yes |
 
-Reachable, not merely present: `apps/desktop/scripts/generate-supabase-config.mjs`
-throws unless `SUPABASE_URL` and `SUPABASE_ANON_KEY` are set, `app-release.yml`
-supplies both from repository secrets, and `AccountPanel` renders unconditionally
-in Settings with Sign in, Sign out, and Delete account. Every published build can
-sign a user into the hosted project.
+Reachable, not merely present: packaging threw unless `SUPABASE_URL` and
+`SUPABASE_ANON_KEY` were set, `app-release.yml` supplied both from repository
+secrets, and `AccountPanel` rendered unconditionally in Settings with Sign in,
+Sign out and Delete account. Every published build could sign a user into the
+hosted project. Nobody did.
 
-This is a process failure, not a defect report. Nothing here says the feature is
-broken — it says nobody has confirmed it works on the artifact users download.
+This was a process failure, not a defect report. Nothing here says the feature is
+broken — it says nobody had confirmed it works on the artifact users download.
 
 ### What CI already discharges
 
@@ -42,17 +72,19 @@ run by the `desktop` job in `ci.yml`) and do not need to be repeated by hand:
 | Paths, MCP commands/args, cache dirs and credential references never sync as runnable config | `settings-sync.test.mjs` — scrub, allowlist, quarantine, path-shaped keys |
 | A second client converges: tombstones, account switch, last-write-wins | `settings-sync.test.mjs` — dirty tombstone, shadow discard, remote-row precedence |
 
-### What still needs a human
+### What would still need a human, if accounts are ever re-enabled
 
 Three things cannot be simulated: a **packaged** app, a **second physical
-machine**, and the **hosted** database. Each needs John — the OAuth flow requires
-entering real credentials, which is not something an agent should do on his
-behalf.
+machine**, and the **hosted** database. Each needs a person — the OAuth flow
+requires entering real credentials.
+
+**These are due again on any build packaged with `CC_ACCOUNTS=1`.** Do not ship
+one without them.
 
 **1. Packaged OAuth and Keychain persistence**
 
 ```bash
-cd apps/desktop && SUPABASE_URL=<hosted> SUPABASE_ANON_KEY=<publishable> npm run dist
+cd apps/desktop && CC_ACCOUNTS=1 SUPABASE_URL=<hosted> SUPABASE_ANON_KEY=<publishable> npm run dist
 ```
 
 Then, on the installed app: complete the GitHub browser flow, confirm
@@ -71,7 +103,7 @@ With a disposable account, invoke Delete account. Confirm in the hosted project
 that the Auth user and the `user_settings` row are both gone, that local session
 state is cleared, and that the app still works signed out.
 
-### Evidence to record when closing
+### Evidence to record
 
 Packaged version and commit SHA · macOS versions and devices used · redacted
 screenshots or logs per check · confirmation the hosted records were removed.
@@ -81,12 +113,6 @@ screenshots or logs per check · confirmation the hosted records were removed.
 Nothing connected the open issue to the release workflow. A gate declared only in
 an issue is a gate only a person can enforce, and the person was busy shipping.
 
-Fixed by the "Verify no release gate is open" step in `app-release.yml`, added
-alongside this file: tagging `app-v0.3.1` now fails while the section above still
-says `## Open:`. That is the intended behavior, not an obstacle to route around —
-the next release is blocked until these three checks are done or the decision to
-ship without them is written here.
-
-## Closed:
-
-*(none yet — the first gate to close will be #44, above)*
+Fixed by the "Verify no release gate is open" step in `app-release.yml`: a tag
+push fails while any `## Open:` section remains in this file. That is the
+intended behavior, not an obstacle to route around.

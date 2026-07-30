@@ -116,8 +116,9 @@ Release with `latest-mac.yml` and `SHA256SUMS`). Requires the Apple Developer
 secrets described in `specs/contextcake-distribution/design.md` §8. Until
 those exist, `npm run dist` produces ad-hoc-signed artifacts for local testing
 only — they must not be distributed.
-Packaged account builds require `VITE_SUPABASE_URL` and
-`VITE_SUPABASE_ANON_KEY` (the `SUPABASE_*` aliases also work). The packaging
-scripts generate `build/supabase-config.json` and electron-builder copies that
-public project configuration into the app resources; the generated file is
-gitignored.
+Packaging ships **without accounts** by default: `build/supabase-config.json` is
+generated as `{"accounts":"disabled"}`, no credentials are needed, and the built
+app has no sign-in. To package a build with accounts, set `CC_ACCOUNTS=1` plus
+`SUPABASE_URL` and `SUPABASE_ANON_KEY` (the `VITE_SUPABASE_*` aliases also work)
+— and complete the manual acceptance checks in `docs/release-gates.md` before
+distributing it. The generated file is gitignored either way.

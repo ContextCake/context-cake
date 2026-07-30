@@ -4,14 +4,17 @@
 # Secrets (see specs/contextcake-distribution/design.md §8):
 #   CSC_LINK / CSC_KEY_PASSWORD          — Developer ID Application cert (.p12, base64)
 #   APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER — notarytool App Store Connect key
-#   VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY — public desktop auth configuration
 # Key rotation: revoke in the Apple Developer portal, reissue, replace these
 # secrets. Keys never live in the repository.
 #
-# With public Supabase configuration but without the complete Apple signing
-# credential set, the workflow builds unsigned inspection artifacts but does
-# NOT create a GitHub Release. Missing Supabase configuration fails packaging;
+# Without the complete Apple signing credential set, the workflow builds
+# unsigned inspection artifacts but does NOT create a GitHub Release;
 # unnotarized builds are never distributed (distribution spec §7).
+#
+# Releases ship WITHOUT accounts: the packaging step no longer receives
+# Supabase configuration, so the published app has no sign-in. To build one
+# that does, set CC_ACCOUNTS=1 plus SUPABASE_URL/SUPABASE_ANON_KEY. See
+# docs/release-gates.md for why the default flipped.
 name: App Release
 
 on:
@@ -108,8 +111,6 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
           export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"
           # --publish never: on a tag build electron-builder would otherwise try
@@ -120,9 +121,6 @@ jobs:
       - name: Build (unsigned — no release)
         if: steps.creds.outputs.signed != 'true'
         working-directory: apps/desktop
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run dist -- --publish never
 
       - name: Gatekeeper assessment

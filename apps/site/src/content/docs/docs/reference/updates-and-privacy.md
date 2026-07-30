@@ -63,9 +63,11 @@ local application settings file.
 
 ## Optional desktop accounts
 
-> **Availability:** Accounts are part of the next signed ContextCake for Mac release.
-> They are not considered live until the packaged GitHub flow and deletion/sync
-> acceptance checks pass.
+> **Availability: not shipped.** Released builds of ContextCake for Mac contain
+> no sign-in, send nothing to any account service, and store nothing about you
+> on a server. There is no ContextCake account to create. The section below
+> describes a capability the app can be built with but currently is not; it is
+> kept so the behavior is documented if that ever changes.
 
 ContextCake for Mac works fully while signed out. Signing in adds settings sync; it
 does not gate the local engine, sources, profiles, resolve tools, or MCP server.

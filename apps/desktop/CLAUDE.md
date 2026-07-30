@@ -69,6 +69,14 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   test asserts `userData=ContextCake`.
 - **Known gaps tracked as follow-ups** (not blocking merge): the updater reads the
   repo-wide GitHub "latest" release (see the comment in `updater.mjs`).
-- `npm run pack` and `npm run dist` require public Supabase configuration through
-  `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (or the `SUPABASE_*` aliases).
-  Only publishable/legacy-anon keys are accepted; never use secret/service-role keys.
+- **Builds ship without accounts.** `npm run pack`/`npm run dist` write
+  `build/supabase-config.json` as `{"accounts":"disabled"}` and need no
+  credentials; the packaged app has no sign-in and `loadSupabaseConfig` treats
+  that marker as authoritative over env and userData, so a stale
+  `VITE_SUPABASE_*` in a shell cannot switch sign-in back on in a shipped
+  artifact. Set `CC_ACCOUNTS=1` plus `SUPABASE_URL`/`SUPABASE_ANON_KEY` to build
+  one with accounts — only publishable/legacy-anon keys are accepted, never
+  secret/service-role — and clear `docs/release-gates.md` before distributing
+  it. The auth and settings-sync code, migrations and tests all still exist and
+  still run in CI; only the packaging default changed. Rationale for the
+  default: `docs/release-gates.md`.

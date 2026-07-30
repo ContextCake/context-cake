@@ -3,19 +3,48 @@
 //
 // This lives outside mcp-server.mjs on purpose. That module parses argv and can
 // call process.exit() at load time, so it cannot be imported — which meant the
-// ranking had no way to be measured.
+// ranking had no way to be measured. The eval harness in packages/core/eval/
+// scores this module directly against a golden question set; change the ranking
+// and re-run it before believing the change helped.
 //
 // Not to be confused with tokenize.mjs, which is the BPE tokenizer used for
-// context-budget accounting. The tokenizer here is a query analyzer.
+// context-budget accounting. The analyzer here is a query analyzer.
+
+import { stem } from "./stem.mjs";
 
 const DAY_MS = 86400000;
+const WORD = /[a-z0-9_-]+/g;
 
-// Field order is load-bearing: scorers weight by position. 0-2 are the
-// identifying fields (id, title, description), 3 is tags, 4 is the body.
-const WEIGHTS = [4, 4, 4, 2, 1];
+// BM25F. Per-field boosts say where a match counts for more; per-field `b` says
+// how hard to punish length. Body gets the standard 0.75 because a long
+// document should not outrank a precise one merely by repeating a word; the
+// short identifying fields get less, since their length carries no signal.
+const FIELDS = [
+  { key: "id", boost: 3, b: 0.4 },
+  { key: "title", boost: 5, b: 0.4 },
+  { key: "description", boost: 3, b: 0.5 },
+  { key: "tags", boost: 2, b: 0.4 },
+  { key: "body", boost: 1, b: 0.75 },
+];
+const K1 = 1.2;
 
+// Raw query words, kept unstemmed for snippet highlighting — a snippet has to
+// point at text the reader can actually see.
 export function tokenizeQuery(query) {
-  return query.toLowerCase().match(/[a-z0-9_-]+/g) ?? [];
+  return query.toLowerCase().match(WORD) ?? [];
+}
+
+// Index terms. Hyphenated compounds also contribute their parts so that
+// "exactly-once" is reachable from "exactly once" and the reverse.
+export function analyze(text) {
+  const terms = [];
+  for (const token of String(text).toLowerCase().match(WORD) ?? []) {
+    terms.push(stem(token));
+    if (token.includes("-")) {
+      for (const part of token.split("-")) if (part) terms.push(stem(part));
+    }
+  }
+  return terms;
 }
 
 function requireTokens(query, tool) {
@@ -25,8 +54,8 @@ function requireTokens(query, tool) {
   return tokens;
 }
 
-// One I/O pass over the cascade. Callers score the returned array in memory, so
-// adding a second scoring pass costs nothing on top of the walk.
+// One I/O pass over the cascade. Indexing and scoring happen in memory over the
+// returned array, so the extra passes cost nothing on top of the walk.
 async function collectDocuments(layers, { prefix = null } = {}) {
   const docs = [];
   for (const source of layers) {
@@ -58,27 +87,70 @@ function conceptFields(doc) {
 
 function captureFields(doc) {
   // Captures carry no description or tags; keeping the arity fixed keeps the
-  // positional weights aligned with concept scoring.
+  // positional boosts aligned with concept scoring.
   return [doc.id, doc.frontmatter.title ?? "", "", "", doc.body];
 }
 
-export function scoreFields(tokens, fields) {
-  return tokens.reduce((total, token) => {
-    return total + fields.reduce((subtotal, field, index) => {
-      return subtotal + countOccurrences(String(field).toLowerCase(), token) * WEIGHTS[index];
-    }, 0);
-  }, 0);
+// ---- BM25F -----------------------------------------------------------------
+
+function buildIndex(docs, fieldsOf) {
+  const fieldTotals = FIELDS.map(() => 0);
+  const entries = docs.map((doc) => {
+    const fields = fieldsOf(doc).map((value, index) => {
+      const terms = analyze(value);
+      fieldTotals[index] += terms.length;
+      const frequencies = new Map();
+      for (const term of terms) frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
+      return { frequencies, length: terms.length };
+    });
+    return { doc, fields };
+  });
+
+  const documentFrequency = new Map();
+  for (const entry of entries) {
+    const seen = new Set();
+    for (const field of entry.fields) for (const term of field.frequencies.keys()) seen.add(term);
+    for (const term of seen) documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
+  }
+
+  return {
+    total: entries.length,
+    averageLength: fieldTotals.map((sum) => (entries.length ? sum / entries.length : 0)),
+    documentFrequency,
+    entries,
+  };
 }
 
-function countOccurrences(haystack, needle) {
-  if (!needle) return 0;
-  let count = 0;
-  let index = haystack.indexOf(needle);
-  while (index !== -1) {
-    count += 1;
-    index = haystack.indexOf(needle, index + needle.length);
+// This IDF form stays positive even for a term that appears in most documents,
+// which matters here: the alternative goes negative past df > N/2 and lets a
+// common word actively push a document down the list.
+function inverseDocumentFrequency(index, term) {
+  const df = index.documentFrequency.get(term) ?? 0;
+  if (df === 0) return 0;
+  return Math.log(1 + (index.total - df + 0.5) / (df + 0.5));
+}
+
+export function scoreEntry(index, entry, terms) {
+  let score = 0;
+  for (const term of terms) {
+    const idf = inverseDocumentFrequency(index, term);
+    if (idf === 0) continue;
+
+    // Accumulate length-normalized frequency across fields first, then saturate
+    // once. Saturating per field would let a term in five fields outscore the
+    // same term used meaningfully in one.
+    let weighted = 0;
+    for (let position = 0; position < FIELDS.length; position += 1) {
+      const field = entry.fields[position];
+      const frequency = field.frequencies.get(term);
+      if (!frequency) continue;
+      const { boost, b } = FIELDS[position];
+      const average = index.averageLength[position] || 1;
+      weighted += (boost * frequency) / (1 - b + b * (field.length / average));
+    }
+    if (weighted > 0) score += (idf * weighted) / (K1 + weighted);
   }
-  return count;
+  return score;
 }
 
 export function makeSnippet(body, tokens) {
@@ -96,14 +168,18 @@ function layerOrderer(layers) {
 }
 
 export async function searchConcepts(layers, { query, limit = 10 }) {
-  const tokens = requireTokens(query, "search");
+  const rawTokens = requireTokens(query, "search");
+  const terms = [...new Set(analyze(query))];
   const orderLayerNames = layerOrderer(layers);
+
   const docs = await collectDocuments(layers);
+  const index = buildIndex(docs, conceptFields);
 
   const byId = new Map();
-  for (const doc of docs) {
-    const score = scoreFields(tokens, conceptFields(doc));
+  for (const entry of index.entries) {
+    const score = scoreEntry(index, entry, terms);
     if (score <= 0) continue;
+    const { doc } = entry;
 
     const existing = byId.get(doc.id);
     if (!existing) {
@@ -112,10 +188,17 @@ export async function searchConcepts(layers, { query, limit = 10 }) {
         title: doc.frontmatter.title ?? null,
         score,
         layers: [doc.layer],
-        snippet: makeSnippet(doc.body, tokens),
+        snippet: makeSnippet(doc.body, rawTokens),
       });
     } else {
-      existing.score += score;
+      // Best layer wins rather than the sum. Summing made a concept that three
+      // layers happen to mention outrank the one document that answers the
+      // question — the cascade's whole point is that those three are one
+      // concept, so they should not vote three times.
+      if (score > existing.score) {
+        existing.score = score;
+        existing.snippet = makeSnippet(doc.body, rawTokens);
+      }
       existing.layers.push(doc.layer);
       if (!existing.title) existing.title = doc.frontmatter.title ?? null;
     }
@@ -128,14 +211,18 @@ export async function searchConcepts(layers, { query, limit = 10 }) {
 }
 
 export async function searchCaptures(layers, { query, kinds = null, limit = 10, now = Date.now() }) {
-  const tokens = requireTokens(query, "find_captures");
+  const rawTokens = requireTokens(query, "find_captures");
+  const terms = [...new Set(analyze(query))];
+
   const docs = await collectDocuments(layers, { prefix: "captures/" });
+  const eligible = kinds ? docs.filter((doc) => kinds.includes(doc.frontmatter.kind)) : docs;
+  const index = buildIndex(eligible, captureFields);
 
   const rows = [];
-  for (const doc of docs) {
-    if (kinds && !kinds.includes(doc.frontmatter.kind)) continue;
-    const base = scoreFields(tokens, captureFields(doc));
+  for (const entry of index.entries) {
+    const base = scoreEntry(index, entry, terms);
     if (base <= 0) continue;
+    const { doc } = entry;
 
     const capturedAt = doc.frontmatter.captured ?? null;
     const capturedTime = capturedAt ? new Date(capturedAt).getTime() : NaN;
@@ -151,7 +238,7 @@ export async function searchCaptures(layers, { query, kinds = null, limit = 10, 
       ageDays: Math.round(ageDays * 10) / 10,
       status: doc.frontmatter.status ?? "unreviewed",
       score: base * 2 ** (-ageDays / 7), // true 7-day half-life
-      snippet: makeSnippet(doc.body, tokens),
+      snippet: makeSnippet(doc.body, rawTokens),
       layer: doc.layer,
     });
   }

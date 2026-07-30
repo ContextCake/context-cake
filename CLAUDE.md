@@ -3,10 +3,19 @@
 ## Commands
 
 ```bash
-# Run all tests
+# Run all tests (the chain lives in package.json "test" — read it there rather
+# than mirroring it here, which is how the two drifted apart before)
 npm test
-# or directly (mirrors the npm test chain):
-bash packages/core/tests/smoke-test.sh && bash packages/core/tests/resolver-test.sh && bash packages/core/tests/source-test.sh && bash packages/core/tests/files-source-test.sh && bash packages/core/tests/github-source-test.sh && bash packages/core/tests/pack-test.sh && bash packages/core/tests/git-sync-test.sh && bash packages/core/tests/capture-test.sh && bash packages/core/tests/team-sync-mcp-test.sh && bash packages/core/tests/playground-test.sh && bash packages/core/tests/service-test.sh && bash packages/core/tests/mcp-respawn-test.sh && bash packages/core/tests/setup-robustness-test.sh
+
+# Run one suite while iterating
+bash packages/core/tests/resolver-test.sh
+node --test packages/core/tests/search.test.mjs
+
+# Retrieval eval — scores search.mjs against the golden question set.
+# Part of npm test: a ranking change that loses recall fails the build.
+npm run eval
+node packages/core/eval/run.mjs --verbose                    # show what each miss returned instead
+node packages/core/eval/run.mjs --record --label "why"       # accept a new number, with its reason
 
 # Run the MCP server (cascade mode)
 node mcp-server.mjs --manifest layers.json
@@ -61,6 +70,7 @@ See `docs/architecture/README.md` for the full design. Short version:
 
 - **Storage is federated** — each layer is a `source` behind a uniform adapter: an `okf-local` bundle, a plain `files` folder, a remote `github` repository, or an `mcp` foreign graph translated into OKF at read time.
 - **Reading is unified** — `resolver.mjs` stitches the sources into one effective OKF concept at read time.
+- **Finding is ranked** — `search.mjs` (BM25F over Porter-stemmed tokens) decides which concept an agent gets to resolve in the first place. Everything the cascade is good at is downstream of it.
 - **Layer precedence** — Personal (3) > Team (2) > Company (0). Higher wins per section. Levels are configurable per layer in the manifest.
 - **Section/field merge** — not whole-document replacement. A higher layer speaks to what it knows; the rest is inherited. Where layers disagree, the primary value carries per-section `conflicts[]` (dissenting layer + date) — surfaced, not hidden.
 - **MCP server** — `mcp-server.mjs` exposes the resolved graph to AI agents (search, read_file, list_concepts, get_links).
@@ -71,6 +81,9 @@ Key files:
 | File | Role |
 |------|------|
 | `packages/core/src/resolver.mjs` | Core cascade engine: section merge, precedence, provenance, conflict surfacing |
+| `packages/core/src/search.mjs` | Ranking behind the `search` and `find_captures` tools: BM25F over stemmed tokens, per-field boosts and length normalization, 7-day recency half-life for captures. Importable and side-effect-free precisely so the eval can score it |
+| `packages/core/src/stem.mjs` | Porter stemmer (1980). Deliberately the published algorithm, not a hand-tuned suffix list — see the note in the file |
+| `packages/core/eval/` | Retrieval eval: committed 3-layer corpus, golden question set, runner, and `baseline.json` with the score history |
 | `packages/core/src/service.mjs` | Embeddable HTTP service: read API, background index, sources CRUD, settings, file APIs, console mount |
 | `packages/core/src/settings.mjs` | User-configurable engine limits (manifest > env > default) + validation and the UI catalog |
 | `packages/core/src/layer-files.mjs` | Layer file explorer/editor APIs (`/api/files`, `/api/file`, `/api/section`), sandboxed to layer roots |
@@ -121,4 +134,5 @@ Key files:
 - **Aggregate reads come from a background index and are often partial.** `/api/graph` and `/api/resolve-all` answer from whatever is indexed right now and report `indexing` / `indexingSources`; clients render what they have and poll. Any assertion about completeness (tests, scripts) must pass `?wait=<ms>`. `/api/resolve` deliberately reads one concept live. An index entry is keyed by its layer config + settings, so adding a source never re-indexes the existing ones.
 - **The indexing limits are user settings, not env-only** (`settings.mjs`, `GET`/`PATCH /api/settings`, Settings → Indexing in the console). Precedence is manifest > env > default — the manifest has to win or the settings UI would silently do nothing. Env vars (`CONTEXTCAKE_MAX_DOC_FILES`, `CONTEXTCAKE_MAX_SCAN_ENTRIES`, `CONTEXTCAKE_SOURCE_BUDGET_MS`) remain the headless/CI fallback.
 - **Add-source validation is deliberately cheap**: only "folder is missing" and "that's a file" fail the form. A too-big folder is a normal thing to add — it becomes a visible source error after indexing, with a pointer at Settings. Don't reintroduce a full walk on the add path. MCP sources still probe (`tools/list`) at add time, which is bounded and catches a wrong command.
+- **Retrieval is measured, not asserted.** `npm test` ends with the eval; a ranking change that loses recall fails the build with `RETRIEVAL REGRESSED`. If a change is a deliberate trade, re-record with `--record --label "<why>"` — the superseded numbers stay in `baseline.json`'s history so the trade is visible later. Do not tune the stemmer or the field boosts against the golden questions: the set is small enough to overfit in an afternoon, and a scorer fitted to its own eval measures nothing. Add questions first, then tune.
 - **Layer file APIs live in the engine, not the playground** (`layer-files.mjs`), so the desktop app can browse and edit context files. They cover `files`-kind layers too — the playground's old copy only mapped `okf-local` roots, which made markdown folders invisible in the editor.

@@ -101,7 +101,7 @@ expected, not a regression. The suppression test is kept.
 | `sources/okf-local.mjs` | Adapter: read an OKF git bundle from disk (today's logic, extracted) | new (extracted) |
 | `sources/mcp.mjs` | Adapter: query a foreign graph over MCP, translate response → OKF concept (+edges) | new |
 | `examples/mock-mcp-source/server.mjs` | A tiny **non-OKF** MCP graph server for the POC's `org-default` layer (proves translation; self-contained, dependency-free) | new |
-| `mcp-server.mjs` | The read surface agents connect to; resolves via `resolver.mjs`; `read_file`/`get_links`/`search` now return primary+conflicts | light change |
+| `mcp-server.mjs` | The read surface agents connect to; resolves via `resolver.mjs`; `read_file` returns primary+conflicts (with `fresherDissent`), `search` marks contested hits (`contested`/`conflictSections`), `get_links` resolves against effective content only | light change |
 | manifest | A layer now declares a `source` type: `{ "name":"org-default", "level":0, "source":"mcp", "command":"node", "args":["./examples/mock-mcp-source/server.mjs"] }` vs `"source":"okf-local","path":"..."` | schema add |
 
 ## 7. POC scope

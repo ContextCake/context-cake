@@ -295,6 +295,176 @@ if (!Array.isArray(r.feed) || r.feed.length < 2) throw new Error('feed should li
 if (!r.feed.some(f => f.archived)) throw new Error('decayed capture should appear flagged archived');
 " || fail "team-activity metrics" "$out"
 
+# ---- read_file markdown: dissent blocks, newer marker, suppression rendering ----
+md_personal="$tmpdir/md-personal"; md_team="$tmpdir/md-team"; md_company="$tmpdir/md-company"
+mkdir -p "$md_personal/decisions" "$md_team/decisions" "$md_company/decisions"
+cat > "$md_company/decisions/markdown-demo.md" <<'EOF'
+---
+type: decision
+title: Markdown demo
+updated: 2026-06-01
+---
+
+## Engine {#engine}
+
+Postgres (org standard).
+Managed RDS by default.
+
+## Ops {#ops}
+
+Company ops line.
+
+## Secrets {#secrets}
+
+Company secret handling line.
+
+## Retired {#retired override=none}
+EOF
+cat > "$md_team/decisions/markdown-demo.md" <<'EOF'
+---
+type: decision
+title: Markdown demo
+updated: 2026-05-12
+---
+
+## Engine {#engine}
+
+SingleStore (HTAP).
+
+## Secrets {#secrets override=none}
+
+## Retired {#retired}
+
+Still relevant for the team.
+EOF
+cat > "$md_personal/decisions/markdown-demo.md" <<'EOF'
+---
+updated: 2026-05-20
+---
+
+## Engine {#engine}
+
+CockroachDB (edge experiment).
+EOF
+cat > "$md_team/decisions/solo.md" <<'EOF'
+---
+type: decision
+title: Solo concept
+updated: 2026-05-12
+---
+
+## Note {#note}
+
+Postgres and SingleStore both appear here, in exactly one layer.
+EOF
+# A dissent dated "June 1, 2026" parses in V8 but is not ISO-shaped — its
+# 10-char prefix would compare lexically as newer than any ISO date. That must
+# mean "unknown": no fresherDissent flag, no newer-marker in markdown.
+cat > "$md_team/decisions/noniso.md" <<'EOF'
+---
+type: decision
+title: Non-ISO date demo
+updated: 2026-05-12
+---
+
+## Engine {#engine}
+
+SingleStore (HTAP).
+EOF
+cat > "$md_company/decisions/noniso.md" <<'EOF'
+---
+type: decision
+title: Non-ISO date demo
+updated: June 1, 2026
+---
+
+## Engine {#engine}
+
+Postgres (org standard).
+EOF
+cat > "$tmpdir/md.json" <<EOF
+{ "layers": [
+  { "name": "personal", "level": 3, "source": "okf-local", "path": "md-personal" },
+  { "name": "team", "level": 2, "source": "okf-local", "path": "md-team" },
+  { "name": "company", "level": 0, "source": "okf-local", "path": "md-company" }
+] }
+EOF
+
+out="$(rpc --manifest "$tmpdir/md.json" -- '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"concept_id":"decisions/markdown-demo"}}}')"
+node -e "
+const lines = process.argv[1].trim().split('\n');
+const read = JSON.parse(JSON.parse(lines[1]).result.content[0].text);
+const md = read.markdown;
+// (1) multi-line dissent preserved: header line with layer + date, every content line quoted
+// (2) newer marker is PER-DISSENT: company (2026-06-01 > winner 2026-05-20) carries it...
+if (!md.includes('> ⚠ company disagrees (updated 2026-06-01) — ⚠ newer than the effective value:\n> Postgres (org standard).\n> Managed RDS by default.')) {
+  throw new Error('newer multi-line dissent block missing or mangled:\n' + md);
+}
+// ...while team (2026-05-12, older than the winner) must NOT carry it
+if (!md.includes('> ⚠ team disagrees (updated 2026-05-12):\n> SingleStore (HTAP).')) {
+  throw new Error('older dissent must render without the newer marker:\n' + md);
+}
+if (md.includes('team disagrees (updated 2026-05-12) — ⚠ newer')) {
+  throw new Error('older dissent wrongly marked newer:\n' + md);
+}
+// old renderer flattened multi-line dissent onto one line — that must be gone
+if (md.includes('Postgres (org standard). Managed RDS by default.')) {
+  throw new Error('dissent must not be flattened to one line:\n' + md);
+}
+// (3) empty-content dissent (a lower layer's tombstone) renders as a suppression line
+if (!md.includes('> ⚠ company suppresses this section (updated 2026-06-01)')) {
+  throw new Error('empty-content dissent should render as suppresses-this-section:\n' + md);
+}
+// (4) a suppressed section renders heading + tombstone note instead of vanishing
+if (!md.includes('_(suppressed by team)_')) throw new Error('suppressed section must render a tombstone note:\n' + md);
+if (md.includes('Company secret handling line.')) throw new Error('suppressed content must not leak into markdown:\n' + md);
+// inherited section still renders normally
+if (!md.includes('Company ops line.')) throw new Error('inherited section missing:\n' + md);
+// JSON side: the freshness flag rides the sections that have a newer dissent
+const engine = read.sections.find((s) => s.key === 'engine');
+if (engine.fresherDissent !== true) throw new Error('engine should carry fresherDissent (company dissent is newer)');
+const retired = read.sections.find((s) => s.key === 'retired');
+if (retired.fresherDissent !== true) throw new Error('retired should carry fresherDissent (newer tombstone dissent)');
+const ops = read.sections.find((s) => s.key === 'ops');
+if (ops.fresherDissent || ops.conflicts) throw new Error('inherited section must carry neither conflicts nor the flag');
+" "$out" || fail "read_file markdown renderer (dissent blocks / newer marker / suppression)" "$out"
+
+# ---- non-ISO dissent date: parseable but shape-invalid means no freshness claim --
+out="$(rpc --manifest "$tmpdir/md.json" -- '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"concept_id":"decisions/noniso"}}}')"
+node -e "
+const lines = process.argv[1].trim().split('\n');
+const read = JSON.parse(JSON.parse(lines[1]).result.content[0].text);
+const md = read.markdown;
+// the dissent still renders, with its date verbatim...
+if (!md.includes('> ⚠ company disagrees (updated June 1, 2026):\n> Postgres (org standard).')) {
+  throw new Error('non-ISO-dated dissent block missing or mangled:\n' + md);
+}
+// ...but 'June 1, 20' > '2026-05-12' lexically must NOT read as fresher
+if (md.includes('newer than the effective value')) {
+  throw new Error('non-ISO dissent date must not produce a newer-marker:\n' + md);
+}
+const engine = read.sections.find((s) => s.key === 'engine');
+if (engine.fresherDissent) throw new Error('non-ISO dissent date must not set fresherDissent');
+" "$out" || fail "read_file non-ISO dissent date (no false freshness claim)" "$out"
+
+# ---- search annotation: contested/conflictSections on multi-layer hits ----------
+# "Postgres SingleStore" matches markdown-demo in two layers (team says
+# SingleStore, company says Postgres) and solo in one. Only the multi-layer,
+# genuinely conflicted hit may carry the annotation; the single-layer hit
+# must carry nothing — no contested:false noise.
+out="$(rpc --manifest "$tmpdir/md.json" -- '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"query":"Postgres SingleStore"}}}')"
+node -e "
+const lines = process.argv[1].trim().split('\n');
+const rows = JSON.parse(JSON.parse(lines[1]).result.content[0].text);
+const demo = rows.find((r) => r.id === 'decisions/markdown-demo');
+if (!demo) throw new Error('conflicted concept should match: ' + JSON.stringify(rows));
+if (demo.contested !== true) throw new Error('multi-layer conflicted hit must be contested: ' + JSON.stringify(demo));
+if (demo.conflictSections !== 2) throw new Error('engine + retired = 2 conflict sections, got: ' + JSON.stringify(demo));
+const solo = rows.find((r) => r.id === 'decisions/solo');
+if (!solo) throw new Error('single-layer concept should match: ' + JSON.stringify(rows));
+if ('contested' in solo || 'conflictSections' in solo) throw new Error('single-layer hit must carry no contested noise: ' + JSON.stringify(solo));
+" "$out" || fail "search contested annotation" "$out"
+
 # ---- capture pack smoke ---------------------------------------------------------
 pack="$repo_root/examples/team-sync-pack"
 node -e "

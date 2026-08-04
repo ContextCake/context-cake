@@ -18,6 +18,7 @@
 // manifest.json: { "layers": [ {"name":"company","level":0,"path":"..."}, ... ] }
 
 import { pathToFileURL } from "node:url";
+import { equivalent, isNewerDay } from "./conflict-policy.mjs";
 import { buildProfileSources, loadProfileRuntime } from "./profile-runtime.mjs";
 
 if (isMainModule(import.meta.url)) {
@@ -116,6 +117,8 @@ export function mergeConcepts(contributors) {
     const winnerContent = suppressed ? "" : section.lines.join("\n").trim();
 
     // Dissent: any OTHER contributor that defines this section with different content.
+    // Formatting-equivalent restatements (whitespace, bullet glyphs) are not dissent
+    // and are silently dropped — see conflict-policy.mjs for the exact normalization.
     // Suppressed sections are tombstones — no conflicts emitted (suppression IS the answer).
     const conflicts = suppressed ? [] : contenders.get(key)
       .filter((x) => x.c !== c)
@@ -124,24 +127,32 @@ export function mergeConcepts(contributors) {
         updated: x.section.updated ?? x.c.updated ?? null,
         content: x.section.override === "none" ? "" : x.section.lines.join("\n").trim(),
       }))
-      .filter((d) => d.content !== winnerContent);
+      .filter((d) => !equivalent(d.content, winnerContent));
+
+    const sourceUpdated = section.updated ?? c.updated ?? null;
+    // Freshness flag: a dissent that is strictly newer than the effective value
+    // (day granularity, both dates must parse — see conflict-policy.mjs) means
+    // the losing layer has spoken more recently than the winner.
+    const fresherDissent = conflicts.some((d) => isNewerDay(d.updated, sourceUpdated));
 
     return {
       key,
       heading: section.heading,
       content: winnerContent,
       sourceLayer: c.layer,
-      sourceUpdated: section.updated ?? c.updated ?? null,
+      sourceUpdated,
       ...(suppressed ? { suppressed: true } : {}),
       ...(conflicts.length ? { conflicts } : {}),
+      ...(fresherDissent ? { fresherDissent: true } : {}),
     };
   });
 
   return { frontmatter, frontmatterProvenance, sections };
 }
 
-// Higher level wins; equal level keeps the first contributor seen
-// (contributors are pre-ordered by precedence). No recency tiebreak.
+// Higher level wins; equal level keeps the first contributor seen. Contributors
+// arrive pre-sorted newest-first within a level (orderContributors, via
+// resolveConcept), so on equal level the more recently updated document wins ties.
 function sectionBeats(a, b) {
   return a.c.level > b.c.level;
 }

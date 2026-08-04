@@ -357,6 +357,31 @@ updated: 2026-05-12
 
 Postgres and SingleStore both appear here, in exactly one layer.
 EOF
+# A dissent dated "June 1, 2026" parses in V8 but is not ISO-shaped — its
+# 10-char prefix would compare lexically as newer than any ISO date. That must
+# mean "unknown": no fresherDissent flag, no newer-marker in markdown.
+cat > "$md_team/decisions/noniso.md" <<'EOF'
+---
+type: decision
+title: Non-ISO date demo
+updated: 2026-05-12
+---
+
+## Engine {#engine}
+
+SingleStore (HTAP).
+EOF
+cat > "$md_company/decisions/noniso.md" <<'EOF'
+---
+type: decision
+title: Non-ISO date demo
+updated: June 1, 2026
+---
+
+## Engine {#engine}
+
+Postgres (org standard).
+EOF
 cat > "$tmpdir/md.json" <<EOF
 { "layers": [
   { "name": "personal", "level": 3, "source": "okf-local", "path": "md-personal" },
@@ -403,6 +428,24 @@ if (retired.fresherDissent !== true) throw new Error('retired should carry fresh
 const ops = read.sections.find((s) => s.key === 'ops');
 if (ops.fresherDissent || ops.conflicts) throw new Error('inherited section must carry neither conflicts nor the flag');
 " "$out" || fail "read_file markdown renderer (dissent blocks / newer marker / suppression)" "$out"
+
+# ---- non-ISO dissent date: parseable but shape-invalid means no freshness claim --
+out="$(rpc --manifest "$tmpdir/md.json" -- '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"concept_id":"decisions/noniso"}}}')"
+node -e "
+const lines = process.argv[1].trim().split('\n');
+const read = JSON.parse(JSON.parse(lines[1]).result.content[0].text);
+const md = read.markdown;
+// the dissent still renders, with its date verbatim...
+if (!md.includes('> ⚠ company disagrees (updated June 1, 2026):\n> Postgres (org standard).')) {
+  throw new Error('non-ISO-dated dissent block missing or mangled:\n' + md);
+}
+// ...but 'June 1, 20' > '2026-05-12' lexically must NOT read as fresher
+if (md.includes('newer than the effective value')) {
+  throw new Error('non-ISO dissent date must not produce a newer-marker:\n' + md);
+}
+const engine = read.sections.find((s) => s.key === 'engine');
+if (engine.fresherDissent) throw new Error('non-ISO dissent date must not set fresherDissent');
+" "$out" || fail "read_file non-ISO dissent date (no false freshness claim)" "$out"
 
 # ---- search annotation: contested/conflictSections on multi-layer hits ----------
 # "Postgres SingleStore" matches markdown-demo in two layers (team says

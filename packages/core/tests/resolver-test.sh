@@ -222,6 +222,13 @@ const cases = [
   ["null winner date must not flag", false, null, "2026-06-01"],
   ["null dissent date must not flag", false, "2026-05-12", null],
   ["unparseable dissent date must not flag", false, "2026-05-12", "sometime last week"],
+  // "June 1, 2026" parses in V8 but is not ISO-shaped: its 10-char prefix
+  // ("June 1, 20") would compare lexically as "J" > "2" — a false freshness
+  // claim. Non-ISO-shaped dates must mean "unknown", not garbage comparison.
+  ["parseable non-ISO dissent date must not flag", false, "2026-05-12", "June 1, 2026"],
+  // Both sides non-ISO: lexically "May..." > "June..." would flag a dissent
+  // that is actually three weeks OLDER than the winner.
+  ["parseable non-ISO dates on both sides must not flag", false, "June 1, 2026", "May 12, 2026"],
   ["older dissent must not flag", false, "2026-06-01", "2026-05-12"],
 ];
 for (const [description, expected, winnerUpdated, dissentUpdated] of cases) {

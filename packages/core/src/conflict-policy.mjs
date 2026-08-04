@@ -36,12 +36,16 @@ function normalizeFormatting(text) {
 }
 
 // True iff `candidate` is strictly newer than `reference` at day granularity.
-// Both values must parse as dates (`new Date(v).getTime()` valid) — a missing
-// or unparseable date on either side means "unknown", never epoch 0, so no
-// freshness claim is made. Day granularity compares the first 10 characters
-// (ISO `YYYY-MM-DD` prefix): MCP layers carry arbitrary `lastTouched`
-// datetimes, and a datetime must not read as fresher than a same-day
-// date-only value.
+// Both values must parse as dates (`new Date(v).getTime()` valid) AND start
+// with an ISO `YYYY-MM-DD` day prefix — a missing, unparseable, or
+// non-ISO-shaped date on either side (e.g. an MCP layer's `lastTouched` of
+// "June 1, 2026", which parses but whose first 10 characters are garbage)
+// means "unknown", never epoch 0 and never a lexical comparison of
+// non-date text, so no freshness claim is made. Day granularity compares
+// the first 10 characters (the ISO day prefix) as strings — deliberately
+// not via toISOString, which would shift days across timezones: MCP layers
+// carry arbitrary `lastTouched` datetimes, and a datetime must not read as
+// fresher than a same-day date-only value.
 export function isNewerDay(candidate, reference) {
   const candidateDay = dayStamp(candidate);
   const referenceDay = dayStamp(reference);
@@ -53,5 +57,6 @@ function dayStamp(value) {
   if (value === null || value === undefined || value === "") return null;
   const time = new Date(value).getTime();
   if (Number.isNaN(time)) return null;
+  if (!/^\d{4}-\d{2}-\d{2}/.test(String(value))) return null;
   return String(value).slice(0, 10);
 }

@@ -50,6 +50,22 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   in renderer code will 401 inside the app.
 - **`resources/bin/contextcake` must stay executable** (mode 755) and POSIX-sh
   compatible — it's exec'd before any Node exists.
+- **Harness connection is sudo-free.** The `contextcake:cli-status` and
+  `cli-install` IPC results carry `shimPath` — the packaged shim's absolute
+  path — and the console builds every harness connect command from it when the
+  `/usr/local/bin` name is unusable (`missing`/`stale`/`conflict`). The PATH
+  symlink install is an optional nicety, never a gate. `shimPath` is null in
+  development and in the `blocked` (translocated/DMG) state: those paths are
+  ephemeral and must never reach a harness configuration — keep that null, and
+  keep the console's status gate, if you touch either side.
+- **The first-run metrics consent prompt waits for the first layer.** A fresh
+  install with zero manifest layers defers the dialog until the manifest
+  watcher sees a layer land (or until a later launch that has one); installs
+  that already have layers prompt at boot. The decision lives in
+  `src/main/metrics-consent.mjs` (no Electron imports, covered by `npm test`).
+  On consent-accept the first-launch report fires immediately — don't separate
+  them, or counting silently slips to the next launch. Dialogs stay behind
+  `app.isPackaged`, so CI and smoke runs never see them.
 - **The app icon is generated, never hand-edited.** `build/icon.icns` and
   `build/icon-master-1024.png` are produced by `npm run icon` from the canonical
   brand mark at `assets/brand/contextcake-app-icon.svg` (the same file the site

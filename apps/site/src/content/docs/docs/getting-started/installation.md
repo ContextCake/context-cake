@@ -15,7 +15,7 @@ local setup path.
 
 ## macOS app (recommended)
 
-Download [ContextCake 0.1.0 for Mac](https://github.com/ContextCake/context-cake/releases/download/app-v0.1.0/ContextCake-0.1.0-arm64.dmg), open the DMG, and drag ContextCake to Applications. Open it from Applications; macOS may ask you to confirm the first launch.
+Download [ContextCake 0.3.0 for Mac](https://github.com/ContextCake/context-cake/releases/download/app-v0.3.0/ContextCake-0.3.0-arm64.dmg), open the DMG, and drag ContextCake to Applications. Open it from Applications; macOS may ask you to confirm the first launch.
 
 The app's activation path is:
 
@@ -35,7 +35,7 @@ query. Sign-in is optional and is only needed when you want account-backed setti
 sync. The app can also install the optional `contextcake` command when a client
 needs it.
 
-The [release page](https://github.com/ContextCake/context-cake/releases/tag/app-v0.1.0)
+The [release page](https://github.com/ContextCake/context-cake/releases/tag/app-v0.3.0)
 contains the matching ZIP and checksums.
 
 ## Prerequisites for the source route

@@ -36,10 +36,12 @@ test('scrubSettings recursively removes absolute paths and indirect secrets', ()
 })
 
 test('prepareSyncPayload allowlists metadata and rejects credentials or context', () => {
-  assert.deepEqual(prepareSyncPayload({ theme: 'light', updateCheck: true, activeProfile: 'work', privateNotes: 'never upload' }), {
+  assert.deepEqual(prepareSyncPayload({ theme: 'light', updateCheck: true, anonymousMetrics: false, activeProfile: 'work', privateNotes: 'never upload' }), {
     theme: 'light',
     updateCheck: true,
+    anonymousMetrics: false,
   })
+  assert.throws(() => prepareSyncPayload({ anonymousMetrics: 'yes' }), /anonymous-metrics preference/)
   assert.throws(
     () => prepareSyncPayload({ sources: [{ credential: 'Bearer definitely-a-secret' }] }),
     /possible credential/,

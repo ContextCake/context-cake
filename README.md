@@ -260,6 +260,9 @@ npm --prefix apps/desktop run test:navigation
 npm --prefix apps/desktop run test:cli-status
 npm --prefix apps/desktop run smoke
 npm --prefix apps/desktop run smoke:bootfail
+
+# Public GitHub Release download + first-launch counts
+npm run metrics:app
 ```
 
 `npm test` starts a local playground server, so it requires an environment that allows binding to `127.0.0.1`. See [CONTRIBUTING.md](CONTRIBUTING.md) for repository conventions, validation expectations, and issue labels.
@@ -271,6 +274,7 @@ npm --prefix apps/desktop run smoke:bootfail
 - [Reference](https://contextcake.com/docs/reference/cli) — CLI flags, manifests, MCP tools, and override syntax.
 - [Architecture](docs/architecture/README.md) — decisions, diagrams, and the resolver design.
 - [Security policy](SECURITY.md) — responsible disclosure and supported-version policy.
+- [App metrics](docs/app-metrics.md) — download counts, confirmed first launches, and metric limitations.
 
 ## Contributing
 

@@ -35,6 +35,11 @@ declare global {
       authState: DesktopAuthState
       /** Open the native macOS directory picker. Null means the user canceled. */
       chooseFolder?: () => Promise<string | null>
+      /** Explicit, user-controlled anonymous usage-metrics preference. */
+      metrics?: {
+        getEnabled: () => Promise<boolean | null>
+        setEnabled: (enabled: boolean) => Promise<boolean>
+      }
       /** Fixed native operations for ContextCake's own command-line tool. */
       cli: {
         getStatus: () => Promise<CliResult>

@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util'
 
 // activeProfile is deliberately local-only: remote activity must never select
 // a profile that can open machine-local paths or trusted executable sources.
-const SYNC_FIELDS = ['theme', 'updateCheck', 'profiles', 'sources']
+const SYNC_FIELDS = ['theme', 'updateCheck', 'anonymousMetrics', 'profiles', 'sources']
 const SCRUBBED = new Set(['execution', 'path', 'secret'])
 const SECRET_KEY = /(?:^|_)(?:password|passwd|secret|token|api_?key|authorization|cookie|credential)(?:$|_)/i
 const CONTEXT_KEY = /^(?:content|contents|body|document|documents|knowledge|markdown|payload|raw|resolved|sections|text)$/i
@@ -129,6 +129,9 @@ function assertSettingsShape(settings) {
   }
   if (settings.updateCheck !== undefined && typeof settings.updateCheck !== 'boolean') {
     throw new Error('Settings sync rejected an invalid update preference.')
+  }
+  if (settings.anonymousMetrics !== undefined && typeof settings.anonymousMetrics !== 'boolean') {
+    throw new Error('Settings sync rejected an invalid anonymous-metrics preference.')
   }
   const assertSources = (sources) => {
     if (!Array.isArray(sources)) throw new Error('Settings sync rejected invalid source definitions.')

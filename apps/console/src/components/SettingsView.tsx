@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useThemeMode } from '../theme-mode'
 import { isUpdateCheckEnabled, setUpdateCheckEnabled } from '../update'
 import type { Mode } from '../api'
@@ -28,11 +28,20 @@ export function SettingsView({
 }) {
   const [pane, setPane] = useState<SettingsPane>('general')
   const [updatesEnabled, setUpdatesEnabled] = useState(() => isUpdateCheckEnabled(appMode))
+  const [metricsEnabled, setMetricsEnabled] = useState<boolean | null>(null)
   const { mode: theme, toggle: toggleTheme } = useThemeMode()
   const desktop = Boolean(window.__CC_DESKTOP)
   // Builds ship without accounts by default, so the pane is hidden rather than
   // shown empty. Browser and demo builds never had sign-in to offer.
   const accountsAvailable = window.__CC_DESKTOP?.authState?.available === true && Boolean(window.__CC_AUTH)
+
+  useEffect(() => {
+    let active = true
+    window.__CC_DESKTOP?.metrics?.getEnabled()
+      .then((enabled) => { if (active) setMetricsEnabled(enabled ?? false) })
+      .catch(() => { if (active) setMetricsEnabled(false) })
+    return () => { active = false }
+  }, [])
 
   const chooseTheme = (next: 'light' | 'dark') => {
     if (next !== theme) toggleTheme()
@@ -42,6 +51,18 @@ export function SettingsView({
     const next = !updatesEnabled
     setUpdatesEnabled(next)
     setUpdateCheckEnabled(next)
+  }
+
+  const toggleMetrics = async () => {
+    if (!window.__CC_DESKTOP?.metrics || metricsEnabled === null) return
+    const previous = metricsEnabled
+    const next = !previous
+    setMetricsEnabled(next)
+    try {
+      setMetricsEnabled(await window.__CC_DESKTOP.metrics.setEnabled(next))
+    } catch {
+      setMetricsEnabled(previous)
+    }
   }
 
   return (
@@ -130,6 +151,25 @@ export function SettingsView({
                       </label>
                     )}
                   </div>
+                  {desktop && (
+                    <div className="cc-settings-row">
+                      <div>
+                        <strong>Anonymous usage metrics</strong>
+                        <span>Share the app version and a one-time signal when ContextCake opens successfully. We use this to improve the app. We never collect your files, paths, prompts, account details, or a device ID.</span>
+                      </div>
+                      <label className="cc-switch">
+                        <input
+                          type="checkbox"
+                          checked={metricsEnabled === true}
+                          disabled={metricsEnabled === null}
+                          onChange={toggleMetrics}
+                          aria-label="Share anonymous usage metrics"
+                        />
+                        <span aria-hidden="true" />
+                        <span className="sr-only">Share anonymous usage metrics</span>
+                      </label>
+                    </div>
+                  )}
                   <div className="cc-settings-row">
                     <div>
                       <strong>Version</strong>

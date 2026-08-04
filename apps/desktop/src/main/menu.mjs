@@ -20,6 +20,12 @@ export function buildMenu(getWindow, onSettingsChange) {
           checked: readSettings().updateCheck,
           click: (item) => onSettingsChange?.(writeSettings({ updateCheck: item.checked })),
         },
+        {
+          label: 'Share Anonymous Usage Metrics',
+          type: 'checkbox',
+          checked: readSettings().anonymousMetrics === true,
+          click: (item) => onSettingsChange?.(writeSettings({ anonymousMetrics: item.checked })),
+        },
         { type: 'separator' },
         {
           label: 'Install Command Line Tool…',

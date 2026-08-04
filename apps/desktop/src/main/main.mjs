@@ -20,6 +20,7 @@ import { loadSupabaseConfig } from './supabase-config.mjs'
 import { initUpdater } from './updater.mjs'
 import { isEngineOrigin, isTrustedIpcSender } from './navigation.mjs'
 import { getCliStatus, installCli } from './cli-install.mjs'
+import { reportFirstLaunch } from './install-metrics.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -225,11 +226,41 @@ function publishPulledSettings(pulled) {
 function installApplicationMenu() {
   Menu.setApplicationMenu(buildMenu(
     () => win,
-    () => {
+    (settings) => {
       initUpdater()
+      if (settings.anonymousMetrics === true) reportAnonymousFirstLaunch()
       if (currentAuthState().signedIn) scheduleSettingsPush()
     },
   ))
+}
+
+function reportAnonymousFirstLaunch() {
+  const settings = readSettings()
+  return reportFirstLaunch({
+    isPackaged: app.isPackaged,
+    version: app.getVersion(),
+    configDir: configDir(),
+    metricsEnabled: settings.anonymousMetrics === true,
+  })
+}
+
+async function ensureAnonymousMetricsPreference() {
+  const current = readSettings().anonymousMetrics
+  if (typeof current === 'boolean') return current
+
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    title: 'Anonymous Usage Metrics',
+    message: 'Help improve ContextCake?',
+    detail: 'ContextCake can share the app version and a one-time signal when it opens successfully. We use this anonymous information to understand adoption and improve the app. We never collect your files, paths, prompts, account details, or a device ID. You can change this anytime in Settings.',
+    buttons: ['Share Anonymous Metrics', "Don't Share"],
+    defaultId: 0,
+    cancelId: 1,
+  })
+  const enabled = response === 0
+  writeSettings({ anonymousMetrics: enabled })
+  if (currentAuthState().signedIn) scheduleSettingsPush()
+  return enabled
 }
 
 function startManifestSync() {
@@ -389,6 +420,18 @@ async function initializeAccounts() {
 // processes or select a path without the user approving the native panel.
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
 handleTrustedIpc('contextcake:cli-install', () => installCli(win, { showSuccess: false }))
+handleTrustedIpc('contextcake:metrics-get', () => {
+  const enabled = readSettings().anonymousMetrics
+  return typeof enabled === 'boolean' ? enabled : null
+})
+handleTrustedIpc('contextcake:metrics-set', (enabled) => {
+  if (typeof enabled !== 'boolean') throw new Error('Anonymous metrics preference must be a boolean.')
+  writeSettings({ anonymousMetrics: enabled })
+  installApplicationMenu()
+  if (enabled) reportAnonymousFirstLaunch()
+  if (currentAuthState().signedIn) scheduleSettingsPush()
+  return enabled
+})
 // The API token is a credential: never put it in BrowserWindow
 // additionalArguments, which become renderer process argv and are visible to
 // other local users through process inspection. The sandboxed preload asks for
@@ -531,6 +574,12 @@ app.whenReady().then(async () => {
   installApplicationMenu()
   initUpdater()
   if (currentAuthState().signedIn) await syncAfterSignIn()
+  // Ask before the first anonymous metric. Update checks and metrics remain
+  // separate choices, and either can be changed later in Settings or the app
+  // menu. Development and smoke builds never show the prompt or report.
+  if (app.isPackaged) await ensureAnonymousMetricsPreference()
+  installApplicationMenu()
+  reportAnonymousFirstLaunch().catch(() => {})
   if (process.env.CC_SMOKE === '1') await smokeCheck()
 }).catch(handleFatal)
 

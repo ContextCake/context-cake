@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   // delivered through __CC_AUTH so it never appears in process arguments.
   authState: { signedIn: arg('cc-signed-in') === '1', available: arg('cc-accounts') === '1' },
   chooseFolder: () => ipcRenderer.invoke('contextcake:choose-folder'),
+  metrics: {
+    getEnabled: () => ipcRenderer.invoke('contextcake:metrics-get'),
+    setEnabled: (enabled) => ipcRenderer.invoke('contextcake:metrics-set', enabled),
+  },
   cli: {
     getStatus: () => ipcRenderer.invoke('contextcake:cli-status'),
     install: () => ipcRenderer.invoke('contextcake:cli-install'),

@@ -8,13 +8,16 @@ let container: HTMLDivElement
 let root: Root
 let writeText: ReturnType<typeof vi.fn>
 type CliBridge = NonNullable<Window['__CC_DESKTOP']>['cli']
+type CliResult = Awaited<ReturnType<CliBridge['getStatus']>>
+
+const SHIM = '/Applications/ContextCake.app/Contents/Resources/bin/contextcake'
 
 let getStatus: Mock<CliBridge['getStatus']>
 let install: Mock<CliBridge['install']>
 
-function desktop(status: 'installed' | 'missing' = 'installed') {
-  getStatus = vi.fn<CliBridge['getStatus']>().mockResolvedValue({ status, message: `CLI is ${status}.` })
-  install = vi.fn<CliBridge['install']>().mockResolvedValue({ status: 'installed', message: 'Command-line tool installed.' })
+function desktop(status: CliResult['status'] = 'installed', shimPath: string | null = null) {
+  getStatus = vi.fn<CliBridge['getStatus']>().mockResolvedValue({ status, message: `CLI is ${status}.`, shimPath })
+  install = vi.fn<CliBridge['install']>().mockResolvedValue({ status: 'installed', message: 'Command-line tool installed.', shimPath })
   window.__CC_DESKTOP = {
     getApiToken: async () => 'test',
     version: '0.1.0',
@@ -95,6 +98,38 @@ describe('ConnectAgentDialog', () => {
     await act(async () => button('Install tool').click())
     expect(install).toHaveBeenCalledOnce()
     expect(container.textContent).toContain('Command-line tool installed')
+  })
+
+  it('connects through the app shim path when the CLI name is unusable', async () => {
+    desktop('missing', SHIM)
+    await render()
+
+    // The PATH install is an optional nicety, not a gate on connecting.
+    expect(container.textContent).toContain('Command-line tool is optional')
+    const panel = () => container.querySelector('[role="tabpanel"]')?.textContent ?? ''
+    expect(panel()).toContain(`claude mcp add --scope user contextcake -- "${SHIM}" mcp`)
+
+    const copyPrompt = container.querySelector<HTMLButtonElement>('[aria-label="Copy Claude Code setup prompt"]')
+    await act(async () => copyPrompt?.click())
+    expect(writeText.mock.calls[0][0]).toContain(`"${SHIM}" mcp`)
+
+    // Installing the shortcut flips every payload back to the short name.
+    await act(async () => button('Install tool').click())
+    expect(panel()).toContain('claude mcp add --scope user contextcake -- contextcake mcp')
+    expect(panel()).not.toContain(SHIM)
+  })
+
+  it('shows the move-to-Applications gate and never an absolute path while translocated', async () => {
+    // Even if a path leaked through IPC in the blocked state, the dialog must
+    // gate on status — a translocated/DMG path dies when the image unmounts.
+    desktop('blocked', SHIM)
+    await render()
+
+    expect(container.textContent).toContain('Move ContextCake to Applications')
+    const panel = container.querySelector('[role="tabpanel"]')?.textContent ?? ''
+    expect(panel).toContain('claude mcp add --scope user contextcake -- contextcake mcp')
+    expect(panel).not.toContain(SHIM)
+    expect(panel).not.toContain('/Volumes/')
   })
 
   it('falls back to a manual copy window when clipboard permission is blocked', async () => {

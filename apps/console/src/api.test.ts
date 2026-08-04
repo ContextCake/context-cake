@@ -309,6 +309,63 @@ describe('adaptSources', () => {
     }
     expect(adaptSources(graph)[0].layer).toBe('personal')
   })
+
+  it('never paints a zero-concept MCP source as serving (the false green)', () => {
+    // A dead MCP child answers [] instead of throwing, so its row arrives
+    // status 'ok' with nothing served — that must not read as healthy.
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 0, resolvedTokens: 0, concepts: 0, sources: 1 },
+      sources: [
+        { name: 'company-mcp', level: 0, kind: 'mcp', conceptCount: 0, tokens: 0, latestUpdated: null, status: 'ok', error: null },
+      ],
+      concepts: [],
+    }
+    const [mcp] = adaptSources(graph)
+    expect(mcp.status).toBe('empty')
+    expect(mcp.status).not.toBe('serving')
+    expect(mcp.coverage).toBe(0)
+    expect(mcp.focus).toContain('nothing served yet')
+  })
+
+  it('treats an ok-status MCP row that still carries an error as degraded, not serving', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 5, resolvedTokens: 5, concepts: 1, sources: 1 },
+      sources: [
+        { name: 'company-mcp', level: 0, kind: 'mcp', conceptCount: 1, tokens: 5, latestUpdated: null, status: 'ok', error: 'child exited (code 1)' },
+      ],
+      concepts: [],
+    }
+    expect(adaptSources(graph)[0].status).toBe('degraded')
+  })
+
+  it('keeps serving strictly for MCP sources with concepts and no recorded failure', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 50, resolvedTokens: 50, concepts: 126, sources: 1 },
+      sources: [
+        { name: 'company-mcp', level: 0, kind: 'mcp', conceptCount: 126, tokens: 50, latestUpdated: null, status: 'ok', error: null },
+      ],
+      concepts: [],
+    }
+    expect(adaptSources(graph)[0].status).toBe('serving')
+  })
+
+  it('carries the raw kind, level, health timestamps, and live flag for management', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 10, resolvedTokens: 10, concepts: 1, sources: 2 },
+      sources: [
+        {
+          name: 'acme-docs', level: 2, kind: 'github', conceptCount: 4, tokens: 10, latestUpdated: null,
+          status: 'ok', error: null, lastSuccessAt: '2026-08-01T10:00:00.000Z', lastErrorAt: null, live: true,
+        },
+        { name: 'notes', level: 3, kind: 'files', conceptCount: 2, tokens: 4, latestUpdated: null, status: 'ok', error: null, origin: null },
+      ],
+      concepts: [],
+    }
+    const [repo, notes] = adaptSources(graph)
+    expect(repo).toMatchObject({ sourceKind: 'github', level: 2, conceptCount: 4, lastSuccessAt: '2026-08-01T10:00:00.000Z', live: true })
+    expect(notes.sourceKind).toBe('files')
+    expect(notes.live).toBeUndefined()
+  })
 })
 
 describe('adaptConflicts', () => {
@@ -354,5 +411,85 @@ describe('adaptConflicts', () => {
       },
     ]
     expect(adaptConflicts(concepts)).toEqual([])
+  })
+})
+
+// ---- fresherDissent carry-through (contract C-b) -------------------------
+
+describe('fresherDissent (C-b)', () => {
+  function conflicted(section: Partial<ResolvedConcept['sections'][0]>): ResolvedConcept {
+    return {
+      id: 'decisions/primary-db',
+      contributors: [
+        { layer: 'personal', level: 3, updated: '2026-05-12' },
+        { layer: 'team', level: 2, updated: '2026-06-01' },
+      ],
+      frontmatter: { title: 'Primary database' },
+      sections: [{
+        key: 'choice', heading: '## Choice {#choice}', content: 'SingleStore.',
+        sourceLayer: 'personal', sourceUpdated: '2026-05-12',
+        conflicts: [{ layer: 'team', updated: '2026-06-01', content: 'Postgres.' }],
+        ...section,
+      }],
+    }
+  }
+
+  it('carries the section flag through adaptConcept onto the view section', () => {
+    const c = adaptConcept(conflicted({ fresherDissent: true }))
+    expect(c.sections[0].fresherDissent).toBe(true)
+    expect(adaptConcept(conflicted({})).sections[0].fresherDissent).toBeUndefined()
+  })
+
+  it('marks exactly the strictly-newer dissent contribution on the conflict card', () => {
+    const concept = conflicted({
+      fresherDissent: true,
+      conflicts: [
+        { layer: 'team', updated: '2026-06-01', content: 'Postgres.' },
+        { layer: 'company', updated: '2025-01-01', content: 'MySQL.' },
+      ],
+    })
+    concept.contributors.push({ layer: 'company', level: 0, updated: '2025-01-01' })
+    const [card] = adaptConflicts([concept])
+    expect(card.contributions[0].fresherDissent).toBeUndefined() // the winner is never its own dissent
+    expect(card.contributions[1]).toMatchObject({ layer: 'team', fresherDissent: true })
+    expect(card.contributions[2].fresherDissent).toBeUndefined() // older dissent stays unmarked
+  })
+
+  it('never marks a dissent when the engine did not flag the section', () => {
+    // The engine owns the rule (it also knows about suppression and
+    // formatting-equivalence); the console must not out-guess it.
+    const [card] = adaptConflicts([conflicted({})])
+    expect(card.contributions.every((k) => k.fresherDissent === undefined)).toBe(true)
+  })
+
+  it('does not treat a same-day datetime as newer than a date-only value', () => {
+    // MCP layers carry arbitrary lastTouched datetimes; day granularity rules.
+    const concept = conflicted({
+      fresherDissent: true, // flagged because of a second, genuinely newer dissent
+      conflicts: [
+        { layer: 'team', updated: '2026-05-12T23:59:59Z', content: 'Same day.' },
+        { layer: 'company', updated: '2026-06-01', content: 'Actually newer.' },
+      ],
+    })
+    concept.contributors.push({ layer: 'company', level: 0, updated: '2026-06-01' })
+    const [card] = adaptConflicts([concept])
+    expect(card.contributions[1].fresherDissent).toBeUndefined()
+    expect(card.contributions[2].fresherDissent).toBe(true)
+  })
+
+  it('never treats a missing or unparseable date as epoch 0', () => {
+    const concept = conflicted({
+      fresherDissent: true,
+      sourceUpdated: null,
+      conflicts: [{ layer: 'team', updated: '2026-06-01', content: 'Dated dissent.' }],
+    })
+    const [card] = adaptConflicts([concept])
+    expect(card.contributions[1].fresherDissent).toBeUndefined()
+
+    const garbled = conflicted({
+      fresherDissent: true,
+      conflicts: [{ layer: 'team', updated: 'not-a-date', content: 'Undated dissent.' }],
+    })
+    expect(adaptConflicts([garbled])[0].contributions[1].fresherDissent).toBeUndefined()
   })
 })

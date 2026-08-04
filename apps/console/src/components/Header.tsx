@@ -3,6 +3,7 @@ import { useStore, type ViewId } from '../store'
 const TITLES: Record<ViewId, [string, string]> = {
   canvas: ['Live cascade', 'Effective knowledge by layer, with conflicts and overrides visible.'],
   overview: ['Cascade health', 'Source coverage, sync state, and decisions that need attention.'],
+  sources: ['Sources', 'Add, rename, re-level, sync, or remove what feeds the cascade.'],
   triage: ['Review queue', 'Decide what becomes shared knowledge. S stores, R keeps review, D discards.'],
   conflicts: ['Resolver', 'Compare layer values and lock the effective read.'],
   concepts: ['Resolved knowledge', 'Browse concepts, sections, and provenance across the cascade.'],

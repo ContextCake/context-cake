@@ -229,6 +229,22 @@ function contributorLevels(r: ResolvedConcept): Map<string, number> {
   return new Map(r.contributors.map((c) => [c.layer, c.level]))
 }
 
+/**
+ * C-b day-granularity freshness: true only when both dates parse
+ * (`new Date(v).getTime()` valid) and the dissent's calendar day
+ * (`slice(0,10)`) is strictly after the winner's. A datetime on the same day
+ * as a date-only value must not count as newer, and a missing or unparseable
+ * date on either side is never treated as epoch 0.
+ */
+function newerAtDayGranularity(dissentUpdated: string | null, winnerUpdated: string | null): boolean {
+  if (!dissentUpdated || !winnerUpdated) return false
+  if (Number.isNaN(new Date(dissentUpdated).getTime()) || Number.isNaN(new Date(winnerUpdated).getTime())) return false
+  const dissentDay = new Date(dissentUpdated.slice(0, 10)).getTime()
+  const winnerDay = new Date(winnerUpdated.slice(0, 10)).getTime()
+  if (Number.isNaN(dissentDay) || Number.isNaN(winnerDay)) return false
+  return dissentDay > winnerDay
+}
+
 /** A resolved section → the console's ConceptSection (with provenance + dissent). */
 function adaptSection(s: ResolvedSection, levels: Map<string, number>): ConceptSection {
   const winner = layerOf(s.sourceLayer, levels.get(s.sourceLayer) ?? 0)
@@ -245,6 +261,7 @@ function adaptSection(s: ResolvedSection, levels: Map<string, number>): ConceptS
     updated: s.sourceUpdated,
     suppressed: s.suppressed === true,
     dissents,
+    ...(s.fresherDissent === true ? { fresherDissent: true } : {}),
   }
 }
 
@@ -276,6 +293,17 @@ export function adaptSources(g: GraphSummary): Source[] {
     // put a green dot over an outage, which is the one thing this row is for.
     const degraded = s.status === 'degraded'
     const count = `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'}`
+    // An MCP child that died after startup used to keep its green "serving"
+    // dot: the adapter answers [] instead of throwing, so a dead server and an
+    // empty graph produced the same row. "Serving" now requires evidence —
+    // at least one concept actually served and no recorded failure.
+    const status = errored
+      ? 'error' as const
+      : degraded
+        ? 'degraded' as const
+        : s.kind === 'mcp'
+          ? (s.conceptCount > 0 && !s.error ? 'serving' as const : s.error ? 'degraded' as const : 'empty' as const)
+          : 'synced' as const
     return {
       name: s.name,
       kind: s.kind === 'mcp' ? 'mcp' : 'okf-local',
@@ -287,8 +315,20 @@ export function adaptSources(g: GraphSummary): Source[] {
         ? (s.error ?? 'unreachable')
         : degraded
           ? `${count} · ${s.lastSuccessAt ? `as of ${s.lastSuccessAt} · ` : ''}${s.error ?? 'source unreachable'}`
-          : `${count} · ${s.kind}`,
-      status: errored ? 'error' : degraded ? 'degraded' : s.kind === 'mcp' ? 'serving' : 'synced',
+          : status === 'empty'
+            ? `${count} · ${s.kind} — nothing served yet`
+            : `${count} · ${s.kind}`,
+      status,
+      // Management fields (Sources view): the raw engine kind plus health
+      // timestamps ride along so remove/rename/sync can render honestly.
+      sourceKind: s.kind,
+      level: s.level,
+      conceptCount: s.conceptCount,
+      origin: s.origin ?? null,
+      error: s.error ?? null,
+      lastSuccessAt: s.lastSuccessAt ?? null,
+      lastErrorAt: s.lastErrorAt ?? null,
+      ...(s.live === true ? { live: true } : {}),
     }
   })
 }
@@ -311,10 +351,16 @@ export function adaptConflicts(concepts: ResolvedConcept[]): Conflict[] {
         winner,
         contributions: [
           { layer: winner, value: s.content, updated: s.sourceUpdated ?? '' },
+          // The engine's per-section `fresherDissent` says *some* dissent is
+          // newer than the effective value; re-apply the same C-b day rule per
+          // dissent so the badge lands on the newer one(s), not on every card.
           ...s.conflicts.map((k) => ({
             layer: layerOf(k.layer, levels.get(k.layer) ?? 0),
             value: k.content,
             updated: k.updated ?? '',
+            ...(s.fresherDissent === true && newerAtDayGranularity(k.updated, s.sourceUpdated)
+              ? { fresherDissent: true }
+              : {}),
           })),
         ],
       })

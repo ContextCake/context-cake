@@ -44,7 +44,29 @@ Full-text search across every layer, scored and deduplicated by concept ID.
 Arguments: `query` (string, required), `limit` (number, default 10).
 
 Each result is `{ id, title, score, layers, snippet }`, where `layers` are the
-contributing layer names ordered by level (highest first).
+contributing layer names ordered by level (highest first). A result whose
+concept is contested carries two extra fields:
+
+```json
+{
+  "id": "decisions/primary-db",
+  "title": "Primary database",
+  "score": 7.1,
+  "layers": ["team", "company"],
+  "snippet": "…Use Postgres 16 with read replicas…",
+  "contested": true,
+  "conflictSections": 1
+}
+```
+
+`contested: true` means resolving that concept found at least one section where
+another layer disagrees with the effective value; `conflictSections` counts
+those sections. Uncontested hits carry neither field — there is no
+`contested: false`. The annotation is best-effort: only hits with more than one
+contributing layer can be contested, only the top hits (up to five) are
+checked, and a hit whose resolve fails comes back without the fields rather
+than failing or slowing the search. Absence of the flag is therefore not proof
+of agreement — `read_file` gives the authoritative per-section `conflicts`.
 
 ## read_file
 
@@ -61,7 +83,7 @@ The resolved response shape:
   "contributors": [
     { "layer": "personal", "level": 3, "updated": "2026-02-10" },
     { "layer": "team",     "level": 2, "updated": "2026-01-22" },
-    { "layer": "company",  "level": 0, "updated": "2025-11-30" }
+    { "layer": "company",  "level": 0, "updated": "2026-03-05" }
   ],
   "frontmatter": { "type": "decision", "title": "Primary database" },
   "frontmatterProvenance": { "type": "company", "title": "team" },
@@ -73,8 +95,9 @@ The resolved response shape:
       "sourceLayer": "team",
       "sourceUpdated": "2026-01-22",
       "conflicts": [
-        { "layer": "company", "updated": "2025-11-30", "content": "Use Postgres 14." }
-      ]
+        { "layer": "company", "updated": "2026-03-05", "content": "Use Postgres 14." }
+      ],
+      "fresherDissent": true
     },
     {
       "key": "rollback",
@@ -98,7 +121,7 @@ Field by field:
 | `frontmatter` | Merged frontmatter — each key won by the highest-level layer that set it. |
 | `frontmatterProvenance` | Map of each frontmatter key to the layer that supplied the winning value. |
 | `sections[]` | Merged sections in effective order (see below). |
-| `markdown` | The effective concept reassembled as OKF markdown, with conflicts rendered inline as blockquote notes. Added by the server. |
+| `markdown` | The effective concept reassembled as OKF markdown. Each dissent renders under its section as a dated blockquote; a dissent newer than the effective value is marked as such; an empty dissent renders as a suppression note; a suppressed section keeps its heading with a note naming the suppressing layer. Added by the server. |
 
 Each entry in `sections[]`:
 
@@ -109,11 +132,17 @@ Each entry in `sections[]`:
 | `content` | The winning layer's section body. Empty string when suppressed. |
 | `sourceLayer` | The layer whose section won. |
 | `sourceUpdated` | Last-updated date of the winning section. |
-| `conflicts` | Optional. Dissenting layers: `[{ layer, updated, content }]`. Present only when another layer defined the section with different content. |
+| `conflicts` | Optional. Dissenting layers: `[{ layer, updated, content }]`. Present only when another layer defined the section with materially different content — a dissent that differs from the winner only in formatting (trailing whitespace, unordered-bullet marker style, blank-line runs) is not a conflict and is dropped silently. |
+| `fresherDissent` | Optional. `true` when at least one entry in `conflicts` carries an `updated` date strictly newer, by calendar day, than the winning section's `sourceUpdated`. Absent when every dissent is same-day, equal, or older — and whenever either side's date is missing or unparseable (a missing date is never treated as old). |
 | `suppressed` | Optional. `true` when a `{#anchor override=none}` tombstone hid an inherited section. Retained for audit; no conflicts are emitted. |
 
 Where layers disagree on a section, the higher layer's value is primary and the
 dissenters ride along in `conflicts` — the contradiction is surfaced, not hidden.
+Freshness never changes the winner: precedence does. `fresherDissent` exists so
+an agent can notice that the value it is about to quote is older than a dissent
+and raise that with a human instead of silently trusting the cascade. Because
+the comparison is day-granular, a dissent timestamped later within the same
+calendar day does not flag.
 See [Conflicts and provenance](/docs/concepts/conflicts-and-provenance).
 
 ### Raw single-layer read

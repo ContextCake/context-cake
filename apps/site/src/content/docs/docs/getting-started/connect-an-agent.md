@@ -1,9 +1,23 @@
 ---
 title: Connect an agent (MCP)
-description: Point Claude or any MCP client at the resolved cascade.
+description: Connect from the Mac app, or point any MCP client at the resolved cascade yourself.
 ---
 
-Point Claude or any MCP client at the resolved cascade.
+Point Claude or any MCP client at the resolved cascade — from the Mac app, or
+by running the server from a source checkout.
+
+## From the Mac app (recommended)
+
+If you installed [ContextCake for Mac](/install/), you don't build a command
+line by hand. Choose **Connect an agent** in the app, pick your client — Claude
+Code, Codex, Cursor, Claude Desktop, or another MCP client — and the app
+prepares the exact local MCP registration for it, plus a verification step and
+a first prompt to test with. Add at least one source first: an agent needs
+something to query.
+
+The rest of this page is the source route: starting `mcp-server.mjs` from a
+checkout and registering it with your client yourself. The tools an agent sees
+are identical on both paths.
 
 ## Start the server
 

@@ -4,6 +4,7 @@
 import Base from '../layouts/Base.astro';
 import Icon from '../components/Icon.astro';
 import demo from '../data/demo-cascade.json';
+import { appTag, appDownloadUrl } from '../data/app-release';
 import appIconUrl from '../../../../assets/brand/contextcake-app-icon.svg?url';
 
 const primaryDb = demo.concepts.find((concept) => concept.id === 'decisions/primary-db');
@@ -50,7 +51,6 @@ const storyBands = ['choice', 'rationale', 'analytics', 'ownership']
 	}));
 
 const choiceConflict = byKey.choice?.conflicts?.[0] ?? null;
-const appDownloadUrl = 'https://github.com/ContextCake/context-cake/releases/download/app-v0.3.0/ContextCake-0.3.0-arm64.dmg';
 
 const principles = [
 	{
@@ -87,7 +87,7 @@ const capabilities = [
 	{
 		icon: 'share',
 		title: 'Local files and foreign graphs',
-		body: 'Mix OKF-compatible markdown with trusted MCP sources in the same cascade.',
+		body: 'Mix plain Markdown folders, GitHub repositories, OKF bundles, and trusted MCP sources in one cascade.',
 	},
 	{
 		icon: 'branch',
@@ -97,7 +97,7 @@ const capabilities = [
 	{
 		icon: 'send',
 		title: 'A small MCP interface',
-		body: 'Agents can search, read, list, and follow links through four MCP tools.',
+		body: 'Agents search, read, list, follow links, and catch up on team captures through six read-only MCP tools.',
 	},
 	{
 		icon: 'shield',
@@ -297,7 +297,7 @@ const mcpTools = ['search', 'read_file', 'list_concepts', 'get_links', 'find_cap
 				<a class="download-file" href={appDownloadUrl} download>
 					<span>
 						<strong>ContextCake for Mac</strong>
-						<small>app-v0.3.0 · Apple silicon · .dmg</small>
+						<small>{appTag} · Apple silicon · .dmg</small>
 					</span>
 					<Icon name="download" size={24} />
 				</a>

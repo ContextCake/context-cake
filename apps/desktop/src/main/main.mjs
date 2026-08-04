@@ -21,6 +21,7 @@ import { initUpdater } from './updater.mjs'
 import { isEngineOrigin, isTrustedIpcSender } from './navigation.mjs'
 import { getCliStatus, installCli } from './cli-install.mjs'
 import { reportFirstLaunch } from './install-metrics.mjs'
+import { manifestLayerCount, shouldDeferConsentPrompt } from './metrics-consent.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -101,6 +102,7 @@ let settingsPushTimer = null
 let manifestWatchStarted = false
 let lastAppliedManifest = ''
 let installMetricAbortController = null
+let consentPromptDeferred = false
 
 function currentAuthState() {
   return authManager?.getState() ?? { available: false, signedIn: false }
@@ -293,12 +295,31 @@ async function ensureAnonymousMetricsPreference() {
   return enabled
 }
 
+// Deferred first-run consent (see the whenReady bootstrap): once the manifest
+// gains its first layer, ask — and on accept, report immediately, exactly as
+// the boot-time path does. Main-process-only; the renderer is never involved.
+function maybeShowDeferredConsent() {
+  if (!consentPromptDeferred) return
+  if (manifestLayerCount(readManifestConfig()) === 0) return
+  consentPromptDeferred = false
+  ensureAnonymousMetricsPreference()
+    .then(() => {
+      installApplicationMenu()
+      return reportAnonymousFirstLaunch()
+    })
+    .catch(() => {})
+}
+
 function startManifestSync() {
   if (manifestWatchStarted) return
   manifestWatchStarted = true
   fs.watchFile(manifestPath(), { interval: 500 }, () => {
     let serialized
     try { serialized = fs.readFileSync(manifestPath(), 'utf8') } catch { return }
+    // Consent sequencing watches for the first layer regardless of who wrote
+    // it (wizard, settings pull, hand edit) — check before the self-write
+    // short-circuit below.
+    maybeShowDeferredConsent()
     if (serialized === lastAppliedManifest) {
       lastAppliedManifest = ''
       return
@@ -604,10 +625,21 @@ app.whenReady().then(async () => {
   installApplicationMenu()
   initUpdater()
   if (currentAuthState().signedIn) await syncAfterSignIn()
-  // Ask before the first anonymous metric. Update checks and metrics remain
-  // separate choices, and either can be changed later in Settings or the app
-  // menu. Development and smoke builds never show the prompt or report.
-  if (app.isPackaged) await ensureAnonymousMetricsPreference()
+  // Ask before the first anonymous metric — but never before the user has a
+  // cascade: a fresh install with zero layers defers the question until the
+  // manifest watcher sees its first layer land (or until a later launch that
+  // already has one). Installs that arrive with layers — an upgrade, or a
+  // skipped wizard revisited — prompt at boot exactly as before. Update checks
+  // and metrics remain separate choices, and either can be changed later in
+  // Settings or the app menu. Development and smoke builds never show the
+  // prompt or report.
+  if (app.isPackaged) {
+    if (shouldDeferConsentPrompt({ storedPreference: readSettings().anonymousMetrics, manifest: readManifestConfig() })) {
+      consentPromptDeferred = true
+    } else {
+      await ensureAnonymousMetricsPreference()
+    }
+  }
   installApplicationMenu()
   reportAnonymousFirstLaunch().catch(() => {})
   if (process.env.CC_SMOKE === '1') await smokeCheck()

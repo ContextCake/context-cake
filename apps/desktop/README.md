@@ -9,10 +9,18 @@ at `/console/` so its live mode engages unchanged. Spec:
 
 ## Commands
 
+From a fresh clone, build in this order (it mirrors the CI desktop job): the
+console renderer needs its own dependencies before the desktop shell can serve it.
+
 ```bash
-cd apps/desktop
-npm ci
-npm run renderer   # build the console renderer (needed after console changes)
+cd apps/console && npm ci && npm run build:live   # renderer first
+cd ../desktop && npm ci                           # then the desktop shell
+```
+
+Then, from `apps/desktop`:
+
+```bash
+npm run renderer   # rebuild the console renderer (needed after console changes)
 npm run start      # launch the app (dev, expects a prior renderer build)
 npm run dev        # renderer + start
 npm test           # auth storage + settings-sync security tests
@@ -21,8 +29,8 @@ npm run test:cli-status # CLI installation-state detection
 npm run smoke      # boot headlessly, verify the token-guarded service, exit
 npm run smoke:bootfail # startup failures exit instead of hanging
 npm run test:isolation # prove indexing cannot stall the Electron UI thread
-npm run pack       # unpacked .app in dist/ (ad-hoc signed)
-npm run dist       # DMG + zip in dist/ (ad-hoc signed until release secrets exist)
+npm run pack       # unpacked .app in dist/ (ad-hoc signed without Apple secrets)
+npm run dist       # DMG + zip in dist/ (ad-hoc signed without Apple secrets; CI releases are signed + notarized)
 ```
 
 ## Layout
@@ -112,10 +120,11 @@ configured command and must come from a trusted source.
 ## Release
 
 `app-v*` tags drive the release workflow (signing + notarization + GitHub
-Release with `latest-mac.yml` and `SHA256SUMS`). Requires the Apple Developer
-secrets described in `specs/contextcake-distribution/design.md` §8. Until
-those exist, `npm run dist` produces ad-hoc-signed artifacts for local testing
-only — they must not be distributed.
+Release with `latest-mac.yml` and `SHA256SUMS`), using the Apple Developer
+secrets described in `specs/contextcake-distribution/design.md` §8 — published
+releases are Developer ID-signed and notarized. A local `npm run dist` without
+those secrets still produces ad-hoc-signed artifacts, for local testing only —
+they must not be distributed.
 Packaging ships **without accounts** by default: `build/supabase-config.json` is
 generated as `{"accounts":"disabled"}`, no credentials are needed, and the built
 app has no sign-in. To package a build with accounts, set `CC_ACCOUNTS=1` plus

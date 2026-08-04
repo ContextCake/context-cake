@@ -105,6 +105,12 @@ local users on shared Macs.
 | `~/Library/Caches/ContextCake/sources/` | source cache (regenerable) | never (safe to purge) |
 | Keychain (via `safeStorage`) | auth session, integration tokens | never |
 
+Cloned repository sources are deliberately *not* under `~/Library/Caches`: the
+service clones next to the manifest (`~/Library/Application
+Support/ContextCake/.cache/repos/`), because clones are load-bearing source data
+referenced by manifest-relative `layer.path` entries — a cache purge or a
+relocation would orphan those sources.
+
 First run with no manifest → the console SetupWizard (extended per plan) creates
 a starter personal layer and writes a valid manifest — no hand-editing (spec §5).
 

@@ -9,9 +9,15 @@ everywhere.
 |---|---|---|---|
 | `apps/site/` | Marketing site, docs, and `/demo` redirect | The static Astro build is published to the production site/domain | The `Site Production Deploy` workflow builds `apps/site/` and deploys `apps/site/dist/` to the Cloudflare Pages project `contextcake` on `main` changes under `apps/site/`, or via manual dispatch. |
 | `apps/console/` | React application for reading and resolving the cascade | The built `apps/console/dist/` is published to the production Cloudflare Pages project `contextcake-console` | Production is **not** "merge to `main`". Production deploy happens when a `console-v*` tag is pushed, or when someone runs `wrangler pages deploy dist --project-name=contextcake-console --branch=main` manually. |
-| `apps/desktop/` | Electron Mac application | A signed, notarized DMG/zip and updater metadata are published in the GitHub Release for an `app-v*` tag | The `App Release` workflow verifies the tag is on `main` and matches `apps/desktop/package.json`, then signs, notarizes, verifies, and publishes the artifacts. With public Supabase configuration but without the complete Apple credential set, it produces unsigned inspection artifacts only; missing Supabase configuration fails packaging. |
+| `apps/desktop/` | Electron Mac application | A signed, notarized DMG/zip and updater metadata are published in the GitHub Release for an `app-v*` tag | The `App Release` workflow verifies the tag is on `main` and matches `apps/desktop/package.json`, then signs, notarizes, verifies, and publishes the artifacts. Releases ship without accounts, so no Supabase configuration is required; without the complete Apple credential set the workflow builds unsigned inspection artifacts and publishes no release. |
 | `packages/core/` | Node-based engine, MCP server, CLI, write path | There is no hosted "live" environment by default | "Live" here means a tagged/released version people can clone and run, or another distribution channel defined in `specs/contextcake-distribution/spec.md`. |
 | `apps/control-surface/` and local playground/demo assets | Local demo/prototype surfaces | Served locally or embedded into the site | Not production by themselves. They are live only if folded into the site or another shipped surface. |
+
+**GitHub Releases rule:** any GitHub Release that is not an `app-v*` app release
+must be published as a prerelease or draft. The desktop updater reads the
+repo-wide `releases/latest` feed (`apps/desktop/src/main/updater.mjs:16-21`); if
+a console or engine release becomes "latest", `latest-mac.yml` 404s and every
+installed app's update check quietly fails until the next app release.
 
 ## Operational meanings
 
@@ -85,18 +91,15 @@ Do not answer "yes" without naming the surface and the release state.
 ### `apps/desktop/`
 
 1. Merge the PR to `main` and verify desktop tests plus both smoke checks.
-2. Apply the reviewed Supabase migrations, run database advisors, keep anonymous
-   sign-ins disabled, enable GitHub, and allow `contextcake://auth/callback`.
-3. Add the public `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` release secrets;
-   confirm the key is publishable/legacy-anon, never secret/service-role.
-4. Before tagging, use a packaged build against the hosted project to complete
-   GitHub sign-in and callback, verify a settings round trip from a second macOS
-   user, and delete a test account while confirming both its Auth user and
-   settings row are removed.
-5. Set `apps/desktop/package.json` to the release version and push the matching
+2. Set `apps/desktop/package.json` to the release version and push the matching
    `app-v*` tag from a commit reachable from `main`.
-6. Confirm the workflow's codesign, Gatekeeper, notarization, stapling, checksums,
+3. Confirm the workflow's codesign, Gatekeeper, notarization, stapling, checksums,
    and publication steps pass, then test the downloaded artifact and updater feed.
+
+Releases ship without accounts by default, so no Supabase setup is part of this
+checklist. An accounts-enabled build (`CC_ACCOUNTS=1`) is a deliberate exception:
+follow `apps/desktop/README.md` and complete the manual acceptance checks in
+`docs/release-gates.md` before distributing one.
 
 ### engine / MCP / CLI
 

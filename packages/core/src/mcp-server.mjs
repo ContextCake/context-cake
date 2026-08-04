@@ -82,7 +82,7 @@ const readOnlyAnnotations = {
 const tools = [
   {
     name: "search",
-    description: "Search the layer cascade. Returns one entry per concept ID with the layers that contribute and a snippet.",
+    description: "Search the layer cascade. Returns one entry per concept ID with the layers that contribute and a snippet. A hit whose layers disagree carries `contested: true` and `conflictSections` (how many resolved sections have dissent) — treat such a hit as unsettled and read the resolved concept before answering from the snippet.",
     inputSchema: {
       type: "object",
       properties: {
@@ -95,7 +95,7 @@ const tools = [
   },
   {
     name: "read_file",
-    description: "Read the resolved (effective) concept across the cascade, with provenance. Pass `layer` to read one layer's raw concept instead.",
+    description: "Read the resolved (effective) concept across the cascade, with provenance. Sections may carry `conflicts[]` — each dissent names its layer, `updated` date, and full content. Surface disagreement with its layers and dates instead of silently reconciling it, and weigh freshness by comparing the section's `sourceUpdated` against each dissent's `updated`; `fresherDissent: true` marks a section where a dissent is newer than the effective value. Pass `layer` to read one layer's raw concept instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -119,7 +119,7 @@ const tools = [
   },
   {
     name: "get_links",
-    description: "Return outgoing and incoming links for a concept, resolved against the effective graph.",
+    description: "Return outgoing and incoming links for a concept, resolved against the effective graph. Links are extracted from effective (winning) section content only — a link that appears only in a dissenting `conflicts[]` entry is not followed.",
     inputSchema: {
       type: "object",
       properties: {

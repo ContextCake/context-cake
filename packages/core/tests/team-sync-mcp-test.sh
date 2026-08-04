@@ -404,6 +404,24 @@ const ops = read.sections.find((s) => s.key === 'ops');
 if (ops.fresherDissent || ops.conflicts) throw new Error('inherited section must carry neither conflicts nor the flag');
 " "$out" || fail "read_file markdown renderer (dissent blocks / newer marker / suppression)" "$out"
 
+# ---- search annotation: contested/conflictSections on multi-layer hits ----------
+# "Postgres SingleStore" matches markdown-demo in two layers (team says
+# SingleStore, company says Postgres) and solo in one. Only the multi-layer,
+# genuinely conflicted hit may carry the annotation; the single-layer hit
+# must carry nothing — no contested:false noise.
+out="$(rpc --manifest "$tmpdir/md.json" -- '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"query":"Postgres SingleStore"}}}')"
+node -e "
+const lines = process.argv[1].trim().split('\n');
+const rows = JSON.parse(JSON.parse(lines[1]).result.content[0].text);
+const demo = rows.find((r) => r.id === 'decisions/markdown-demo');
+if (!demo) throw new Error('conflicted concept should match: ' + JSON.stringify(rows));
+if (demo.contested !== true) throw new Error('multi-layer conflicted hit must be contested: ' + JSON.stringify(demo));
+if (demo.conflictSections !== 2) throw new Error('engine + retired = 2 conflict sections, got: ' + JSON.stringify(demo));
+const solo = rows.find((r) => r.id === 'decisions/solo');
+if (!solo) throw new Error('single-layer concept should match: ' + JSON.stringify(rows));
+if ('contested' in solo || 'conflictSections' in solo) throw new Error('single-layer hit must carry no contested noise: ' + JSON.stringify(solo));
+" "$out" || fail "search contested annotation" "$out"
+
 # ---- capture pack smoke ---------------------------------------------------------
 pack="$repo_root/examples/team-sync-pack"
 node -e "

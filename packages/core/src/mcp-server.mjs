@@ -435,7 +435,34 @@ async function confirmCaptureTool({ token }) {
 // ---- tools ----------------------------------------------------------------
 
 async function search({ query, limit = 10 }) {
-  return await searchConcepts(layers, { query, limit });
+  const hits = await searchConcepts(layers, { query, limit });
+  await annotateContested(hits);
+  return hits;
+}
+
+// Contested annotation lives in the handler, not search.mjs — the ranking
+// module stays importable and eval-scored on its own. Only hits that matched
+// in more than one layer can carry cross-layer dissent; resolve up to 5 of
+// those in parallel and attach `contested: true` + `conflictSections` when the
+// resolved concept has conflict-bearing sections. Uncontested hits carry
+// nothing. A resolve that throws is skipped silently: annotation must never
+// fail or slow a search.
+const CONTESTED_RESOLVE_CAP = 5;
+
+async function annotateContested(hits) {
+  const candidates = hits.filter((hit) => hit.layers.length > 1).slice(0, CONTESTED_RESOLVE_CAP);
+  await Promise.all(candidates.map(async (hit) => {
+    try {
+      const resolved = await resolveConcept(hit.id, layers);
+      const conflictSections = resolved?.sections.filter((s) => s.conflicts?.length).length ?? 0;
+      if (conflictSections > 0) {
+        hit.contested = true;
+        hit.conflictSections = conflictSections;
+      }
+    } catch {
+      // fail-silent by contract
+    }
+  }));
 }
 
 async function readFileTool({ concept_id, layer }) {

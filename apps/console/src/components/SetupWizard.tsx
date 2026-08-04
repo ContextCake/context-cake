@@ -525,7 +525,13 @@ export function SetupWizard({
   addingSource?: boolean
 }) {
   const { reload } = useStore()
-  const steps = addingSource ? ADD_STEPS : FIRST_RUN_STEPS
+  // Frozen at mount: adding the first source flips the shell's live
+  // `sources.length > 0` mid-flow (reload() lands while the success fetch is
+  // in flight), and letting that swap the step array under a live stepIdx
+  // blanks the dialog. Each open mounts a fresh wizard, so capture-once is
+  // the correct lifecycle, not a workaround.
+  const [isAdding] = useState(addingSource)
+  const steps = isAdding ? ADD_STEPS : FIRST_RUN_STEPS
   const [stepIdx, setStepIdx] = useState(0)
   const step = steps[stepIdx]
   const [added, setAdded] = useState<AddedLayer[]>([])
@@ -949,8 +955,8 @@ export function SetupWizard({
           <StepShell
             stepIndex={steps.length - 1}
             stepCount={steps.length}
-            title={addingSource ? 'Source added' : "You're set up"}
-            subtitle={addingSource ? 'It joins the cascade as it indexes.' : 'Your cascade is live.'}
+            title={isAdding ? 'Source added' : "You're set up"}
+            subtitle={isAdding ? 'It joins the cascade as it indexes.' : 'Your cascade is live.'}
             footer={(
               <div style={css('display:flex; justify-content:flex-end; gap:8px; width:100%;')}>
                 <button type="button" style={btnGhost()} onClick={onClose}>Done</button>
@@ -960,7 +966,7 @@ export function SetupWizard({
               </div>
             )}
           >
-            {added.length > 0 && addingSource && (
+            {added.length > 0 && isAdding && (
               <ul style={css('margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px;')}>
                 {added.map((a) => (
                   <li

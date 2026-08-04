@@ -330,6 +330,24 @@ describe('SetupWizard first run', () => {
     expect(onConnectAgent).toHaveBeenCalledOnce()
   })
 
+  it('survives the shell flipping addingSource mid-flow once the first source lands', async () => {
+    // App passes addingSource={sources.length > 0}, which flips true the
+    // moment reload() picks up the source added at step 2. The wizard's step
+    // machine is frozen at mount — the flip must not blank the dialog.
+    await act(async () => root.render(<SetupWizard addingSource={false} onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/work-vault')
+    await act(async () => button('Next').click())
+    await act(async () => root.render(<SetupWizard addingSource={true} onClose={vi.fn()} />))
+
+    expect(container.textContent).toContain('Add a team source')
+    await act(async () => button('Skip').click())
+    await act(async () => button('Skip for now').click())
+    await act(async () => button('Finish').click())
+    expect(container.textContent).toContain("You're set up")
+  })
+
   it('does not tell users to add content while their source is still indexing', async () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
       JSON.stringify(url === '/api/sources' && init?.method === 'POST'

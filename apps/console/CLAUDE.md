@@ -41,12 +41,25 @@ and `npm test`; CI runs both. dev/build/typecheck/test all regenerate
   `resolveConflict`, `send`, view/selection setters) in one context. Callbacks
   read the freshest values through refs so they don't re-subscribe. State is
   in-memory only — reloads reset it.
-- **Views** — `src/views/` (Canvas, Overview, Triage, Conflicts, Concepts, Files).
-  `App.tsx` is the shell: topbar + subbar + routed view, plus the Triage
-  S/R/D keyboard handler. The canvas view stays full-height inside the chrome.
-  Files is live-mode only: it browses and edits the real files behind each
-  layer through the engine's `/api/files` + `/api/file`, with a rendered/raw
-  toggle for Markdown.
+- **Views** — `src/views/` (Canvas, Overview, Sources, Triage, Conflicts,
+  Concepts, Files). `App.tsx` is the shell: topbar + subbar + routed view, plus
+  the Triage S/R/D keyboard handler. The canvas view stays full-height inside
+  the chrome. Files is live-mode only: it browses and edits the real files
+  behind each layer through the engine's `/api/files` + `/api/file`, with a
+  rendered/raw toggle for Markdown. Sources manages the layers themselves —
+  rename + re-level (PATCH `/api/sources`), remove with confirm (DELETE),
+  Sync-now for github kinds (POST `/api/sources/sync`) — read-only in demo
+  mode; `live: true` layers get a capture warning on rename/remove.
+- **Setup wizard** — `src/components/SetupWizard.tsx` has two shapes from one
+  component: the first-run guided narrative (personal → optional team →
+  optional company MCP → review) and a one-step add-a-source mode (four-kind
+  picker). Names are derived (folder basename / repo slug / MCP command
+  target) but always editable; levels are steppers, not constants. GitHub
+  sources fork on a public/private radio: public → `github-rest` (no clone,
+  never sends `auth`/`apiBase`), private → the `github` clone kind. The mode
+  is frozen at mount (`isAdding`) because the shell's `addingSource` prop
+  flips live when the first add lands — don't "simplify" that back to the
+  prop or the step machine changes length under a mounted step index.
 - **Theming** — every color is a CSS variable in `src/styles.css` (light
   soft-control-plane default, dark primary surface under
   `:root[data-theme="dark"]`). `C` in `src/theme.ts` holds the variable references; `css()` parses inline

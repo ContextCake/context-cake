@@ -512,7 +512,9 @@ function openMergeModal(sectionKey) {
     ...s.conflicts.map((c) => ({ layer: c.layer, updated: c.updated, content: c.content, winner: false })),
   ];
   const layers = [...new Set(versions.map((v) => v.layer))];
-  mergeCtx = { conceptId: r.id, sectionKey, sectionName, layers };
+  // Capture each target file's mtime as the modal opens, so the server can 409
+  // instead of overwriting an edit that landed while the user was reading.
+  mergeCtx = { conceptId: r.id, sectionKey, sectionName, layers, modified: readLayerMtimes(r.id, layers) };
 
   document.getElementById("mergeTitle").textContent = sectionName;
   document.getElementById("mergeSub").textContent = `${r.id} · {#${sectionKey}}`;
@@ -552,18 +554,34 @@ function closeMergeModal() {
   mergeCtx = null;
 }
 
+// The mtimes behind the merge modal's versions, keyed by layer. A layer with
+// no file behind it (an MCP dissent) simply stays out of the map — the server
+// skips those targets anyway. Never rejects: a missing mtime just means that
+// layer's write goes unguarded, the pre-guard behavior.
+async function readLayerMtimes(conceptId, layers) {
+  const out = {};
+  await Promise.all(layers.map(async (layer) => {
+    try {
+      const f = await fetchJSON(`/api/file?path=${encodeURIComponent(`${layer}/${conceptId}.md`)}`);
+      if (f?.modified) out[layer] = f.modified;
+    } catch { /* no editable file behind this layer */ }
+  }));
+  return out;
+}
+
 async function applyMerge() {
   if (!mergeCtx) return;
-  const { conceptId, sectionKey, sectionName, layers } = mergeCtx;
+  const { conceptId, sectionKey, sectionName, layers, modified: modifiedPromise } = mergeCtx;
   const content = document.getElementById("mergeText").value;
   const btn = document.getElementById("mergeApply");
   btn.disabled = true;
 
   let res;
   try {
+    const modified = await modifiedPromise;
     res = await fetchJSON("/api/section", {
       method: "PUT",
-      body: JSON.stringify({ conceptId, sectionKey, layers, content }),
+      body: JSON.stringify({ conceptId, sectionKey, layers, content, modified }),
     });
   } catch (err) {
     toast(`Resolve failed: ${err.message}`);

@@ -6,8 +6,20 @@ export interface Layer {
 
 export interface Source {
   name: string; kind: 'mcp' | 'okf-local'; layer: LayerId
-  /** 'degraded': answering, but its last request failed — stale or partial. */
-  coverage: number; focus: string; status: 'serving' | 'synced' | 'degraded' | 'error'
+  /** 'degraded': answering, but its last request failed — stale or partial.
+   *  'empty': listed cleanly yet serves zero concepts — never painted green. */
+  coverage: number; focus: string; status: 'serving' | 'synced' | 'degraded' | 'error' | 'empty'
+  /** Raw engine kind ('okf-local' | 'files' | 'github' | 'mcp') for management UI. */
+  sourceKind: string
+  level: number
+  conceptCount: number
+  /** Git remote a clone-backed layer came from; enables Sync alongside kind 'github'. */
+  origin?: string | null
+  error?: string | null
+  lastSuccessAt?: string | null
+  lastErrorAt?: string | null
+  /** The manifest's team-capture layer (`live: true`) — removal disables capture. */
+  live?: boolean
 }
 
 export interface Signal {
@@ -17,7 +29,11 @@ export interface Signal {
   reasons: [string, string][]
 }
 
-export interface Contribution { layer: LayerId; value: string; updated: string; note?: string }
+export interface Contribution {
+  layer: LayerId; value: string; updated: string; note?: string
+  /** This dissent is strictly newer than the effective value (day granularity, C-b). */
+  fresherDissent?: boolean
+}
 export interface Conflict {
   id: string; concept: string; section: string; title: string
   status: 'open' | 'resolved'; contributions: Contribution[]; winner: LayerId
@@ -30,6 +46,8 @@ export interface ConceptSection {
   key?: string; updated?: string | null; suppressed?: boolean
   /** All dissenting layers (surfaced, not hidden). */
   dissents?: Dissent[]
+  /** At least one dissent is strictly newer than the effective value (C-b). */
+  fresherDissent?: boolean
 }
 export interface Concept {
   id: string; title: string; type: string; layers: LayerId[]

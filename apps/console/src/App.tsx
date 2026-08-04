@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { Canvas } from './views/Canvas'
 import { Overview } from './views/Overview'
+import { Sources } from './views/Sources'
 import { Triage } from './views/Triage'
 import { Conflicts } from './views/Conflicts'
 import { Concepts } from './views/Concepts'
@@ -219,6 +220,7 @@ export function App() {
             ) : (
               <main className="cc-main">
                 {view === 'overview' && <Overview />}
+                {view === 'sources' && <Sources onAddSource={mode === 'live' ? reopenWizard : undefined} />}
                 {view === 'triage' && <Triage />}
                 {view === 'conflicts' && <Conflicts />}
                 {view === 'concepts' && <Concepts />}

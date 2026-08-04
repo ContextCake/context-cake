@@ -10,10 +10,10 @@ import {
 } from './api'
 import type { LayerId, RouteId } from './theme'
 
-export type ViewId = 'canvas' | 'overview' | 'triage' | 'conflicts' | 'concepts' | 'files'
+export type ViewId = 'canvas' | 'overview' | 'sources' | 'triage' | 'conflicts' | 'concepts' | 'files'
 export type TriageTab = 'review' | 'captured' | 'ignored'
 
-const VIEW_IDS: ViewId[] = ['canvas', 'overview', 'triage', 'conflicts', 'concepts', 'files']
+const VIEW_IDS: ViewId[] = ['canvas', 'overview', 'sources', 'triage', 'conflicts', 'concepts', 'files']
 
 /** Parse the URL hash into a view + optional concept id (deep link). */
 function parseHash(): { view?: ViewId; concept?: string } {

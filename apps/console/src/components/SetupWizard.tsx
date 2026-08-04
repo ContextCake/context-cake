@@ -347,7 +347,7 @@ const REPO_ACCESS_CHOICES: Array<{ value: RepoAccess; title: string; detail: str
 /** Level defaults per kind when adding a single source (3/3/2/0). */
 const ADD_LEVEL_DEFAULTS: Record<SourceKind, number> = { files: 3, local: 3, github: 2, mcp: 0 }
 
-function LevelStepper({ id, value, onChange }: { id: string; value: number; onChange: (v: number) => void }) {
+export function LevelStepper({ id, value, onChange }: { id: string; value: number; onChange: (v: number) => void }) {
   const stepBtn = (disabled: boolean): React.CSSProperties => css(
     `width:30px; height:34px; display:grid; place-items:center; border-radius:8px; border:1px solid ${C.line}; background:${disabled ? C.neutralFill : C.surface}; color:${disabled ? C.faint : C.body}; cursor:${disabled ? 'not-allowed' : 'pointer'}; font:inherit; font-size:15px; line-height:1;`,
   )

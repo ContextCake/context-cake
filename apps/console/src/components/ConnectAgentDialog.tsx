@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { DEFAULT_HARNESS_ID, HARNESS_DEFINITIONS, harnessById, type HarnessIcon, type HarnessId } from '../connect-agent'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { DEFAULT_COMMAND, DEFAULT_HARNESS_ID, buildHarnessDefinitions, harnessById, type HarnessIcon, type HarnessId } from '../connect-agent'
 
 type CopyTarget = 'prompt' | 'setup' | 'verify' | 'first-prompt'
 type CopyState = { target: CopyTarget; kind: 'copied' | 'manual' | 'failed' } | null
@@ -32,28 +32,51 @@ function copyLabel(state: CopyState, target: CopyTarget, idle: string): string {
   return 'Copy failed'
 }
 
-function cliCopy(status: CliStatus): { title: string; detail: string; tone: string } {
+function cliCopy(status: CliStatus, shimInUse: boolean): { title: string; detail: string; tone: string } {
   if (status === 'installed') return { title: 'Command-line tool installed', detail: '`contextcake mcp` is ready for local clients.', tone: 'ready' }
-  if (status === 'stale') return { title: 'Command-line tool needs refreshing', detail: 'Reconnect it to this copy of ContextCake before continuing.', tone: 'warn' }
-  if (status === 'conflict') return { title: 'Another command uses this name', detail: 'ContextCake will not replace a real file at `/usr/local/bin/contextcake`.', tone: 'error' }
-  if (status === 'blocked') return { title: 'Move ContextCake to Applications', detail: 'Reopen the installed app before adding its command-line tool.', tone: 'warn' }
+  if (status === 'stale') {
+    return shimInUse
+      ? { title: 'Command-line tool needs refreshing', detail: 'The commands below use the app’s built-in path, so connections keep working. Reinstall the tool to fix the stale `contextcake` shortcut.', tone: 'warn' }
+      : { title: 'Command-line tool needs refreshing', detail: 'Reconnect it to this copy of ContextCake before continuing.', tone: 'warn' }
+  }
+  if (status === 'conflict') {
+    return shimInUse
+      ? { title: 'Another command uses this name', detail: 'ContextCake will not replace the real file at `/usr/local/bin/contextcake`. The commands below use the app’s full path instead.', tone: 'warn' }
+      : { title: 'Another command uses this name', detail: 'ContextCake will not replace a real file at `/usr/local/bin/contextcake`.', tone: 'error' }
+  }
+  if (status === 'blocked') return { title: 'Move ContextCake to Applications', detail: 'ContextCake is running from the disk image or a temporary quarantine location, so it has no lasting command path yet. Move it to Applications, reopen it, then connect.', tone: 'warn' }
   if (status === 'development') return { title: 'Development build', detail: 'CLI installation is available in packaged builds. Generated production setup remains unchanged.', tone: 'neutral' }
   if (status === 'loading') return { title: 'Checking command-line tool…', detail: 'This only inspects ContextCake’s own command.', tone: 'neutral' }
-  return { title: 'Install the command-line tool', detail: 'The harness commands below depend on `contextcake mcp`.', tone: 'warn' }
+  return shimInUse
+    ? { title: 'Command-line tool is optional', detail: 'The commands below already use ContextCake’s built-in path. Install the tool if you prefer the short `contextcake` name.', tone: 'neutral' }
+    : { title: 'Install the command-line tool', detail: 'The harness commands below depend on `contextcake mcp`.', tone: 'warn' }
+}
+
+// The absolute shim path stands in for the PATH name only in the states where
+// the `contextcake` name is unusable. `blocked` (translocated/DMG) is
+// deliberately excluded — that path vanishes when the image unmounts, so it
+// must never be written into a harness configuration; the step-1 gate asks the
+// user to move the app to Applications instead.
+function effectiveCommand(status: CliStatus, shimPath: string | null): string {
+  if (shimPath && (status === 'missing' || status === 'stale' || status === 'conflict')) return shimPath
+  return DEFAULT_COMMAND
 }
 
 export function ConnectAgentDialog({ hasSources, onClose, onOpenSetup }: ConnectAgentDialogProps) {
   const [activeId, setActiveId] = useState<HarnessId>(DEFAULT_HARNESS_ID)
   const [copyState, setCopyState] = useState<CopyState>(null)
   const [cliStatus, setCliStatus] = useState<CliStatus>('loading')
+  const [shimPath, setShimPath] = useState<string | null>(null)
   const [cliBusy, setCliBusy] = useState(false)
   const [cliNotice, setCliNotice] = useState('')
   const dialogRef = useRef<HTMLDivElement>(null)
   const firstTabRef = useRef<HTMLButtonElement>(null)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const previousFocus = useRef<HTMLElement | null>(null)
-  const harness = harnessById(activeId)
   const desktopCli = window.__CC_DESKTOP?.cli
+  const command = effectiveCommand(cliStatus, shimPath)
+  const definitions = useMemo(() => buildHarnessDefinitions(command), [command])
+  const harness = harnessById(activeId, definitions)
 
   useEffect(() => {
     previousFocus.current = document.activeElement as HTMLElement | null
@@ -66,7 +89,11 @@ export function ConnectAgentDialog({ hasSources, onClose, onOpenSetup }: Connect
     if (!hasSources || !desktopCli) return
     let live = true
     desktopCli.getStatus()
-      .then((result) => { if (live) setCliStatus(result.status) })
+      .then((result) => {
+        if (!live) return
+        setCliStatus(result.status)
+        setShimPath(result.shimPath ?? null)
+      })
       .catch(() => { if (live) setCliStatus('missing') })
     return () => { live = false }
   }, [desktopCli, hasSources])
@@ -105,6 +132,7 @@ export function ConnectAgentDialog({ hasSources, onClose, onOpenSetup }: Connect
     try {
       const result = await desktopCli.install()
       setCliStatus(result.status)
+      setShimPath(result.shimPath ?? null)
       setCliNotice(result.message)
     } catch {
       setCliNotice('ContextCake could not start the installer. Use ContextCake → Install Command Line Tool… and try again.')
@@ -139,7 +167,7 @@ export function ConnectAgentDialog({ hasSources, onClose, onOpenSetup }: Connect
     onOpenSetup()
   }
 
-  const cli = cliCopy(cliStatus)
+  const cli = cliCopy(cliStatus, command !== DEFAULT_COMMAND)
   const canInstall = cliStatus === 'missing' || cliStatus === 'stale'
 
   return (
@@ -173,7 +201,7 @@ export function ConnectAgentDialog({ hasSources, onClose, onOpenSetup }: Connect
         ) : (
           <>
             <div className="cc-harness-tabs" role="tablist" aria-label="AI client">
-              {HARNESS_DEFINITIONS.map((item, index) => (
+              {definitions.map((item, index) => (
                 <button
                   key={item.id}
                   ref={index === 0 ? firstTabRef : undefined}

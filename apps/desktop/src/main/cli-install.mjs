@@ -92,7 +92,7 @@ export async function installCli(win, { showSuccess = true } = {}) {
         detail: 'The command path changed while ContextCake was installing. Inspect it yourself, then try again.',
       })
       return conflict.status === 'missing'
-        ? { status: 'conflict', message: 'The command path changed during installation and was not replaced.' }
+        ? { status: 'conflict', message: 'The command path changed during installation and was not replaced.', shimPath: cliShim }
         : conflict
     }
     if (err && (err.code === 'EACCES' || err.code === 'EPERM')) {
@@ -106,13 +106,13 @@ export async function installCli(win, { showSuccess = true } = {}) {
         cancelId: 1,
       })
       if (response === 0) clipboard.writeText(cmd)
-      return { status: 'missing', message: 'Administrator approval is required. The finishing command was offered for copying.' }
+      return { status: 'missing', message: 'Administrator approval is required. The finishing command was offered for copying.', shimPath: cliShim }
     }
     await dialog.showMessageBox(win, {
       type: 'error',
       message: 'Could not install the command line tool.',
       detail: String(err?.message ?? err),
     })
-    return { status: 'missing', message: 'The command-line tool could not be installed. Use the ContextCake app menu to try again.' }
+    return { status: 'missing', message: 'The command-line tool could not be installed. Use the ContextCake app menu to try again.', shimPath: cliShim }
   }
 }

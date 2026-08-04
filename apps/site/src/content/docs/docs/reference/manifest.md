@@ -214,7 +214,7 @@ disk merge section-for-section instead of splitting into parallel sections.
   "source": "github",
   "repo": "acme/payments",
   "paths": ["CLAUDE.md", "docs/**"],
-  "auth": "keychain:github",
+  "auth": { "tokenEnv": "GITHUB_TOKEN" },
   "cache": { "ttlSeconds": 900 }
 }
 ```
@@ -245,9 +245,14 @@ sources.
 
 The manifest never holds a token. `auth` may only *name* one:
 
-- `"keychain:<alias>"` — the desktop app resolves the alias from the macOS
-  Keychain and injects the secret at build time. The engine never opens a keychain.
-- `{"tokenEnv": "NAME"}` — for CLI and CI runs, read from that environment variable.
+- `{"tokenEnv": "NAME"}` — read the token from that environment variable. This
+  is the authenticated route that works today, for headless, CLI, and CI runs.
+- `"keychain:<alias>"` — reserved for a host application that resolves the alias
+  and injects the secret when it builds the sources; the engine never opens a
+  keychain itself. The Mac app does not perform this injection yet — in the app,
+  an alias resolves to nothing and the layer reads anonymously. To read a
+  private repository from the app today, add it as a repository source instead:
+  the app clones it with your existing git credentials or SSH key.
 
 The object form must contain exactly the one `tokenEnv` field. Extra fields and
 every other shape are rejected outright, so a raw credential cannot hide beside

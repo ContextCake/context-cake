@@ -31,7 +31,8 @@ Anonymous usage metrics never include files or knowledge content, file names or
 paths, prompts, resolved answers, account details, a device ID, or a persistent
 remote identifier. The request has no event body and ContextCake does not set a
 cookie. GitHub receives the ordinary request metadata it already receives for
-app downloads and update checks.
+app downloads and update checks, including the network address used to connect;
+see [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 ## Your choice
 
@@ -39,6 +40,10 @@ The packaged app asks before it shares its first anonymous metric. Choosing
 **Don't Share** sends nothing. You can change the choice at any time under
 **Settings → General → Anonymous usage metrics** or with **Share Anonymous Usage
 Metrics** in the ContextCake application menu.
+
+This preference is local to the Mac's ContextCake application-support directory.
+It is not included in account settings sync, so a choice made on another Mac
+cannot enable metrics without the local first-run choice.
 
 Turning the setting off stops an unreported first launch, retries after a failed
 request, and any future anonymous metrics. An aggregate count already recorded

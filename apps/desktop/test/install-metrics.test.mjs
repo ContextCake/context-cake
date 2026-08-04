@@ -78,3 +78,50 @@ test('failed requests do not mark the launch as reported', async (t) => {
   assert.equal(fs.existsSync(path.join(configDir, INSTALL_METRIC_MARKER)), false)
   assert.throws(() => installMetricUrl('../not-a-version'), /Invalid ContextCake version/)
 })
+
+test('overlapping triggers coalesce into one download', async (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-install-metric-'))
+  t.after(() => fs.rmSync(configDir, { recursive: true, force: true }))
+  let finish
+  let requests = 0
+  const fetchImpl = () => {
+    requests += 1
+    return new Promise((resolve) => { finish = resolve })
+  }
+  const options = {
+    isPackaged: true,
+    version: '0.4.0',
+    configDir,
+    metricsEnabled: true,
+    fetchImpl,
+  }
+
+  const first = reportFirstLaunch(options)
+  const second = reportFirstLaunch(options)
+  assert.equal(requests, 1)
+  finish({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(0) })
+  assert.deepEqual(await Promise.all([first, second]), [{ status: 'reported' }, { status: 'reported' }])
+  assert.equal(requests, 1)
+})
+
+test('opting out cancels an in-flight download without writing a marker', async (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-install-metric-'))
+  t.after(() => fs.rmSync(configDir, { recursive: true, force: true }))
+  const controller = new AbortController()
+  const fetchImpl = (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+  })
+
+  const pending = reportFirstLaunch({
+    isPackaged: true,
+    version: '0.4.0',
+    configDir,
+    metricsEnabled: true,
+    fetchImpl,
+    signal: controller.signal,
+  })
+  controller.abort()
+
+  assert.deepEqual(await pending, { status: 'cancelled' })
+  assert.equal(fs.existsSync(path.join(configDir, INSTALL_METRIC_MARKER)), false)
+})

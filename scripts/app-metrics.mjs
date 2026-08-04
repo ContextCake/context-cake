@@ -63,18 +63,24 @@ export function renderMarkdown(report) {
   return lines.join('\n') + '\n'
 }
 
-async function loadReleases({ repository, token, fetchImpl = globalThis.fetch }) {
-  const response = await fetchImpl(`https://api.github.com/repos/${repository}/releases?per_page=100`, {
-    headers: {
-      accept: 'application/vnd.github+json',
-      'x-github-api-version': '2022-11-28',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-  })
-  if (!response.ok) {
-    throw new Error(`GitHub releases request failed: HTTP ${response.status}`)
+export async function loadReleases({ repository, token, fetchImpl = globalThis.fetch }) {
+  const releases = []
+  for (let page = 1; ; page += 1) {
+    const response = await fetchImpl(`https://api.github.com/repos/${repository}/releases?per_page=100&page=${page}`, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'x-github-api-version': '2022-11-28',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!response.ok) {
+      throw new Error(`GitHub releases request failed: HTTP ${response.status}`)
+    }
+    const batch = await response.json()
+    if (!Array.isArray(batch)) throw new Error('GitHub releases request returned an invalid response.')
+    releases.push(...batch)
+    if (batch.length < 100) return releases
   }
-  return response.json()
 }
 
 async function main() {

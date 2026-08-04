@@ -99,6 +99,8 @@ surfaces we control — so users don't drift onto stale versions.
 - [ ] WHEN a user disables anonymous usage metrics THE SYSTEM SHALL stop any
   unreported first launch, failed-request retries, and future anonymous metrics
   without disabling update checks or local product functionality.
+- [ ] WHEN account settings sync runs THE SYSTEM SHALL keep the anonymous-metrics
+  choice local so a remote setting cannot enable a first-launch request.
 
 ### Self-update (owned channels: standalone binary, native GUI app)
 - [ ] WHEN a newer version is available on an owned channel THE SYSTEM SHALL download, **verify**, and

@@ -144,7 +144,8 @@ from the same engine + manifest contract; it is a packaging task, not new code.
    (disclosed in `docs/reference/updates-and-privacy` on the site, per spec §5).
    The one-time first-launch request has its own explicit first-run choice and
    Settings/application-menu toggle. It is disclosed beside the updater behavior
-   but does not share the updater preference.
+   but does not share the updater preference. The choice stays local rather than
+   entering account settings sync, so a remote preference cannot bypass consent.
 4. Package-managed installs are never self-mutated (spec §5): the cask relies
    on `brew upgrade` (`auto_updates true` so brew defers to the app updater);
    the CLI prints the correct upgrade hint for its detected channel.

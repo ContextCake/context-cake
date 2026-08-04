@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { renderMarkdown, summarizeAppMetrics } from './app-metrics.mjs'
+import { loadReleases, renderMarkdown, summarizeAppMetrics } from './app-metrics.mjs'
 
 const releases = [
   {
@@ -40,4 +40,26 @@ test('summarizes app release assets without pretending downloads are unique peop
   assert.match(markdown, /directional, not unique-person counts/)
   assert.doesNotMatch(markdown, /app-v9\.9\.9/)
   assert.doesNotMatch(markdown, /console-v/)
+})
+
+test('loads every GitHub releases page before calculating totals', async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({ tag_name: `app-v0.0.${index}` }))
+  const calls = []
+  const loaded = await loadReleases({
+    repository: 'ContextCake/context-cake',
+    token: 'test-token',
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options })
+      return {
+        ok: true,
+        status: 200,
+        json: async () => url.endsWith('page=1') ? firstPage : [{ tag_name: 'app-v1.0.0' }],
+      }
+    },
+  })
+
+  assert.equal(loaded.length, 101)
+  assert.equal(calls.length, 2)
+  assert.match(calls[1].url, /page=2$/)
+  assert.equal(calls[0].options.headers.authorization, 'Bearer test-token')
 })

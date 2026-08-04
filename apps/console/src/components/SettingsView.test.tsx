@@ -137,7 +137,7 @@ describe('SettingsView', () => {
 
     expect(container.textContent).toContain('Anonymous usage metrics')
     expect(container.textContent).toContain('We use this to improve the app')
-    expect(container.textContent).toContain('We never collect your files')
+    expect(container.textContent).toContain('The request never includes your files')
     const toggle = container.querySelector<HTMLInputElement>('input[aria-label="Share anonymous usage metrics"]')
     expect(toggle?.checked).toBe(true)
 

@@ -73,7 +73,7 @@ identifier, account data, file name, local path, knowledge content, prompt,
 device ID, or cookie. The count is anonymous to ContextCake and is never tied to
 an account or settings-sync record. GitHub still receives the ordinary request
 metadata it receives for downloads, including the network address used to make
-the request.
+the request; see [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 After a successful request, the app writes a local `install-metric-v1.json`
 marker so the request is not repeated for that application-support directory.
@@ -87,6 +87,10 @@ off stops an unreported first launch, failed-request retries, and future
 anonymous metrics. It cannot remove a count already recorded because ContextCake
 does not have an identifier that connects the aggregate count back to a person
 or device. Update checks are a separate setting.
+
+The preference is local to that Mac's ContextCake application-support directory
+and is not included in account settings sync. A choice made on another Mac
+therefore cannot enable metrics without the local first-run choice.
 
 The resulting count is directional rather than a unique-person record: fresh
 application-support directories can count again, and public release assets can
@@ -125,8 +129,7 @@ The server-side account data includes:
 - Supabase Auth audit logs, which can include the user ID, IP address, user agent,
   provider metadata, and event timestamps;
 - one owner-only `user_settings` row. Its JSON blob is limited to 1,000,000 bytes
-  and can contain only `theme`, `updateCheck`, `anonymousMetrics`, `profiles`,
-  and `sources`.
+  and can contain only `theme`, `updateCheck`, `profiles`, and `sources`.
   Profile metadata is limited to names/labels, source membership,
   theme preference, and manifest layers. Source metadata is limited to its
   name, kind, precedence, repository/ref/origin, cache policy, and scrubbed
@@ -139,10 +142,10 @@ email address, or context-content pattern remains. Synced integrations therefore
 require local setup on each Mac and can never activate a remote command.
 
 Settings sync never includes knowledge or document content, resolved output,
-integration tokens, environment-variable values, absolute local paths, or metric
-events. The `anonymousMetrics` boolean can sync as an ordinary preference, but it
-contains no event data. Deleting the account removes the Supabase Auth user and the
-cascading settings row; local ContextCake files and settings are left untouched.
+integration tokens, environment-variable values, absolute local paths, metric
+events, or the local anonymous-metrics preference. Deleting the account removes
+the Supabase Auth user and the cascading settings row; local ContextCake files
+and settings are left untouched.
 Project-folder mappings, matched roots, and the app's active profile are also
 local-only. A remote settings row cannot activate a profile or redirect a trusted
 local executable source.

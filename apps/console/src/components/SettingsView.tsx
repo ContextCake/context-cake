@@ -155,7 +155,7 @@ export function SettingsView({
                     <div className="cc-settings-row">
                       <div>
                         <strong>Anonymous usage metrics</strong>
-                        <span>Share the app version and a one-time signal when ContextCake opens successfully. We use this to improve the app. We never collect your files, paths, prompts, account details, or a device ID.</span>
+                        <span>Share the app version and a one-time signal through a tiny GitHub download when ContextCake opens successfully. We use this to improve the app. GitHub receives ordinary download request metadata. The request never includes your files, paths, prompts, account details, or a device ID.</span>
                       </div>
                       <label className="cc-switch">
                         <input

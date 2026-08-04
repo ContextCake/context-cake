@@ -1,7 +1,7 @@
 import { app, Menu, shell } from 'electron'
 import { checkInteractive } from './updater.mjs'
 import { installCli } from './cli-install.mjs'
-import { readSettings, writeSettings } from './settings.mjs'
+import { readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
 
 export function buildMenu(getWindow, onSettingsChange) {
   const template = [
@@ -18,7 +18,13 @@ export function buildMenu(getWindow, onSettingsChange) {
           label: 'Check for Updates Automatically',
           type: 'checkbox',
           checked: readSettings().updateCheck,
-          click: (item) => onSettingsChange?.(writeSettings({ updateCheck: item.checked })),
+          click: (item) => onSettingsChange?.(writeSettings({ updateCheck: item.checked }), 'updateCheck'),
+        },
+        {
+          label: 'Share Anonymous Usage Metrics',
+          type: 'checkbox',
+          checked: readSettings().anonymousMetrics === true,
+          click: (item) => onSettingsChange?.(writeLocalSettings({ anonymousMetrics: item.checked }), 'anonymousMetrics'),
         },
         { type: 'separator' },
         {

@@ -1,0 +1,6 @@
+ContextCake anonymous first-launch metric.
+
+Downloading this tiny release asset increments GitHub's public asset download
+count. The app requests it once per persistent ContextCake data directory and
+sends no event payload or application-generated identifier. The aggregate count
+helps the ContextCake team understand adoption and improve the app.

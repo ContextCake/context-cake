@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 
 const html = await readFile(new URL('../dist/install/index.html', import.meta.url), 'utf8')
+const desktopPackage = JSON.parse(await readFile(new URL('../../desktop/package.json', import.meta.url), 'utf8'))
 
 function requireText(text, message) {
   if (!html.includes(text)) throw new Error(message)
@@ -21,7 +22,7 @@ function requireOrder(items) {
 }
 
 requireText('Download for Mac', 'Mac download must remain the primary install action')
-requireText('ContextCake-0.1.0-arm64.dmg', 'Mac download must target the published DMG')
+requireText(`ContextCake-${desktopPackage.version}-arm64.dmg`, 'Mac download must target the current desktop version')
 requireText('href="/install" aria-current="page"', 'Install navigation must expose the current route')
 requireText('Show source installation', 'Versioned source installation must remain available')
 requireText('console-v0.2.0', 'Source installation must stay pinned to the published console tag')

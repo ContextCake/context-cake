@@ -6,7 +6,7 @@ import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } from 'e
 import { startEngineService } from './service-host.mjs'
 import { buildMenu } from './menu.mjs'
 import { configDir, manifestPath, settingsPath } from './paths.mjs'
-import { markSettingsDirty, readSettings, writeSettings } from './settings.mjs'
+import { markSettingsDirty, readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
 import { createAuthManager } from './auth.mjs'
 import {
   assertSafeLocalSettings,
@@ -20,6 +20,7 @@ import { loadSupabaseConfig } from './supabase-config.mjs'
 import { initUpdater } from './updater.mjs'
 import { isEngineOrigin, isTrustedIpcSender } from './navigation.mjs'
 import { getCliStatus, installCli } from './cli-install.mjs'
+import { reportFirstLaunch } from './install-metrics.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -99,6 +100,7 @@ let pendingDeepLink = null
 let settingsPushTimer = null
 let manifestWatchStarted = false
 let lastAppliedManifest = ''
+let installMetricAbortController = null
 
 function currentAuthState() {
   return authManager?.getState() ?? { available: false, signedIn: false }
@@ -225,11 +227,70 @@ function publishPulledSettings(pulled) {
 function installApplicationMenu() {
   Menu.setApplicationMenu(buildMenu(
     () => win,
-    () => {
+    (settings, changedField) => {
       initUpdater()
-      if (currentAuthState().signedIn) scheduleSettingsPush()
+      if (changedField === 'anonymousMetrics') {
+        if (settings.anonymousMetrics === true) reportAnonymousFirstLaunch()
+        else cancelAnonymousFirstLaunch()
+      } else if (currentAuthState().signedIn) {
+        scheduleSettingsPush()
+      }
     },
   ))
+}
+
+function reportAnonymousFirstLaunch() {
+  const settings = readSettings()
+  if (settings.anonymousMetrics !== true) return Promise.resolve({ status: 'disabled' })
+  if (!installMetricAbortController || installMetricAbortController.signal.aborted) {
+    installMetricAbortController = new AbortController()
+  }
+  const controller = installMetricAbortController
+  return reportFirstLaunch({
+    isPackaged: app.isPackaged,
+    version: app.getVersion(),
+    configDir: configDir(),
+    metricsEnabled: true,
+    signal: controller.signal,
+  }).finally(() => {
+    if (installMetricAbortController === controller) installMetricAbortController = null
+  }).then((result) => {
+    // If the user opted out and immediately opted back in while the abort was
+    // settling, honor the final local choice without overlapping requests.
+    if (result.status === 'cancelled' && readSettings().anonymousMetrics === true) {
+      return reportAnonymousFirstLaunch()
+    }
+    return result
+  })
+}
+
+function cancelAnonymousFirstLaunch() {
+  installMetricAbortController?.abort()
+  installMetricAbortController = null
+}
+
+async function ensureAnonymousMetricsPreference() {
+  const current = readSettings().anonymousMetrics
+  if (typeof current === 'boolean') return current
+
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    title: 'Anonymous Usage Metrics',
+    message: 'Help improve ContextCake?',
+    detail: 'ContextCake can download one tiny file from GitHub to share the app version and a one-time signal when it opens successfully. We use this anonymous information to understand adoption and improve the app. GitHub receives ordinary download request metadata, including the network address used to connect. The request never includes your files, paths, prompts, account details, or a device ID. You can change this anytime in Settings.',
+    buttons: ['Share Anonymous Metrics', "Don't Share"],
+    defaultId: 1,
+    cancelId: 1,
+  })
+  const enabled = response === 0
+  try {
+    writeLocalSettings({ anonymousMetrics: enabled })
+  } catch {
+    // A metrics-only preference must never turn a writable-settings problem
+    // into a fatal app startup. Without a persisted opt-in, do not report.
+    return false
+  }
+  return enabled
 }
 
 function startManifestSync() {
@@ -389,6 +450,18 @@ async function initializeAccounts() {
 // processes or select a path without the user approving the native panel.
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
 handleTrustedIpc('contextcake:cli-install', () => installCli(win, { showSuccess: false }))
+handleTrustedIpc('contextcake:metrics-get', () => {
+  const enabled = readSettings().anonymousMetrics
+  return typeof enabled === 'boolean' ? enabled : null
+})
+handleTrustedIpc('contextcake:metrics-set', (enabled) => {
+  if (typeof enabled !== 'boolean') throw new Error('Anonymous metrics preference must be a boolean.')
+  writeLocalSettings({ anonymousMetrics: enabled })
+  installApplicationMenu()
+  if (enabled) reportAnonymousFirstLaunch()
+  else cancelAnonymousFirstLaunch()
+  return enabled
+})
 // The API token is a credential: never put it in BrowserWindow
 // additionalArguments, which become renderer process argv and are visible to
 // other local users through process inspection. The sandboxed preload asks for
@@ -531,6 +604,12 @@ app.whenReady().then(async () => {
   installApplicationMenu()
   initUpdater()
   if (currentAuthState().signedIn) await syncAfterSignIn()
+  // Ask before the first anonymous metric. Update checks and metrics remain
+  // separate choices, and either can be changed later in Settings or the app
+  // menu. Development and smoke builds never show the prompt or report.
+  if (app.isPackaged) await ensureAnonymousMetricsPreference()
+  installApplicationMenu()
+  reportAnonymousFirstLaunch().catch(() => {})
   if (process.env.CC_SMOKE === '1') await smokeCheck()
 }).catch(handleFatal)
 

@@ -52,6 +52,9 @@ surfaces we control — so users don't drift onto stale versions.
   macOS artifact a user downloads is signed and notarized.
 - **Privacy by default.** Any network call the app makes on its own behalf (e.g. an update check)
   carries the minimum data, no PII, and can be turned off.
+- **Measure outcomes, not people.** Adoption metrics may count versioned release
+  downloads and content-free first launches, but SHALL NOT add an analytics SDK,
+  persistent remote identifier, account correlation, local path, or knowledge content.
 
 ## 5. Acceptance Criteria (EARS)
 
@@ -87,6 +90,17 @@ surfaces we control — so users don't drift onto stale versions.
   information**, SHALL send only the minimum needed to determine availability (e.g. current version,
   channel, platform/arch), SHALL disclose this behavior in the docs, and SHALL provide a documented
   way to **disable update checks**.
+
+### Anonymous usage metrics
+- [ ] WHEN the packaged app can share an anonymous first-launch metric THE SYSTEM
+  SHALL ask first, explain what is and is not collected, explain that the aggregate
+  count is used to improve the app, and provide **Share Anonymous Metrics** and
+  **Don't Share** actions before sending it.
+- [ ] WHEN a user disables anonymous usage metrics THE SYSTEM SHALL stop any
+  unreported first launch, failed-request retries, and future anonymous metrics
+  without disabling update checks or local product functionality.
+- [ ] WHEN account settings sync runs THE SYSTEM SHALL keep the anonymous-metrics
+  choice local so a remote setting cannot enable a first-launch request.
 
 ### Self-update (owned channels: standalone binary, native GUI app)
 - [ ] WHEN a newer version is available on an owned channel THE SYSTEM SHALL download, **verify**, and

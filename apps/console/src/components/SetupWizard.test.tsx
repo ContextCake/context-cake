@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { parseCommandLine, SetupWizard } from './SetupWizard'
+import { deriveSourceName, parseCommandLine, SetupWizard } from './SetupWizard'
 
 const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), reload: vi.fn() }))
 
@@ -34,6 +34,12 @@ async function enter(selector: string, value: string) {
   })
 }
 
+function postCalls(): Array<Record<string, unknown>> {
+  return mocks.apiFetch.mock.calls
+    .filter(([url, init]) => url === '/api/sources' && (init as RequestInit | undefined)?.method === 'POST')
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>)
+}
+
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   container = document.createElement('div')
@@ -54,7 +60,7 @@ afterEach(async () => {
   container.remove()
 })
 
-describe('SetupWizard connection handoff', () => {
+describe('SetupWizard first run', () => {
   it('adds a repository, vault, or wiki folder as the Markdown source users expect', async () => {
     await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
 
@@ -66,8 +72,38 @@ describe('SetupWizard connection handoff', () => {
 
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources', expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ kind: 'files', name: 'personal', level: 3, path: '/tmp/work-vault' }),
+      body: JSON.stringify({ kind: 'files', name: 'work-vault', level: 3, path: '/tmp/work-vault' }),
     }))
+  })
+
+  it('derives the source name from the folder basename but keeps it editable', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/Users/person/Work Vault')
+    expect(container.querySelector<HTMLInputElement>('#wiz-personal-name')?.value).toBe('Work Vault')
+
+    await enter('#wiz-personal-name', 'My notes')
+    await enter('#wiz-personal-path', '/Users/person/Other Folder')
+    // The user's own name is never clobbered by a later path change.
+    expect(container.querySelector<HTMLInputElement>('#wiz-personal-name')?.value).toBe('My notes')
+
+    await act(async () => button('Next').click())
+    expect(postCalls()[0]).toMatchObject({ name: 'My notes', level: 3 })
+  })
+
+  it('lets the level stepper change precedence away from the 3/2/0 defaults', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    expect(container.querySelector('#wiz-personal-level')?.textContent).toBe('3')
+    await enter('#wiz-personal-path', '/tmp/vault')
+    const lower = container.querySelector<HTMLButtonElement>('button[aria-label="Lower level"]')
+    await act(async () => lower?.click())
+    expect(container.querySelector('#wiz-personal-level')?.textContent).toBe('2')
+    await act(async () => button('Next').click())
+
+    expect(postCalls()[0]).toMatchObject({ level: 2 })
   })
 
   it('makes the structured ContextCake option deliberate rather than the default', async () => {
@@ -80,23 +116,87 @@ describe('SetupWizard connection handoff', () => {
 
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources', expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ kind: 'local', name: 'personal', level: 3, path: '/tmp/structured-context' }),
+      body: JSON.stringify({ kind: 'local', name: 'structured-context', level: 3, path: '/tmp/structured-context' }),
     }))
   })
 
-  it('asks for a human name when adding another source', async () => {
-    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+  it('sends a public team repo through the clone-free github-rest kind with no follow-up sync', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
 
-    await act(async () => button('Choose a source').click())
-    await enter('#wiz-personal-path', '/tmp/repo-b')
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/vault')
     await act(async () => button('Next').click())
-    expect(container.textContent).toContain('Give this source a short name')
 
-    await enter('#wiz-personal-name', 'Repo B')
+    await act(async () => button('GitHub repo').click())
+    expect(sourceChoice('Public repo (no clone)').getAttribute('aria-checked')).toBe('true')
+    await enter('#wiz-team-repo', 'acme/payments-docs')
+    expect(container.querySelector<HTMLInputElement>('#wiz-team-name')?.value).toBe('payments-docs')
     await act(async () => button('Next').click())
-    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources', expect.objectContaining({
-      body: JSON.stringify({ kind: 'files', name: 'Repo B', level: 3, path: '/tmp/repo-b' }),
-    }))
+
+    expect(postCalls()[1]).toEqual({ kind: 'github-rest', name: 'payments-docs', level: 2, repo: 'acme/payments-docs' })
+    // Add is atomic — the old post-add sync call created half-added layers.
+    const syncCalls = mocks.apiFetch.mock.calls.filter(([url]) => String(url).startsWith('/api/sources/sync'))
+    expect(syncCalls).toHaveLength(0)
+  })
+
+  it('sends a private team repo through the existing github clone kind', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/vault')
+    await act(async () => button('Next').click())
+
+    await act(async () => button('GitHub repo').click())
+    await act(async () => sourceChoice('Private repo').click())
+    await enter('#wiz-team-repo', 'acme/internal-docs')
+    await act(async () => button('Next').click())
+
+    expect(postCalls()[1]).toEqual({ kind: 'github', name: 'internal-docs', level: 2, repo: 'acme/internal-docs' })
+  })
+
+  it('surfaces a duplicate-name 409 inline instead of advancing', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/sources' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ error: 'A source named "team" already exists' }), {
+          status: 409, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/team')
+    await act(async () => button('Next').click())
+
+    expect(container.textContent).toContain('A source named "team" already exists')
+    expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
+  })
+
+  it('treats a 409 on an identical retry as success — the earlier add landed', async () => {
+    let calls = 0
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/sources' && init?.method === 'POST') {
+        calls += 1
+        if (calls === 1) throw new DOMException('The operation timed out', 'TimeoutError')
+        return new Response(JSON.stringify({ error: 'A source named "vault" already exists' }), {
+          status: 409, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/vault')
+    await act(async () => button('Next').click())
+    // First attempt failed in flight; the wizard stays put and says so.
+    expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
+
+    await act(async () => button('Next').click())
+    // Retry got 409 because the first attempt actually landed → proceed.
+    expect(container.querySelector('#wiz-personal-path')).toBeNull()
+    expect(container.textContent).toContain('Add a team source')
   })
 
   it('surfaces server-side folder validation inline at the add step', async () => {
@@ -122,7 +222,7 @@ describe('SetupWizard connection handoff', () => {
   it('warns on the review step when a folder holds no documents', async () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
       JSON.stringify(url === '/api/sources' && init?.method === 'POST'
-        ? { ok: true, added: 'personal', indexing: true, hasDocuments: false, scanComplete: true }
+        ? { ok: true, added: 'empty-vault', indexing: true, hasDocuments: false, scanComplete: true }
         : {}),
       { status: 200, headers: { 'content-type': 'application/json' } },
     ))
@@ -140,7 +240,7 @@ describe('SetupWizard connection handoff', () => {
   it('says indexing continues in the background rather than blocking setup', async () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
       JSON.stringify(url === '/api/sources' && init?.method === 'POST'
-        ? { ok: true, added: 'personal', indexing: true, hasDocuments: true, scanComplete: true }
+        ? { ok: true, added: 'work-vault', indexing: true, hasDocuments: true, scanComplete: true }
         : { concepts: [{ id: 'systems/app' }] }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     ))
@@ -183,10 +283,9 @@ describe('SetupWizard connection handoff', () => {
     await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.click())
     await act(async () => button('Connect server').click())
 
-    const call = mocks.apiFetch.mock.calls.find(([url, init]) => url === '/api/sources' && init?.method === 'POST'
-      && JSON.parse(String(init.body)).kind === 'mcp')
-    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
-      kind: 'mcp', command: 'npx', args: ['-y', '@company/context-mcp'], trusted: true,
+    const call = postCalls().find((body) => body.kind === 'mcp')
+    expect(call).toMatchObject({
+      kind: 'mcp', name: 'context-mcp', level: 0, command: 'npx', args: ['-y', '@company/context-mcp'], trusted: true,
     })
   })
 
@@ -210,6 +309,7 @@ describe('SetupWizard connection handoff', () => {
     expect(chooseFolder).toHaveBeenCalledOnce()
     expect(container.querySelector<HTMLInputElement>('#wiz-personal-path')?.value)
       .toBe('/Users/person/ContextCake/personal')
+    expect(container.querySelector<HTMLInputElement>('#wiz-personal-name')?.value).toBe('personal')
   })
 
   it('makes Connect an agent the primary next action after a source is added', async () => {
@@ -233,8 +333,8 @@ describe('SetupWizard connection handoff', () => {
   it('does not tell users to add content while their source is still indexing', async () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
       JSON.stringify(url === '/api/sources' && init?.method === 'POST'
-        ? { ok: true, added: 'personal', indexing: true, hasDocuments: true, scanComplete: true }
-        : { concepts: [], indexing: true, indexingSources: ['personal'] }),
+        ? { ok: true, added: 'contextcake-personal', indexing: true, hasDocuments: true, scanComplete: true }
+        : { concepts: [], indexing: true, indexingSources: ['contextcake-personal'] }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     ))
     await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
@@ -248,6 +348,98 @@ describe('SetupWizard connection handoff', () => {
 
     expect(container.textContent).toContain('still indexing in the background')
     expect(container.textContent).not.toContain('Add content to a layer')
+  })
+})
+
+describe('SetupWizard add-a-source mode', () => {
+  it('collapses to one step with a four-kind picker and per-kind level defaults', async () => {
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    // No welcome detour — the form IS the first screen.
+    expect(container.textContent).toContain('Add a source')
+    for (const label of ['Markdown folder', 'ContextCake folder', 'GitHub repo', 'MCP server']) {
+      expect(sourceChoice(label)).toBeTruthy()
+    }
+    expect(container.querySelector('#wiz-add-level')?.textContent).toBe('3')
+
+    await act(async () => sourceChoice('GitHub repo').click())
+    expect(container.querySelector('#wiz-add-level')?.textContent).toBe('2')
+    await act(async () => sourceChoice('MCP server').click())
+    expect(container.querySelector('#wiz-add-level')?.textContent).toBe('0')
+    await act(async () => sourceChoice('Markdown folder').click())
+    expect(container.querySelector('#wiz-add-level')?.textContent).toBe('3')
+  })
+
+  it('accepts a second repo beside team under its own name (EARS)', async () => {
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    await act(async () => sourceChoice('GitHub repo').click())
+    await enter('#wiz-add-repo', 'acme/design-system')
+    expect(container.querySelector<HTMLInputElement>('#wiz-add-name')?.value).toBe('design-system')
+    await act(async () => button('Add source').click())
+
+    expect(postCalls()[0]).toEqual({ kind: 'github-rest', name: 'design-system', level: 2, repo: 'acme/design-system' })
+    expect(container.textContent).toContain('Source added')
+  })
+
+  it('accepts a second MCP server under a distinct name with the trust gate intact (EARS)', async () => {
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    await act(async () => sourceChoice('MCP server').click())
+    await enter('#wiz-add-command', 'npx -y @acme/design-graph-mcp')
+    // The trust checkbox survives in add mode: no consent, no submit.
+    expect(button('Add source').disabled).toBe(true)
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.click())
+    await act(async () => button('Add source').click())
+
+    expect(postCalls()[0]).toMatchObject({
+      kind: 'mcp', name: 'design-graph-mcp', level: 0, command: 'npx', args: ['-y', '@acme/design-graph-mcp'], trusted: true,
+    })
+    expect(container.textContent).toContain('Source added')
+  })
+
+  it('requires a name when the user clears the derived one', async () => {
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    await enter('#wiz-add-path', '/tmp/repo-b')
+    await enter('#wiz-add-name', '')
+    await act(async () => button('Add source').click())
+
+    expect(container.textContent).toContain('Give this source a short name')
+    expect(postCalls()).toHaveLength(0)
+  })
+
+  it('sends a private repo through the clone kind in add mode too', async () => {
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    await act(async () => sourceChoice('GitHub repo').click())
+    await act(async () => sourceChoice('Private repo').click())
+    await enter('#wiz-add-repo', 'acme/secret-docs')
+    await act(async () => button('Add source').click())
+
+    expect(postCalls()[0]).toEqual({ kind: 'github', name: 'secret-docs', level: 2, repo: 'acme/secret-docs' })
+  })
+})
+
+describe('deriveSourceName', () => {
+  it('derives folder names from the basename', () => {
+    expect(deriveSourceName({ kind: 'files', path: '/Users/person/Work Vault/' })).toBe('Work Vault')
+    expect(deriveSourceName({ kind: 'local', path: '/tmp/notes.d' })).toBe('notes-d')
+  })
+
+  it('derives repo names from the slug', () => {
+    expect(deriveSourceName({ kind: 'github', repo: 'acme/payments-docs' })).toBe('payments-docs')
+    expect(deriveSourceName({ kind: 'github', repo: 'acme/payments-docs.git' })).toBe('payments-docs')
+  })
+
+  it('derives MCP names from the command target, not the runner', () => {
+    expect(deriveSourceName({ kind: 'mcp', command: 'npx -y @acme/context-mcp' })).toBe('context-mcp')
+    expect(deriveSourceName({ kind: 'mcp', command: 'node /opt/acme/server.mjs' })).toBe('server')
+    expect(deriveSourceName({ kind: 'mcp', command: '/opt/bin/acme-graph --stdio' })).toBe('acme-graph')
+  })
+
+  it('returns empty rather than guessing on an unparsable command', () => {
+    expect(deriveSourceName({ kind: 'mcp', command: 'npx "unfinished' })).toBe('')
   })
 })
 

@@ -6,17 +6,20 @@ set -uo pipefail
 
 PORT="${PORT:-8811}"           # token-gated host
 PORT2=$((PORT + 1))            # token-unset, mutations-disabled host
+PORT3=$((PORT + 2))            # github-rest probe fixture (stands in for api.github.com)
 BASE="http://127.0.0.1:$PORT"
 BASE2="http://127.0.0.1:$PORT2"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 TMP="$(mktemp -d)"
 PID1=""
 PID2=""
+PID3=""
 FAILED=0
 
 cleanup() {
   [ -n "$PID1" ] && kill "$PID1" 2>/dev/null
   [ -n "$PID2" ] && kill "$PID2" 2>/dev/null
+  [ -n "$PID3" ] && kill "$PID3" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -29,6 +32,16 @@ code() { [ "$2" = "$1" ] && pass "$3 ($2)" || fail "$3 (got $2, want $1)"; }
 
 C() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 AUTH=(-H "Authorization: Bearer sekrit")
+JQ() { node -e '
+  let s = "";
+  process.stdin.on("data", (d) => (s += d)).on("end", () => {
+    let v;
+    try { v = JSON.parse(s); } catch { process.stdout.write("PARSE-ERROR"); return; }
+    const fn = new Function("d", `return ${process.argv[1]}`);
+    let out;
+    try { out = fn(v); } catch (e) { out = "EVAL-ERROR: " + e.message; }
+    process.stdout.write(typeof out === "string" ? out : JSON.stringify(out));
+  });' "$1"; }
 
 # ---- fixtures: a temp OKF bundle + manifest + a console dist -----------------
 mkdir -p "$TMP/bundle" "$TMP/b2" "$TMP/cdist"
@@ -60,8 +73,34 @@ http.createServer(async (req, res) => {
 }).listen(Number(port), "127.0.0.1");
 EOF
 
+# ---- github-rest probe fixture ------------------------------------------------
+# Stands in for api.github.com so the add-time probe is deterministic with or
+# without network: a known slug answers 200, "forbidden" 403, "deadend" kills
+# the socket (the network-failure shape), anything else 404. The layer the
+# endpoint then WRITES still points at the real api.github.com — its graph row
+# is asserted as degraded, which is true offline and online (the slug is chosen
+# to exist nowhere).
+cat > "$TMP/gh-probe.mjs" <<'EOF'
+import http from "node:http";
+http.createServer((req, res) => {
+  if (req.url.startsWith("/repos/cc-no-such-owner-e3e9021/")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ default_branch: "main" }));
+  }
+  if (req.url.startsWith("/repos/forbidden/")) {
+    res.writeHead(403, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ message: "rate limited" }));
+  }
+  if (req.url.startsWith("/repos/deadend/")) return req.socket.destroy();
+  res.writeHead(404, { "content-type": "application/json" });
+  res.end(JSON.stringify({ message: "Not Found" }));
+}).listen(Number(process.argv[2]), "127.0.0.1");
+EOF
+node "$TMP/gh-probe.mjs" "$PORT3" >/dev/null 2>&1 &
+PID3=$!
+
 export SERVICE_MJS="$ROOT/packages/core/src/service.mjs"
-node "$TMP/host.mjs" "$PORT" "$TMP/manifest.json" sekrit true "$TMP/cdist" >/dev/null 2>&1 &
+CONTEXTCAKE_GITHUB_PROBE_BASE="http://127.0.0.1:$PORT3" node "$TMP/host.mjs" "$PORT" "$TMP/manifest.json" sekrit true "$TMP/cdist" >/dev/null 2>&1 &
 PID1=$!
 node "$TMP/host.mjs" "$PORT2" "$TMP/manifest2.json" - false - >/dev/null 2>&1 &
 PID2=$!
@@ -115,6 +154,173 @@ grep -q '"source": "files"' "$TMP/manifest.json" && pass "markdown folder is per
 curl -s "${AUTH[@]}" "$BASE/api/resolve?concept=notes" | grep -q 'No frontmatter needed' && pass "markdown folder resolves plain files" || fail "markdown folder resolve"
 code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=notes")" "remove markdown folder source"
 
+echo "section writes: stale-editor guard + updated= refresh (B4)"
+TODAY="$(date -u +%Y-%m-%d)"
+printf -- '---\ntype: note\ntitle: Merge me\n---\n\n# Merge me\n\n## Pick {#pick updated=2026-01-01}\n\nold value.\n\n## After {#after}\n\nuntouched.\n' > "$TMP/bundle/merge-me.md"
+MT="$(curl -s "${AUTH[@]}" "$BASE/api/file?path=t/merge-me.md" | JQ 'd.modified')"
+code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"merge-me\",\"sectionKey\":\"pick\",\"layers\":[\"t\"],\"content\":\"AGREED.\",\"modified\":{\"t\":\"$MT\"}}" "$BASE/api/section")" "matching mtime writes the section"
+grep -q 'AGREED.' "$TMP/bundle/merge-me.md" && pass "section body replaced" || fail "section body not written"
+grep -q "## Pick {#pick updated=$TODAY}" "$TMP/bundle/merge-me.md" && pass "authored updated= attr refreshed to today, anchor intact" || fail "updated= not refreshed ($(grep '## Pick' "$TMP/bundle/merge-me.md"))"
+grep -q 'untouched.' "$TMP/bundle/merge-me.md" && pass "next section survived" || fail "next section corrupted"
+MT="$(curl -s "${AUTH[@]}" "$BASE/api/file?path=t/merge-me.md" | JQ 'd.modified')"
+sleep 0.1
+printf '\nexternal edit line.\n' >> "$TMP/bundle/merge-me.md"
+code 409 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"merge-me\",\"sectionKey\":\"pick\",\"layers\":[\"t\"],\"content\":\"STALE WRITE\",\"modified\":{\"t\":\"$MT\"}}" "$BASE/api/section")" "a stale mtime is refused with 409"
+grep -q 'STALE WRITE' "$TMP/bundle/merge-me.md" && fail "stale write reached disk" || pass "stale write never reached disk"
+grep -q 'external edit line.' "$TMP/bundle/merge-me.md" && pass "the external edit survived the refused write" || fail "external edit lost"
+# All-or-nothing across layers: one stale target refuses the WHOLE write.
+mkdir -p "$TMP/m2"
+printf -- '# Merge me\n\n## Pick {#pick}\n\nother value.\n' > "$TMP/m2/merge-me.md"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"m2\",\"level\":1,\"path\":\"$TMP/m2\"}" "$BASE/api/sources")" "add second layer defining the section"
+MT2="$(curl -s "${AUTH[@]}" "$BASE/api/file?path=m2/merge-me.md" | JQ 'd.modified')"
+code 409 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"merge-me\",\"sectionKey\":\"pick\",\"layers\":[\"t\",\"m2\"],\"content\":\"HOMOGENIZED\",\"modified\":{\"t\":\"$MT\",\"m2\":\"$MT2\"}}" "$BASE/api/section")" "one stale layer fails the whole multi-layer write"
+grep -q 'HOMOGENIZED' "$TMP/m2/merge-me.md" && fail "partial write reached the fresh layer" || pass "the fresh layer was not partially homogenized"
+# No updated= attr -> none is invented; the anchor stays byte-identical.
+MTN="$(curl -s "${AUTH[@]}" "$BASE/api/file?path=t/note.md" | JQ 'd.modified')"
+code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"note\",\"sectionKey\":\"body\",\"layers\":[\"t\"],\"content\":\"still hello.\",\"modified\":{\"t\":\"$MTN\"}}" "$BASE/api/section")" "write to a heading without updated="
+grep -q '## Body {#body}$' "$TMP/bundle/note.md" && pass "no updated= attr invented on an undated heading" || fail "heading changed ($(grep '## Body' "$TMP/bundle/note.md"))"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=m2")" "cleanup second layer"
+
+echo "github-rest source kind (C-a)"
+code 400 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"gr","level":2,"repo":"cc-no-such-owner-e3e9021/repo","auth":"keychain:x"}' "$BASE/api/sources")" "auth field rejected, not ignored"
+code 400 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"gr","level":2,"repo":"cc-no-such-owner-e3e9021/repo","apiBase":"https://ghe.corp"}' "$BASE/api/sources")" "apiBase field rejected, not ignored"
+code 400 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"gr","level":2,"repo":"not-a-slug"}' "$BASE/api/sources")" "repo must be owner/name"
+code 400 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"bad name!","level":2,"repo":"cc-no-such-owner-e3e9021/repo"}' "$BASE/api/sources")" "name slug shape rejected"
+MISS="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"gr","level":2,"repo":"missing/repo"}' "$BASE/api/sources")"
+code 400 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"gr","level":2,"repo":"missing/repo"}' "$BASE/api/sources")" "404 probe rejects the add"
+JQ 'd.error' <<<"$MISS" | grep -q 'repo not found or not public' && pass "404 wording points at the private-repo option" || fail "404 probe message ($MISS)"
+code 400 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"gr","level":2,"repo":"forbidden/repo"}' "$BASE/api/sources")" "403 probe rejects the add"
+grep -Eq 'missing/repo|forbidden/repo' "$TMP/manifest.json" && fail "rejected github-rest source leaked into the manifest" || pass "rejected github-rest adds never touch the manifest"
+ADD="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"gr","level":2,"repo":"cc-no-such-owner-e3e9021/repo"}' "$BASE/api/sources")"
+[ "$(JQ '`${d.ok}:${d.added}:${d.indexing}`' <<<"$ADD")" = "true:gr:true" ] && pass "public repo add answers ok/added/indexing" || fail "github-rest add response ($ADD)"
+SHAPE="$(node -e '
+  const fs = require("node:fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  const layers = m.layers ?? m.profiles?.default?.layers ?? [];
+  const l = layers.find((x) => x.name === "gr");
+  if (!l) { console.log("MISSING"); process.exit(0); }
+  console.log([
+    l.source, l.repo, l.level, l.cache?.ttlSeconds,
+    "auth" in l, "apiBase" in l, "path" in l, "ref" in l, "paths" in l,
+  ].join(":"));
+' "$TMP/manifest.json")"
+[ "$SHAPE" = "github:cc-no-such-owner-e3e9021/repo:2:900:false:false:false:false:false" ] && pass "manifest layer shape per C-a (source github + cache, no auth/apiBase/path)" || fail "github-rest layer shape ($SHAPE)"
+code 409 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"gr","level":2,"repo":"cc-no-such-owner-e3e9021/repo"}' "$BASE/api/sources")" "duplicate name answers the existing 409"
+ADD2="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"kind":"github-rest","name":"gr2","level":1,"repo":"deadend/repo","ref":"main","paths":["docs/**","CLAUDE.md"]}' "$BASE/api/sources")"
+[ "$(JQ 'String(d.ok)' <<<"$ADD2")" = "true" ] && pass "a network-failing probe fails open (the add still writes)" || fail "fail-open add ($ADD2)"
+SHAPE2="$(node -e '
+  const fs = require("node:fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  const layers = m.layers ?? m.profiles?.default?.layers ?? [];
+  const l = layers.find((x) => x.name === "gr2");
+  console.log(l ? [l.ref, JSON.stringify(l.paths)].join(":") : "MISSING");
+' "$TMP/manifest.json")"
+[ "$SHAPE2" = 'main:["docs/**","CLAUDE.md"]' ] && pass "optional ref/paths are carried into the layer" || fail "ref/paths carry ($SHAPE2)"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=gr2")" "remove fail-open source"
+G="$(curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000")"
+ROW="$(JQ 'JSON.stringify((({kind,conceptCount,status}) => ({kind,conceptCount,status}))(d.sources.find((s) => s.name === "gr") ?? {}))' <<<"$G")"
+[ "$ROW" = '{"kind":"github","conceptCount":0,"status":"degraded"}' ] && pass "the REST layer's graph row appears (degraded offline/online: repo is unreachable)" || fail "github-rest graph row ($ROW)"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "gr").lastErrorAt !== null)' <<<"$G")" = "true" ] && pass "health rides the row (lastErrorAt set)" || fail "lastErrorAt missing ($G)"
+SYNC="$(curl -s -X POST "${AUTH[@]}" "$BASE/api/sources/sync?name=gr")"
+code 502 "$(C -X POST "${AUTH[@]}" "$BASE/api/sources/sync?name=gr")" "sync reaches the REST branch and reports the real failure"
+JQ 'd.error' <<<"$SYNC" | grep -q 'Sync failed' && pass "sync failure names itself instead of a false green" || fail "sync error copy ($SYNC)"
+
+echo "v2 manifest reads: profile create migration keeps the service working (B2)"
+PRE="$(curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000")"
+PRE_ROWS="$(JQ 'd.sources.map((s) => `${s.name}/${s.level}/${s.kind}`).join(",")' <<<"$PRE")"
+PRE_T_MS="$(JQ 'String(d.sources.find((s) => s.name === "t").indexing.elapsedMs)' <<<"$PRE")"
+MIG="$(node --input-type=module -e "
+import { migrateManifestToV2, classifyManifest } from '$ROOT/packages/core/src/manifest.mjs';
+import fs from 'node:fs';
+const r = migrateManifestToV2('$TMP/manifest.json', { newProfile: { label: 'Work' } });
+const m = JSON.parse(fs.readFileSync('$TMP/manifest.json', 'utf8'));
+console.log(r.action + ':' + classifyManifest(m));
+")"
+[ "$MIG" = "migrated:v2" ] && pass "profile create migrated the service-managed manifest to v2" || fail "migration ($MIG)"
+POST="$(curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000")"
+POST_ROWS="$(JQ 'd.sources.map((s) => `${s.name}/${s.level}/${s.kind}`).join(",")' <<<"$POST")"
+[ -n "$PRE_ROWS" ] && [ "$PRE_ROWS" = "$POST_ROWS" ] && pass "/api/graph lists the same sources after migration ($POST_ROWS)" || fail "graph rows diverged (pre=$PRE_ROWS post=$POST_ROWS)"
+POST_T_MS="$(JQ 'String(d.sources.find((s) => s.name === "t").indexing.elapsedMs)' <<<"$POST")"
+[ "$PRE_T_MS" = "$POST_T_MS" ] && pass "migration reused the finished index (identical keys)" || fail "index rebuilt on migration ($PRE_T_MS -> $POST_T_MS)"
+F="$(curl -s "${AUTH[@]}" "$BASE/api/files")"
+[ "$(JQ 'String(d.layers.some((l) => l.layer === "t"))' <<<"$F")" = "true" ] && pass "/api/files still lists layer roots" || fail "file roots lost after migration ($F)"
+code 200 "$(C "${AUTH[@]}" "$BASE/api/resolve?concept=note")" "a concept still resolves"
+code 502 "$(C -X POST "${AUTH[@]}" "$BASE/api/sources/sync?name=gr")" "sync still FINDS the layer post-migration (502 not 404)"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"pv2\",\"level\":1,\"path\":\"$TMP/m2\"}" "$BASE/api/sources")" "CRUD add works on a v2 manifest"
+node -e '
+  const m = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  process.exit(m.profiles?.default?.layers?.some((l) => l.name === "pv2") && !("layers" in m) ? 0 : 1);
+' "$TMP/manifest.json" && pass "the add landed inside profiles.default, not a legacy layers array" || fail "v2 add wrote the wrong place"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"pv2","newName":"pv2b","level":0}' "$BASE/api/sources")" "CRUD rename/re-level works on v2"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=pv2b")" "CRUD remove works on v2"
+
+echo "a dead MCP child paints its row degraded, then recovers (C-d)"
+cat > "$TMP/flaky.mjs" <<'EOF'
+import readline from "node:readline";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+// The kill switch is a marker file next to this script (the spawning service
+// host does not share the test shell's environment).
+const MARKER = fileURLToPath(new URL("./flaky-die", import.meta.url));
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const write = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+rl.on("line", (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  if (msg.method === "initialize") return write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "flaky", version: "0" } } });
+  if (msg.method === "notifications/initialized") return;
+  if (msg.method === "tools/list") return write({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "list_nodes" }, { name: "get_node" }] } });
+  if (msg.method === "tools/call") {
+    if (fs.existsSync(MARKER)) process.exit(1); // crash instead of answering
+    const { name, arguments: a = {} } = msg.params ?? {};
+    if (name === "list_nodes") return write({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify({ nodes: ["n1"] }) }] } });
+    if (name === "get_node") return write({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify({ node: "n1", title: "N1", kind: "note", facts: [{ topic: "Body", text: "alive.", lastTouched: "2026-06-01" }] }) }] } });
+  }
+});
+EOF
+FLAKY_DIE="$TMP/flaky-die"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"mcp\",\"name\":\"flaky\",\"level\":0,\"command\":\"node\",\"args\":[\"$TMP/flaky.mjs\"],\"trusted\":true}" "$BASE/api/sources")" "mcp source added (probe passes, v2 manifest)"
+G="$(curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000")"
+[ "$(JQ 'JSON.stringify([d.sources.find((s) => s.name === "flaky")?.status, d.sources.find((s) => s.name === "flaky")?.conceptCount])' <<<"$G")" = '["ok",1]' ] && pass "healthy mcp row is ok with its concept" || fail "mcp pre-crash row ($G)"
+touch "$FLAKY_DIE"
+curl -s "${AUTH[@]}" "$BASE/api/resolve?concept=n1" >/dev/null # the read that hits the now-dying child
+G="$(curl -s "${AUTH[@]}" "$BASE/api/graph")"
+ROW="$(JQ 'JSON.stringify((({status,conceptCount}) => ({status,conceptCount}))(d.sources.find((s) => s.name === "flaky") ?? {}))' <<<"$G")"
+[ "$ROW" = '{"status":"degraded","conceptCount":1}' ] && pass "dead child paints the row degraded, snapshot still served" || fail "mcp degraded row ($ROW)"
+JQ 'd.sources.find((s) => s.name === "flaky").error' <<<"$G" | grep -q 'exited' && pass "the row names the child exit" || fail "mcp degraded error copy ($G)"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "flaky").lastErrorAt !== null)' <<<"$G")" = "true" ] && pass "lastErrorAt recorded" || fail "mcp lastErrorAt ($G)"
+rm -f "$FLAKY_DIE"
+sleep 3.2 # past the adapter's respawn cooldown
+curl -s "${AUTH[@]}" "$BASE/api/resolve?concept=n1" | grep -q 'alive.' && pass "past the cooldown the child respawns and answers" || fail "mcp respawn resolve"
+G="$(curl -s "${AUTH[@]}" "$BASE/api/graph")"
+[ "$(JQ 'd.sources.find((s) => s.name === "flaky").status' <<<"$G")" = "ok" ] && pass "a successful read clears the degraded state" || fail "mcp recovery row ($G)"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "flaky").lastSuccessAt !== null)' <<<"$G")" = "true" ] && pass "lastSuccessAt recorded" || fail "mcp lastSuccessAt ($G)"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=flaky")" "cleanup mcp source"
+
+echo "removing a clone-backed source cleans its clone dir (B5)"
+CLONE="$TMP/.cache/repos/github.com__o__gh1"
+mkdir -p "$CLONE/sub"
+printf -- '---\ntype: note\ntitle: C\n---\n\n# C\n\n## S {#s}\n\nclone doc.\n' > "$CLONE/c.md"
+printf -- '---\ntype: note\ntitle: C2\n---\n\n# C2\n\n## S {#s}\n\nclone sub doc.\n' > "$CLONE/sub/c2.md"
+node -e '
+  const fs = require("node:fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.profiles.default.layers.push(
+    { name: "cl1", level: 1, path: ".cache/repos/github.com__o__gh1", origin: "https://github.com/o/gh1.git", ref: null },
+    { name: "cl2", level: 1, path: ".cache/repos/github.com__o__gh1/sub", origin: "https://github.com/o/gh1.git", ref: null },
+  );
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$TMP/manifest.json"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=cl2")" "remove one of two layers sharing the clone"
+[ -d "$CLONE" ] && pass "the shared clone dir survives while another layer uses it" || fail "shared clone dir deleted too early"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=cl1")" "remove the last layer using the clone"
+[ -d "$CLONE" ] && fail "orphaned clone dir left behind" || pass "the orphaned clone dir is deleted"
+mkdir -p "$TMP/keepme"
+printf '# Keep\n\n## Body\n\nuser data.\n' > "$TMP/keepme/keep.md"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"keep\",\"level\":1,\"path\":\"$TMP/keepme\"}" "$BASE/api/sources")" "add a user folder source"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=keep")" "remove the user folder source"
+[ -f "$TMP/keepme/keep.md" ] && pass "a user folder is never touched by remove" || fail "user folder deleted on remove"
+
 echo "allowMutations: false (token unset)"
 code 200 "$(C "$BASE2/api/graph")" "reads work with no header when token unset"
 code 405 "$(C -X POST -H 'content-type: application/json' -d '{}' "$BASE2/api/sources")" "POST /api/sources returns 405"
@@ -125,4 +331,4 @@ grep -q '"t"' "$TMP/manifest2.json" && pass "manifest untouched by blocked mutat
 FT="$(curl -s "$BASE2/nope")"
 grep -q host-fallthrough <<<"$FT" && pass "fall-through works on this host too" || fail "fall-through host2 ($FT)"
 
-[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount)" || { echo "service test FAILED"; exit 1; }
+[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard)" || { echo "service test FAILED"; exit 1; }

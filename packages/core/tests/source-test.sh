@@ -66,4 +66,38 @@ EOF
 bad="$(node "$resolver" --manifest "$tmpdir/bad.json" --concept decisions/database-engine 2>/dev/null)"
 grep -q 'SingleStore' <<<"$bad" || fail "unreachable MCP source should degrade to remaining layers, not fail" "$bad"
 
-echo "source test passed (heterogeneous stitch + conflict + cross-source inherit + graceful degrade)"
+# probe() checks the ANSWER, not just the transport: a server that responds but
+# lacks the two graph tools must fail the probe with err.code === "CONTRACT",
+# so the add form can word it differently from "did not respond". A transport
+# failure (missing binary) must NOT carry that code.
+cat > "$tmpdir/no-get-node.mjs" <<'EOF'
+import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const write = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+rl.on("line", (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  if (msg.method === "initialize") return write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "no-get-node", version: "0" } } });
+  if (msg.method === "notifications/initialized") return;
+  if (msg.method === "tools/list") return write({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "list_nodes" }, { name: "something_else" }] } });
+});
+EOF
+probe_out="$(MOCK="$mock" LACKING="$tmpdir/no-get-node.mjs" MCP_URL="file://$repo_root/packages/core/src/sources/mcp.mjs" node --input-type=module -e '
+const { createMcpSource } = await import(process.env.MCP_URL);
+const probeOf = (args) => createMcpSource({ name: "p", level: 0, command: process.execPath, args });
+const good = probeOf([process.env.MOCK]);
+const goodTools = (await good.probe()).tools.map((t) => t.name).sort().join(",");
+good.close();
+const lacking = probeOf([process.env.LACKING]);
+let contractCode = "NO-THROW";
+try { await lacking.probe(); } catch (e) { contractCode = e.code ?? "NO-CODE"; }
+lacking.close();
+const ghost = createMcpSource({ name: "p", level: 0, command: "definitely-not-a-real-binary-xyz", args: [] });
+let transportCode = "NO-THROW";
+try { await ghost.probe(); } catch (e) { transportCode = e.code === "CONTRACT" ? "CONTRACT" : "TRANSPORT"; }
+ghost.close();
+console.log(`${goodTools}|${contractCode}|${transportCode}`);
+')"
+[ "$probe_out" = "get_node,list_nodes|CONTRACT|TRANSPORT" ] || fail "probe contract check (got: $probe_out)"
+
+echo "source test passed (heterogeneous stitch + conflict + cross-source inherit + graceful degrade + probe contract)"

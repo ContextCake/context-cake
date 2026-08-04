@@ -113,7 +113,7 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
     ready = send("initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
-      clientInfo: { name: "contextcake", version: "0.3.0" },
+      clientInfo: { name: "contextcake", version: "0.4.0" },
     })
       .then(() => notify("notifications/initialized"))
       .catch(() => {});

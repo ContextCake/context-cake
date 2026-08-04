@@ -4,6 +4,18 @@ import path from 'node:path'
 export const CLI_LINK = '/usr/local/bin/contextcake'
 
 export function inspectCliStatus({ isPackaged, cliShim, link = CLI_LINK }) {
+  const result = classifyCliLink({ isPackaged, cliShim, link })
+  // Harness connection is sudo-free: the console builds `claude mcp add …`
+  // payloads from this absolute shim path whenever the /usr/local/bin name is
+  // unusable (missing/stale/conflict). Development has no packaged shim, and a
+  // blocked (translocated/DMG) path vanishes when the app quits or the image
+  // unmounts — both report null so an ephemeral absolute path can never leak
+  // into a harness configuration.
+  const shimPath = isPackaged && result.status !== 'blocked' ? cliShim : null
+  return { ...result, shimPath }
+}
+
+function classifyCliLink({ isPackaged, cliShim, link }) {
   if (!isPackaged) {
     return { status: 'development', message: 'CLI installation is available in packaged builds.' }
   }

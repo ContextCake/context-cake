@@ -10,6 +10,7 @@
 
 import path from "node:path";
 import readline from "node:readline";
+import { isNewerDay } from "./conflict-policy.mjs";
 import { resolveConcept } from "./resolver.mjs";
 import { searchConcepts, searchCaptures } from "./search.mjs";
 import { buildSources } from "./sources/index.mjs";
@@ -606,17 +607,32 @@ function assembleMarkdown(resolved) {
     ? `> ⚠ unreviewed capture from ${resolved.frontmatter.author ?? "unknown"}, ${resolved.frontmatter.captured ?? "?"} — decays after ${liveLayer?.retentionDays ?? 14} days unless promoted\n\n`
     : "";
   const front = `---\n${fmLines.join("\n")}\n---\n\n${banner}`;
-  const bodyParts = resolved.sections
-    .filter((s) => !s.suppressed)
-    .map((s) => {
-      const head = s.heading ? `${s.heading}\n\n${s.content}` : s.content;
-      if (!s.conflicts || s.conflicts.length === 0) return head;
-      const notes = s.conflicts
-        .map((c) => `> ⚠ ${c.layer} disagrees (updated ${c.updated ?? "?"}): ${c.content.replace(/\n+/g, " ")}`)
-        .join("\n");
-      return `${head}\n\n${notes}`;
-    });
+  const bodyParts = resolved.sections.map((s) => {
+    // A suppressed section is an explicit tombstone. Rendering nothing would
+    // hide that a layer deliberately withdrew it — say who suppressed it.
+    if (s.suppressed) {
+      const note = `_(suppressed by ${s.sourceLayer})_`;
+      return s.heading ? `${s.heading}\n\n${note}` : note;
+    }
+    const head = s.heading ? `${s.heading}\n\n${s.content}` : s.content;
+    if (!s.conflicts || s.conflicts.length === 0) return head;
+    const notes = s.conflicts.map((c) => renderDissent(c, s.sourceUpdated)).join("\n\n");
+    return `${head}\n\n${notes}`;
+  });
   return front + bodyParts.join("\n\n");
+}
+
+// One blockquote per dissent: a header line naming the layer and date — marked
+// when the dissent is newer than the effective value (day granularity, both
+// dates must parse; see conflict-policy.mjs) — then the dissent's full content
+// with every line quoted. An empty-content dissent is a lower layer's tombstone
+// for a section a higher layer kept. Undated dissent renders `(updated ?)`.
+function renderDissent(dissent, sourceUpdated) {
+  const updated = dissent.updated ?? "?";
+  if (!dissent.content) return `> ⚠ ${dissent.layer} suppresses this section (updated ${updated})`;
+  const newer = isNewerDay(dissent.updated, sourceUpdated) ? " — ⚠ newer than the effective value" : "";
+  const body = dissent.content.split("\n").map((line) => (line ? `> ${line}` : ">")).join("\n");
+  return `> ⚠ ${dissent.layer} disagrees (updated ${updated})${newer}:\n${body}`;
 }
 
 function stripDecoration(value) {

@@ -27,7 +27,7 @@ test('accepts matching Web Demo provenance and site release links', async () => 
       seen.push(url.href)
       if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
       if (url.pathname === '/install/') return response('ContextCake-1.2.3-arm64.dmg')
-      if (url.pathname === '/demo/') return response('https://contextcake-console.pages.dev/')
+      if (url.pathname === '/demo/') return response('<iframe src="https://contextcake-console.pages.dev/"></iframe>')
       throw new Error(`unexpected URL ${url}`)
     },
   })
@@ -59,4 +59,21 @@ test('rejects inconsistent release inputs before making a request', async () => 
     /tag and version do not match/,
   )
   assert.equal(requested, false)
+})
+
+test('rejects a lookalike Web Demo iframe host', async () => {
+  await assert.rejects(
+    verifyReleaseSurfaces({
+      ...release,
+      fetchImpl: async (url) => {
+        if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
+        if (url.pathname === '/install/') return response('ContextCake-1.2.3-arm64.dmg')
+        if (url.pathname === '/demo/') {
+          return response('<iframe src="https://contextcake-console.pages.dev.attacker.example/"></iframe>')
+        }
+        throw new Error(`unexpected URL ${url}`)
+      },
+    }),
+    /does not embed the canonical Web Demo/,
+  )
 })

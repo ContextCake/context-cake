@@ -42,7 +42,16 @@ forbidText('After sign-in', 'Sign-in must not be presented as required for local
 forbidText('theagent', 'Inline link whitespace collapsed in production HTML')
 forbidText('nopostinstall', 'Inline code whitespace collapsed in production HTML')
 
-if (!demoHtml.includes('https://contextcake-console.pages.dev/')) {
+const demoIframeMatch = demoHtml.match(/<iframe\b[^>]*\bsrc="([^"]+)"[^>]*>/i)
+if (!demoIframeMatch) throw new Error('The site demo must contain a Web Demo iframe')
+
+let embeddedDemoUrl
+try {
+  embeddedDemoUrl = new URL(demoIframeMatch[1])
+} catch {
+  throw new Error('The site demo iframe must use a valid URL')
+}
+if (embeddedDemoUrl.href !== 'https://contextcake-console.pages.dev/') {
   throw new Error('The site demo must embed the canonical released Web Demo')
 }
 if (demoHtml.includes('/demo-app/')) {

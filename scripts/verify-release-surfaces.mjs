@@ -47,7 +47,16 @@ export async function verifyReleaseSurfaces({
 
   const demoResponse = await readResponse(fetchImpl, new URL('/demo/', siteBase), 'Site demo page')
   const demoHtml = await demoResponse.text()
-  if (!demoHtml.includes('https://contextcake-console.pages.dev/')) {
+  const demoIframeMatch = demoHtml.match(/<iframe\b[^>]*\bsrc="([^"]+)"[^>]*>/i)
+  if (!demoIframeMatch) throw new Error('Site demo page does not contain a Web Demo iframe')
+
+  let embeddedDemoUrl
+  try {
+    embeddedDemoUrl = new URL(demoIframeMatch[1])
+  } catch {
+    throw new Error('Site demo iframe does not use a valid URL')
+  }
+  if (embeddedDemoUrl.href !== 'https://contextcake-console.pages.dev/') {
     throw new Error('Site demo page does not embed the canonical Web Demo')
   }
 }

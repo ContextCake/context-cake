@@ -8,6 +8,28 @@ import { SettingsView } from './SettingsView'
 let container: HTMLDivElement
 let root: Root
 
+type TestPreferences = {
+  theme: 'system' | 'light' | 'dark'
+  density: 'comfortable' | 'compact'
+  updateCheck: boolean
+  anonymousMetrics: boolean | null
+  reducedTransparency: boolean
+  highContrast: boolean
+}
+
+function preferences(overrides: Partial<TestPreferences> = {}) {
+  let current: TestPreferences = {
+    theme: 'system', density: 'comfortable', updateCheck: true,
+    anonymousMetrics: true, reducedTransparency: false, highContrast: false,
+    ...overrides,
+  }
+  const set = vi.fn().mockImplementation(async (patch: Partial<TestPreferences>) => {
+    current = { ...current, ...patch }
+    return current
+  })
+  return { initial: current, get: vi.fn().mockImplementation(async () => current), set, onChanged: vi.fn(() => () => {}) }
+}
+
 function button(label: string): HTMLButtonElement {
   const match = findButton(label)
   if (!match) throw new Error(`Button not found: ${label}`)
@@ -24,6 +46,7 @@ function withAccountsEnabled(auth: Partial<NonNullable<typeof window.__CC_AUTH>>
     getApiToken: vi.fn().mockResolvedValue('token'),
     version: '0.0.0-test',
     authState: { signedIn: false, available: true },
+    preferences: preferences({ theme: 'dark' }),
     metrics: {
       getEnabled: vi.fn().mockResolvedValue(true),
       setEnabled: vi.fn().mockResolvedValue(true),
@@ -49,18 +72,16 @@ function withAccountsEnabled(auth: Partial<NonNullable<typeof window.__CC_AUTH>>
 }
 
 function withDesktopMetrics(enabled = true) {
-  const setEnabled = vi.fn().mockImplementation(async (next: boolean) => next)
+  const bridge = preferences({ anonymousMetrics: enabled })
   window.__CC_DESKTOP = {
     getApiToken: vi.fn().mockResolvedValue('token'),
     version: '0.0.0-test',
     authState: { signedIn: false, available: false },
-    metrics: {
-      getEnabled: vi.fn().mockResolvedValue(enabled),
-      setEnabled,
-    },
+    preferences: bridge,
+    metrics: { getEnabled: vi.fn().mockResolvedValue(enabled), setEnabled: vi.fn() },
     cli: { getStatus: vi.fn(), install: vi.fn() },
   } as unknown as typeof window.__CC_DESKTOP
-  return setEnabled
+  return bridge.set
 }
 
 beforeEach(() => {
@@ -147,9 +168,11 @@ describe('SettingsView', () => {
       </ThemeModeProvider>,
     ))
 
-    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(document.documentElement.dataset.themePreference).toBe('system')
     await act(async () => button('Light').click())
     expect(document.documentElement.dataset.theme).toBe('light')
+    await act(async () => button('Dark').click())
+    expect(document.documentElement.dataset.theme).toBe('dark')
   })
 
   it('explains anonymous metrics and lets desktop users opt out', async () => {
@@ -168,7 +191,7 @@ describe('SettingsView', () => {
     expect(toggle?.checked).toBe(true)
 
     await act(async () => toggle?.click())
-    expect(setEnabled).toHaveBeenCalledWith(false)
+    expect(setEnabled).toHaveBeenCalledWith({ anonymousMetrics: false })
     expect(toggle?.checked).toBe(false)
   })
 

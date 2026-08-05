@@ -18,6 +18,19 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   // Initial, non-PII snapshot. The live state (including optional email) is
   // delivered through __CC_AUTH so it never appears in process arguments.
   authState: { signedIn: arg('cc-signed-in') === '1', available: arg('cc-accounts') === '1' },
+  preferences: {
+    initial: {
+      theme: ['system', 'light', 'dark'].includes(arg('cc-theme')) ? arg('cc-theme') : 'system',
+      density: ['comfortable', 'compact'].includes(arg('cc-density')) ? arg('cc-density') : 'comfortable',
+      updateCheck: arg('cc-update-check') !== '0',
+      anonymousMetrics: arg('cc-anonymous-metrics') === '' ? null : arg('cc-anonymous-metrics') === '1',
+      reducedTransparency: arg('cc-reduced-transparency') === '1',
+      highContrast: arg('cc-high-contrast') === '1',
+    },
+    get: () => ipcRenderer.invoke('preferences:get'),
+    set: (patch) => ipcRenderer.invoke('preferences:set', patch),
+    onChanged: (cb) => subscribe('preferences:changed', cb),
+  },
   chooseFolder: () => ipcRenderer.invoke('contextcake:choose-folder'),
   metrics: {
     getEnabled: () => ipcRenderer.invoke('contextcake:metrics-get'),

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
 import { startEngineService } from './service-host.mjs'
 import { createGithubConnections, verifyGithubToken } from './github-connections.mjs'
 import { buildMenu } from './menu.mjs'
@@ -23,6 +23,7 @@ import { isEngineOrigin, isTrustedIpcSender } from './navigation.mjs'
 import { getCliStatus, installCli } from './cli-install.mjs'
 import { reportFirstLaunch } from './install-metrics.mjs'
 import { manifestLayerCount, shouldDeferConsentPrompt } from './metrics-consent.mjs'
+import { changedPreferencePatch } from './preferences.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -115,6 +116,26 @@ function currentSyncState() {
 
 function sendToRenderer(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
+}
+
+function desktopPreferencesSnapshot(settings = readSettings()) {
+  const theme = ['system', 'light', 'dark'].includes(settings.theme) ? settings.theme : 'system'
+  const density = ['comfortable', 'compact'].includes(settings.density) ? settings.density : 'comfortable'
+  return {
+    theme,
+    density,
+    updateCheck: settings.updateCheck !== false,
+    anonymousMetrics: typeof settings.anonymousMetrics === 'boolean' ? settings.anonymousMetrics : null,
+    reducedTransparency: nativeTheme.prefersReducedTransparency === true,
+    highContrast: nativeTheme.shouldUseHighContrastColors === true,
+  }
+}
+
+function applyNativeAppearance(settings = readSettings()) {
+  const preferences = desktopPreferencesSnapshot(settings)
+  nativeTheme.themeSource = preferences.theme
+  sendToRenderer('preferences:changed', preferences)
+  return preferences
 }
 
 function readManifestConfig() {
@@ -221,6 +242,7 @@ function publishPulledSettings(pulled) {
   if (!pulled) return
   applyPulledManifest(pulled.settings)
   sendToRenderer('settings:pulled', selectSyncSettings(pulled.settings))
+  applyNativeAppearance()
   if (app.isReady()) {
     installApplicationMenu()
     initUpdater()
@@ -520,6 +542,27 @@ registerIntegrationIpc()
 
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
 handleTrustedIpc('contextcake:cli-install', () => installCli(win, { showSuccess: false }))
+handleTrustedIpc('preferences:get', () => desktopPreferencesSnapshot())
+handleTrustedIpc('preferences:set', (candidate) => {
+  const current = readSettings()
+  const changed = changedPreferencePatch(current, candidate)
+  if (Object.keys(changed).length === 0) return desktopPreferencesSnapshot(current)
+
+  const { anonymousMetrics, ...synced } = changed
+  let next = current
+  if (Object.keys(synced).length > 0) next = writeSettings(synced)
+  if (anonymousMetrics !== undefined) next = writeLocalSettings({ anonymousMetrics })
+
+  const preferences = applyNativeAppearance(next)
+  if (Object.hasOwn(changed, 'updateCheck')) initUpdater()
+  if (anonymousMetrics !== undefined) {
+    installApplicationMenu()
+    if (anonymousMetrics) reportAnonymousFirstLaunch()
+    else cancelAnonymousFirstLaunch()
+  }
+  if (Object.keys(synced).length > 0) scheduleSettingsPush()
+  return preferences
+})
 handleTrustedIpc('contextcake:metrics-get', () => {
   const enabled = readSettings().anonymousMetrics
   return typeof enabled === 'boolean' ? enabled : null
@@ -557,6 +600,7 @@ async function createWindow() {
   // filling in.
   await pushGithubTokens()
 
+  const preferences = applyNativeAppearance()
   win = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -571,6 +615,12 @@ async function createWindow() {
       additionalArguments: [
         `--cc-version=${app.getVersion()}`,
         `--cc-signed-in=${currentAuthState().signedIn ? '1' : '0'}`,
+        `--cc-theme=${preferences.theme}`,
+        `--cc-density=${preferences.density}`,
+        `--cc-update-check=${preferences.updateCheck ? '1' : '0'}`,
+        `--cc-anonymous-metrics=${preferences.anonymousMetrics === null ? '' : preferences.anonymousMetrics ? '1' : '0'}`,
+        `--cc-reduced-transparency=${preferences.reducedTransparency ? '1' : '0'}`,
+        `--cc-high-contrast=${preferences.highContrast ? '1' : '0'}`,
         // Whether this build ships accounts at all. Static for the process, so
         // the renderer can drop the Account pane on first paint rather than
         // rendering it and then discovering there is nothing behind it.
@@ -673,6 +723,7 @@ app.on('open-url', (event, url) => {
 })
 
 app.whenReady().then(async () => {
+  nativeTheme.on('updated', () => sendToRenderer('preferences:changed', desktopPreferencesSnapshot()))
   await initializeAccounts()
   await createWindow()
   installApplicationMenu()

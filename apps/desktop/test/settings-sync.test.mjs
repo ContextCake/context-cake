@@ -69,6 +69,20 @@ test('prepareSyncPayload allowlists metadata and rejects credentials or context'
   )
 })
 
+test('system theme and application density are sync-safe global preferences', () => {
+  assert.deepEqual(
+    prepareSyncPayload({ theme: 'system', density: 'compact', updateCheck: false, anonymousMetrics: true }),
+    { theme: 'system', density: 'compact', updateCheck: false },
+  )
+  assert.deepEqual(prepareSyncPayload({ density: 'comfortable' }), { density: 'comfortable' })
+  assert.throws(() => prepareSyncPayload({ theme: 'automatic' }), /invalid theme/)
+  assert.throws(() => prepareSyncPayload({ density: 'dense' }), /invalid density/)
+  assert.throws(
+    () => prepareSyncPayload({ profiles: [{ id: 'work', preferences: { density: 'compact' } }] }),
+    /unsupported profile preference field/,
+  )
+})
+
 test('Pack files and local registry stay out of sync while identity metadata is safe', () => {
   const manifest = {
     packs: {

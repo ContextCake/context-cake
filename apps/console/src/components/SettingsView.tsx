@@ -5,6 +5,7 @@ import type { Mode } from '../api'
 import { AccountPanel } from './AccountPanel'
 import { IndexingSettings } from './IndexingSettings'
 import { IntegrationsPanel } from './IntegrationsPanel'
+import { SegmentedControl } from './ui'
 
 type SettingsPane = 'general' | 'indexing' | 'integrations' | 'account'
 
@@ -34,7 +35,7 @@ export function SettingsView({
   const [pane, setPane] = useState<SettingsPane>('general')
   const [updatesEnabled, setUpdatesEnabled] = useState(() => isUpdateCheckEnabled(appMode))
   const [metricsEnabled, setMetricsEnabled] = useState<boolean | null>(null)
-  const { mode: theme, toggle: toggleTheme } = useThemeMode()
+  const { preference: theme, density, setPreference: setTheme, setDensity } = useThemeMode()
   const desktop = Boolean(window.__CC_DESKTOP)
   // Builds ship without accounts by default, so the pane is hidden rather than
   // shown empty. Browser and demo builds never had sign-in to offer.
@@ -45,29 +46,40 @@ export function SettingsView({
 
   useEffect(() => {
     let active = true
-    window.__CC_DESKTOP?.metrics?.getEnabled()
-      .then((enabled) => { if (active) setMetricsEnabled(enabled ?? false) })
+    const preferences = window.__CC_DESKTOP?.preferences
+    preferences?.get()
+      .then((value) => {
+        if (!active) return
+        setMetricsEnabled(value.anonymousMetrics ?? false)
+        setUpdatesEnabled(value.updateCheck)
+      })
       .catch(() => { if (active) setMetricsEnabled(false) })
-    return () => { active = false }
+    const unsubscribe = preferences?.onChanged((value) => {
+      if (!active) return
+      setMetricsEnabled(value.anonymousMetrics ?? false)
+      setUpdatesEnabled(value.updateCheck)
+    })
+    return () => { active = false; unsubscribe?.() }
   }, [])
 
-  const chooseTheme = (next: 'light' | 'dark') => {
-    if (next !== theme) toggleTheme()
-  }
-
-  const toggleUpdates = () => {
+  const toggleUpdates = async () => {
     const next = !updatesEnabled
     setUpdatesEnabled(next)
-    setUpdateCheckEnabled(next)
+    if (window.__CC_DESKTOP?.preferences) {
+      try { setUpdatesEnabled((await window.__CC_DESKTOP.preferences.set({ updateCheck: next })).updateCheck) }
+      catch { setUpdatesEnabled(!next) }
+    } else {
+      setUpdateCheckEnabled(next)
+    }
   }
 
   const toggleMetrics = async () => {
-    if (!window.__CC_DESKTOP?.metrics || metricsEnabled === null) return
+    if (!window.__CC_DESKTOP?.preferences || metricsEnabled === null) return
     const previous = metricsEnabled
     const next = !previous
     setMetricsEnabled(next)
     try {
-      setMetricsEnabled(await window.__CC_DESKTOP.metrics.setEnabled(next))
+      setMetricsEnabled((await window.__CC_DESKTOP.preferences.set({ anonymousMetrics: next })).anonymousMetrics ?? false)
     } catch {
       setMetricsEnabled(previous)
     }
@@ -139,10 +151,21 @@ export function SettingsView({
                       <strong>Theme</strong>
                       <span>Choose the appearance used throughout ContextCake.</span>
                     </div>
-                    <div className="cc-settings-segmented" role="group" aria-label="Theme">
-                      <button type="button" aria-pressed={theme === 'light'} onClick={() => chooseTheme('light')}>Light</button>
-                      <button type="button" aria-pressed={theme === 'dark'} onClick={() => chooseTheme('dark')}>Dark</button>
+                    <SegmentedControl label="Theme" value={theme} onChange={setTheme} options={[
+                      { value: 'system', label: 'System' },
+                      { value: 'light', label: 'Light' },
+                      { value: 'dark', label: 'Dark' },
+                    ]} />
+                  </div>
+                  <div className="cc-settings-row">
+                    <div>
+                      <strong>Density</strong>
+                      <span>Comfortable gives controls more room. Compact fits more knowledge on screen.</span>
                     </div>
+                    <SegmentedControl label="Density" value={density} onChange={setDensity} options={[
+                      { value: 'comfortable', label: 'Comfortable' },
+                      { value: 'compact', label: 'Compact' },
+                    ]} />
                   </div>
                 </div>
               </section>
@@ -153,17 +176,13 @@ export function SettingsView({
                   <div className="cc-settings-row">
                     <div>
                       <strong>Automatic updates</strong>
-                      <span>{desktop ? 'Managed from the ContextCake application menu.' : 'Check GitHub for new ContextCake console releases.'}</span>
+                      <span>{desktop ? 'Check for new desktop releases automatically.' : 'Check GitHub for new ContextCake console releases.'}</span>
                     </div>
-                    {desktop ? (
-                      <span className="cc-settings-value">App menu</span>
-                    ) : (
-                      <label className="cc-switch">
-                        <input type="checkbox" checked={updatesEnabled} onChange={toggleUpdates} />
-                        <span aria-hidden="true" />
-                        <span className="sr-only">Check for updates automatically</span>
-                      </label>
-                    )}
+                    <label className="cc-switch">
+                      <input type="checkbox" checked={updatesEnabled} onChange={toggleUpdates} />
+                      <span aria-hidden="true" />
+                      <span className="sr-only">Check for updates automatically</span>
+                    </label>
                   </div>
                   {desktop && (
                     <div className="cc-settings-row">

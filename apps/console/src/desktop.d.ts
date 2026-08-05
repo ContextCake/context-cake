@@ -19,6 +19,18 @@ type SettingsSyncState = {
 
 type CliStatus = 'installed' | 'missing' | 'stale' | 'conflict' | 'blocked' | 'development'
 
+type ThemePreference = 'system' | 'light' | 'dark'
+type Density = 'comfortable' | 'compact'
+
+type DesktopPreferences = {
+  theme: ThemePreference
+  density: Density
+  updateCheck: boolean
+  anonymousMetrics: boolean | null
+  reducedTransparency: boolean
+  highContrast: boolean
+}
+
 interface CliResult {
   status: CliStatus
   message: string
@@ -54,6 +66,12 @@ declare global {
       version: string
       /** Initial auth snapshot; subscribe through __CC_AUTH for live state. */
       authState: DesktopAuthState
+      preferences?: {
+        initial: DesktopPreferences
+        get(): Promise<DesktopPreferences>
+        set(patch: Partial<Pick<DesktopPreferences, 'theme' | 'density' | 'updateCheck' | 'anonymousMetrics'>>): Promise<DesktopPreferences>
+        onChanged(cb: (preferences: DesktopPreferences) => void): () => void
+      }
       /** Open the native macOS directory picker. Null means the user canceled. */
       chooseFolder?: () => Promise<string | null>
       /** Explicit, user-controlled anonymous usage-metrics preference. */

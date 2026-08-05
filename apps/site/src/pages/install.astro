@@ -5,17 +5,14 @@ import Base from '../layouts/Base.astro';
 import CodeBlock from '../components/CodeBlock.astro';
 import Icon from '../components/Icon.astro';
 import demo from '../data/demo-cascade.json';
+import { appVersion, appTag, appDownloadUrl, appReleaseUrl } from '../data/app-release';
 
 const sourceVersion = '0.2.0';
 const sourceTag = `console-v${sourceVersion}`;
-const appVersion = '0.1.0';
-const appTag = `app-v${appVersion}`;
 const archiveName = `context-cake-${sourceTag}.tar.gz`;
 const archiveSha256 = '013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253';
 const sourceDownloadUrl = `https://github.com/ContextCake/context-cake/archive/refs/tags/${sourceTag}.tar.gz`;
 const sourceTagUrl = `https://github.com/ContextCake/context-cake/tree/${sourceTag}`;
-const appDownloadUrl = `https://github.com/ContextCake/context-cake/releases/download/${appTag}/ContextCake-${appVersion}-arm64.dmg`;
-const appReleaseUrl = `https://github.com/ContextCake/context-cake/releases/tag/${appTag}`;
 
 const terminalDownload = `curl --fail --location ${sourceDownloadUrl} \\
   --output ${archiveName}`;
@@ -78,7 +75,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				</div>
 				<ul class="hero-facts" aria-label="Mac app details">
 					<li>Signed and notarized</li>
-					<li>Apple silicon</li>
+					<li>Apple silicon (M1 or later) only</li>
 					<li>Runs locally</li>
 					<li><a href={appReleaseUrl}>Release notes and checksums</a></li>
 				</ul>
@@ -203,8 +200,9 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 				<div>
 					<h2 id="source-title">Need the engine without the app?</h2>
 					<p>
-						The versioned source route stays available for Linux, WSL, contribution work,
-						and anyone who wants to audit every file before running it.
+						The versioned source route stays available for Intel Macs, Linux, WSL,
+						contribution work, and anyone who wants to audit every file before running it.
+						The app itself ships for Apple silicon only.
 					</p>
 				</div>
 				<span>Node.js 18+ · macOS, Linux, or WSL · no npm install</span>

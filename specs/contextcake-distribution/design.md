@@ -16,7 +16,7 @@
 | Self-update swap mechanism | **electron-updater** (Squirrel.Mac): staged download, code-signature validated, "Relaunch to update" |
 | Install locations | App: `/Applications` (drag-install DMG). Config: `~/Library/Application Support/ContextCake/`. Caches: `~/Library/Caches/ContextCake/`. CLI: symlink in `/usr/local/bin` (user-initiated) |
 | Release automation | **electron-builder** in GitHub Actions on `app-v*` tag: build → sign → notarize → staple → publish release assets |
-| Artifact set per release | `ContextCake-<ver>-arm64.dmg`, `ContextCake-<ver>-arm64-mac.zip` (updater feed), `latest-mac.yml`, `SHA256SUMS` |
+| Artifact set per release | `ContextCake-<ver>-arm64.dmg`, `ContextCake-<ver>-arm64-mac.zip` (updater feed), `latest-mac.yml`, `SHA256SUMS`, `install-ping.txt` (content-free first-launch counter) |
 | Architecture | arm64-only first (spec §2 primary target); universal2 revisited on demand |
 
 ## 2. Why Electron
@@ -101,8 +101,15 @@ local users on shared Macs.
 |---|---|---|
 | `~/Library/Application Support/ContextCake/manifest.json` | layers/profiles (manifest v2) | never |
 | `~/Library/Application Support/ContextCake/settings.json` | app preferences | never |
+| `~/Library/Application Support/ContextCake/install-metric-v1.json` | local first-launch-reported marker; version and timestamp only | never |
 | `~/Library/Caches/ContextCake/sources/` | source cache (regenerable) | never (safe to purge) |
 | Keychain (via `safeStorage`) | auth session, integration tokens | never |
+
+Cloned repository sources are deliberately *not* under `~/Library/Caches`: the
+service clones next to the manifest (`~/Library/Application
+Support/ContextCake/.cache/repos/`), because clones are load-bearing source data
+referenced by manifest-relative `layer.path` entries — a cache purge or a
+relocation would orphan those sources.
 
 First run with no manifest → the console SetupWizard (extended per plan) creates
 a starter personal layer and writes a valid manifest — no hand-editing (spec §5).
@@ -130,13 +137,21 @@ from the same engine + manifest contract; it is a packaging task, not new code.
 2. `app-release.yml` (macOS runner): build console renderer → electron-builder
    package → codesign (Developer ID, hardened runtime) → `notarytool submit
    --wait` → staple → generate `SHA256SUMS` → create the GitHub Release with
-   all §1 artifacts. GitHub Releases is thereby the **single authoritative
-   version source** for the app, the CLI's update hint, the site's download
-   button, the Homebrew cask, and the changelog page.
+   all §1 artifacts. A successfully started packaged app fetches the tiny
+   `install-ping.txt` asset once per persistent application-support directory;
+   its public asset `download_count` provides a directional first-launch metric
+   without an SDK, event body, or application-generated identifier. GitHub
+   Releases is thereby the **single authoritative version source** for the app,
+   the CLI's update hint, the site's download button, the Homebrew cask, and the
+   changelog page.
 3. In-app: electron-updater checks on launch + every 6 hours over HTTPS to
    `github.com`/`objects.githubusercontent.com` only; a Settings toggle
    disables all checks; the check carries version/platform/arch and no PII
    (disclosed in `docs/reference/updates-and-privacy` on the site, per spec §5).
+   The one-time first-launch request has its own explicit first-run choice and
+   Settings/application-menu toggle. It is disclosed beside the updater behavior
+   but does not share the updater preference. The choice stays local rather than
+   entering account settings sync, so a remote preference cannot bypass consent.
 4. Package-managed installs are never self-mutated (spec §5): the cask relies
    on `brew upgrade` (`auto_updates true` so brew defers to the app updater);
    the CLI prints the correct upgrade hint for its detected channel.

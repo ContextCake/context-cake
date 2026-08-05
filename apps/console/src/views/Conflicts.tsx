@@ -76,6 +76,12 @@ export function Conflicts() {
                       {isW && (
                         <span style={css(`font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.08em; padding:3px 8px; background:#2C8A82; color:var(--cc-on-teal); border-radius:999px;`)}>EFFECTIVE</span>
                       )}
+                      {!isW && k.fresherDissent && (
+                        <span
+                          title="This dissenting value was updated after the effective one — the winner may be stale."
+                          style={css(`font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; padding:3px 8px; background:${C.amberFill}; color:${C.amberText}; border:1px solid ${C.amberStrokeE}; border-radius:999px; white-space:nowrap;`)}
+                        >dissent is newer</span>
+                      )}
                     </div>
                     <div style={css(`font-size:13.5px; color:#1A1915; line-height:1.5; font-weight:${isW ? 600 : 400};`)}>{k.value}</div>
                     <div style={css(`display:flex; align-items:center; gap:8px; margin-top:12px; font-size:11px; color:#8A8A82; font-family:${MONO};`)}>

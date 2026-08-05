@@ -138,6 +138,11 @@ jobs:
           shasum -a 256 *.dmg *.zip > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Prepare anonymous install counter
+        if: steps.creds.outputs.signed == 'true'
+        working-directory: apps/desktop/dist
+        run: cp ../release-assets/install-ping.txt install-ping.txt
+
       - name: Publish GitHub Release
         if: steps.creds.outputs.signed == 'true'
         env:
@@ -147,7 +152,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "ContextCake ${GITHUB_REF_NAME#app-v}" \
             --generate-notes \
-            *.dmg *.zip latest-mac.yml SHA256SUMS
+            *.dmg *.zip latest-mac.yml SHA256SUMS install-ping.txt
 
       - name: Upload artifacts (unsigned build)
         if: steps.creds.outputs.signed != 'true'

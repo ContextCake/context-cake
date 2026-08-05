@@ -2,7 +2,7 @@
   "name": "contextcake-desktop",
   "productName": "ContextCake",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "ContextCake for Mac — desktop shell over the engine and console",
   "type": "module",
   "main": "src/main/main.mjs",
@@ -24,7 +24,7 @@
     "dist": "npm run renderer && electron-builder --mac --arm64"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.110.9",
+    "@supabase/supabase-js": "2.111.0",
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {

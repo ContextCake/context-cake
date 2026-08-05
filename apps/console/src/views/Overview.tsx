@@ -23,8 +23,10 @@ export function Overview() {
     return { id, L, col, nc, conceptCount }
   })
 
+  // 'empty' is deliberately neutral: a source serving zero concepts is not
+  // healthy-green, but it isn't failing either — it just has nothing to say.
   const statusColor = (s: string) =>
-    s === 'error' ? C.amberStrokeE : s === 'degraded' ? C.amberStroke : s === 'serving' ? C.tealStrokeE : C.blueStroke
+    s === 'error' ? C.amberStrokeE : s === 'degraded' ? C.amberStroke : s === 'serving' ? C.tealStrokeE : s === 'empty' ? C.lineStrong : C.blueStroke
   const kindMap: Record<string, { g: string; l: string }> = {
     mcp: { g: '⇄', l: 'MCP source' }, 'okf-local': { g: '▤', l: 'OKF bundle' },
   }

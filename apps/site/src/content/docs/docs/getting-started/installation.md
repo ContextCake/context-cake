@@ -15,7 +15,7 @@ local setup path.
 
 ## macOS app (recommended)
 
-Download [ContextCake 0.1.0 for Mac](https://github.com/ContextCake/context-cake/releases/download/app-v0.1.0/ContextCake-0.1.0-arm64.dmg), open the DMG, and drag ContextCake to Applications. Open it from Applications; macOS may ask you to confirm the first launch.
+Download the `.dmg` from the [latest release](https://github.com/ContextCake/context-cake/releases/latest), open it, and drag ContextCake to Applications. Open it from Applications; macOS may ask you to confirm the first launch. The app is Apple silicon (arm64) only — on an Intel Mac, use the source route below.
 
 The app's activation path is:
 
@@ -31,11 +31,10 @@ The app's activation path is:
    names its source and keeps any disagreement visible.
 
 Source setup comes before agent connection: an agent needs at least one source to
-query. Sign-in is optional and is only needed when you want account-backed settings
-sync. The app can also install the optional `contextcake` command when a client
+query. The app can also install the optional `contextcake` command when a client
 needs it.
 
-The [release page](https://github.com/ContextCake/context-cake/releases/tag/app-v0.1.0)
+Each [release page](https://github.com/ContextCake/context-cake/releases/latest)
 contains the matching ZIP and checksums.
 
 ## Prerequisites for the source route

@@ -1,0 +1,42 @@
+name: App Metrics Snapshot
+
+on:
+  schedule:
+    - cron: '17 12 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: downloads and first launches
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Build metrics snapshot
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/app-metrics.mjs > app-metrics.md
+
+      - name: Publish job summary
+        run: cat app-metrics.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain machine-readable snapshot
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/app-metrics.mjs --json > app-metrics.json
+
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-metrics-${{ github.run_id }}
+          path: app-metrics.json
+          retention-days: 90

@@ -237,16 +237,28 @@ export function createEngineService({
     if (closed) throw httpError(503, "Engine service is closed");
     const stamp = manifestStamp();
     if (cache && cache.stamp === stamp) return cache;
-    const manifest = readManifest(); // throws while the manifest is missing/invalid
+    const stored = readManifest(); // throws while the manifest is missing/invalid
+    // ONE profile view of the manifest, built here and nowhere else. Every read
+    // this service does — the layers list, buildSources' own internal
+    // `manifest.layers` read, the index keys, the index↔layer correlation in
+    // ensureIndexes, buildGraph's layerMeta, syncSourceApi's lookup, the
+    // watcher roots, and layerRootMap for the file APIs — flows from
+    // `cache.manifest`, so pointing them all at this view is what keeps a v2
+    // manifest (profiles.default) and the flat manifest it migrated from
+    // producing identical service responses. Mutation routes deliberately keep
+    // re-reading the stored manifest through the profile-aware helpers.
+    const manifest = { ...stored, layers: getManifestProfileLayers(stored) };
     const settings = resolveSettings(manifest);
-    const layers = manifest.layers ?? [];
+    const layers = manifest.layers;
     const next = {
       stamp,
       manifest,
       settings,
       sources: buildSources(manifest, MANIFEST_DIR),
       // Identity of a source's *configuration* (plus the settings that govern
-      // indexing), so an unrelated manifest edit doesn't discard a finished index.
+      // indexing), so an unrelated manifest edit doesn't discard a finished
+      // index — and, because a migrated profile carries the same layer objects,
+      // a v2 migration reuses every existing index too.
       keys: layers.map((l) => `${JSON.stringify(l)}::${JSON.stringify(settings)}`),
     };
     const prev = cache;
@@ -625,6 +637,7 @@ export function createEngineService({
         kind,
         location: kind === "mcp" ? [meta.command, ...(meta.args ?? [])].join(" ") : meta.path,
         origin: meta.origin ?? null, // e.g. a github repo a clone came from
+        live: meta.live === true, // the team's live capture layer, if this is it
         conceptCount: snap?.ids.length ?? 0,
         tokens: snap?.tokens ?? 0,
         latestUpdated: latestPerSource.get(s.name) ?? null,
@@ -768,6 +781,35 @@ export function createEngineService({
       const probeArgs = args.map((a) => (a.startsWith("./") || a.startsWith("../") ? path.resolve(MANIFEST_DIR, a) : a));
       await probeMcp({ name, level, command, args: probeArgs });
       layer = { name, level, source: "mcp", command, args };
+    } else if (b.kind === "github-rest") {
+      // The "Public repo" wizard path: a REST-read layer, no clone. It reads
+      // anonymously in 0.4.0 by design — a keychain alias would silently
+      // resolve to null and false-green a private repo as empty, so auth (and
+      // apiBase, which decides where a credential would be SENT) are rejected
+      // outright rather than ignored. Private repos take the git-clone kind;
+      // headless users may hand-edit {"auth":{"tokenEnv":"NAME"}} into the
+      // manifest, which the adapter already honors.
+      if (b.auth !== undefined || b.apiBase !== undefined) {
+        throw httpError(400, "A public-repo source reads anonymously — remove auth/apiBase. For private repos use the Private repo (git) option.");
+      }
+      const slug = String(b.repo ?? "").trim();
+      const parts = slug.split("/");
+      if (parts.length !== 2 || !parts.every((part) => /^[A-Za-z0-9._-]+$/.test(part) && part !== "." && part !== "..")) {
+        throw httpError(400, 'Repo must be "owner/name"');
+      }
+      if (b.paths !== undefined && (!Array.isArray(b.paths) || b.paths.some((p) => typeof p !== "string"))) {
+        throw httpError(400, "paths must be an array of strings");
+      }
+      await probeGithubRest(slug);
+      layer = {
+        name,
+        level,
+        source: "github",
+        repo: slug,
+        ...(b.ref ? { ref: String(b.ref) } : {}),
+        ...(Array.isArray(b.paths) && b.paths.length ? { paths: b.paths } : {}),
+        cache: { ttlSeconds: 900 },
+      };
     } else if (b.kind === "github") {
       const { url, slug } = normalizeRepo(String(b.repo ?? ""));
       const dir = path.join(CACHE_DIR, slug);
@@ -822,15 +864,50 @@ export function createEngineService({
     }
   }
 
+  // Add-time github-rest validation: one bounded, anonymous request. A definite
+  // "that repo isn't public" (404, or 403 — the shape GitHub also uses for rate
+  // limits and blocked repos) fails the form with a pointer at the private-repo
+  // option; anything network-shaped writes the layer anyway — the cheap-add
+  // doctrine: the background index runs next and health() marks the source
+  // degraded with the real error, instead of an offline laptop blocking setup.
+  // The env override exists for the network-free test suite only; the manifest
+  // layer this endpoint writes never carries an apiBase.
+  async function probeGithubRest(slug) {
+    const base = process.env.CONTEXTCAKE_GITHUB_PROBE_BASE || "https://api.github.com";
+    let res;
+    try {
+      res = await fetch(`${base}/repos/${slug}`, {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "contextcake",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(10_000), // mirrors the adapter's request timeout
+      });
+    } catch {
+      return; // unreachable — fail open, the first index reports health honestly
+    }
+    if (res.status === 404 || res.status === 403) {
+      throw httpError(400, "repo not found or not public — for private repos use the Private repo (git) option");
+    }
+  }
+
   // Add-time MCP validation: spawn the command and require an answer to
   // tools/list (bounded by the adapter's own timeouts) before the manifest is
   // written. A wrong command fails the form in seconds; the old behavior was a
-  // silently-empty source.
+  // silently-empty source. The probe also checks the answer: a server that
+  // responds but lacks the two graph tools would otherwise pass the form and
+  // become a permanently empty source — the exact silence the probe exists to
+  // prevent.
   async function probeMcp({ name, level, command, args }) {
     const probe = createMcpSource({ name, level, command, args });
     try {
       await probe.probe();
     } catch (err) {
+      if (err.code === "CONTRACT") {
+        throw httpError(400, "This MCP server responded but doesn't speak the ContextCake graph contract (needs list_nodes and get_node tools).");
+      }
       throw httpError(400, `The MCP server did not respond (${err.message}). Check the command and try again.`);
     } finally {
       probe.close();
@@ -839,20 +916,65 @@ export function createEngineService({
 
   function removeSourceApi(name) {
     if (!name) throw httpError(400, "Provide ?name=");
+    let removed = null;
+    let survivors = [];
     mutateContextManifest(MANIFEST, (manifest) => {
       const layers = getManifestProfileLayers(manifest);
       const before = layers.length;
       const container = defaultProfileContainer(manifest);
       const pendingBefore = container.pendingSources?.length ?? 0;
+      removed = layers.find((layer) => layer.name === name) ?? null;
       const retained = layers.filter((layer) => layer.name !== name);
       layers.splice(0, layers.length, ...retained);
       removePendingSource(container, name);
       if (layers.length === before && (container.pendingSources?.length ?? 0) === pendingBefore) {
         throw httpError(404, `No source named "${name}"`);
       }
+      survivors = allManifestLayers(manifest); // every profile — a shared clone must survive
     }, { allowMissing: false, allowTransitional: true });
+    cleanupCloneDir(removed, survivors);
     reload();
     return { ok: true, removed: name };
+  }
+
+  // Every layer the manifest still declares, across the legacy array and every
+  // profile — the audience whose paths can keep a clone directory alive.
+  function allManifestLayers(manifest) {
+    const out = [...(manifest.layers ?? [])];
+    for (const profile of Object.values(manifest.profiles ?? {})) out.push(...(profile.layers ?? []));
+    return out;
+  }
+
+  // A wizard-cloned repo lives in app-managed disk under .cache/repos, so
+  // removing its layer removes the clone — unless another layer (any profile)
+  // still resolves inside that directory, e.g. two sub-directory layers over
+  // one repo. Every other kind points at the user's own folder and is never
+  // touched. Best effort: an undeletable orphan dir is not worth failing the
+  // remove that already happened.
+  function cleanupCloneDir(layer, survivors) {
+    const dir = cloneDirOf(layer);
+    if (!dir) return;
+    const inUse = survivors.some((candidate) => {
+      if (typeof candidate?.path !== "string") return false;
+      const resolved = path.resolve(MANIFEST_DIR, candidate.path);
+      return resolved === dir || resolved.startsWith(dir + path.sep);
+    });
+    if (inUse) return;
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* orphan dir stays; the manifest entry is already gone */ }
+  }
+
+  // The clone directory a layer's origin maps to — null unless the layer is a
+  // clone-backed github layer whose own path actually lives under CACHE_DIR
+  // (a pack: origin, a REST layer, or a hand-retargeted path all bail out).
+  function cloneDirOf(layer) {
+    if (!layer || typeof layer.origin !== "string" || typeof layer.path !== "string") return null;
+    let slug;
+    try { ({ slug } = normalizeRepo(layer.origin)); } catch { return null; }
+    const dir = path.join(CACHE_DIR, slug);
+    if (!dir.startsWith(CACHE_DIR + path.sep)) return null;
+    const resolved = path.resolve(MANIFEST_DIR, layer.path);
+    if (resolved !== dir && !resolved.startsWith(dir + path.sep)) return null;
+    return dir;
   }
 
   function patchSourceApi(rawBody) {

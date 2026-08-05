@@ -193,6 +193,13 @@ export async function writeFileApi(rawBody, roots) {
  * Merge resolution: write a resolved section body into every layer that
  * defines it, so those layers agree and the conflict clears. Same sandbox
  * (layer roots) and text-only rules as writeFileApi.
+ *
+ * `modified` ({ [layer]: mtime ISO }) is the same stale-editor guard writeFileApi
+ * has, per target file: every write target is staged and stat'd BEFORE anything
+ * is written, and one mismatch fails the whole request with 409 — writing only
+ * the layers that still matched would "resolve" the conflict into a new,
+ * partial disagreement. Omitting a layer (or the map) skips its check, which is
+ * also the compatibility path for older clients.
  */
 export async function writeSectionApi(rawBody, roots) {
   const body = parseJson(rawBody);
@@ -201,25 +208,49 @@ export async function writeSectionApi(rawBody, roots) {
     throw httpError(400, "Provide conceptId, sectionKey, content (strings)");
   }
   if (!Array.isArray(layers) || !layers.length) throw httpError(400, "Provide layers: string[]");
+  const modified = body.modified ?? {};
+  if (typeof modified !== "object" || Array.isArray(modified)) {
+    throw httpError(400, "modified must map layer name -> mtime ISO string");
+  }
 
-  const written = [];
+  const today = new Date().toISOString().slice(0, 10);
+  const writes = [];
   const skipped = [];
   for (const layer of layers) {
     let target;
     try { target = resolveLayerFile(`${layer}/${conceptId}.md`, roots); }
     catch (err) { skipped.push({ layer, reason: err.message }); continue; }
-    if (target.ext !== ".md" || !fs.existsSync(target.abs)) { skipped.push({ layer, reason: "no such concept file" }); continue; }
-    const { text, replaced } = replaceSection(await fsp.readFile(target.abs, "utf8"), sectionKey, content);
+    let stat = null;
+    if (target.ext === ".md") { try { stat = await fsp.stat(target.abs); } catch { stat = null; } }
+    if (!stat?.isFile()) { skipped.push({ layer, reason: "no such concept file" }); continue; }
+    const { text, replaced } = replaceSection(
+      await fsp.readFile(target.abs, "utf8"), sectionKey, content, { refreshUpdatedTo: today },
+    );
     if (!replaced) { skipped.push({ layer, reason: `section "${sectionKey}" not found` }); continue; }
-    await fsp.writeFile(target.abs, text, "utf8");
-    written.push(layer);
+    writes.push({ layer, abs: target.abs, text, mtime: stat.mtime.toISOString() });
   }
-  return { ok: true, written, skipped };
+  for (const write of writes) {
+    const expected = modified[write.layer];
+    if (expected !== undefined && expected !== write.mtime) {
+      throw httpError(409, `${write.layer}/${conceptId}.md changed on disk after you loaded this conflict. Reload and merge again — nothing was written.`);
+    }
+  }
+  // A section write into a clone-backed layer dirties .cache/repos, and a later
+  // Sync's `git pull --ff-only` will surface that as a failure. Acceptable —
+  // the user chose to edit their copy; don't guard it here.
+  for (const write of writes) await fsp.writeFile(write.abs, write.text, "utf8");
+  return { ok: true, written: writes.map((write) => write.layer), skipped };
 }
 
 // Replace the body of the section identified by `key`, keeping its heading.
 // Mirrors the OKF parser's key derivation ({#anchor} or normalized heading).
-export function replaceSection(text, key, newBody) {
+// `refreshUpdatedTo` (YYYY-MM-DD) rewrites an authored `updated=` attr on that
+// heading to the given date — the write makes the section current, and a stale
+// authored date would otherwise outrank the truth in every date comparison. A
+// heading without the attr is left byte-identical: the content-date fallback
+// covers undated sections, and inventing an attr would claim an authored date
+// nobody wrote.
+export function replaceSection(text, key, newBody, { refreshUpdatedTo = null } = {}) {
   const nl = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
   const isFence = (l) => /^\s{0,3}(```|~~~)/.test(l);
@@ -244,14 +275,27 @@ export function replaceSection(text, key, newBody) {
     if (isFence(lines[i])) { inFence = !inFence; continue; }
     if (!inFence && isHeading(lines[i])) { end = i; break; }
   }
+  const heading = refreshUpdatedTo ? refreshHeadingUpdated(lines[start], refreshUpdatedTo) : lines[start];
   const rebuilt = [
-    ...lines.slice(0, start + 1),
+    ...lines.slice(0, start),
+    heading,
     "",
     ...String(newBody).replace(/\s+$/, "").split("\n"),
     "",
     ...lines.slice(end),
   ];
   return { text: rebuilt.join(nl), replaced: true };
+}
+
+// Rewrite only the value of an `updated=` token inside the heading's first
+// {...} attr group (the group the OKF parser reads), preserving its quote
+// style. Anchor and every other attr stay byte-identical; a heading with no
+// `updated=` token comes back untouched.
+function refreshHeadingUpdated(headingLine, today) {
+  return headingLine.replace(/\{[^}]*\}/, (attrs) => attrs.replace(
+    /(^\{|\s)(updated=)(['"]?)[^\s'"}]*(['"]?)/,
+    (m, pre, kw, open, close) => `${pre}${kw}${open}${today}${close}`,
+  ));
 }
 
 function headingKey(headingText) {

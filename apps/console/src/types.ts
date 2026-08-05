@@ -31,6 +31,12 @@ export interface ResolvedSection {
   suppressed?: boolean
   /** Losing contributors for this section — surfaced, never hidden. */
   conflicts?: SectionConflict[]
+  /**
+   * True only when the winner's `sourceUpdated` and at least one dissent's
+   * `updated` both parse and that dissent is strictly newer at day
+   * granularity. Absent otherwise — never treat missing dates as epoch 0.
+   */
+  fresherDissent?: boolean
 }
 
 /** One effective OKF concept stitched across layers. */
@@ -76,6 +82,8 @@ export interface GraphSource {
   /** ISO timestamps from adapters that track health (remote sources); else null. */
   lastErrorAt?: string | null
   lastSuccessAt?: string | null
+  /** The manifest's team-capture layer (`live: true`); absent until the engine exposes it. */
+  live?: boolean
 }
 
 /** A concept index entry in the graph summary (lighter than a full resolve). */

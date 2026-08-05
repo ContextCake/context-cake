@@ -24,6 +24,10 @@ function withAccountsEnabled(auth: Partial<NonNullable<typeof window.__CC_AUTH>>
     getApiToken: vi.fn().mockResolvedValue('token'),
     version: '0.0.0-test',
     authState: { signedIn: false, available: true },
+    metrics: {
+      getEnabled: vi.fn().mockResolvedValue(true),
+      setEnabled: vi.fn().mockResolvedValue(true),
+    },
     cli: { getStatus: vi.fn(), install: vi.fn() },
   } as unknown as typeof window.__CC_DESKTOP
   window.__CC_AUTH = {
@@ -42,6 +46,21 @@ function withAccountsEnabled(auth: Partial<NonNullable<typeof window.__CC_AUTH>>
     bootstrapTheme: vi.fn().mockResolvedValue('dark'),
     ...auth,
   } as unknown as typeof window.__CC_AUTH
+}
+
+function withDesktopMetrics(enabled = true) {
+  const setEnabled = vi.fn().mockImplementation(async (next: boolean) => next)
+  window.__CC_DESKTOP = {
+    getApiToken: vi.fn().mockResolvedValue('token'),
+    version: '0.0.0-test',
+    authState: { signedIn: false, available: false },
+    metrics: {
+      getEnabled: vi.fn().mockResolvedValue(enabled),
+      setEnabled,
+    },
+    cli: { getStatus: vi.fn(), install: vi.fn() },
+  } as unknown as typeof window.__CC_DESKTOP
+  return setEnabled
 }
 
 beforeEach(() => {
@@ -105,6 +124,26 @@ describe('SettingsView', () => {
     expect(document.documentElement.dataset.theme).toBe('dark')
     await act(async () => button('Light').click())
     expect(document.documentElement.dataset.theme).toBe('light')
+  })
+
+  it('explains anonymous metrics and lets desktop users opt out', async () => {
+    const setEnabled = withDesktopMetrics(true)
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+    await act(async () => {})
+
+    expect(container.textContent).toContain('Anonymous usage metrics')
+    expect(container.textContent).toContain('We use this to improve the app')
+    expect(container.textContent).toContain('The request never includes your files')
+    const toggle = container.querySelector<HTMLInputElement>('input[aria-label="Share anonymous usage metrics"]')
+    expect(toggle?.checked).toBe(true)
+
+    await act(async () => toggle?.click())
+    expect(setEnabled).toHaveBeenCalledWith(false)
+    expect(toggle?.checked).toBe(false)
   })
 
   it('cancels a pending OAuth attempt when leaving the Account pane', async () => {

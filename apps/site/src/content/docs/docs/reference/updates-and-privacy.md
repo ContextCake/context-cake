@@ -1,6 +1,6 @@
 ---
 title: Network access and privacy
-description: What update checks and optional desktop account sync send, store, and leave on your Mac.
+description: What anonymous usage metrics, update checks, and optional desktop account sync send, store, and leave on your Mac.
 ---
 
 The engine itself — `resolver.mjs`, `mcp-server.mjs`, and every other CLI tool — makes
@@ -54,6 +54,50 @@ the background and installs it when the app quits. Turn off the native menu chec
 to prevent automatic checks; the manual **Check for Updates…** command contacts GitHub
 only when you choose it.
 
+## Anonymous usage metrics
+
+ContextCake asks before sharing anonymous usage metrics. We use these aggregate
+counts to understand whether people can download and successfully open the app,
+and to improve installation, onboarding, and release quality.
+
+If you choose **Share Anonymous Metrics**, a successfully started packaged app
+downloads one tiny file from its versioned GitHub Release:
+
+```text
+https://github.com/ContextCake/context-cake/releases/download/app-v<version>/install-ping.txt
+```
+
+The release URL identifies the app version. GitHub increments that release
+asset's public download count. ContextCake sends no request body and adds no
+identifier, account data, file name, local path, knowledge content, prompt,
+device ID, or cookie. The count is anonymous to ContextCake and is never tied to
+an account or settings-sync record. GitHub still receives the ordinary request
+metadata it receives for downloads, including the network address used to make
+the request; see [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+
+After a successful request, the app writes a local `install-metric-v1.json`
+marker so the request is not repeated for that application-support directory.
+Failed requests do not affect startup and may be retried later only while
+anonymous metrics remain enabled.
+
+Choose **Don't Share** in the first-run prompt to send nothing. You can change
+this choice at any time under **Settings → General → Anonymous usage metrics**
+or with **Share Anonymous Usage Metrics** in the application menu. Turning it
+off stops an unreported first launch, failed-request retries, and future
+anonymous metrics. It cannot remove a count already recorded because ContextCake
+does not have an identifier that connects the aggregate count back to a person
+or device. Update checks are a separate setting.
+
+The preference is local to that Mac's ContextCake application-support directory
+and is not included in account settings sync. A choice made on another Mac
+therefore cannot enable metrics without the local first-run choice.
+
+The resulting count is directional rather than a unique-person record: fresh
+application-support directories can count again, and public release assets can
+be downloaded outside the app. The first release with this counter also counts
+existing users when they update and launch it; later releases do not recount the
+same application-support directory.
+
 ## Why this exists
 
 ContextCake is privacy-by-default: local engine work does not phone home, update checks
@@ -97,10 +141,11 @@ markers. It then rejects the entire upload if a recognized credential, URL crede
 email address, or context-content pattern remains. Synced integrations therefore
 require local setup on each Mac and can never activate a remote command.
 
-ContextCake never syncs knowledge or document content, resolved output, integration
-tokens, environment-variable values, absolute local paths, analytics, or telemetry.
-Those stay on the Mac. Deleting the account removes the Supabase Auth user and the
-cascading settings row; local ContextCake files and settings are left untouched.
+Settings sync never includes knowledge or document content, resolved output,
+integration tokens, environment-variable values, absolute local paths, metric
+events, or the local anonymous-metrics preference. Deleting the account removes
+the Supabase Auth user and the cascading settings row; local ContextCake files
+and settings are left untouched.
 Project-folder mappings, matched roots, and the app's active profile are also
 local-only. A remote settings row cannot activate a profile or redirect a trusted
 local executable source.

@@ -19,6 +19,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/ContextCake/context-cake/releases/latest">Download for Mac</a> ·
   <a href="https://contextcake.com">Website</a> ·
   <a href="https://contextcake.com/demo">Live demo</a> ·
   <a href="https://contextcake.com/docs">Documentation</a> ·
@@ -32,6 +33,12 @@
 
 ---
 
+## Download for Mac
+
+Get the signed, notarized app from the **[latest release](https://github.com/ContextCake/context-cake/releases/latest)**: open the DMG, drag ContextCake to Applications, and the app walks you through adding your first sources and connecting your AI client. Each release page carries the matching ZIP and SHA-256 checksums.
+
+The app is Apple silicon (arm64) only. On an Intel Mac or Linux, run the engine from source instead — see the [quick start](#quick-start) below.
+
 ## Why ContextCake?
 
 Teams do not have one source of truth. They have an org policy, a service runbook, a team decision, and the local note that explains the exception. Flattening those into another wiki loses both the useful detail and the disagreement.
@@ -43,7 +50,7 @@ ContextCake keeps each scope separate, then resolves them at read time. The resu
 | Local nuance without copying every policy | Higher-priority layers override only the sections they address. Everything else inherits. |
 | An AI agent that can explain its answer | Returns provenance for frontmatter and every resolved section. |
 | A safe view of disagreement | Keeps competing values as dated conflicts instead of silently deleting them. |
-| Knowledge from more than one system | Combines local [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundles with trusted MCP sources. |
+| Knowledge from more than one system | Layers any folder of Markdown, any GitHub repository, local [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundles, and trusted foreign MCP graphs in one cascade. |
 
 ## The layer cake
 
@@ -143,7 +150,14 @@ With `--capture`, two write tools are added — `log_capture` (stage a capture, 
 
 ## Bring your own knowledge
 
-A manifest defines the sources and their precedence. Local `okf-local` sources are Markdown directories with YAML frontmatter; an MCP source translates a trusted foreign graph into the same resolved view.
+A manifest defines the sources and their precedence. Four source adapters cover most places knowledge already lives:
+
+| Source kind | What becomes a layer |
+| --- | --- |
+| `files` | Any folder of `.md`, `.mdx`, or `.txt` — repository docs, an Obsidian vault, a wiki export. No conversion needed. |
+| `github` | Any GitHub repository, read over the API without a clone: `CLAUDE.md`, `AGENTS.md`, `README.md`, and `docs/**` by default. |
+| `okf-local` | A local OKF bundle — Markdown directories with YAML frontmatter for types, dates, and links. |
+| `mcp` | A trusted foreign MCP graph, translated into the same resolved view at read time. |
 
 ```json
 {
@@ -260,6 +274,9 @@ npm --prefix apps/desktop run test:navigation
 npm --prefix apps/desktop run test:cli-status
 npm --prefix apps/desktop run smoke
 npm --prefix apps/desktop run smoke:bootfail
+
+# Public GitHub Release download + first-launch counts
+npm run metrics:app
 ```
 
 `npm test` starts a local playground server, so it requires an environment that allows binding to `127.0.0.1`. See [CONTRIBUTING.md](CONTRIBUTING.md) for repository conventions, validation expectations, and issue labels.
@@ -271,6 +288,7 @@ npm --prefix apps/desktop run smoke:bootfail
 - [Reference](https://contextcake.com/docs/reference/cli) — CLI flags, manifests, MCP tools, and override syntax.
 - [Architecture](docs/architecture/README.md) — decisions, diagrams, and the resolver design.
 - [Security policy](SECURITY.md) — responsible disclosure and supported-version policy.
+- [App metrics](docs/app-metrics.md) — download counts, confirmed first launches, and metric limitations.
 
 ## Contributing
 

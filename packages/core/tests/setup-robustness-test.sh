@@ -196,7 +196,25 @@ T="$(ms -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"gh
 code 400 "$(C -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"ghost","level":0,"command":"definitely-not-a-real-binary-xyz","trusted":true}' "$BASE/api/sources")" "missing binary rejected"
 faster_than "$T" 10000 "missing binary fails fast"
 code 400 "$(C -X POST -H 'content-type: application/json' -d '{"kind":"mcp","name":"mute","level":0,"command":"sleep","args":["30"],"trusted":true}' "$BASE/api/sources")" "unresponsive command rejected"
-grep -Eq 'ghost|mute' "$TMP/manifest.json" && fail "failed MCP probe leaked into the manifest" || pass "failed MCP probes never touch the manifest"
+# A server that ANSWERS but lacks the two graph tools is the other silent-empty
+# trap: the probe reads the tools/list result and rejects it with its own copy,
+# so the form can distinguish "wrong command" from "wrong kind of MCP server".
+cat > "$TMP/no-contract.mjs" <<'EOF'
+import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const write = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+rl.on("line", (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  if (msg.method === "initialize") return write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "no-contract", version: "0" } } });
+  if (msg.method === "notifications/initialized") return;
+  if (msg.method === "tools/list") return write({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "list_nodes" }] } });
+});
+EOF
+NC="$(curl -s -X POST -H 'content-type: application/json' -d "{\"kind\":\"mcp\",\"name\":\"nocontract\",\"level\":0,\"command\":\"node\",\"args\":[\"$TMP/no-contract.mjs\"],\"trusted\":true}" "$BASE/api/sources")"
+code 400 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"mcp\",\"name\":\"nocontract\",\"level\":0,\"command\":\"node\",\"args\":[\"$TMP/no-contract.mjs\"],\"trusted\":true}" "$BASE/api/sources")" "a responding server without the graph tools is rejected"
+JQ 'd.error' <<<"$NC" | grep -q 'ContextCake graph contract' && pass "the rejection names the contract, not the transport" || fail "contract rejection copy ($NC)"
+grep -Eq 'ghost|mute|nocontract' "$TMP/manifest.json" && fail "failed MCP probe leaked into the manifest" || pass "failed MCP probes never touch the manifest"
 code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"mcp\",\"name\":\"mock\",\"level\":0,\"command\":\"node\",\"args\":[\"$ROOT/examples/mock-mcp-source/server.mjs\"],\"trusted\":true}" "$BASE/api/sources")" "a real MCP server passes the probe"
 code 200 "$(C -X DELETE "$BASE/api/sources?name=mock")" "cleanup mcp source"
 

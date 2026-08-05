@@ -43,24 +43,35 @@ const src = createMcpSource({
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const first = await src.listConceptIds()          // fresh child, call #1 → ['a']
+const healthUp = src.health()                      // a successful read: ok, lastSuccessAt set
 const second = await src.listConceptIds()          // call #2 → child crashes → degraded []
+const healthDown = src.health()                    // the crash is recorded, scope "index"
 await sleep(250)                                    // past the 100ms cooldown
 const third = await src.listConceptIds()           // respawned child, call #1 → ['a']
+const healthBack = src.health()                    // success clears the recorded failure
 src.close()
 
 const ok = first.length === 1 && first[0] === 'a'
   && second.length === 0
   && third.length === 1 && third[0] === 'a'
-console.log(JSON.stringify({ first, second, third, ok }))
+  // health() duck-types the github adapter: { ok, lastError, lastErrorScope,
+  // lastErrorAt, lastSuccessAt } — service.mjs paints "degraded" only on
+  // lastErrorScope === "index", so that literal is load-bearing.
+  && healthUp.ok === true && healthUp.lastSuccessAt !== null && healthUp.lastErrorScope === null
+  && healthDown.ok === false && healthDown.lastErrorScope === 'index'
+  && typeof healthDown.lastError === 'string' && healthDown.lastError.includes('exited')
+  && healthDown.lastErrorAt !== null
+  && healthBack.ok === true && healthBack.lastError === null && healthBack.lastSuccessAt !== null
+console.log(JSON.stringify({ first, second, third, healthUp, healthDown, healthBack, ok }))
 process.exit(ok ? 0 : 1)
 JS
 
 echo "mcp respawn after crash"
 if MCP_URL="file://$MCP_MODULE" CRASHY="$TMP/crashy.mjs" node "$TMP/driver.mjs"; then
-  echo "  ok   crashed source degrades then respawns on next access"
+  echo "  ok   crashed source degrades then respawns on next access, health honest at every step"
 else
-  echo "  FAIL source did not recover after child crash"
+  echo "  FAIL source did not recover after child crash (or health() misreported)"
   exit 1
 fi
 
-echo "mcp respawn test passed (degrade-then-recover across held-adapter lifetime)"
+echo "mcp respawn test passed (degrade-then-recover across held-adapter lifetime + health)"

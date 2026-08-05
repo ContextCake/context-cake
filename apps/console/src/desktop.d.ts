@@ -22,6 +22,13 @@ type CliStatus = 'installed' | 'missing' | 'stale' | 'conflict' | 'blocked' | 'd
 interface CliResult {
   status: CliStatus
   message: string
+  /**
+   * Absolute path of the app-bundled `contextcake` shim, for sudo-free harness
+   * connection when the /usr/local/bin name is unusable. Null in development
+   * builds and in the translocated/DMG `blocked` state, whose paths are
+   * ephemeral and must never reach a harness configuration.
+   */
+  shimPath: string | null
 }
 
 declare global {
@@ -35,6 +42,11 @@ declare global {
       authState: DesktopAuthState
       /** Open the native macOS directory picker. Null means the user canceled. */
       chooseFolder?: () => Promise<string | null>
+      /** Explicit, user-controlled anonymous usage-metrics preference. */
+      metrics?: {
+        getEnabled: () => Promise<boolean | null>
+        setEnabled: (enabled: boolean) => Promise<boolean>
+      }
       /** Fixed native operations for ContextCake's own command-line tool. */
       cli: {
         getStatus: () => Promise<CliResult>

@@ -21,7 +21,6 @@ export function readSettings() {
 
 function persistSettings(patch, changedFields) {
   const current = readSettings()
-  const dirtyFields = [...new Set([...(current._sync?.dirtyFields ?? []), ...changedFields])]
   // The manifest remains the one authoritative local copy of source configs.
   // Never duplicate paths, commands, or credential references into settings.json.
   const { sources: _sources, profiles: _profiles, ...diskPatch } = patch
@@ -29,7 +28,10 @@ function persistSettings(patch, changedFields) {
   const next = {
     ...diskCurrent,
     ...diskPatch,
-    _sync: { ...(current._sync ?? {}), dirty: true, dirtyFields, localUpdatedAt: new Date().toISOString() },
+  }
+  if (changedFields.length > 0) {
+    const dirtyFields = [...new Set([...(current._sync?.dirtyFields ?? []), ...changedFields])]
+    next._sync = { ...(current._sync ?? {}), dirty: true, dirtyFields, localUpdatedAt: new Date().toISOString() }
   }
   const file = settingsPath()
   fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -41,6 +43,11 @@ function persistSettings(patch, changedFields) {
 
 export function writeSettings(patch) {
   return persistSettings(patch, Object.keys(patch))
+}
+
+/** Persist a device-local preference without adding it to account sync state. */
+export function writeLocalSettings(patch) {
+  return persistSettings(patch, [])
 }
 
 export function markSettingsDirty(fields) {

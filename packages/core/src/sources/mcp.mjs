@@ -33,6 +33,23 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
   const pending = new Map();
   let startError = null;
   let lastSpawnAt = 0;
+  // Honesty channel, duck-typing the github adapter's health() exactly. The
+  // read methods degrade to null/[] so one dead child never sinks a resolve —
+  // which makes a crashed server indistinguishable from an empty graph at the
+  // read API. health() reports the last swallowed failure out of band. Scope is
+  // always "index": a child failure stalls this source's whole graph, never
+  // just one file, and service.mjs gates its "degraded" row on that literal.
+  let lastError = null; // { at, message }
+  let lastSuccessAt = null; // ms of the last read that actually answered
+
+  function recordFailure(e) {
+    lastError = { at: Date.now(), message: e.message };
+  }
+
+  function recordSuccess() {
+    lastError = null;
+    lastSuccessAt = Date.now();
+  }
 
   // Reject every in-flight request immediately so a dead/unreachable source
   // degrades instantly instead of waiting for each request's timeout.
@@ -56,6 +73,7 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
       child = spawnTrustedMcpCommand(command, args);
     } catch (e) {
       startError = e;
+      recordFailure(e);
       return;
     }
     // spawn() defers failures to async events: a missing binary fires "error";
@@ -63,13 +81,16 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
     // "exit". Either way reject every pending request now instead of waiting for
     // timeouts. On "exit" we also drop the child handle and clear rl/ready so the
     // next access past the cooldown respawns rather than failing forever.
-    child.on("error", (e) => { startError = startError || e; rejectPending(e); });
+    // Both paths record into health() directly: a child that dies between reads
+    // must paint the source degraded on the next graph, not only after another
+    // read happens to fail.
+    child.on("error", (e) => { startError = startError || e; recordFailure(startError); rejectPending(e); });
     child.on("exit", () => {
       child = null;
       if (rl) { try { rl.close(); } catch { /* already gone */ } rl = null; }
       ready = null;
       const e = new Error(`MCP source "${name}" exited`);
-      if (!closed) startError = e; // intentional close() → leave it closed
+      if (!closed) { startError = e; recordFailure(e); } // intentional close() → leave it closed, and not a health event
       rejectPending(e);
     });
     child.stdin.on("error", () => {}); // swallow EPIPE if the child is already gone
@@ -92,7 +113,7 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
     ready = send("initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
-      clientInfo: { name: "contextcake", version: "0.3.0" },
+      clientInfo: { name: "contextcake", version: "0.4.0" },
     })
       .then(() => notify("notifications/initialized"))
       .catch(() => {});
@@ -131,14 +152,16 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
     async loadConcept(id) {
       try {
         const node = await callTool("get_node", { id });
+        recordSuccess(); // the call answered — a null node is an absent concept, not a failure
         return node ? translateToOkf(node) : null;
-      } catch (e) { warn(e); return null; }
+      } catch (e) { recordFailure(e); warn(e); return null; }
     },
     async listConceptIds() {
       try {
         const res = await callTool("list_nodes", {});
+        recordSuccess();
         return res?.nodes ?? [];
-      } catch (e) { warn(e); return []; }
+      } catch (e) { recordFailure(e); warn(e); return []; }
     },
     // Add-time health check: unlike the read methods (which degrade to
     // null/[] so one dead source never sinks a resolve), probe() surfaces the
@@ -146,11 +169,35 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
     // looking at the form, not discovered as a hang on the first resolve.
     // tools/list is mandatory in the MCP spec, so any compliant server answers.
     // Bounded by the same per-request timeout as every other send().
+    //
+    // The answer is checked, not just received: this adapter only ever calls
+    // list_nodes and get_node, so a server without both would pass a
+    // transport-only probe and then sit as a permanently empty source — the
+    // exact silent failure the probe exists to catch. err.code = "CONTRACT"
+    // lets the caller word that differently from "did not respond".
     async probe() {
       ensureStarted();
       if (startError) throw startError;
       await ready;
-      return send("tools/list", {});
+      const result = await send("tools/list", {});
+      const names = Array.isArray(result?.tools) ? result.tools.map((tool) => tool?.name) : null;
+      if (!names || !names.includes("list_nodes") || !names.includes("get_node")) {
+        const err = new Error("tools/list answered without list_nodes and get_node");
+        err.code = "CONTRACT";
+        throw err;
+      }
+      return result;
+    },
+    // What the read path refuses to say, same shape as the github adapter's:
+    // a snapshot of already-recorded state — no request, no effect on reads.
+    health() {
+      return {
+        ok: lastError === null,
+        lastError: lastError ? lastError.message : null,
+        lastErrorScope: lastError ? "index" : null, // a child failure is never scoped to one file
+        lastErrorAt: lastError ? new Date(lastError.at).toISOString() : null,
+        lastSuccessAt: lastSuccessAt ? new Date(lastSuccessAt).toISOString() : null,
+      };
     },
     async close() {
       closed = true;

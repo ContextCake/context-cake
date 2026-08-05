@@ -288,6 +288,8 @@ npm run metrics:app
 - [Reference](https://contextcake.com/docs/reference/cli) — CLI flags, manifests, MCP tools, and override syntax.
 - [Architecture](docs/architecture/README.md) — decisions, diagrams, and the resolver design.
 - [Security policy](SECURITY.md) — responsible disclosure and supported-version policy.
+- [Threat model](docs/security/threat-model.md) — what is protected, who is assumed hostile, and the limits we do not claim.
+- [Network egress](docs/security/egress-allowlist.md) — every host the app can contact, and how to verify it yourself.
 - [App metrics](docs/app-metrics.md) — download counts, confirmed first launches, and metric limitations.
 
 ## Contributing

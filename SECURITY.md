@@ -21,6 +21,19 @@ or desktop app), and the version or commit you tested.
 ContextCake is pre-1.0. Security fixes land on `main` and ship in the next
 release; only the **latest release** is supported.
 
+## How the product is meant to behave
+
+Three documents state the intended security posture. A report that shows the
+app departing from any of them is a valid report.
+
+- [Threat model](docs/security/threat-model.md) — what is protected, who is
+  assumed hostile, and the limits we do not claim to defend against.
+- [Network egress](docs/security/egress-allowlist.md) — every host the app can
+  contact, and how to verify that yourself. Traffic to anything not on that list
+  is worth reporting.
+- [Secret rotation](docs/security/secret-rotation.md) — how project secrets are
+  held and rotated.
+
 ## Scope notes
 
 - **The manifest is a trust boundary by design.** A layer with `"source": "mcp"`

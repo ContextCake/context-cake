@@ -59,7 +59,7 @@ if ((args.capture || args.telemetry) && !liveLayer) {
 }
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
-const serverInfo = { name: "contextcake", version: "0.4.0" };
+const serverInfo = { name: "contextcake", version: "0.5.0" };
 const serverInstructions = [
   "Consult ContextCake before answering project-specific questions.",
   `Selected ContextCake profile id: ${selection.profileId}; reason: ${selection.reason}.`,

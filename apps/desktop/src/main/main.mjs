@@ -10,7 +10,6 @@ import { configDir, manifestPath, settingsPath } from './paths.mjs'
 import { markSettingsDirty, readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
 import { createAuthManager } from './auth.mjs'
 import {
-  assertSafeLocalSettings,
   combineManifestSources,
   createSettingsSync,
   overlaySyncShadow,
@@ -19,7 +18,8 @@ import {
 } from './settings-sync.mjs'
 import { loadSupabaseConfig } from './supabase-config.mjs'
 import { initUpdater } from './updater.mjs'
-import { isEngineOrigin, isTrustedIpcSender } from './navigation.mjs'
+import { isEngineOrigin } from './navigation.mjs'
+import { createTrustedWindowRegistry, trustedRolesForChannel } from './trusted-windows.mjs'
 import { getCliStatus, installCli } from './cli-install.mjs'
 import { reportFirstLaunch } from './install-metrics.mjs'
 import { manifestLayerCount, shouldDeferConsentPrompt } from './metrics-consent.mjs'
@@ -88,6 +88,8 @@ if (app.isPackaged) {
 
 let service = null
 let win = null
+let settingsWin = null
+const trustedWindows = createTrustedWindowRegistry(() => service?.origin)
 
 /**
  * Stop the engine process and stop treating its exit as a crash. Every path
@@ -108,6 +110,7 @@ let lastAppliedManifest = ''
 let installMetricAbortController = null
 let consentPromptDeferred = false
 let windowStateTimer = null
+const rendererErrors = []
 
 function currentAuthState() {
   return authManager?.getState() ?? { available: false, signedIn: false }
@@ -118,7 +121,7 @@ function currentSyncState() {
 }
 
 function sendToRenderer(channel, payload) {
-  if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
+  trustedWindows.broadcast(channel, payload)
 }
 
 function desktopPreferencesSnapshot(settings = readSettings()) {
@@ -275,15 +278,7 @@ function publishPulledSettings(pulled) {
 function installApplicationMenu() {
   Menu.setApplicationMenu(buildMenu(
     () => win,
-    (settings, changedField) => {
-      initUpdater()
-      if (changedField === 'anonymousMetrics') {
-        if (settings.anonymousMetrics === true) reportAnonymousFirstLaunch()
-        else cancelAnonymousFirstLaunch()
-      } else if (currentAuthState().signedIn) {
-        scheduleSettingsPush()
-      }
-    },
+    (pane) => openSettingsWindow(pane),
   ))
 }
 
@@ -393,16 +388,11 @@ function openExternalHttps(rawUrl) {
   } catch { /* ignore malformed renderer links */ }
 }
 
-function assertTrustedIpc(event) {
-  if (!win || !service || !isTrustedIpcSender(event, win.webContents, service.origin)) {
-    throw new Error('Untrusted IPC sender.')
-  }
-}
-
 function handleTrustedIpc(channel, callback) {
+  const roles = trustedRolesForChannel(channel)
   ipcMain.handle(channel, (event, ...args) => {
-    assertTrustedIpc(event)
-    return callback(...args)
+    const entry = trustedWindows.resolve(event, roles)
+    return callback(...args, { event, window: entry.window, role: entry.role })
   })
 }
 
@@ -413,6 +403,12 @@ async function handleDeepLink(url) {
   }
   try {
     await authManager.handleDeepLink(url)
+    if (settingsWin && !settingsWin.isDestroyed() && currentAuthState().signedIn) {
+      settingsWin.webContents.send('windows:settings-pane', 'account')
+      if (settingsWin.isMinimized()) settingsWin.restore()
+      settingsWin.show()
+      settingsWin.focus()
+    }
   } catch {
     sendToRenderer('auth:error', 'Sign-in could not be completed. Cancel this attempt, then try again.')
   }
@@ -474,47 +470,25 @@ function registerAccountIpc() {
     await authManager?.signOut()
     return currentAuthState()
   })
-  handle('auth:delete-account', async () => {
-    const { response } = await dialog.showMessageBox(win, {
+  handle('auth:delete-account', async ({ window }) => {
+    const { response } = await dialog.showMessageBox(window, {
       type: 'warning',
       buttons: ['Cancel', 'Delete Account'],
       defaultId: 0,
       cancelId: 0,
       title: 'Delete ContextCake Account',
-      message: 'Delete your account and synced settings?',
-      detail: 'Your local ContextCake files and settings will stay on this Mac.',
+      message: 'Permanently delete your ContextCake account?',
+      detail: 'The cloud account and its synced settings will be deleted. Your local ContextCake files and this Mac\'s local settings will remain. This action cannot be undone.',
     })
     if (response !== 1) return currentAuthState()
     await authManager?.deleteAccount()
     return currentAuthState()
   })
   handle('settings:sync-state', currentSyncState)
-  handle('settings:push', async (patch) => {
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('Settings patch must be an object.')
-    if (JSON.stringify(patch).length > 1_000_000) throw new Error('Settings patch is too large.')
-    const selected = selectSyncSettings(patch)
-    assertSafeLocalSettings(selected)
-    writeSettings(selected)
-    if (!currentAuthState().signedIn) return { localOnly: true }
-    scheduleSettingsPush()
-    return { localOnly: false }
-  })
   handle('settings:pull', async () => {
     const pulled = await settingsSync?.pull(settingsSnapshot())
     publishPulledSettings(pulled)
     return pulled ? { overwritten: pulled.overwritten, settings: selectSyncSettings(pulled.settings) } : null
-  })
-  handle('settings:bootstrap-theme', async (localTheme) => {
-    if (localTheme !== 'light' && localTheme !== 'dark') throw new Error('Invalid theme.')
-    if (currentAuthState().signedIn) {
-      const pulled = await settingsSync.pull(settingsSnapshot())
-      publishPulledSettings(pulled)
-    }
-    const current = readSettings()
-    if (current.theme === 'light' || current.theme === 'dark') return current.theme
-    writeSettings({ theme: localTheme })
-    scheduleSettingsPush()
-    return localTheme
   })
 }
 
@@ -564,7 +538,7 @@ async function initializeAccounts() {
 registerIntegrationIpc()
 
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
-handleTrustedIpc('contextcake:cli-install', () => installCli(win, { showSuccess: false }))
+handleTrustedIpc('contextcake:cli-install', ({ window }) => installCli(window, { showSuccess: false }))
 handleTrustedIpc('preferences:get', () => desktopPreferencesSnapshot())
 handleTrustedIpc('preferences:set', (candidate) => {
   const current = readSettings()
@@ -592,31 +566,109 @@ handleTrustedIpc('ui-state:set', (patch) => {
   if (result.changed) writeLocalSettings({ uiState: result.state })
   return result.state
 })
-handleTrustedIpc('contextcake:metrics-get', () => {
-  const enabled = readSettings().anonymousMetrics
-  return typeof enabled === 'boolean' ? enabled : null
-})
-handleTrustedIpc('contextcake:metrics-set', (enabled) => {
-  if (typeof enabled !== 'boolean') throw new Error('Anonymous metrics preference must be a boolean.')
-  writeLocalSettings({ anonymousMetrics: enabled })
-  installApplicationMenu()
-  if (enabled) reportAnonymousFirstLaunch()
-  else cancelAnonymousFirstLaunch()
-  return enabled
-})
 // The API token is a credential: never put it in BrowserWindow
 // additionalArguments, which become renderer process argv and are visible to
 // other local users through process inspection. The sandboxed preload asks for
 // it over the same exact-window, exact-origin IPC gate as every native action.
 handleTrustedIpc('contextcake:get-api-token', () => service?.token ?? '')
-handleTrustedIpc('contextcake:choose-folder', async () => {
-  const result = await dialog.showOpenDialog(win, {
+handleTrustedIpc('contextcake:choose-folder', async ({ window }) => {
+  const result = await dialog.showOpenDialog(window, {
     title: 'Choose a ContextCake folder',
     buttonLabel: 'Choose Folder',
     properties: ['openDirectory', 'createDirectory'],
   })
   return result.canceled ? null : (result.filePaths[0] ?? null)
 })
+
+handleTrustedIpc('windows:open-settings', (pane) => openSettingsWindow(pane))
+handleTrustedIpc('data:reload-requested', () => {
+  trustedWindows.broadcast('data:reload-requested', undefined, ['main'])
+  return { requested: true }
+})
+
+const VALID_SETTINGS_PANES = new Set(['general', 'indexing', 'integrations', 'account', 'privacy'])
+
+function rendererArguments(preferences, uiState, role) {
+  return [
+    `--cc-window-role=${role}`,
+    `--cc-version=${app.getVersion()}`,
+    `--cc-signed-in=${currentAuthState().signedIn ? '1' : '0'}`,
+    `--cc-theme=${preferences.theme}`,
+    `--cc-density=${preferences.density}`,
+    `--cc-update-check=${preferences.updateCheck ? '1' : '0'}`,
+    `--cc-anonymous-metrics=${preferences.anonymousMetrics === null ? '' : preferences.anonymousMetrics ? '1' : '0'}`,
+    `--cc-reduced-transparency=${preferences.reducedTransparency ? '1' : '0'}`,
+    `--cc-high-contrast=${preferences.highContrast ? '1' : '0'}`,
+    `--cc-native-vibrancy=${process.platform === 'darwin' && role === 'main' ? '1' : '0'}`,
+    `--cc-ui-state=${encodeURIComponent(JSON.stringify(uiState))}`,
+    `--cc-accounts=${currentAuthState().available ? '1' : '0'}`,
+  ]
+}
+
+function protectWindowNavigation(window) {
+  window.webContents.on('console-message', (event) => {
+    const { level, message } = event
+    if (level === 'error' || level === 3) rendererErrors.push(String(message ?? 'Unknown renderer error'))
+  })
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalHttps(url)
+    return { action: 'deny' }
+  })
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!isEngineOrigin(url, service.origin)) {
+      event.preventDefault()
+      openExternalHttps(url)
+    }
+  })
+}
+
+async function openSettingsWindow(requestedPane) {
+  const pane = VALID_SETTINGS_PANES.has(requestedPane) ? requestedPane : uiStateSnapshot().settingsPane
+  if (settingsWin && !settingsWin.isDestroyed()) {
+    settingsWin.webContents.send('windows:settings-pane', pane)
+    if (settingsWin.isMinimized()) settingsWin.restore()
+    settingsWin.show()
+    settingsWin.focus()
+    return { opened: true, existing: true }
+  }
+  if (!service) return { opened: false, existing: false }
+
+  const preferences = desktopPreferencesSnapshot()
+  const uiState = { ...uiStateSnapshot(), settingsPane: pane }
+  settingsWin = new BrowserWindow({
+    width: 760,
+    height: 620,
+    minWidth: 680,
+    minHeight: 520,
+    maximizable: false,
+    fullscreenable: false,
+    resizable: true,
+    show: false,
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : {}),
+    webPreferences: {
+      preload: path.join(here, '..', 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      additionalArguments: rendererArguments(preferences, uiState, 'settings'),
+    },
+  })
+  trustedWindows.register(settingsWin, 'settings')
+  protectWindowNavigation(settingsWin)
+  settingsWin.once('ready-to-show', () => {
+    settingsWin?.show()
+    settingsWin?.focus()
+  })
+  settingsWin.webContents.once('did-finish-load', () => {
+    settingsWin?.webContents.send('auth:session-changed', currentAuthState())
+    settingsWin?.webContents.send('settings:sync-status', currentSyncState())
+    settingsWin?.webContents.send('windows:settings-pane', pane)
+  })
+  settingsWin.on('close', () => { Promise.resolve(authManager?.cancelSignIn?.()).catch(() => {}) })
+  settingsWin.on('closed', () => { settingsWin = null })
+  await settingsWin.loadURL(`${service.origin}/console/?surface=settings`)
+  return { opened: true, existing: false }
+}
 
 async function createWindow() {
   // The engine runs in its own utilityProcess (service-host.mjs). If it dies
@@ -648,37 +700,11 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      additionalArguments: [
-        `--cc-version=${app.getVersion()}`,
-        `--cc-signed-in=${currentAuthState().signedIn ? '1' : '0'}`,
-        `--cc-theme=${preferences.theme}`,
-        `--cc-density=${preferences.density}`,
-        `--cc-update-check=${preferences.updateCheck ? '1' : '0'}`,
-        `--cc-anonymous-metrics=${preferences.anonymousMetrics === null ? '' : preferences.anonymousMetrics ? '1' : '0'}`,
-        `--cc-reduced-transparency=${preferences.reducedTransparency ? '1' : '0'}`,
-        `--cc-high-contrast=${preferences.highContrast ? '1' : '0'}`,
-        `--cc-native-vibrancy=${process.platform === 'darwin' ? '1' : '0'}`,
-        `--cc-ui-state=${encodeURIComponent(JSON.stringify(uiState))}`,
-        // Whether this build ships accounts at all. Static for the process, so
-        // the renderer can drop the Account pane on first paint rather than
-        // rendering it and then discovering there is nothing behind it.
-        `--cc-accounts=${currentAuthState().available ? '1' : '0'}`,
-      ],
+      additionalArguments: rendererArguments(preferences, uiState, 'main'),
     },
   })
-
-  // The window only ever shows the local service; everything else opens in
-  // the user's browser.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    openExternalHttps(url)
-    return { action: 'deny' }
-  })
-  win.webContents.on('will-navigate', (event, url) => {
-    if (!isEngineOrigin(url, service.origin)) {
-      event.preventDefault()
-      openExternalHttps(url)
-    }
-  })
+  trustedWindows.register(win, 'main')
+  protectWindowNavigation(win)
 
   win.once('ready-to-show', () => {
     if (restored.maximized) win.maximize()
@@ -692,9 +718,14 @@ async function createWindow() {
   win.on('move', () => scheduleWindowStateSave(win))
   win.on('maximize', () => scheduleWindowStateSave(win))
   win.on('unmaximize', () => scheduleWindowStateSave(win))
-  win.on('close', () => { clearTimeout(windowStateTimer); windowStateTimer = null; saveWindowState(win) })
+  win.on('close', () => {
+    clearTimeout(windowStateTimer)
+    windowStateTimer = null
+    saveWindowState(win)
+    if (settingsWin && !settingsWin.isDestroyed()) settingsWin.close()
+  })
   win.on('closed', () => { clearTimeout(windowStateTimer); windowStateTimer = null; win = null })
-  await win.loadURL(`${service.origin}/console/`)
+  await win.loadURL(`${service.origin}/console/${process.env.CC_SMOKE_UI === '1' ? '?mode=demo' : ''}`)
   startManifestSync()
 }
 
@@ -721,6 +752,130 @@ async function smokeCheck() {
   // CC_SMOKE=1: boot, prove the service answers with the token, exit.
   // Used by CI and agents — no lingering window.
   try {
+    const artifactDir = process.env.CC_SMOKE_ARTIFACT_DIR || ''
+    const capture = async (window, name) => {
+      if (!artifactDir) return
+      fs.mkdirSync(artifactDir, { recursive: true })
+      const image = await window.webContents.capturePage()
+      fs.writeFileSync(path.join(artifactDir, `${name}.png`), image.toPNG())
+    }
+    if (process.env.CC_SMOKE_SETTINGS === '1' || process.env.CC_SMOKE_UI === '1') {
+      const first = await openSettingsWindow('privacy')
+      const second = await openSettingsWindow('privacy')
+      const snapshot = await settingsWin?.webContents.executeJavaScript(`({
+        href: location.href,
+        label: document.querySelector('.cc-settings-screen')?.getAttribute('aria-label'),
+        text: document.body.textContent,
+      })`)
+      const settingsOk = first?.opened && !first?.existing && second?.existing
+        && BrowserWindow.getAllWindows().length === 2
+        && snapshot?.href?.includes('surface=settings')
+        && snapshot?.label === 'ContextCake Settings'
+        && snapshot?.text?.includes('Privacy')
+      if (!settingsOk) throw new Error(`Settings smoke failed: ${JSON.stringify({ first, second, windows: BrowserWindow.getAllWindows().length, snapshot })}`)
+      console.log('SETTINGS SMOKE OK single-instance surface=settings pane=privacy')
+      await capture(settingsWin, 'settings-privacy')
+      settingsWin.close()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const restored = await openSettingsWindow()
+      const restoredPane = await settingsWin?.webContents.executeJavaScript(
+        `document.querySelector('.cc-settings-nav button[aria-current="page"]')?.textContent`,
+      )
+      if (!restored?.opened || restored?.existing || restoredPane?.trim() !== 'Privacy') {
+        throw new Error(`Settings pane restoration failed: ${JSON.stringify({ restored, restoredPane })}`)
+      }
+      settingsWin.close()
+    }
+    if (process.env.CC_SMOKE_UI === '1') {
+      const pause = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms))
+      const inspect = async (width, height, hash, expression) => {
+        win.setBounds({ x: 80, y: 80, width, height })
+        await win.webContents.executeJavaScript(`location.hash=${JSON.stringify(hash)}`)
+        await pause()
+        const result = await win.webContents.executeJavaScript(expression)
+        if (!result?.ok) throw new Error(`UI smoke failed at ${width}x${height} ${hash}: ${JSON.stringify(result)}`)
+        // Capture settled geometry rather than an in-flight 150 ms sheet
+        // transition; the assertions above intentionally inspect immediately.
+        await pause(200)
+        await capture(win, `${hash.slice(2)}-${width}x${height}`)
+        console.log(`UI SMOKE OK ${width}x${height} ${hash}`)
+      }
+      await inspect(760, 560, '#/overview', `(() => {
+        const sidebar = document.querySelector('.cc-sidebar');
+        return { ok: document.body.scrollWidth <= document.body.clientWidth + 1
+          && getComputedStyle(sidebar).position === 'fixed'
+          && document.querySelectorAll('.cc-nav-button').length === 5,
+          body: [document.body.scrollWidth, document.body.clientWidth], sidebar: getComputedStyle(sidebar).position };
+      })()`)
+      await inspect(900, 640, '#/sources', `(async () => {
+        const option = document.querySelector('.cc-source-navigator button[role="option"]'); option?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const detail = document.querySelector('.cc-source-detail');
+        const before = Boolean(detail?.hasAttribute('data-open')) && getComputedStyle(detail).position === 'absolute';
+        dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const main = document.querySelector('.cc-main');
+        const optionRect = option?.getBoundingClientRect();
+        const mainRect = main?.getBoundingClientRect();
+        return { ok: before && !detail?.hasAttribute('data-open')
+          && option?.innerText.includes('personal')
+          && (main?.scrollLeft ?? -1) === 0
+          && (optionRect?.left ?? -1) >= (mainRect?.left ?? 0)
+          && getComputedStyle(document.querySelector('.cc-sidebar-resizer')).display !== 'none'
+          && document.body.scrollWidth <= document.body.clientWidth + 1,
+          before, text: option?.innerText, mainScrollLeft: main?.scrollLeft,
+          optionLeft: optionRect?.left, mainLeft: mainRect?.left,
+          position: detail && getComputedStyle(detail).position };
+      })()`)
+      await inspect(1360, 860, '#/overview', `(async () => {
+        const headings = [...document.querySelectorAll('.cc-workspace-section h2')].map((node) => node.textContent);
+        document.querySelector('.cc-toolbar-ask')?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const ask = document.querySelector('[aria-label="Ask ContextCake"]');
+        const ok = headings.join('|').includes('Needs Attention') && headings.includes('Cascade summary')
+          && headings.includes('Source health') && ask?.getAttribute('role') === 'complementary'
+          && !ask?.hasAttribute('aria-modal') && document.body.scrollWidth <= document.body.clientWidth + 1;
+        document.querySelector('[aria-label="Close chat"]')?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return { ok, headings, askRole: ask?.getAttribute('role') };
+      })()`)
+      await inspect(1600, 1000, '#/canvas', `(async () => {
+        [...document.querySelectorAll('.cc-canvas-dots button')].find((button) => button.querySelector('code'))?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const inspector = document.querySelector('aside[aria-label$="concept detail"]');
+        return { ok: inspector?.getAttribute('role') === 'complementary'
+          && !inspector?.hasAttribute('aria-modal')
+          && document.body.scrollWidth <= document.body.clientWidth + 1,
+          role: inspector?.getAttribute('role'), canvasWidth: document.querySelector('.cc-canvas-dots')?.clientWidth,
+          innerWidth, shellWidth: document.querySelector('.cc-main-canvas')?.clientWidth };
+      })()`)
+      if (artifactDir) {
+        await inspect(760, 560, '#/conflicts', `(async () => {
+          document.querySelector('[role="option"]')?.click();
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const detail = document.querySelector('[aria-label$="conflict detail"]');
+          return { ok: detail?.getAttribute('role') === 'dialog' && detail?.getAttribute('aria-modal') === 'true'
+            && document.body.scrollWidth <= document.body.clientWidth + 1 };
+        })()`)
+        await win.setBounds({ x: 80, y: 80, width: 1360, height: 860 })
+        await win.webContents.executeJavaScript(`location.hash='#/concepts'; document.documentElement.dataset.density='compact'`)
+        await pause(200)
+        await capture(win, 'knowledge-compact-1360x860')
+        await win.webContents.executeJavaScript(`location.hash='#/overview'; document.documentElement.dataset.theme='dark'; document.documentElement.dataset.density='compact'`)
+        await pause()
+        await capture(win, 'home-dark-compact-1360x860')
+        await win.webContents.executeJavaScript(`document.documentElement.dataset.theme='light'; document.documentElement.dataset.density='comfortable'; dispatchEvent(new KeyboardEvent('keydown',{key:'k',metaKey:true,bubbles:true}))`)
+        await pause(220)
+        await capture(win, 'command-palette-1360x860')
+        await pause(100)
+        await openSettingsWindow('general')
+        await pause(200)
+        await capture(settingsWin, 'settings-general')
+        settingsWin?.close()
+      }
+      if (rendererErrors.length > 0) throw new Error(`Renderer console errors: ${rendererErrors.join(' | ')}`)
+      console.log('UI SMOKE OK renderer-console-errors=0')
+    }
     // Exercise the wrapper used after a settings pull, not only HTTP reads.
     // It round-trips to the engine process now, so await the acknowledgement.
     await service.reload()
@@ -781,7 +936,7 @@ app.whenReady().then(async () => {
   // already has one). Installs that arrive with layers — an upgrade, or a
   // skipped wizard revisited — prompt at boot exactly as before. Update checks
   // and metrics remain separate choices, and either can be changed later in
-  // Settings or the app menu. Development and smoke builds never show the
+  // Settings. Development and smoke builds never show the
   // prompt or report.
   if (app.isPackaged) {
     if (shouldDeferConsentPrompt({ storedPreference: readSettings().anonymousMetrics, manifest: readManifestConfig() })) {

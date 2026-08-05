@@ -104,6 +104,15 @@ afterEach(async () => {
 })
 
 describe('SettingsView', () => {
+  it('renders the desktop Settings window without an in-app Back or Close control', async () => {
+    withDesktopMetrics(false)
+    await act(async () => root.render(<ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>))
+    await act(async () => {})
+    expect(container.querySelector('.cc-settings-screen')?.getAttribute('data-surface')).toBe('window')
+    expect(findButton('Close')).toBeUndefined()
+    expect(container.querySelector('.cc-settings-screen')?.hasAttribute('aria-modal')).toBe(false)
+  })
+
   it('offers no Account pane in a build that ships without accounts', async () => {
     const onClose = vi.fn()
     await act(async () => root.render(
@@ -117,8 +126,33 @@ describe('SettingsView', () => {
     expect(findButton('Account')).toBeUndefined()
     expect(container.textContent).not.toContain('ContextCake account')
 
-    await act(async () => button('Back to app').click())
+    await act(async () => button('Close').click())
     expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('falls back from a saved pane that is unavailable in this build', async () => {
+    const setUiState = vi.fn().mockResolvedValue(undefined)
+    const bridge = preferences()
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '0.0.0-test',
+      authState: { signedIn: false, available: false },
+      preferences: bridge,
+      uiState: {
+        initial: {
+          sidebar: { collapsed: false, width: 232 }, lastView: 'overview',
+          knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'account',
+        },
+        set: setUiState,
+      },
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(<ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>))
+    await act(async () => {})
+
+    expect(container.querySelector('h1')?.textContent).toBe('General')
+    expect(setUiState).toHaveBeenCalledWith({ settingsPane: 'general' })
   })
 
   it('keeps account controls inside the settings surface when accounts are enabled', async () => {
@@ -131,9 +165,9 @@ describe('SettingsView', () => {
     ))
 
     await act(async () => button('Account').click())
-    expect(container.textContent).toContain('ContextCake account')
+    expect(container.textContent).toContain('ContextCake remains fully usable without an account')
 
-    await act(async () => button('Back to app').click())
+    await act(async () => button('Close').click())
     expect(onClose).toHaveBeenCalledOnce()
   })
 
@@ -184,9 +218,10 @@ describe('SettingsView', () => {
     ))
     await act(async () => {})
 
-    expect(container.textContent).toContain('Anonymous usage metrics')
-    expect(container.textContent).toContain('We use this to improve the app')
-    expect(container.textContent).toContain('The request never includes your files')
+    await act(async () => button('Privacy').click())
+    expect(container.textContent).toContain('Anonymous metrics')
+    expect(container.textContent).toContain('one-time successful-open signal')
+    expect(container.textContent).toContain('It excludes files, paths, prompts, document content')
     const toggle = container.querySelector<HTMLInputElement>('input[aria-label="Share anonymous usage metrics"]')
     expect(toggle?.checked).toBe(true)
 
@@ -205,7 +240,7 @@ describe('SettingsView', () => {
       </ThemeModeProvider>,
     ))
     await act(async () => button('Account').click())
-    await act(async () => button('Sign in with GitHub').click())
+    await act(async () => button('Continue with GitHub').click())
     expect(window.__CC_AUTH?.signIn).toHaveBeenCalledOnce()
 
     await act(async () => button('General').click())

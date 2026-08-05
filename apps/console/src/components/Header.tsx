@@ -47,7 +47,13 @@ export function Header({
       <div className="cc-toolbar-actions">
         {searchable && <SearchField
           ref={search} data-context-search value={query} onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Escape' && query) { event.preventDefault(); setQuery('') } }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && query) {
+              event.preventDefault()
+              event.stopPropagation()
+              setQuery('')
+            }
+          }}
           label={`Search ${view === 'triage' ? 'queue' : view}`}
           placeholder={`Search ${view === 'triage' ? 'queue' : view}`}
         />}

@@ -18,3 +18,7 @@ export const SparkleIcon = (props: IconProps) => <Icon {...props}><path d="m12 3
 export const PlusIcon = (props: IconProps) => <Icon {...props}><path d="M12 5v14M5 12h14" /></Icon>
 export const AgentIcon = (props: IconProps) => <Icon {...props}><rect x="3" y="5" width="18" height="14" rx="3" /><path d="M8 12h8M12 8v8" /></Icon>
 export const CloseIcon = (props: IconProps) => <Icon {...props}><path d="m6 6 12 12M18 6 6 18" /></Icon>
+export const IndexingIcon = (props: IconProps) => <Icon {...props}><ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6M4.5 12v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6" /></Icon>
+export const AccountIcon = (props: IconProps) => <Icon {...props}><circle cx="12" cy="8" r="3.4" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" /></Icon>
+export const PrivacyIcon = (props: IconProps) => <Icon {...props}><path d="M12 3 5 6v5c0 4.8 2.8 8.1 7 10 4.2-1.9 7-5.2 7-10V6z" /><path d="m9 12 2 2 4-4" /></Icon>
+export const ConnectionsIcon = (props: IconProps) => <Icon {...props}><path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.8-2.8a4 4 0 0 0-5.7-5.7l-1.6 1.6M13.5 10.5a4 4 0 0 0-5.7 0L5 13.3a4 4 0 1 0 5.7 5.7l1.6-1.6" /></Icon>

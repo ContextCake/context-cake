@@ -68,6 +68,7 @@ declare global {
 
   interface Window {
     __CC_DESKTOP?: {
+      windowRole?: 'main' | 'settings'
       /** Fetch the per-launch engine bearer through the desktop's trusted IPC gate. */
       getApiToken: () => Promise<string>
       /** Desktop app version. Update UX is owned by the app's native updater. */
@@ -89,13 +90,16 @@ declare global {
       commands?: {
         onInvoke(cb: (command: 'command-palette' | 'search' | 'ask' | 'settings' | 'toggle-sidebar' | `destination:${1 | 2 | 3 | 4 | 5}`) => void): () => void
       }
+      windows?: {
+        openSettings(pane?: DeviceUiState['settingsPane']): Promise<{ opened: boolean; existing: boolean }>
+        onSettingsPane(cb: (pane: DeviceUiState['settingsPane']) => void): () => void
+      }
+      data?: {
+        requestReload(): Promise<{ requested: boolean }>
+        onReloadRequested(cb: () => void): () => void
+      }
       /** Open the native macOS directory picker. Null means the user canceled. */
       chooseFolder?: () => Promise<string | null>
-      /** Explicit, user-controlled anonymous usage-metrics preference. */
-      metrics?: {
-        getEnabled: () => Promise<boolean | null>
-        setEnabled: (enabled: boolean) => Promise<boolean>
-      }
       /** Fixed native operations for ContextCake's own command-line tool. */
       cli: {
         getStatus: () => Promise<CliResult>
@@ -119,12 +123,9 @@ declare global {
       deleteAccount(): Promise<DesktopAuthState>
       onSessionChanged(cb: (state: DesktopAuthState) => void): () => void
       onError(cb: (message: string) => void): () => void
-      syncSettings(settings: Record<string, unknown>): Promise<{ localOnly: boolean }>
       pullSettings(): Promise<{ overwritten?: boolean; settings: Record<string, unknown> } | null>
       getSyncState(): Promise<SettingsSyncState>
       onSyncStatus(cb: (state: SettingsSyncState) => void): () => void
-      onSettingsPulled(cb: (settings: Record<string, unknown>) => void): () => void
-      bootstrapTheme(theme: 'light' | 'dark'): Promise<'light' | 'dark'>
     }
   }
 }

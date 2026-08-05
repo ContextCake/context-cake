@@ -1,9 +1,7 @@
 import { app, Menu, shell } from 'electron'
 import { checkInteractive } from './updater.mjs'
 import { installCli } from './cli-install.mjs'
-import { readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
-
-export function buildMenu(getWindow, onSettingsChange) {
+export function buildMenu(getWindow, openSettings) {
   const invoke = (command) => {
     const window = getWindow()
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
@@ -17,25 +15,12 @@ export function buildMenu(getWindow, onSettingsChange) {
         {
           label: 'Settings…',
           accelerator: 'CmdOrCtrl+,',
-          click: () => invoke('settings'),
+          click: () => openSettings?.(),
         },
         { type: 'separator' },
         {
           label: 'Check for Updates…',
           click: () => checkInteractive(getWindow()),
-        },
-        { type: 'separator' },
-        {
-          label: 'Check for Updates Automatically',
-          type: 'checkbox',
-          checked: readSettings().updateCheck,
-          click: (item) => onSettingsChange?.(writeSettings({ updateCheck: item.checked }), 'updateCheck'),
-        },
-        {
-          label: 'Share Anonymous Usage Metrics',
-          type: 'checkbox',
-          checked: readSettings().anonymousMetrics === true,
-          click: (item) => onSettingsChange?.(writeLocalSettings({ anonymousMetrics: item.checked }), 'anonymousMetrics'),
         },
         { type: 'separator' },
         {
@@ -65,9 +50,14 @@ export function buildMenu(getWindow, onSettingsChange) {
         { label: 'Ask ContextCake', accelerator: 'CmdOrCtrl+Shift+A', click: () => invoke('ask') },
         { type: 'separator' },
         { label: 'Toggle Sidebar', click: () => invoke('toggle-sidebar') },
-        { type: 'separator' },
-        { role: 'reload' },
-        { role: 'toggleDevTools' },
+        // Reload bypasses the renderer's unsaved-file navigation guard, and
+        // neither reload nor DevTools belongs in the shipped desktop app.
+        // Keep both available to developers running an unpackaged build.
+        ...(!app.isPackaged ? [
+          { type: 'separator' },
+          { role: 'reload' },
+          { role: 'toggleDevTools' },
+        ] : []),
       ],
     },
     { role: 'windowMenu' },

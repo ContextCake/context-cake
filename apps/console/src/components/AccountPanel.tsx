@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Button, InlineNotice, StatusBadge } from './ui'
 
 type AuthState = Awaited<ReturnType<NonNullable<typeof window.__CC_AUTH>['getState']>>
 type SyncState = Awaited<ReturnType<NonNullable<typeof window.__CC_AUTH>['getSyncState']>>
@@ -10,7 +11,26 @@ function messageOf(error: unknown) {
   return error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+':\s*/, '') : 'Something went wrong.'
 }
 
-/** Desktop-only account controls. Browser/demo builds render nothing. */
+function syncTime(value?: string | null) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return { relative: value, absolute: value }
+  const seconds = Math.round((date.getTime() - Date.now()) / 1000)
+  const scale: [number, Intl.RelativeTimeFormatUnit][] = [[60, 'second'], [60, 'minute'], [24, 'hour'], [30, 'day'], [12, 'month']]
+  let amount = seconds
+  let unit: Intl.RelativeTimeFormatUnit = 'second'
+  for (const [limit, nextUnit] of scale) {
+    if (Math.abs(amount) < limit) break
+    amount = Math.round(amount / limit)
+    unit = nextUnit
+  }
+  return {
+    relative: new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(amount, unit),
+    absolute: date.toLocaleString(),
+  }
+}
+
+/** Desktop-only account controls. Tokens and PKCE material never enter here. */
 export function AccountPanel() {
   const bridge = window.__CC_AUTH
   const [auth, setAuth] = useState<AuthState>(() => window.__CC_DESKTOP?.authState ?? SIGNED_OUT)
@@ -18,6 +38,7 @@ export function AccountPanel() {
   const [busy, setBusy] = useState(false)
   const [pendingProvider, setPendingProvider] = useState<'github' | null>(null)
   const [error, setError] = useState('')
+  const [announcement, setAnnouncement] = useState('')
   const signInTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const signInAttempt = useRef(0)
   const signInPending = useRef(false)
@@ -42,21 +63,16 @@ export function AccountPanel() {
     })
     const removeSync = bridge.onSyncStatus(setSync)
     const removeError = bridge.onError((message) => {
-      signInAttempt.current += 1
-      clearSignInTimer()
       setError(message)
       setBusy(false)
-      // The main process deliberately keeps a valid pending OAuth attempt when
-      // an unrelated or forged callback arrives. Keep Cancel visible so that
-      // attempt can never leave the renderer stuck behind the backend lock.
+      // Keep Cancel visible: the main process intentionally preserves a valid
+      // pending attempt when an unrelated or forged callback arrives.
     })
     return () => {
       removeSession()
       removeSync()
       removeError()
       clearSignInTimer()
-      // The Account pane is intentionally unmounted when Settings closes or
-      // switches panes. Do not leave the main-process OAuth lock orphaned.
       if (signInPending.current) bridge.cancelSignIn().catch(() => {})
       signInPending.current = false
     }
@@ -64,36 +80,23 @@ export function AccountPanel() {
 
   if (!bridge) return null
 
-  const run = async (action: () => Promise<unknown>) => {
-    setBusy(true)
-    setPendingProvider(null)
-    setError('')
-    try {
-      await action()
-    } catch (err) {
-      setError(messageOf(err))
-    } finally {
-      setBusy(false)
-      setPendingProvider(null)
-    }
-  }
-
-  const startSignIn = async (provider: 'github') => {
+  const startSignIn = async () => {
     const attempt = ++signInAttempt.current
     setBusy(true)
-    setPendingProvider(provider)
+    setPendingProvider('github')
     signInPending.current = true
     setError('')
+    setAnnouncement('')
     clearSignInTimer()
     try {
-      await bridge.signIn(provider)
+      await bridge.signIn('github')
       if (attempt !== signInAttempt.current) return
       signInTimer.current = setTimeout(() => {
         signInPending.current = false
         bridge.cancelSignIn().catch(() => {})
         setBusy(false)
         setPendingProvider(null)
-        setError('Sign-in wasn’t completed. You can try again.')
+        setError('Sign-in timed out. Try again when you are ready.')
       }, 10 * 60 * 1000)
     } catch (err) {
       signInPending.current = false
@@ -107,53 +110,101 @@ export function AccountPanel() {
     signInAttempt.current += 1
     signInPending.current = false
     clearSignInTimer()
-    await run(() => bridge.cancelSignIn())
+    setBusy(true)
+    try { setAuth(await bridge.cancelSignIn()); setError('') }
+    catch (err) { setError(messageOf(err)) }
+    finally { setBusy(false); setPendingProvider(null) }
   }
+
+  const signOut = async () => {
+    setBusy(true); setError('')
+    try {
+      setAuth(await bridge.signOut())
+      setAnnouncement('Signed out. Local files and settings were not changed.')
+    } catch (err) { setError(messageOf(err)) }
+    finally { setBusy(false) }
+  }
+
+  const deleteAccount = async () => {
+    setBusy(true); setError('')
+    try {
+      const next = await bridge.deleteAccount()
+      setAuth(next)
+      if (!next.signedIn) setAnnouncement('Account deleted. Local files and this Mac’s settings were not changed.')
+    } catch (err) { setError(messageOf(err)) }
+    finally { setBusy(false) }
+  }
+
+  const syncNow = async () => {
+    setError('')
+    setSync((current) => ({ ...current, status: 'syncing' }))
+    try {
+      const result = await bridge.pullSettings()
+      const current = await bridge.getSyncState()
+      setSync({ ...current, overwritten: result?.overwritten ?? current.overwritten })
+    } catch (err) {
+      setSync((current) => ({ ...current, status: 'error', message: messageOf(err) }))
+    }
+  }
+
+  const timestamp = syncTime(sync.updatedAt)
+
+  if (!auth.available) return <InlineNotice>Sign-in is not included in this build. ContextCake remains fully usable locally.</InlineNotice>
+
+  if (!auth.signedIn) return (
+    <section className="cc-account" aria-labelledby="cc-account-title" aria-busy={busy}>
+      <div className="cc-account-profile">
+        <div className="cc-account-identity">
+          <h2 id="cc-account-title">Account</h2>
+          <p className="cc-account-note">Preferences and safe source metadata can follow you across Macs.</p>
+          <p className="cc-account-note"><strong>Sign-in is optional.</strong> ContextCake remains fully usable without an account.</p>
+        </div>
+      </div>
+      {pendingProvider ? (
+        <div className="cc-account-pending" role="status">
+          <StatusBadge tone="info">GitHub</StatusBadge>
+          <strong>Finish signing in in your browser.</strong>
+          <span>This window will update automatically when GitHub returns you to ContextCake.</span>
+          <Button type="button" variant="secondary" onClick={cancelSignIn}>Cancel</Button>
+        </div>
+      ) : (
+        <Button type="button" variant="primary" disabled={busy} onClick={startSignIn}>Continue with GitHub</Button>
+      )}
+      <p className="cc-account-note">Settings sync never uploads document contents, local paths, commands, or credentials.</p>
+      {auth.notice && <InlineNotice>{auth.notice}</InlineNotice>}
+      {error && <InlineNotice tone="error">{error} <button type="button" onClick={startSignIn}>Try again</button></InlineNotice>}
+      <div className="sr-only" aria-live="polite">{announcement}</div>
+    </section>
+  )
 
   return (
     <section className="cc-account" aria-labelledby="cc-account-title" aria-busy={busy}>
       <div className="cc-account-profile">
-        <span className="cc-account-avatar" aria-hidden="true">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2" /><path d="M5.8 19.5a6.2 6.2 0 0 1 12.4 0" /></svg>
-        </span>
+        <span className="cc-account-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2" /><path d="M5.8 19.5a6.2 6.2 0 0 1 12.4 0" /></svg></span>
         <div className="cc-account-identity">
-          <div className="cc-account-head">
-            <span id="cc-account-title">ContextCake account</span>
-            {auth.signedIn && <span className="cc-account-dot" aria-label="Signed in" />}
-          </div>
-          {!auth.available ? (
-            <p className="cc-account-note">Sign-in isn’t configured in this build. Local features still work.</p>
-          ) : auth.signedIn ? (
-            <p className="cc-account-email" title={auth.email}>{auth.email ?? 'Signed in'}</p>
-          ) : (
-            <p className="cc-account-note">Optional. Sign in to sync preferences and source metadata across your Macs.</p>
-          )}
+          <h2 id="cc-account-title">{auth.email ?? 'Signed in'}</h2>
+          <p className="cc-account-note">Connected with GitHub</p>
         </div>
+        <StatusBadge tone="success">Signed in</StatusBadge>
       </div>
 
-      {auth.available && (auth.signedIn ? (
-        <>
-          <div className="cc-account-actions">
-            <button type="button" disabled={busy} onClick={() => run(() => bridge.signOut())}>Sign out</button>
-            <button type="button" className="cc-account-danger" disabled={busy} onClick={() => run(() => bridge.deleteAccount())}>Delete account</button>
-          </div>
-        </>
-      ) : (
-        <div className="cc-account-providers">
-          <button type="button" disabled={busy} onClick={() => startSignIn('github')}>
-            {pendingProvider === 'github' ? 'Opening browser…' : 'Sign in with GitHub'}
-          </button>
-          {pendingProvider && <button type="button" onClick={cancelSignIn}>Cancel sign-in</button>}
+      <div className="cc-account-sync">
+        <div>
+          <strong>{sync.status === 'syncing' ? 'Syncing' : sync.status === 'synced' ? (sync.overwritten ? 'Updated from another Mac' : 'Settings synced') : sync.status === 'error' ? 'Offline or unable to sync' : 'Ready to sync'}</strong>
+          {timestamp && <span title={timestamp.absolute}>Last synced {timestamp.relative} · {timestamp.absolute}</span>}
+          {sync.status === 'error' && <span>{sync.message || 'Local settings are unchanged.'}</span>}
         </div>
-      ))}
+        <Button type="button" variant="secondary" disabled={sync.status === 'syncing'} onClick={syncNow}>{sync.status === 'error' ? 'Retry' : 'Sync now'}</Button>
+      </div>
 
-      {auth.signedIn && sync.status === 'syncing' && <p className="cc-account-status">Syncing settings…</p>}
-      {auth.signedIn && sync.status === 'synced' && (
-        <p className="cc-account-status">{sync.overwritten ? 'Settings updated from another Mac.' : 'Settings synced.'}</p>
-      )}
-      {auth.signedIn && sync.status === 'error' && <p className="cc-account-error" role="status">{sync.message}</p>}
-      {!auth.signedIn && auth.notice && <p className="cc-account-note" role="status">{auth.notice}</p>}
-      {error && <p className="cc-account-error" role="alert">{error}</p>}
+      <div className="cc-account-actions"><Button type="button" variant="secondary" disabled={busy} onClick={signOut}>Sign Out</Button></div>
+
+      <section className="cc-account-danger-zone" aria-labelledby="cc-danger-title">
+        <div><h3 id="cc-danger-title">Danger Zone</h3><p>Delete the cloud account and synced settings. Local files and this Mac’s settings remain.</p></div>
+        <Button type="button" variant="danger" disabled={busy} onClick={deleteAccount}>Delete Account…</Button>
+      </section>
+      {error && <InlineNotice tone="error">{error}</InlineNotice>}
+      <div className="sr-only" aria-live="polite">{announcement}</div>
     </section>
   )
 }

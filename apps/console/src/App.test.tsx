@@ -101,6 +101,9 @@ describe('Mac-first application shell', () => {
     await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     await act(async () => button('Knowledge').click())
+    const concept = container.querySelector<HTMLButtonElement>('.cc-navigator-detail > div button')
+    await act(async () => concept?.click())
+    expect(container.querySelector('.cc-navigator-detail-panel[data-open]')).toBeTruthy()
 
     await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true })))
     const search = container.querySelector<HTMLInputElement>('input[data-context-search]')
@@ -113,6 +116,7 @@ describe('Mac-first application shell', () => {
     expect(search?.value).toBe('auth')
     await act(async () => search?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(search?.value).toBe('')
+    expect(container.querySelector('.cc-navigator-detail-panel[data-open]')).toBeTruthy()
   })
 
   it('routes every shell navigation path through the unsaved-work guard', async () => {
@@ -194,7 +198,7 @@ describe('Mac-first application shell', () => {
     expect(container.querySelector('.cc-app-shell')).toBe(shell)
     expect(container.querySelector('.cc-app-layer')?.hasAttribute('inert')).toBe(true)
 
-    await act(async () => button('Back to app').click())
+    await act(async () => button('Close').click())
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
     expect(container.querySelector('.cc-settings-screen')).toBeNull()
     expect(container.querySelector('.cc-app-shell')).toBe(shell)
@@ -226,6 +230,21 @@ describe('Mac-first application shell', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true, bubbles: true }))
     })
     expect(container.querySelector('.cc-connect-dialog')).toBeTruthy()
+    expect(container.querySelector('.cc-settings-screen')).toBeNull()
+  })
+
+  it('opens desktop Settings as a separate native window instead of mounting the overlay', async () => {
+    const openSettings = vi.fn().mockResolvedValue({ opened: true, existing: false })
+    window.__CC_DESKTOP = {
+      getApiToken: async () => 'test', version: '0.1.0', authState: { signedIn: false },
+      windows: { openSettings, onSettingsPane: vi.fn(() => () => {}) },
+      data: { requestReload: vi.fn(), onReloadRequested: vi.fn(() => () => {}) },
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    }
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => button('Settings⌘,').click())
+    expect(openSettings).toHaveBeenCalledWith()
     expect(container.querySelector('.cc-settings-screen')).toBeNull()
   })
 

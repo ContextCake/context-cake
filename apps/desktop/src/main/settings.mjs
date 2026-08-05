@@ -6,6 +6,8 @@ import path from 'node:path'
 import { settingsPath } from './paths.mjs'
 
 const DEFAULTS = Object.freeze({
+  theme: 'system',
+  density: 'comfortable',
   // Spec (distribution §5): the update check is disable-able.
   updateCheck: true,
 })

@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-density="comfortable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ContextCake Mac-first UI prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #e9e8e1;
+      --window: #f4f3ea;
+      --sidebar: rgba(244, 243, 234, 0.88);
+      --toolbar: rgba(255, 253, 246, 0.9);
+      --surface: #fffdf6;
+      --raised: #ffffff;
+      --line: rgba(61, 76, 68, 0.13);
+      --line-strong: rgba(61, 76, 68, 0.23);
+      --ink: #151917;
+      --body: #38413c;
+      --caption: #6b736d;
+      --faint: #8b918c;
+      --neutral: rgba(21, 25, 23, 0.055);
+      --teal-fill: #e6efe9;
+      --teal: #557f6c;
+      --teal-text: #254e3d;
+      --blue-fill: #e6f0f3;
+      --blue: #356f91;
+      --blue-text: #224e63;
+      --amber-fill: #f6eada;
+      --amber: #c95f3f;
+      --amber-text: #6a3a24;
+      --company: #8bbad1;
+      --team: #8dc3a8;
+      --personal: #d9ab53;
+      --conflict: #e07a56;
+      --shadow: 0 24px 70px rgba(30, 35, 31, 0.18);
+      --overlay-shadow: 0 22px 60px rgba(20, 24, 21, 0.28);
+      --sidebar-width: 232px;
+      --control: 32px;
+      --row: 44px;
+      --gap: 12px;
+      --panel-pad: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+      font-size: 13px;
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: #090a09;
+      --window: #10110f;
+      --sidebar: rgba(24, 26, 23, 0.9);
+      --toolbar: rgba(27, 29, 26, 0.92);
+      --surface: #1d1f1c;
+      --raised: #252720;
+      --line: rgba(235, 226, 207, 0.11);
+      --line-strong: rgba(235, 226, 207, 0.21);
+      --ink: #f3efe6;
+      --body: #d4cec2;
+      --caption: #aaa398;
+      --faint: #837d73;
+      --neutral: rgba(235, 226, 207, 0.08);
+      --teal-fill: rgba(83, 127, 108, 0.2);
+      --teal: #8dc3a8;
+      --teal-text: #bfe8d3;
+      --blue-fill: rgba(71, 113, 137, 0.22);
+      --blue: #8bbad1;
+      --blue-text: #b6d9e8;
+      --amber-fill: rgba(201, 95, 63, 0.19);
+      --amber: #e07a56;
+      --amber-text: #f0c08b;
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+      --overlay-shadow: 0 22px 60px rgba(0, 0, 0, 0.62);
+    }
+
+    :root[data-density="compact"] {
+      --control: 28px;
+      --row: 36px;
+      --gap: 8px;
+      --panel-pad: 12px;
+      font-size: 12.5px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      background: var(--page);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      overflow: auto;
+    }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid var(--teal);
+      outline-offset: 2px;
+    }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+    .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .icon { width: 17px; height: 17px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    .prototype-bar {
+      position: sticky; top: 0; z-index: 1000;
+      min-height: 48px; padding: 8px 14px;
+      display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(18px);
+    }
+    .prototype-bar strong { margin-right: 6px; font-size: 12px; font-weight: 600; }
+    .prototype-bar label { display: inline-flex; align-items: center; gap: 5px; color: var(--caption); font-size: 11px; }
+    .prototype-bar select, .prototype-bar button {
+      height: 28px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); padding: 0 9px;
+    }
+    .prototype-bar .prototype-note { margin-left: auto; color: var(--faint); font-size: 11px; }
+
+    .stage-wrap { min-width: min-content; padding: 24px; display: grid; place-items: start center; }
+    #stage {
+      position: relative; container-type: inline-size;
+      width: 1360px; height: 860px; min-width: 360px; min-height: 480px;
+      overflow: hidden; border-radius: 12px; background: var(--window);
+      box-shadow: var(--shadow); border: 1px solid var(--line-strong);
+      transition: width 180ms ease, height 180ms ease;
+    }
+    body.capture .prototype-bar { display: none; }
+    body.capture .stage-wrap { padding: 0; }
+    body.capture #stage { border: 0; border-radius: 0; box-shadow: none; }
+
+    .app-grid { height: 100%; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+    #stage.collapsed .app-grid { grid-template-columns: 64px minmax(0, 1fr); }
+    .traffic-lights { position: absolute; top: 18px; left: 18px; z-index: 30; display: flex; gap: 8px; }
+    .traffic-lights span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,.18); }
+    .traffic-lights span:nth-child(1) { background: #ff5f57; }
+    .traffic-lights span:nth-child(2) { background: #febc2e; }
+    .traffic-lights span:nth-child(3) { background: #28c840; }
+
+    .sidebar {
+      position: relative; z-index: 20; min-width: 0; overflow: hidden;
+      display: flex; flex-direction: column; padding: 54px 10px 10px;
+      background: var(--sidebar); border-right: 1px solid var(--line);
+      backdrop-filter: blur(26px) saturate(115%);
+    }
+    .brand { height: 34px; padding: 0 8px 10px; display: flex; align-items: center; gap: 9px; }
+    .brand-mark { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: var(--ink); color: var(--surface); font-size: 12px; font-weight: 600; }
+    .brand-name { font-weight: 600; letter-spacing: -.01em; white-space: nowrap; }
+    .nav { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
+    .nav-button, .sidebar-settings {
+      position: relative; width: 100%; min-height: var(--row); padding: 0 10px;
+      border: 0; border-radius: 8px; background: transparent;
+      display: flex; align-items: center; gap: 10px; text-align: left; color: var(--body);
+    }
+    .nav-button:hover, .sidebar-settings:hover { background: var(--neutral); }
+    .nav-button.active { background: var(--teal-fill); color: var(--teal-text); font-weight: 600; }
+    .nav-label { flex: 1; white-space: nowrap; overflow: hidden; }
+    .badge { min-width: 19px; height: 19px; padding: 0 5px; display: inline-grid; place-items: center; border-radius: 9px; background: var(--amber-fill); color: var(--amber-text); font-size: 10px; font-weight: 600; }
+    .sidebar-bottom { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); }
+    .resize-handle {
+      position: absolute; z-index: 40; top: 0; right: -4px; width: 8px; height: 100%;
+      cursor: col-resize; outline: none;
+    }
+    .resize-handle::after { content: ""; position: absolute; top: 0; right: 3px; width: 1px; height: 100%; background: transparent; }
+    .resize-handle:hover::after, .resize-handle:focus-visible::after { background: var(--teal); }
+    #stage.collapsed .brand-name, #stage.collapsed .nav-label, #stage.collapsed .badge, #stage.collapsed .sidebar-settings kbd { display: none; }
+    #stage.collapsed .brand, #stage.collapsed .nav-button, #stage.collapsed .sidebar-settings { justify-content: center; padding-left: 0; padding-right: 0; }
+    #stage.collapsed .resize-handle { display: none; }
+
+    .main-shell { min-width: 0; min-height: 0; display: grid; grid-template-rows: 52px minmax(0, 1fr); background: var(--window); }
+    .toolbar {
+      min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0 14px;
+      background: var(--toolbar); border-bottom: 1px solid var(--line); backdrop-filter: blur(20px);
+    }
+    .toolbar-title { min-width: 90px; font-size: 14px; font-weight: 600; white-space: nowrap; }
+    .toolbar-spacer { flex: 1; min-width: 8px; }
+    .icon-button, .tool-button {
+      height: var(--control); min-width: var(--control); border: 1px solid var(--line); border-radius: 8px;
+      background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 9px;
+    }
+    .icon-button:hover, .tool-button:hover { background: var(--neutral); border-color: var(--line-strong); }
+    .tool-button.primary { background: var(--teal-text); color: var(--surface); border-color: transparent; }
+    .sidebar-toggle { display: none; }
+    .segmented { display: inline-flex; align-items: center; padding: 2px; border-radius: 8px; background: var(--neutral); border: 1px solid var(--line); }
+    .segmented button { height: calc(var(--control) - 6px); padding: 0 11px; border: 0; border-radius: 6px; background: transparent; color: var(--caption); font-size: 12px; }
+    .segmented button.active { background: var(--raised); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    .search {
+      width: clamp(150px, 25vw, 260px); height: var(--control); padding: 0 10px 0 31px;
+      border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23717771' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-4-4'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: 9px center;
+    }
+    .activity { display: inline-flex; align-items: center; gap: 6px; color: var(--caption); white-space: nowrap; font-size: 11.5px; }
+    .activity-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); animation: pulse 1.8s ease infinite; }
+    @keyframes pulse { 50% { opacity: .35; } }
+
+    .workspace { position: relative; min-width: 0; min-height: 0; overflow: auto; container-type: inline-size; }
+    .view { min-height: 100%; padding: 18px; }
+    .view.flush { padding: 0; overflow: hidden; height: 100%; }
+    .section { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+    .section-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 15px 10px; }
+    .section-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
+    .section-header span { color: var(--caption); font-size: 11.5px; }
+    .quiet { color: var(--caption); }
+    .empty-good { min-height: 78px; padding: 16px; display: flex; gap: 11px; align-items: center; color: var(--teal-text); background: var(--teal-fill); border: 1px solid color-mix(in srgb, var(--teal) 50%, transparent); border-radius: 10px; }
+    .check { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--teal); flex: 0 0 auto; }
+
+    .home { display: grid; gap: var(--gap); max-width: 1160px; margin: 0 auto; }
+    .attention-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; padding: 0 14px 14px; }
+    .attention-row { min-height: 58px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--raised); display: flex; gap: 10px; align-items: center; text-align: left; }
+    .attention-row strong { display: block; font-size: 12.5px; }
+    .attention-row small { display: block; margin-top: 2px; color: var(--caption); }
+    .attention-count { font: 600 20px/1 ui-monospace, Menlo, monospace; color: var(--amber-text); }
+    .metric-strip { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface); }
+    .metric { min-height: 68px; padding: 11px 14px; border: 0; border-right: 1px solid var(--line); background: transparent; text-align: left; }
+    .metric:last-child { border-right: 0; }
+    .metric span { display: block; color: var(--caption); font-size: 11.5px; }
+    .metric strong { display: block; margin-top: 3px; font: 500 22px/1.15 ui-monospace, Menlo, monospace; }
+    .home-columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); gap: var(--gap); }
+    .layer-list, .source-health { padding: 0 8px 8px; }
+    .layer-row, .health-row { min-height: var(--row); display: grid; align-items: center; gap: 10px; padding: 6px 8px; border-top: 1px solid var(--line); }
+    .layer-row { grid-template-columns: 28px 1fr auto; }
+    .health-row { grid-template-columns: 8px minmax(0,1fr) auto; }
+    .layer-row > span:nth-child(2) { min-width: 0; display: flex; align-items: baseline; gap: 4px; }
+    .layer-number { width: 25px; height: 25px; border-radius: 50%; display: grid; place-items: center; background: var(--raised); border: 2px solid var(--layer); font: 600 10px ui-monospace, Menlo, monospace; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--status); }
+
+    .split { height: 100%; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); background: var(--surface); }
+    .navigator { min-height: 0; overflow: auto; padding: 8px; border-right: 1px solid var(--line); }
+    .nav-row { width: 100%; min-height: var(--row); margin-bottom: 3px; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; text-align: left; }
+    .nav-row:hover { background: var(--neutral); }
+    .nav-row.active { background: var(--teal-fill); border-color: color-mix(in srgb, var(--teal) 45%, transparent); color: var(--teal-text); }
+    .nav-row strong, .nav-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav-row strong { font-size: 12.5px; font-weight: 600; }
+    .nav-row small { margin-top: 3px; color: var(--caption); font-size: 11px; }
+    .detail { min-width: 0; overflow: auto; padding: 20px 22px; }
+    .detail-close { display: none; min-height: 28px; margin: 0 0 14px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); color: var(--body); }
+    .detail h1 { margin: 0 0 6px; font-size: 20px; letter-spacing: -.015em; }
+    .detail h2 { margin: 22px 0 8px; font-size: 14px; }
+    .detail p { max-width: 68ch; color: var(--body); line-height: 1.55; }
+    .detail-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--caption); }
+    .chip { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 7px; border-radius: 6px; background: var(--chip-bg, var(--neutral)); color: var(--chip-text, var(--body)); border: 1px solid var(--chip-line, var(--line)); font-size: 10.5px; }
+    .provenance { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin-top: 14px; }
+    .provenance-card { padding: 13px; border: 1px solid var(--line); border-left: 4px solid var(--layer); border-radius: 8px; background: var(--raised); }
+    .provenance-card strong { display: block; margin-bottom: 6px; }
+    .path { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--neutral); overflow-wrap: anywhere; font: 11px/1.5 ui-monospace, Menlo, monospace; }
+    .action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+    .button { min-height: var(--control); padding: 0 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); }
+    .button.primary { background: var(--teal-text); color: var(--surface); border-color: transparent; }
+    .button.danger { color: var(--amber-text); border-color: color-mix(in srgb, var(--amber) 50%, var(--line)); }
+    .inline-error { margin-top: 12px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--amber) 60%, transparent); border-radius: 8px; color: var(--amber-text); background: var(--amber-fill); }
+
+    .file-tree-label { padding: 9px 10px 5px; color: var(--caption); font-size: 11px; font-weight: 600; }
+    .editor { height: 100%; display: grid; grid-template-rows: 44px minmax(0, 1fr); }
+    .editor-bar { padding: 0 14px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
+    .editor-body { padding: 24px; overflow: auto; font: 12px/1.65 ui-monospace, Menlo, monospace; white-space: pre-wrap; color: var(--body); }
+
+    .canvas { position: relative; height: 100%; overflow: hidden; background-color: var(--window); background-image: radial-gradient(var(--line-strong) .8px, transparent .8px); background-size: 18px 18px; }
+    .canvas svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .node { position: absolute; width: 178px; min-height: 76px; padding: 11px; border: 1px solid var(--line-strong); border-left: 4px solid var(--layer); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 22px rgba(0,0,0,.08); }
+    .node strong { display: block; font-size: 12.5px; }
+    .node small { display: block; margin-top: 5px; color: var(--caption); }
+    .node.n1 { left: 10%; top: 18%; --layer: var(--company); }
+    .node.n2 { left: 40%; top: 41%; --layer: var(--team); }
+    .node.n3 { right: 9%; top: 20%; --layer: var(--personal); }
+    .node.n4 { right: 15%; bottom: 13%; --layer: var(--conflict); }
+    .canvas-controls { position: absolute; right: 14px; bottom: 14px; display: flex; gap: 4px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--overlay-shadow); }
+    .canvas-controls button { width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; }
+
+    .ask-panel { position: absolute; z-index: 55; top: 52px; right: 0; bottom: 0; width: min(420px, calc(100% - 24px)); display: none; grid-template-rows: 50px minmax(0,1fr) auto; background: var(--surface); border-left: 1px solid var(--line); box-shadow: var(--overlay-shadow); }
+    #stage.ask-open .ask-panel { display: grid; }
+    .ask-header { padding: 0 14px; display: flex; align-items: center; gap: 9px; border-bottom: 1px solid var(--line); }
+    .ask-header strong { flex: 1; }
+    .ask-messages { padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+    .message { max-width: 88%; padding: 10px 12px; border-radius: 10px; line-height: 1.5; background: var(--neutral); }
+    .message.user { align-self: flex-end; background: var(--teal-fill); color: var(--teal-text); }
+    .citation { display: block; margin-top: 7px; color: var(--blue-text); font-size: 10.5px; }
+    .ask-compose { padding: 10px; display: flex; gap: 7px; border-top: 1px solid var(--line); }
+    .ask-compose input { flex: 1; min-width: 0; height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); padding: 0 10px; }
+
+    .palette-backdrop { position: absolute; z-index: 100; inset: 0; display: none; align-items: flex-start; justify-content: center; padding-top: 14%; background: rgba(10, 12, 10, .24); }
+    #stage.palette-open .palette-backdrop { display: flex; }
+    .palette { width: min(560px, calc(100% - 32px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); box-shadow: var(--overlay-shadow); }
+    .palette input { width: 100%; height: 48px; padding: 0 15px; border: 0; border-bottom: 1px solid var(--line); background: transparent; font-size: 14px; outline: 0; }
+    .palette-list { max-height: 320px; padding: 6px; overflow: auto; }
+    .command { width: 100%; min-height: 40px; padding: 0 9px; border: 0; border-radius: 8px; background: transparent; display: flex; align-items: center; gap: 10px; text-align: left; }
+    .command.active { background: var(--teal-fill); color: var(--teal-text); }
+    .command span:nth-child(2) { flex: 1; }
+    kbd { min-width: 23px; padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--neutral); color: var(--caption); font: 10px ui-monospace, Menlo, monospace; text-align: center; }
+    .palette-footer { height: 30px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); color: var(--faint); font-size: 10.5px; }
+
+    .settings-window { position: absolute; z-index: 120; left: 50%; top: 50%; width: min(760px, calc(100% - 30px)); height: min(620px, calc(100% - 30px)); min-height: 470px; transform: translate(-50%, -50%); display: none; grid-template-rows: 86px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--window); box-shadow: var(--overlay-shadow); }
+    #stage.settings-open .settings-window { display: grid; }
+    .settings-traffic { position: absolute; top: 15px; left: 15px; display: flex; gap: 7px; }
+    .settings-traffic button { width: 12px; height: 12px; padding: 0; border: 0; border-radius: 50%; background: #ff5f57; }
+    .settings-toolbar { display: flex; justify-content: center; align-items: flex-end; gap: 8px; padding: 28px 14px 8px 82px; background: var(--toolbar); border-bottom: 1px solid var(--line); }
+    .settings-tab { min-width: 74px; height: 48px; padding: 5px 7px; border: 0; border-radius: 8px; background: transparent; display: grid; place-items: center; gap: 2px; color: var(--caption); font-size: 10.5px; }
+    .settings-tab.active { background: var(--neutral); color: var(--ink); }
+    .settings-tab .icon { width: 18px; height: 18px; }
+    .settings-content { overflow: auto; padding: 24px 28px 40px; }
+    .settings-column { max-width: 620px; margin: 0 auto; }
+    .settings-column h1 { margin: 0 0 18px; font-size: 20px; font-weight: 600; text-align: center; }
+    .settings-group { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .settings-row { min-height: 58px; padding: 11px 13px; display: flex; align-items: center; gap: 18px; border-top: 1px solid var(--line); }
+    .settings-row:first-child { border-top: 0; }
+    .settings-copy { flex: 1; min-width: 0; }
+    .settings-copy strong, .settings-copy small { display: block; }
+    .settings-copy strong { font-weight: 500; }
+    .settings-copy small { margin-top: 3px; color: var(--caption); line-height: 1.4; }
+    .settings-heading { margin: 20px 2px 7px; color: var(--caption); font-size: 11px; font-weight: 600; }
+    .switch { position: relative; width: 34px; height: 20px; border: 0; border-radius: 10px; background: var(--line-strong); padding: 2px; }
+    .switch::after { content: ""; display: block; width: 16px; height: 16px; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0,0,0,.24); transition: transform 150ms ease; }
+    .switch.on { background: var(--teal); }
+    .switch.on::after { transform: translateX(14px); }
+    .account-card { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .account-head { display: flex; gap: 12px; align-items: center; }
+    .avatar { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--neutral); border: 1px solid var(--line); font-weight: 600; }
+    .account-head div:nth-child(2) { flex: 1; }
+    .account-head strong, .account-head small { display: block; }
+    .account-head small { margin-top: 3px; color: var(--caption); }
+    .sync-status { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--neutral); color: var(--body); }
+    .danger-zone { margin-top: 20px; padding: 14px; border: 1px solid color-mix(in srgb, var(--amber) 50%, var(--line)); border-radius: 10px; }
+    .danger-zone strong { color: var(--amber-text); }
+
+    @container (min-width: 1280px) {
+      #stage.ask-open .app-grid { grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 360px; }
+      #stage.collapsed.ask-open .app-grid { grid-template-columns: 64px minmax(0, 1fr) 360px; }
+      #stage.ask-open .ask-panel { position: relative; z-index: 15; grid-column: 3; grid-row: 1; top: auto; width: 360px; box-shadow: none; }
+    }
+    @container (max-width: 899px) {
+      .app-grid, #stage.collapsed .app-grid { grid-template-columns: minmax(0,1fr); }
+      .sidebar { position: absolute; inset: 0 auto 0 0; width: min(280px, calc(100% - 46px)); transform: translateX(-102%); box-shadow: var(--overlay-shadow); transition: transform 160ms ease; }
+      #stage.drawer-open .sidebar { transform: translateX(0); }
+      #stage.collapsed .brand-name, #stage.collapsed .nav-label, #stage.collapsed .badge { display: initial; }
+      #stage.collapsed .sidebar-settings kbd { display: inline-block; }
+      #stage.collapsed .brand, #stage.collapsed .nav-button, #stage.collapsed .sidebar-settings { justify-content: flex-start; padding-left: 10px; padding-right: 10px; }
+      .sidebar-toggle { display: inline-flex; }
+      .toolbar { padding-left: 82px; }
+      .toolbar-title { min-width: 0; }
+      .activity span:last-child, .tool-button .ask-label { display: none; }
+      .search { width: min(220px, 32vw); }
+      .attention-grid { grid-template-columns: 1fr; }
+      .home-columns { grid-template-columns: 1fr; }
+      .metric-strip { grid-template-columns: 1fr 1fr; }
+      .metric:nth-child(2) { border-right: 0; }
+      .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+    }
+    @container (max-width: 680px) {
+      .toolbar-title { display: none; }
+      .segmented button { padding: 0 8px; }
+      .search { display: none; }
+      .activity { display: none; }
+      .view { padding: 12px; }
+      .metric-strip { grid-template-columns: 1fr 1fr; }
+      .provenance { grid-template-columns: 1fr; }
+      .settings-window { width: calc(100% - 16px); height: calc(100% - 16px); min-height: 0; }
+      .settings-toolbar { justify-content: flex-start; overflow-x: auto; padding-left: 72px; }
+      .settings-content { padding: 20px 16px 32px; }
+      .settings-row { align-items: flex-start; flex-direction: column; gap: 10px; }
+    }
+    @container (max-width: 839px) {
+      .split { grid-template-columns: minmax(0,1fr); }
+      .navigator { border-right: 0; }
+      .split .detail { position: absolute; z-index: 25; top: 0; right: 0; bottom: 0; width: min(620px, calc(100% - 30px)); background: var(--surface); border-left: 1px solid var(--line); box-shadow: var(--overlay-shadow); }
+      .split.detail-closed .detail { display: none; }
+      .detail-close { display: inline-flex; align-items: center; gap: 5px; }
+    }
+    @container (max-width: 559px) {
+      .split .detail { width: 100%; }
+      .metric-strip { grid-template-columns: 1fr; }
+      .metric { border-right: 0; border-bottom: 1px solid var(--line); }
+      .metric:last-child { border-bottom: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="prototype-bar" aria-label="Prototype controls">
+    <strong>ContextCake UI gate</strong>
+    <label>Viewport
+      <select id="viewportControl">
+        <option value="760x560">760 × 560</option>
+        <option value="900x640">900 × 640</option>
+        <option value="1360x860" selected>1360 × 860</option>
+        <option value="1600x1000">1600 × 1000</option>
+        <option value="full">Fit browser</option>
+      </select>
+    </label>
+    <label>Appearance
+      <select id="themeControl">
+        <option value="system">System</option>
+        <option value="light" selected>Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+    <label>Density
+      <select id="densityControl">
+        <option value="comfortable" selected>Comfortable</option>
+        <option value="compact">Compact</option>
+      </select>
+    </label>
+    <label>Account fixture
+      <select id="accountControl">
+        <option value="signed-out">Signed out</option>
+        <option value="pending">Pending</option>
+        <option value="signed-in">Signed in</option>
+        <option value="syncing">Syncing</option>
+        <option value="error">Error</option>
+      </select>
+    </label>
+    <button id="paletteControl" type="button">Command palette</button>
+    <span class="prototype-note">Fixture-only · no engine calls</span>
+  </div>
+
+  <div class="stage-wrap">
+    <div id="stage" aria-label="ContextCake desktop prototype">
+      <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="app-grid">
+        <aside class="sidebar" aria-label="Primary navigation">
+          <div class="brand"><span class="brand-mark">C</span><span class="brand-name">ContextCake</span></div>
+          <nav class="nav" id="primaryNav"></nav>
+          <div class="sidebar-bottom">
+            <button class="sidebar-settings" id="settingsButton" type="button" title="Settings (⌘,)">
+              <span data-icon="settings"></span><span class="nav-label">Settings</span><kbd>⌘,</kbd>
+            </button>
+          </div>
+          <div class="resize-handle" id="resizeHandle" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin="208" aria-valuemax="300" aria-valuenow="232" tabindex="0"></div>
+        </aside>
+
+        <main class="main-shell">
+          <header class="toolbar" id="toolbar"></header>
+          <div class="workspace" id="workspace"></div>
+        </main>
+
+        <aside class="ask-panel" id="askPanel" aria-label="Ask ContextCake">
+          <div class="ask-header"><span data-icon="sparkle"></span><strong>Ask ContextCake</strong><button class="icon-button" id="closeAsk" aria-label="Close Ask" title="Close"><span data-icon="close"></span></button></div>
+          <div class="ask-messages">
+            <div class="message">Ask about the resolved cascade. I’ll show which layer each answer comes from.</div>
+            <div class="message user">Which database should this team use?</div>
+            <div class="message">The team uses SingleStore for the primary database. That decision overrides the Company default for this section only.<span class="citation">Team · decisions/primary-db</span></div>
+          </div>
+          <div class="ask-compose"><input aria-label="Ask ContextCake" placeholder="Ask about your knowledge…"><button class="button primary">Send</button></div>
+        </aside>
+      </div>
+
+      <div class="palette-backdrop" id="paletteBackdrop">
+        <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+          <input id="paletteInput" placeholder="Type a command…" autocomplete="off">
+          <div class="palette-list" id="paletteList" role="listbox"></div>
+          <div class="palette-footer"><span id="paletteCount"></span><span>↑↓ Navigate · ↵ Open · esc Close</span></div>
+        </div>
+      </div>
+
+      <section class="settings-window" id="settingsWindow" aria-label="ContextCake Settings">
+        <div class="settings-traffic"><button id="closeSettings" type="button" aria-label="Close Settings" title="Close Settings"></button></div>
+        <nav class="settings-toolbar" id="settingsTabs" aria-label="Settings panes"></nav>
+        <div class="settings-content"><div class="settings-column" id="settingsContent"></div></div>
+      </section>
+      <div class="sr-only" aria-live="polite" id="announcer"></div>
+    </div>
+  </div>
+
+  <script>
+    const icons = {
+      home: '<svg class="icon" viewBox="0 0 24 24"><path d="m4 11 8-7 8 7v9H4z"/><path d="M9 20v-6h6v6"/></svg>',
+      cascade: '<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="6" rx="1.5"/><rect x="14" y="8" width="7" height="6" rx="1.5"/><rect x="7" y="16" width="7" height="5" rx="1.5"/></svg>',
+      knowledge: '<svg class="icon" viewBox="0 0 24 24"><circle cx="6" cy="7" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="17" r="2"/><path d="m7.6 8.6 3 6.4m5.8-7.3-3.1 7.4M8 7h8"/></svg>',
+      sources: '<svg class="icon" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7" ry="2.5"/><path d="M5 5.5v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-6M5 11.5v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-6"/></svg>',
+      review: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2"/></svg>',
+      settings: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A8 8 0 0 0 15 6l-.4-2.6h-4L10 6a8 8 0 0 0-1.5 1.1l-2.4-1-2 3.4L6.2 11a7 7 0 0 0 0 2L4 14.5l2 3.4 2.4-1A8 8 0 0 0 10 18l.5 2.6h4L15 18a8 8 0 0 0 1.5-1.1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1Z"/></svg>',
+      menu: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
+      search: '<svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
+      sparkle: '<svg class="icon" viewBox="0 0 24 24"><path d="m12 3 1.8 4.9 4.9 1.8-4.9 1.8-1.8 4.9-1.8-4.9-4.9-1.8 4.9-1.8z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>',
+      close: '<svg class="icon" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+      general: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M9 17h6"/><circle cx="8" cy="7" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="11" cy="17" r="1.5"/></svg>',
+      indexing: '<svg class="icon" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg>',
+      account: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/></svg>',
+      privacy: '<svg class="icon" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.7 2.8 8.2 7 10 4.2-1.8 7-5.3 7-10V6z"/><path d="m9 12 2 2 4-5"/></svg>',
+      command: '<svg class="icon" viewBox="0 0 24 24"><path d="M9 6H7a3 3 0 1 0 3 3V4a3 3 0 1 0-3 3h10a3 3 0 1 0-3-3v5a3 3 0 1 0 3-3H7a3 3 0 1 0 3 3v8a3 3 0 1 0-3-3h10a3 3 0 1 0-3 3v-8"/></svg>'
+    }
+    document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = icons[el.dataset.icon] || '' })
+
+    const state = {
+      destination: 'home', knowledge: 'concepts', review: 'queue',
+      settingsPane: 'general', account: 'signed-out', paletteIndex: 0, search: '',
+      themePreference: 'light', density: 'comfortable', sidebarWidth: 232,
+    }
+    const stage = document.getElementById('stage')
+    const workspace = document.getElementById('workspace')
+    const toolbar = document.getElementById('toolbar')
+    const nav = document.getElementById('primaryNav')
+    const announcer = document.getElementById('announcer')
+
+    const destinations = [
+      ['home', 'Home', 'home', '⌘1'], ['cascade', 'Cascade', 'cascade', '⌘2'],
+      ['knowledge', 'Knowledge', 'knowledge', '⌘3'], ['sources', 'Sources', 'sources', '⌘4'],
+      ['review', 'Review', 'review', '⌘5'],
+    ]
+
+    const guardedNavigate = (destination, subview) => {
+      state.destination = destination
+      if (destination === 'knowledge' && subview) state.knowledge = subview
+      if (destination === 'review' && subview) state.review = subview
+      stage.classList.remove('drawer-open')
+      render()
+      announcer.textContent = `Opened ${destination}`
+    }
+
+    function renderNav() {
+      nav.innerHTML = destinations.map(([id, label, icon, shortcut]) => {
+        const count = id === 'review' ? '<span class="badge">5</span>' : id === 'sources' ? '<span class="badge">1</span>' : ''
+        return `<button class="nav-button ${state.destination === id ? 'active' : ''}" data-destination="${id}" type="button" title="${label} (${shortcut})">${icons[icon]}<span class="nav-label">${label}</span>${count}</button>`
+      }).join('')
+      nav.querySelectorAll('[data-destination]').forEach((button) => button.addEventListener('click', () => guardedNavigate(button.dataset.destination)))
+    }
+
+    function toolbarSegments() {
+      if (state.destination === 'knowledge') return `<div class="segmented" aria-label="Knowledge view"><button class="${state.knowledge === 'concepts' ? 'active' : ''}" data-subview="concepts">Concepts</button><button class="${state.knowledge === 'files' ? 'active' : ''}" data-subview="files">Files</button></div>`
+      if (state.destination === 'review') return `<div class="segmented" aria-label="Review view"><button class="${state.review === 'queue' ? 'active' : ''}" data-subview="queue">Queue <span class="mono">3</span></button><button class="${state.review === 'conflicts' ? 'active' : ''}" data-subview="conflicts">Conflicts <span class="mono">2</span></button></div>`
+      return ''
+    }
+
+    function isSearchable() { return state.destination === 'sources' || state.destination === 'review' || state.destination === 'knowledge' }
+    function title() { return destinations.find(([id]) => id === state.destination)?.[1] || 'Home' }
+
+    function renderToolbar() {
+      toolbar.innerHTML = `
+        <button class="icon-button sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar" title="Toggle sidebar">${icons.menu}</button>
+        <div class="toolbar-title">${title()}</div>
+        ${toolbarSegments()}
+        <div class="toolbar-spacer"></div>
+        ${isSearchable() ? `<input class="search" id="viewSearch" value="${state.search}" aria-label="Search ${title()}" placeholder="Search ${title().toLowerCase()}…">` : ''}
+        <div class="activity" title="ContextCake remains usable while indexing"><span class="activity-dot"></span><span>Indexing 2 sources…</span></div>
+        <button class="tool-button primary" id="askButton" type="button">${icons.sparkle}<span class="ask-label">Ask</span></button>`
+      document.getElementById('sidebarToggle')?.addEventListener('click', toggleSidebar)
+      document.getElementById('askButton').addEventListener('click', () => stage.classList.toggle('ask-open'))
+      toolbar.querySelectorAll('[data-subview]').forEach((button) => button.addEventListener('click', () => guardedNavigate(state.destination, button.dataset.subview)))
+      document.getElementById('viewSearch')?.addEventListener('input', (event) => { state.search = event.target.value })
+    }
+
+    function homeView() {
+      return `<div class="view"><div class="home">
+        <section class="section"><div class="section-header"><h2>Needs attention</h2><span>5 items</span></div><div class="attention-grid">
+          <button class="attention-row" data-go="review:queue"><span class="attention-count">3</span><span><strong>Signals to review</strong><small>Store, review, or discard</small></span></button>
+          <button class="attention-row" data-go="review:conflicts"><span class="attention-count">2</span><span><strong>Open conflicts</strong><small>Layers disagree on a section</small></span></button>
+          <button class="attention-row" data-go="sources"><span class="attention-count">1</span><span><strong>Source needs help</strong><small>team-runbooks failed to sync</small></span></button>
+        </div></section>
+        <div class="metric-strip">
+          <button class="metric" data-go="sources"><span>Sources</span><strong>8</strong></button>
+          <button class="metric" data-go="knowledge:concepts"><span>Concepts</span><strong>42</strong></button>
+          <button class="metric" data-go="review:queue"><span>To review</span><strong>3</strong></button>
+          <button class="metric" data-go="review:conflicts"><span>Open conflicts</span><strong>2</strong></button>
+        </div>
+        <div class="home-columns">
+          <section class="section"><div class="section-header"><h2>The cascade</h2><span>Higher layers win per section</span></div><div class="layer-list">
+            ${[['3','Personal','You · private overrides','9','var(--personal)'],['2','Team','Platform · shared working context','31','var(--team)'],['1','Company','Acme · organization defaults','38','var(--company)']].map(([n,name,sub,count,color]) => `<div class="layer-row" style="--layer:${color}"><span class="layer-number">${n}</span><span><strong>${name}</strong><small class="quiet">${sub}</small></span><span class="mono quiet">${count} concepts</span></div>`).join('')}
+          </div></section>
+          <section class="section"><div class="section-header"><h2>Source health</h2><span>8 connected</span></div><div class="source-health">
+            ${[['company-handbook','Serving','var(--teal)'],['platform-context','Serving','var(--teal)'],['team-runbooks','Error','var(--amber)'],['personal-notes','Indexing','var(--blue)']].map(([name,status,color]) => `<div class="health-row" style="--status:${color}"><span class="status-dot"></span><span class="mono">${name}</span><span class="quiet">${status}</span></div>`).join('')}
+          </div></section>
+        </div>
+      </div></div>`
+    }
+
+    const conceptRows = [
+      ['primary-db','Primary database','decision','Team · Company'], ['auth-tokens','Authentication tokens','interface','Company · Team'],
+      ['deploy','Deployment process','runbook','Team'], ['incident-response','Incident response','runbook','Personal · Company'],
+      ['service-boundaries','Service boundaries','system','Company'],
+    ]
+    function conceptsView() {
+      return `<div class="view flush"><div class="split">
+        <div class="navigator">${conceptRows.map((row,i) => `<button class="nav-row ${i === 0 ? 'active' : ''}"><strong>${row[1]}</strong><small><span class="mono">${row[0]}</span> · ${row[2]}</small></button>`).join('')}</div>
+        <article class="detail"><div class="detail-meta"><span class="chip" style="--chip-bg:var(--amber-fill);--chip-text:var(--amber-text)">decision</span><span class="mono">primary-db</span><span class="chip">2 layers</span></div><h1>Primary database</h1><p>The resolved choice for the primary operational database, with the team-specific decision taking precedence over the company default.</p>
+          <h2>Effective value</h2><div class="provenance"><div class="provenance-card" style="--layer:var(--team)"><strong>Team · effective</strong><span>Use SingleStore for HTAP workloads and operational analytics.</span></div><div class="provenance-card" style="--layer:var(--company)"><strong>Company · inherited dissent</strong><span>Postgres is the default for new services.</span></div></div>
+          <h2>Provenance</h2><div class="path">platform-context/decisions/primary-db.md · updated 2 hours ago</div>
+        </article>
+      </div></div>`
+    }
+
+    function filesView() {
+      return `<div class="view flush"><div class="split">
+        <div class="navigator"><div class="file-tree-label">TEAM · 12 FILES</div>${['decisions/primary-db.md','interfaces/auth-tokens.md','runbooks/deploy.md','runbooks/incident-response.md'].map((name,i) => `<button class="nav-row ${i === 0 ? 'active' : ''}"><strong class="mono">${name}</strong><small>${i ? 'Markdown' : 'Edited 2 hours ago'}</small></button>`).join('')}<div class="file-tree-label">COMPANY · 18 FILES</div>${['policies/security.md','standards/databases.md'].map(name => `<button class="nav-row"><strong class="mono">${name}</strong><small>Markdown</small></button>`).join('')}</div>
+        <article class="detail" style="padding:0"><div class="editor"><div class="editor-bar"><strong class="mono">decisions/primary-db.md</strong><span class="quiet">4.2 KB · saved</span><span style="flex:1"></span><div class="segmented"><button class="active">Rendered</button><button>Raw</button></div></div><div class="editor-body"># Primary database\n\nUse SingleStore for HTAP workloads and operational analytics.\n\n## Why\n\nThe team needs transactional writes and low-latency analytical queries over the same operational data.\n\n## Provenance\n\nTeam decision · overrides Company database default for this section.</div></div></article>
+      </div></div>`
+    }
+
+    const sources = [
+      ['team-runbooks','Error','Team · level 2','18 concepts'], ['platform-context','Serving','Team · level 2','31 concepts'],
+      ['company-handbook','Serving','Company · level 1','38 concepts'], ['personal-notes','Indexing','Personal · level 3','9 concepts'],
+    ]
+    function sourcesView() {
+      return `<div class="view flush"><div class="split">
+        <div class="navigator">${sources.map((s,i) => `<button class="nav-row ${i === 0 ? 'active' : ''}"><strong>${s[0]}</strong><small>${s[2]} · ${s[3]} · ${s[1]}</small></button>`).join('')}</div>
+        <article class="detail"><div class="detail-meta"><span class="chip" style="--chip-bg:var(--amber-fill);--chip-text:var(--amber-text)">Error</span><span class="chip" style="--chip-bg:var(--teal-fill);--chip-text:var(--teal-text)">Team</span><span class="mono">level 2</span></div><h1 class="mono">team-runbooks</h1><p>A clone-backed Markdown source providing the team’s operational runbooks.</p><div class="inline-error"><strong>Last sync failed</strong><br><span class="mono">Repository could not fast-forward. Resolve the local checkout, then sync again.</span></div><h2>Source details</h2><div class="settings-group"><div class="settings-row"><div class="settings-copy"><strong>Type</strong><small>Git-backed ContextCake folder</small></div><span>github</span></div><div class="settings-row"><div class="settings-copy"><strong>Last success</strong><small>Yesterday at 4:42 PM</small></div><span>18 concepts</span></div></div><div class="action-row"><button class="button primary">Sync now</button><button class="button">Rename / level</button><button class="button danger">Remove</button></div></article>
+      </div></div>`
+    }
+
+    function reviewView() {
+      if (state.review === 'queue') return `<div class="view flush"><div class="split"><div class="navigator">${[['Review','3'],['Captured','7'],['Ignored','12']].map((x,i)=>`<button class="nav-row ${i===0?'active':''}"><strong>${x[0]}</strong><small>${x[1]} signals</small></button>`).join('')}<div class="file-tree-label">NEEDS REVIEW</div>${[['Standardize deploy health checks','platform-api'],['Prefer a single source of truth','docs'],['Move auth guidance to interfaces','identity']].map((x,i)=>`<button class="nav-row ${i===0?'active':''}"><strong>${x[0]}</strong><small>${x[1]} · 2h ago</small></button>`).join('')}</div><article class="detail"><div class="detail-meta"><span class="chip" style="--chip-bg:var(--amber-fill);--chip-text:var(--amber-text)">Review required</span><span class="mono">platform-api</span></div><h1>Standardize deploy health checks</h1><p>Repeated guidance was detected across recent work. Review it before storing it as durable team context.</p><h2>Suggested destination</h2><div class="path">team/runbooks/deploy.md · Health checks</div><div class="action-row"><button class="button primary">Store for team</button><button class="button">Keep for me</button><button class="button">Ignore</button></div></article></div></div>`
+      return `<div class="view flush"><div class="split"><div class="navigator">${[['Primary database','primary-db · open'],['JWT audience','auth-tokens · open'],['Incident escalation','incident-response · resolved']].map((x,i)=>`<button class="nav-row ${i===0?'active':''}"><strong>${x[0]}</strong><small>${x[1]}</small></button>`).join('')}</div><article class="detail"><div class="detail-meta"><span class="chip" style="--chip-bg:var(--amber-fill);--chip-text:var(--amber-text)">Open conflict</span><span class="mono">primary-db § Engine</span></div><h1>Primary database</h1><p>The Team and Company layers define this section differently. The higher Team layer is effective; Company remains visible as provenance.</p><div class="provenance"><div class="provenance-card" style="--layer:var(--team)"><strong>Team · effective</strong><span>SingleStore for HTAP workloads.</span></div><div class="provenance-card" style="--layer:var(--company)"><strong>Company · dissent</strong><span>Postgres for new services.</span></div></div><div class="inline-error">Read-only in live mode. The resolved result is served with both values preserved as provenance.</div></article></div></div>`
+    }
+
+    function cascadeView() {
+      return `<div class="view flush"><div class="canvas"><svg class="edges" viewBox="0 0 1000 700" preserveAspectRatio="none"><path d="M190 165 C350 170 360 330 470 350" fill="none" stroke="var(--company)" stroke-width="2"/><path d="M545 350 C700 330 710 180 820 170" fill="none" stroke="var(--team)" stroke-width="2"/><path d="M555 380 C700 450 700 545 790 560" fill="none" stroke="var(--conflict)" stroke-width="2" stroke-dasharray="7 6"/></svg><div class="node n1"><strong>Company defaults</strong><small>38 concepts · level 1</small></div><div class="node n2"><strong>Platform team</strong><small>31 concepts · level 2</small></div><div class="node n3"><strong>Personal overlay</strong><small>9 concepts · level 3</small></div><div class="node n4"><strong>2 open conflicts</strong><small>Review provenance and dissent</small></div><div class="canvas-controls"><button title="Zoom out">−</button><button title="Fit graph">⌗</button><button title="Zoom in">+</button></div></div></div>`
+    }
+
+    function renderWorkspace() {
+      workspace.innerHTML = state.destination === 'home' ? homeView() : state.destination === 'cascade' ? cascadeView() : state.destination === 'knowledge' ? (state.knowledge === 'concepts' ? conceptsView() : filesView()) : state.destination === 'sources' ? sourcesView() : reviewView()
+      workspace.querySelectorAll('[data-go]').forEach((button) => button.addEventListener('click', () => {
+        const [destination, subview] = button.dataset.go.split(':')
+        guardedNavigate(destination, subview)
+      }))
+      const split = workspace.querySelector('.split')
+      const detail = split?.querySelector('.detail')
+      if (detail) {
+        detail.insertAdjacentHTML('afterbegin', '<button class="detail-close" type="button" aria-label="Close detail">‹ Back</button>')
+        detail.querySelector('.detail-close').addEventListener('click', () => {
+          split.classList.add('detail-closed')
+          split.querySelector('.nav-row.active')?.focus()
+        })
+        split.querySelectorAll('.nav-row').forEach((button) => button.addEventListener('click', () => {
+          split.querySelectorAll('.nav-row').forEach((row) => row.classList.toggle('active', row === button))
+          split.classList.remove('detail-closed')
+        }))
+      }
+    }
+
+    function render() { renderNav(); renderToolbar(); renderWorkspace(); renderSettings(); }
+
+    function stageIsNarrow() { return stage.getBoundingClientRect().width < 900 }
+    function toggleSidebar() {
+      if (stageIsNarrow()) stage.classList.toggle('drawer-open')
+      else stage.classList.toggle('collapsed')
+    }
+
+    const resize = document.getElementById('resizeHandle')
+    function setSidebarWidth(width) {
+      state.sidebarWidth = Math.max(208, Math.min(300, Math.round(width)))
+      document.documentElement.style.setProperty('--sidebar-width', `${state.sidebarWidth}px`)
+      resize.setAttribute('aria-valuenow', String(state.sidebarWidth))
+    }
+    resize.addEventListener('pointerdown', (event) => {
+      resize.setPointerCapture(event.pointerId)
+      const startX = event.clientX, startWidth = state.sidebarWidth
+      const move = (e) => setSidebarWidth(startWidth + e.clientX - startX)
+      const up = () => { resize.removeEventListener('pointermove', move); resize.removeEventListener('pointerup', up) }
+      resize.addEventListener('pointermove', move); resize.addEventListener('pointerup', up)
+    })
+    resize.addEventListener('dblclick', () => setSidebarWidth(232))
+    resize.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setSidebarWidth(state.sidebarWidth + (event.key === 'ArrowRight' ? 8 : -8)) }
+    })
+
+    const panes = [['general','General','general'],['indexing','Indexing','indexing'],['account','Account','account'],['privacy','Privacy','privacy']]
+    function accountPanel() {
+      if (state.account === 'signed-out') return `<div class="account-card"><div class="account-head"><span class="avatar">C</span><div><strong>ContextCake account</strong><small>Optional. ContextCake remains fully usable without signing in.</small></div></div><p class="quiet">Sign in to keep preferences and safe source metadata consistent across your Macs. Document contents, paths, commands, and credentials are not uploaded through settings sync.</p><div class="action-row"><button class="button primary">Continue with GitHub</button></div></div>`
+      if (state.account === 'pending') return `<div class="account-card"><div class="account-head"><span class="avatar">GH</span><div><strong>Finish signing in in your browser</strong><small>This window will update automatically when GitHub finishes.</small></div></div><div class="sync-status">Waiting for GitHub…</div><div class="action-row"><button class="button">Cancel sign-in</button></div></div>`
+      const status = state.account === 'syncing' ? 'Syncing settings…' : state.account === 'error' ? 'Couldn’t sync. ContextCake is still available locally.' : 'Settings synced · Today at 4:42 PM'
+      return `<div class="account-card"><div class="account-head"><span class="avatar">JS</span><div><strong>john@example.com</strong><small>Connected with GitHub</small></div><button class="button">Sign out</button></div><div class="sync-status">${status}</div><div class="action-row"><button class="button primary">${state.account === 'error' ? 'Retry' : 'Sync now'}</button></div></div><div class="danger-zone"><strong>Danger Zone</strong><p class="quiet">Deleting the cloud account removes synced settings. Local files and this Mac’s settings remain.</p><button class="button danger">Delete account…</button></div>`
+    }
+    function renderSettings() {
+      document.getElementById('settingsTabs').innerHTML = panes.map(([id,label,icon]) => `<button class="settings-tab ${state.settingsPane===id?'active':''}" data-pane="${id}">${icons[icon]}<span>${label}</span></button>`).join('')
+      document.querySelectorAll('[data-pane]').forEach((button) => button.addEventListener('click', () => { state.settingsPane = button.dataset.pane; renderSettings() }))
+      const content = document.getElementById('settingsContent')
+      if (state.settingsPane === 'general') content.innerHTML = `<h1>General</h1><div class="settings-heading">APPEARANCE</div><div class="settings-group"><div class="settings-row"><div class="settings-copy"><strong>Theme</strong><small>System follows the current appearance of this Mac.</small></div><div class="segmented"><button data-theme-choice="system" class="${state.themePreference==='system'?'active':''}">System</button><button data-theme-choice="light" class="${state.themePreference==='light'?'active':''}">Light</button><button data-theme-choice="dark" class="${state.themePreference==='dark'?'active':''}">Dark</button></div></div><div class="settings-row"><div class="settings-copy"><strong>Density</strong><small>Adjust spacing without hiding information.</small></div><div class="segmented"><button data-density-choice="comfortable" class="${state.density==='comfortable'?'active':''}">Comfortable</button><button data-density-choice="compact" class="${state.density==='compact'?'active':''}">Compact</button></div></div></div><div class="settings-heading">APPLICATION</div><div class="settings-group"><div class="settings-row"><div class="settings-copy"><strong>Automatic updates</strong><small>Check for new ContextCake releases automatically.</small></div><button class="switch on" aria-label="Automatic updates on"></button></div><div class="settings-row"><div class="settings-copy"><strong>Version</strong><small>The installed desktop version.</small></div><span class="mono">0.4.0</span></div></div>`
+      if (state.settingsPane === 'indexing') content.innerHTML = `<h1>Indexing</h1><div class="settings-heading">LIMITS</div><div class="settings-group">${[['Maximum files per source','10,000'],['Maximum file size','5 MB'],['Maximum scan depth','24']].map(x=>`<div class="settings-row"><div class="settings-copy"><strong>${x[0]}</strong><small>Changes re-index sources in the background.</small></div><input class="search" style="width:100px;padding-left:10px;background-image:none" value="${x[1]}"></div>`).join('')}</div><p class="quiet">ContextCake stays usable while it re-indexes your sources.</p>`
+      if (state.settingsPane === 'account') content.innerHTML = `<h1>Account</h1>${accountPanel()}`
+      if (state.settingsPane === 'privacy') content.innerHTML = `<h1>Privacy</h1><div class="settings-group"><div class="settings-row"><div class="settings-copy"><strong>Anonymous usage metrics</strong><small>Share the app version and a one-time successful-open signal. Never includes files, paths, prompts, account details, or a device ID.</small></div><button class="switch" aria-label="Anonymous metrics off"></button></div><div class="settings-row"><div class="settings-copy"><strong>Local by default</strong><small>Indexing and resolution happen on this Mac. ContextCake does not upload document content through settings sync.</small></div></div></div><p><a href="https://contextcake.com/docs/reference/updates-and-privacy/" style="color:var(--blue-text)">Read the network access and privacy documentation</a></p>`
+      content.querySelectorAll('[data-theme-choice]').forEach((button) => button.addEventListener('click', () => applyTheme(button.dataset.themeChoice)))
+      content.querySelectorAll('[data-density-choice]').forEach((button) => button.addEventListener('click', () => applyDensity(button.dataset.densityChoice)))
+    }
+
+    function openSettings(pane = state.settingsPane) { state.settingsPane = pane; stage.classList.add('settings-open'); renderSettings(); setTimeout(() => document.querySelector(`[data-pane="${pane}"]`)?.focus(), 0) }
+    function closeSettings() { stage.classList.remove('settings-open'); document.getElementById('settingsButton').focus() }
+    document.getElementById('settingsButton').addEventListener('click', () => openSettings())
+    document.getElementById('closeSettings').addEventListener('click', closeSettings)
+    document.getElementById('closeAsk').addEventListener('click', () => { stage.classList.remove('ask-open'); document.getElementById('askButton')?.focus() })
+
+    const commands = [
+      ['Home','⌘1',()=>guardedNavigate('home'), 'home'], ['Cascade','⌘2',()=>guardedNavigate('cascade'),'cascade'],
+      ['Knowledge: Concepts','⌘3',()=>guardedNavigate('knowledge','concepts'),'knowledge'], ['Knowledge: Files','',()=>guardedNavigate('knowledge','files'),'knowledge'],
+      ['Sources','⌘4',()=>guardedNavigate('sources'),'sources'], ['Review: Queue','⌘5',()=>guardedNavigate('review','queue'),'review'],
+      ['Review: Conflicts','',()=>guardedNavigate('review','conflicts'),'review'], ['Add Source','',()=>guardedNavigate('sources'),'sources'],
+      ['Connect Agent','',()=>guardedNavigate('sources'),'command'], ['Ask ContextCake','⌘⇧A',()=>stage.classList.add('ask-open'),'sparkle'],
+      ['Open Settings','⌘,',()=>openSettings(),'settings'], ['Toggle Sidebar','',toggleSidebar,'menu'],
+    ]
+    let filteredCommands = commands
+    function renderPalette() {
+      const query = document.getElementById('paletteInput').value.trim().toLowerCase()
+      filteredCommands = commands.filter(([label]) => label.toLowerCase().includes(query))
+      state.paletteIndex = Math.max(0, Math.min(state.paletteIndex, filteredCommands.length - 1))
+      document.getElementById('paletteList').innerHTML = filteredCommands.map(([label,shortcut,,icon],i)=>`<button class="command ${i===state.paletteIndex?'active':''}" role="option" aria-selected="${i===state.paletteIndex}" data-command="${i}">${icons[icon]||icons.command}<span>${label}</span>${shortcut?`<kbd>${shortcut}</kbd>`:''}</button>`).join('') || '<div style="padding:16px;color:var(--caption)">No matching commands</div>'
+      document.getElementById('paletteCount').textContent = `${filteredCommands.length} command${filteredCommands.length===1?'':'s'}`
+      document.querySelectorAll('[data-command]').forEach((button)=>button.addEventListener('click',()=>runCommand(Number(button.dataset.command))))
+    }
+    function openPalette() { stage.classList.remove('settings-open'); stage.classList.add('palette-open'); state.paletteIndex=0; document.getElementById('paletteInput').value=''; renderPalette(); setTimeout(()=>document.getElementById('paletteInput').focus(),0) }
+    function closePalette() { stage.classList.remove('palette-open') }
+    function runCommand(index) { const command=filteredCommands[index]; if(!command)return; closePalette(); command[2](); render() }
+    document.getElementById('paletteControl').addEventListener('click', openPalette)
+    document.getElementById('paletteBackdrop').addEventListener('mousedown',(event)=>{if(event.target===event.currentTarget)closePalette()})
+    document.getElementById('paletteInput').addEventListener('input',()=>{state.paletteIndex=0;renderPalette()})
+    document.getElementById('paletteInput').addEventListener('keydown',(event)=>{
+      if(event.key==='ArrowDown'){event.preventDefault();state.paletteIndex=Math.min(filteredCommands.length-1,state.paletteIndex+1);renderPalette()}
+      if(event.key==='ArrowUp'){event.preventDefault();state.paletteIndex=Math.max(0,state.paletteIndex-1);renderPalette()}
+      if(event.key==='Enter'){event.preventDefault();runCommand(state.paletteIndex)}
+      if(event.key==='Escape'){event.preventDefault();closePalette()}
+      if(event.key==='Tab'){
+        const focusable=[document.getElementById('paletteInput'),...document.querySelectorAll('.command')]
+        const index=focusable.indexOf(document.activeElement), next=event.shiftKey?(index<=0?focusable.length-1:index-1):(index===focusable.length-1?0:index+1)
+        event.preventDefault();focusable[next]?.focus()
+      }
+    })
+
+    function resolveSystemTheme(){return matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}
+    function applyTheme(preference){state.themePreference=preference;document.documentElement.dataset.theme=preference==='system'?resolveSystemTheme():preference;document.getElementById('themeControl').value=preference;renderSettings()}
+    function applyDensity(density){state.density=density;document.documentElement.dataset.density=density;document.getElementById('densityControl').value=density;renderSettings()}
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(state.themePreference==='system')applyTheme('system')})
+    document.getElementById('themeControl').addEventListener('change',(event)=>applyTheme(event.target.value))
+    document.getElementById('densityControl').addEventListener('change',(event)=>applyDensity(event.target.value))
+    document.getElementById('accountControl').addEventListener('change',(event)=>{state.account=event.target.value;renderSettings()})
+    document.getElementById('viewportControl').addEventListener('change',(event)=>setViewport(event.target.value))
+    function setViewport(value){
+      if(value==='full'){stage.style.width='calc(100vw - 48px)';stage.style.height='calc(100vh - 120px)';return}
+      const [width,height]=value.split('x').map(Number);stage.style.width=`${width}px`;stage.style.height=`${height}px`;stage.classList.remove('drawer-open')
+    }
+
+    document.addEventListener('keydown',(event)=>{
+      const mod=event.metaKey||event.ctrlKey
+      if(mod&&event.key.toLowerCase()==='k'){event.preventDefault();openPalette();return}
+      if(mod&&event.key===','){event.preventDefault();openSettings();return}
+      if(mod&&event.shiftKey&&event.key.toLowerCase()==='a'){event.preventDefault();stage.classList.toggle('ask-open');return}
+      if(mod&&event.key.toLowerCase()==='f'&&isSearchable()){event.preventDefault();document.getElementById('viewSearch')?.focus();return}
+      if(mod&&['1','2','3','4','5'].includes(event.key)){event.preventDefault();guardedNavigate(destinations[Number(event.key)-1][0]);return}
+      if(event.key==='Escape'){
+        if(stage.classList.contains('palette-open'))closePalette()
+        else if(stage.classList.contains('settings-open'))closeSettings()
+        else if(stage.classList.contains('ask-open'))stage.classList.remove('ask-open')
+        else if(stage.classList.contains('drawer-open'))stage.classList.remove('drawer-open')
+        else if(state.search){state.search='';renderToolbar()}
+      }
+    })
+
+    const shots = {
+      'home-light': {viewport:'1360x860',theme:'light',density:'comfortable',destination:'home'},
+      'home-dark': {viewport:'1360x860',theme:'dark',density:'comfortable',destination:'home'},
+      'knowledge-compact': {viewport:'1360x860',theme:'light',density:'compact',destination:'knowledge',knowledge:'concepts'},
+      'review-narrow': {viewport:'760x560',theme:'dark',density:'comfortable',destination:'review',review:'conflicts'},
+      'settings-general': {viewport:'900x640',theme:'light',density:'comfortable',destination:'home',settingsPane:'general',settings:true},
+      'settings-account-pending': {viewport:'900x640',theme:'dark',density:'comfortable',destination:'home',settingsPane:'account',account:'pending',settings:true},
+      'palette': {viewport:'900x640',theme:'light',density:'compact',destination:'knowledge',knowledge:'concepts',palette:true},
+    }
+    function applyShot(name){const shot=shots[name];if(!shot)return;document.body.classList.add('capture');Object.assign(state,shot);setViewport(shot.viewport);applyTheme(shot.theme);applyDensity(shot.density);document.getElementById('accountControl').value=state.account;render();if(shot.settings)openSettings(shot.settingsPane);if(shot.palette)openPalette()}
+    const params=new URLSearchParams(location.search);if(params.has('shot'))applyShot(params.get('shot'));else render()
+  </script>
+</body>
+</html>

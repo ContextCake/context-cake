@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from './store'
 import { C, css, MONO } from './theme'
 import { Sidebar } from './components/Sidebar'
@@ -15,6 +15,8 @@ import { SetupWizard } from './components/SetupWizard'
 import { ConnectAgentDialog } from './components/ConnectAgentDialog'
 import { SettingsView } from './components/SettingsView'
 import type { LiveErrorKind } from './api'
+import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
+import { readBrowserGroupedViews, SEARCHABLE_VIEWS, viewForDestination } from './shell-navigation'
 
 const ERROR_COPY: Record<LiveErrorKind, (msg: string) => string> = {
   unreachable: () => "Can't reach the ContextCake server. Start it with `npm run console:live`, or view the demo.",
@@ -43,27 +45,6 @@ function LoadingState() {
   )
 }
 
-/**
- * A non-blocking status strip: the app is fully usable while sources are read.
- * It names what is still being indexed so the count changing under the user is
- * explained rather than mysterious.
- */
-function IndexingBanner({ names }: { names: string[] }) {
-  const label = names.length === 1
-    ? `Indexing ${names[0]}`
-    : `Indexing ${names.length} sources (${names.slice(0, 3).join(', ')}${names.length > 3 ? ', …' : ''})`
-  return (
-    <div role="status" style={css(`display:flex; align-items:center; gap:9px; padding:7px 16px; background:${C.tealFill}; border-bottom:1px solid ${C.tealStroke}; font-size:12px; color:${C.tealText};`)}>
-      <span aria-hidden="true" style={css('display:flex; gap:3px;')}>
-        {[0, 1, 2].map((i) => (
-          <span key={i} style={css(`width:5px; height:5px; border-radius:999px; background:${C.tealStroke}; animation:ccPulse 1.1s ease-in-out ${i * 0.15}s infinite;`)} />
-        ))}
-      </span>
-      <span>{label} — everything here stays usable, and results fill in as they land.</span>
-    </div>
-  )
-}
-
 function ErrorState({ kind, message, reload }: { kind: LiveErrorKind; message: string; reload: () => void }) {
   const text = ERROR_COPY[kind](message)
   return (
@@ -85,7 +66,7 @@ function ErrorState({ kind, message, reload }: { kind: LiveErrorKind; message: s
 }
 
 export function App() {
-  const { view, chatOpen, route, loading, load, error, reload, mode, sources, loadErrors } = useStore()
+  const { view, setView, chatOpen, openChat, closeChat, route, loading, load, error, reload, mode, sources, loadErrors } = useStore()
   // Undefined = not yet decided by the auto-trigger effect below; true/false
   // once the user (or the trigger) has taken an explicit stance. Kept separate
   // from `needsSetup` so the wizard's own Success step stays visible even
@@ -95,7 +76,18 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sourceSetupComplete, setSourceSetupComplete] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [backgroundAnnouncement, setBackgroundAnnouncement] = useState('')
   const settingsOpener = useRef<HTMLElement | null>(null)
+  const paletteOpener = useRef<HTMLElement | null>(null)
+  const askOpener = useRef<HTMLElement | null>(null)
+  const drawerOpener = useRef<HTMLElement | null>(null)
+  const browserViews = useRef(readBrowserGroupedViews())
+  const knowledgeView = useRef<'concepts' | 'files'>(window.__CC_DESKTOP?.uiState?.initial.knowledgeView ?? browserViews.current.knowledgeView)
+  const reviewView = useRef<'triage' | 'conflicts'>(window.__CC_DESKTOP?.uiState?.initial.reviewView ?? browserViews.current.reviewView)
+  const backgroundCounts = useRef({ indexing: 0, failures: 0 })
+  if (view === 'concepts' || view === 'files') knowledgeView.current = view
+  if (view === 'triage' || view === 'conflicts') reviewView.current = view
 
   const needsSetup = mode === 'live' && !loading && !error && sources.length === 0
   const isDesktop = typeof window !== 'undefined' && Boolean(window.__CC_DESKTOP)
@@ -119,6 +111,65 @@ export function App() {
     setDrawerOpen(false)
     setSettingsOpen(true)
   }
+  const openPalette = () => {
+    paletteOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setDrawerOpen(false)
+    setPaletteOpen(true)
+  }
+  const closePalette = () => {
+    const opener = paletteOpener.current
+    setPaletteOpen(false)
+    window.requestAnimationFrame(() => opener?.isConnected && opener.focus())
+  }
+  const openAsk = useCallback(() => {
+    askOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setDrawerOpen(false)
+    openChat()
+  }, [openChat])
+  const openAskFromPalette = useCallback(() => {
+    askOpener.current = paletteOpener.current?.isConnected ? paletteOpener.current : null
+    setDrawerOpen(false)
+    openChat()
+  }, [openChat])
+  const closeAsk = useCallback(() => {
+    const opener = askOpener.current
+    closeChat()
+    window.requestAnimationFrame(() => {
+      const target = opener?.isConnected ? opener : document.querySelector<HTMLElement>('.cc-toolbar-ask')
+      target?.focus()
+      askOpener.current = null
+    })
+  }, [closeChat])
+  const closeDrawer = useCallback(() => {
+    const opener = drawerOpener.current
+    setDrawerOpen(false)
+    window.requestAnimationFrame(() => opener?.isConnected && opener.focus())
+  }, [])
+  const toggleSidebar = () => {
+    if (window.innerWidth < 900) {
+      if (drawerOpen) closeDrawer()
+      else {
+        drawerOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        setDrawerOpen(true)
+      }
+    }
+    else window.dispatchEvent(new Event('contextcake:toggle-sidebar'))
+  }
+
+  const paletteCommands = useMemo<PaletteCommand[]>(() => [
+    { id: 'home', label: 'Go to Home', keywords: 'overview', shortcut: '⌘1', run: () => setView('overview') },
+    { id: 'cascade', label: 'Go to Cascade', keywords: 'canvas graph', shortcut: '⌘2', run: () => setView('canvas') },
+    { id: 'concepts', label: 'Go to Knowledge: Concepts', keywords: 'browse', run: () => setView('concepts') },
+    { id: 'files', label: 'Go to Knowledge: Files', keywords: 'markdown documents', run: () => setView('files') },
+    { id: 'sources', label: 'Go to Sources', shortcut: '⌘4', run: () => setView('sources') },
+    { id: 'queue', label: 'Go to Review: Queue', keywords: 'triage', run: () => setView('triage') },
+    { id: 'conflicts', label: 'Go to Review: Conflicts', keywords: 'resolve', run: () => setView('conflicts') },
+    ...(mode === 'live' ? [{ id: 'add-source', label: 'Add Source', keywords: 'folder repository', run: reopenWizard }] : []),
+    ...(isDesktop ? [{ id: 'connect-agent', label: 'Connect Agent', keywords: 'cli mcp', run: openConnect }] : []),
+    { id: 'ask', label: 'Ask ContextCake', shortcut: '⇧⌘A', run: openAskFromPalette },
+    { id: 'settings', label: 'Open Settings', shortcut: '⌘,', run: openSettings },
+    { id: 'sidebar', label: 'Toggle Sidebar', run: toggleSidebar },
+  ], [isDesktop, mode, openAskFromPalette, setView, sources.length, sourceSetupComplete])
   const closeSettings = () => {
     const opener = settingsOpener.current
     setSettingsOpen(false)
@@ -126,7 +177,7 @@ export function App() {
       const candidates = [
         opener,
         document.querySelector<HTMLElement>('.cc-settings-cta'),
-        document.querySelector<HTMLElement>('.cc-menu-btn'),
+        document.querySelector<HTMLElement>('.cc-toolbar-leading button'),
       ]
       candidates.find((candidate) => {
         if (!candidate?.isConnected) return false
@@ -141,20 +192,62 @@ export function App() {
     })
   }
 
+  useEffect(() => {
+    const indexing = load.indexingSources.length
+    const failures = loadErrors.length
+    const previous = backgroundCounts.current
+    if (indexing > 0) {
+      setBackgroundAnnouncement(`Indexing ${indexing} source${indexing === 1 ? '' : 's'}.`)
+    } else if (previous.indexing > 0) {
+      setBackgroundAnnouncement(`Indexing complete.${failures > 0 ? ` ${failures} concept${failures === 1 ? '' : 's'} failed to resolve.` : ''}`)
+    } else if (failures > previous.failures) {
+      setBackgroundAnnouncement(`${failures} concept${failures === 1 ? '' : 's'} failed to resolve.`)
+    }
+    backgroundCounts.current = { indexing, failures }
+  }, [load.indexingSources.length, loadErrors.length])
+
   // Mobile off-canvas nav drawer (inert on desktop, where the sidebar is static).
-  const closeDrawer = () => setDrawerOpen(false)
   useEffect(() => {
     if (!drawerOpen || settingsOpen) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawerOpen(false) }
+    const sidebar = document.querySelector<HTMLElement>('.cc-sidebar')
+    const focusable = () => Array.from(sidebar?.querySelectorAll<HTMLElement>('button,a[href],[tabindex]:not([tabindex="-1"])') ?? [])
+    sidebar?.querySelector<HTMLElement>('.cc-nav-button')?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); closeDrawer(); return }
+      if (e.key !== 'Tab') return
+      const items = focusable()
+      if (!items.length) return
+      const position = items.indexOf(document.activeElement as HTMLElement)
+      const next = e.shiftKey ? (position - 1 + items.length) % items.length : (position + 1) % items.length
+      e.preventDefault(); items[next]?.focus()
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [drawerOpen, settingsOpen])
+  }, [closeDrawer, drawerOpen, settingsOpen])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+      const command = e.metaKey || e.ctrlKey
+      const target = e.target
+      const editing = target instanceof Element && target.matches('input, textarea, select, [contenteditable="true"]')
+      if (command && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        if (!showWizard && !connectOpen && !settingsOpen) openPalette()
+      } else if (command && e.shiftKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        if (!showWizard && !connectOpen && !settingsOpen) openAsk()
+      } else if (command && e.key.toLowerCase() === 'f' && SEARCHABLE_VIEWS.has(view)) {
+        e.preventDefault()
+        window.dispatchEvent(new Event('contextcake:focus-search'))
+      } else if (command && !editing && !e.shiftKey && /^[1-5]$/.test(e.key)) {
+        e.preventDefault()
+        const destinations = ['home', 'cascade', 'knowledge', 'sources', 'review'] as const
+        setView(viewForDestination(destinations[Number(e.key) - 1], knowledgeView.current, reviewView.current))
+      } else if (command && e.key === ',') {
         e.preventDefault()
         if (!showWizard && !connectOpen) openSettings()
+      } else if (e.key === 'Escape' && paletteOpen) {
+        e.preventDefault(); closePalette()
       } else if (e.key === 'Escape' && settingsOpen) {
         e.preventDefault()
         closeSettings()
@@ -162,7 +255,23 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [connectOpen, settingsOpen, showWizard])
+  }, [connectOpen, paletteOpen, settingsOpen, showWizard, view, setView])
+
+  useEffect(() => window.__CC_DESKTOP?.commands?.onInvoke((command) => {
+    const active = document.activeElement
+    const editing = active instanceof Element && active.matches('input, textarea, select, [contenteditable="true"]')
+    const modalOpen = showWizard || connectOpen || settingsOpen
+    if (command === 'command-palette' && !modalOpen) openPalette()
+    else if (command === 'search' && SEARCHABLE_VIEWS.has(view) && !modalOpen) window.dispatchEvent(new Event('contextcake:focus-search'))
+    else if (command === 'ask' && !modalOpen) openAsk()
+    else if (command === 'settings' && !showWizard && !connectOpen) openSettings()
+    else if (command === 'toggle-sidebar') toggleSidebar()
+    else if (command.startsWith('destination:') && !editing && !modalOpen && !paletteOpen) {
+      const number = Number(command.slice(-1))
+      const destinations = ['home', 'cascade', 'knowledge', 'sources', 'review'] as const
+      if (number >= 1 && number <= 5) setView(viewForDestination(destinations[number - 1], knowledgeView.current, reviewView.current))
+    }
+  }), [connectOpen, paletteOpen, setView, settingsOpen, showWizard, view])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -191,19 +300,19 @@ export function App() {
     body = <ErrorState kind={error.kind} message={error.message} reload={reload} />
   } else {
     body = (
-      <div className="cc-app-shell" data-drawer={drawerOpen ? 'open' : 'closed'}>
+      <div className="cc-app-shell" data-drawer={drawerOpen ? 'open' : 'closed'} data-ask={chatOpen ? 'open' : 'closed'}>
         <div className="cc-drawer-scrim" onClick={closeDrawer} aria-hidden="true" />
         <div className="cc-shell-inner">
-          <Sidebar
-            onReopenSetup={mode === 'live' ? reopenWizard : undefined}
-            sourceActionLabel={needsSetup ? 'Set up sources' : 'Add source'}
-            onConnectAgent={isDesktop && !needsSetup ? openConnect : undefined}
-            onOpenSettings={openSettings}
-            onNavigate={closeDrawer}
-          />
-          <div className="cc-content">
-            <Header onOpenMenu={() => setDrawerOpen(true)} />
-            {load.indexingSources.length > 0 && <IndexingBanner names={load.indexingSources} />}
+          <Sidebar onOpenSettings={openSettings} onNavigate={closeDrawer} />
+          <div className="cc-content" aria-hidden={drawerOpen || undefined} inert={drawerOpen || undefined}>
+            <Header
+              onToggleSidebar={toggleSidebar} onAsk={openAsk}
+              onAddSource={mode === 'live' ? reopenWizard : undefined}
+              onConnectAgent={isDesktop && !needsSetup ? openConnect : undefined}
+            />
+            <div className="sr-only" aria-live="polite">
+              {backgroundAnnouncement}
+            </div>
             {loadErrors.length > 0 && (
               <div role="status" style={css(`display:flex; align-items:center; gap:8px; padding:8px 16px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; font-size:12px; color:${C.amberText};`)}>
                 <span aria-hidden="true">⚠</span>
@@ -215,7 +324,7 @@ export function App() {
             )}
             {view === 'canvas' ? (
               <main className="cc-main cc-main-canvas">
-                <Canvas keyboardSuspended={settingsOpen} />
+                <Canvas keyboardSuspended={settingsOpen || paletteOpen || chatOpen || drawerOpen} />
               </main>
             ) : (
               <main className="cc-main">
@@ -229,15 +338,16 @@ export function App() {
             )}
           </div>
         </div>
-        {chatOpen && <ChatPanel keyboardSuspended={settingsOpen} onConnectAgent={isDesktop ? openConnect : undefined} />}
+        {chatOpen && <ChatPanel keyboardSuspended={settingsOpen || paletteOpen} onConnectAgent={isDesktop ? openConnect : undefined} onClose={closeAsk} />}
       </div>
     )
   }
 
   return (
     <>
-      <div className="cc-app-layer" aria-hidden={settingsOpen || undefined} inert={settingsOpen || undefined}>{body}</div>
+      <div className="cc-app-layer" aria-hidden={(settingsOpen || paletteOpen) || undefined} inert={(settingsOpen || paletteOpen) || undefined}>{body}</div>
       {settingsOpen && <SettingsView appMode={mode} onClose={closeSettings} onIndexingChange={reload} />}
+      {paletteOpen && <CommandPalette commands={paletteCommands} onClose={closePalette} />}
       {showWizard && <SetupWizard addingSource={sources.length > 0} onClose={closeWizard} onConnectAgent={isDesktop ? () => {
         setSourceSetupComplete(true)
         setWizardOpen(false)

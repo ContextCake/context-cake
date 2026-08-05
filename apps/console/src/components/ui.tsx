@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'primary' | 'secondary' | 'quiet' | 'danger'
@@ -36,15 +36,15 @@ export function SegmentedControl<T extends string>({
   )
 }
 
-export function SearchField({ label = 'Search', className = '', ...props }: InputHTMLAttributes<HTMLInputElement> & { label?: string }) {
+export const SearchField = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { label?: string }>(function SearchField({ label = 'Search', className = '', ...props }, ref) {
   return (
     <label className={`cc-ui-search ${className}`.trim()}>
       <span className="sr-only">{label}</span>
       <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.25" /><path d="m12.5 12.5 4 4" /></svg>
-      <input type="search" {...props} />
+      <input ref={ref} type="search" {...props} />
     </label>
   )
-}
+})
 
 export function StatusBadge({ tone = 'neutral', children }: { tone?: 'neutral' | 'success' | 'attention' | 'info'; children: ReactNode }) {
   return <span className={`cc-ui-status cc-ui-status--${tone}`}>{children}</span>

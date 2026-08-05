@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron'
 import { startEngineService } from './service-host.mjs'
 import { createGithubConnections, verifyGithubToken } from './github-connections.mjs'
 import { buildMenu } from './menu.mjs'
@@ -24,6 +24,8 @@ import { getCliStatus, installCli } from './cli-install.mjs'
 import { reportFirstLaunch } from './install-metrics.mjs'
 import { manifestLayerCount, shouldDeferConsentPrompt } from './metrics-consent.mjs'
 import { changedPreferencePatch } from './preferences.mjs'
+import { applyUiStatePatch, normalizeUiState } from './ui-state.mjs'
+import { restoreWindowState } from './window-state.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -105,6 +107,7 @@ let manifestWatchStarted = false
 let lastAppliedManifest = ''
 let installMetricAbortController = null
 let consentPromptDeferred = false
+let windowStateTimer = null
 
 function currentAuthState() {
   return authManager?.getState() ?? { available: false, signedIn: false }
@@ -136,6 +139,26 @@ function applyNativeAppearance(settings = readSettings()) {
   nativeTheme.themeSource = preferences.theme
   sendToRenderer('preferences:changed', preferences)
   return preferences
+}
+
+function uiStateSnapshot(settings = readSettings()) {
+  return normalizeUiState(settings.uiState)
+}
+
+function saveWindowState(window) {
+  if (!window || window.isDestroyed() || window.isFullScreen()) return
+  const maximized = window.isMaximized()
+  const bounds = maximized ? window.getNormalBounds() : window.getBounds()
+  writeLocalSettings({ mainWindow: { bounds, maximized } })
+}
+
+function scheduleWindowStateSave(window) {
+  clearTimeout(windowStateTimer)
+  windowStateTimer = setTimeout(() => {
+    windowStateTimer = null
+    saveWindowState(window)
+  }, 250)
+  windowStateTimer.unref?.()
 }
 
 function readManifestConfig() {
@@ -563,6 +586,12 @@ handleTrustedIpc('preferences:set', (candidate) => {
   if (Object.keys(synced).length > 0) scheduleSettingsPush()
   return preferences
 })
+handleTrustedIpc('ui-state:set', (patch) => {
+  const currentSettings = readSettings()
+  const result = applyUiStatePatch(currentSettings.uiState, patch)
+  if (result.changed) writeLocalSettings({ uiState: result.state })
+  return result.state
+})
 handleTrustedIpc('contextcake:metrics-get', () => {
   const enabled = readSettings().anonymousMetrics
   return typeof enabled === 'boolean' ? enabled : null
@@ -601,11 +630,18 @@ async function createWindow() {
   await pushGithubTokens()
 
   const preferences = applyNativeAppearance()
+  const uiState = uiStateSnapshot()
+  const restored = restoreWindowState(readSettings().mainWindow, screen.getAllDisplays(), screen.getPrimaryDisplay())
   win = new BrowserWindow({
-    width: 1360,
-    height: 860,
-    minWidth: 980,
-    minHeight: 640,
+    ...restored.bounds,
+    minWidth: 760,
+    minHeight: 560,
+    ...(process.platform === 'darwin' ? {
+      titleBarStyle: 'hiddenInset',
+      vibrancy: 'sidebar',
+      visualEffectState: 'active',
+      backgroundColor: '#00000000',
+    } : {}),
     show: false,
     webPreferences: {
       preload: path.join(here, '..', 'preload.cjs'),
@@ -621,6 +657,8 @@ async function createWindow() {
         `--cc-anonymous-metrics=${preferences.anonymousMetrics === null ? '' : preferences.anonymousMetrics ? '1' : '0'}`,
         `--cc-reduced-transparency=${preferences.reducedTransparency ? '1' : '0'}`,
         `--cc-high-contrast=${preferences.highContrast ? '1' : '0'}`,
+        `--cc-native-vibrancy=${process.platform === 'darwin' ? '1' : '0'}`,
+        `--cc-ui-state=${encodeURIComponent(JSON.stringify(uiState))}`,
         // Whether this build ships accounts at all. Static for the process, so
         // the renderer can drop the Account pane on first paint rather than
         // rendering it and then discovering there is nothing behind it.
@@ -642,12 +680,20 @@ async function createWindow() {
     }
   })
 
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    if (restored.maximized) win.maximize()
+    win.show()
+  })
   win.webContents.once('did-finish-load', () => {
     sendToRenderer('auth:session-changed', currentAuthState())
     sendToRenderer('settings:sync-status', currentSyncState())
   })
-  win.on('closed', () => { win = null })
+  win.on('resize', () => scheduleWindowStateSave(win))
+  win.on('move', () => scheduleWindowStateSave(win))
+  win.on('maximize', () => scheduleWindowStateSave(win))
+  win.on('unmaximize', () => scheduleWindowStateSave(win))
+  win.on('close', () => { clearTimeout(windowStateTimer); windowStateTimer = null; saveWindowState(win) })
+  win.on('closed', () => { clearTimeout(windowStateTimer); windowStateTimer = null; win = null })
   await win.loadURL(`${service.origin}/console/`)
   startManifestSync()
 }
@@ -761,6 +807,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   clearTimeout(settingsPushTimer)
+  clearTimeout(windowStateTimer)
   if (manifestWatchStarted) fs.unwatchFile(manifestPath())
   authManager?.close()
   shutdownEngine()

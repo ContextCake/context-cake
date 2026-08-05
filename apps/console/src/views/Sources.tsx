@@ -92,7 +92,7 @@ function CredentialWarning({ source }: { source: Source }) {
 type Panel = { name: string; kind: 'edit' | 'remove' } | null
 
 export function Sources({ onAddSource }: { onAddSource?: () => void }) {
-  const { mode, sources, reload } = useStore()
+  const { mode, sources, reload, query } = useStore()
   const live = mode === 'live'
 
   const [panel, setPanel] = useState<Panel>(null)
@@ -104,7 +104,17 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   const [notice, setNotice] = useState<{ name: string; text: string } | null>(null)
   const [syncErr, setSyncErr] = useState<{ name: string; text: string } | null>(null)
 
-  const ordered = [...sources].sort((a, b) => b.level - a.level || a.name.localeCompare(b.name))
+  const normalizedQuery = (query ?? '').trim().toLowerCase()
+  const ordered = [...sources]
+    .filter((source) => !normalizedQuery || [
+      source.name,
+      source.layer,
+      source.sourceKind,
+      source.status,
+      source.error,
+      source.origin,
+    ].some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery)))
+    .sort((a, b) => b.level - a.level || a.name.localeCompare(b.name))
 
   const openEdit = (s: Source) => {
     setPanel({ name: s.name, kind: 'edit' })
@@ -184,11 +194,20 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
         )}
       </div>
 
-      {ordered.length === 0 && (
+      {sources.length === 0 && (
         <div style={css(`display:grid; place-items:center; min-height:220px; background:${C.surface}; border:1px dashed ${C.lineStrong}; border-radius:13px; padding:32px; text-align:center;`)}>
           <div style={css('max-width:380px;')}>
             <div style={css(`font-weight:600; font-size:14.5px; color:${C.ink}; margin-bottom:8px;`)}>No sources yet</div>
             <p style={css(`margin:0; font-size:12.5px; color:${C.caption}; line-height:1.5;`)}>Nothing is feeding the cascade. Add a folder, repository, or MCP server to get started.</p>
+          </div>
+        </div>
+      )}
+
+      {sources.length > 0 && ordered.length === 0 && (
+        <div style={css(`display:grid; place-items:center; min-height:220px; background:${C.surface}; border:1px dashed ${C.lineStrong}; border-radius:13px; padding:32px; text-align:center;`)}>
+          <div style={css('max-width:380px;')}>
+            <div style={css(`font-weight:600; font-size:14.5px; color:${C.ink}; margin-bottom:8px;`)}>No matching sources</div>
+            <p style={css(`margin:0; font-size:12.5px; color:${C.caption}; line-height:1.5;`)}>Try a source name, layer, kind, status, repository, or error message.</p>
           </div>
         </div>
       )}

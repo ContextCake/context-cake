@@ -64,6 +64,7 @@ export function applyAppearance(appearance: Appearance) {
 
 /** Apply synchronously before React mounts to prevent an appearance flash. */
 export function applyInitialAppearance() {
+  document.documentElement.dataset.nativeVibrancy = String(window.__CC_DESKTOP?.nativeVibrancy === true)
   applyAppearance(initialAppearance())
 }
 

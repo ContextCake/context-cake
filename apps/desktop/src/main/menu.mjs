@@ -4,11 +4,22 @@ import { installCli } from './cli-install.mjs'
 import { readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
 
 export function buildMenu(getWindow, onSettingsChange) {
+  const invoke = (command) => {
+    const window = getWindow()
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
+    window.webContents.send('commands:invoke', command)
+  }
   const template = [
     {
       label: app.name,
       submenu: [
         { role: 'about' },
+        {
+          label: 'Settings…',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => invoke('settings'),
+        },
+        { type: 'separator' },
         {
           label: 'Check for Updates…',
           click: () => checkInteractive(getWindow()),
@@ -40,7 +51,25 @@ export function buildMenu(getWindow, onSettingsChange) {
       ],
     },
     { role: 'editMenu' },
-    { role: 'viewMenu' },
+    {
+      label: 'View',
+      submenu: [
+        { label: 'Go to Home', accelerator: 'CmdOrCtrl+1', click: () => invoke('destination:1') },
+        { label: 'Go to Cascade', accelerator: 'CmdOrCtrl+2', click: () => invoke('destination:2') },
+        { label: 'Go to Knowledge', accelerator: 'CmdOrCtrl+3', click: () => invoke('destination:3') },
+        { label: 'Go to Sources', accelerator: 'CmdOrCtrl+4', click: () => invoke('destination:4') },
+        { label: 'Go to Review', accelerator: 'CmdOrCtrl+5', click: () => invoke('destination:5') },
+        { type: 'separator' },
+        { label: 'Command Palette…', accelerator: 'CmdOrCtrl+K', click: () => invoke('command-palette') },
+        { label: 'Search This View', accelerator: 'CmdOrCtrl+F', click: () => invoke('search') },
+        { label: 'Ask ContextCake', accelerator: 'CmdOrCtrl+Shift+A', click: () => invoke('ask') },
+        { type: 'separator' },
+        { label: 'Toggle Sidebar', click: () => invoke('toggle-sidebar') },
+        { type: 'separator' },
+        { role: 'reload' },
+        { role: 'toggleDevTools' },
+      ],
+    },
     { role: 'windowMenu' },
     {
       role: 'help',

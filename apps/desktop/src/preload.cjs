@@ -9,6 +9,11 @@ function arg(name) {
   return hit ? hit.slice(prefix.length) : ''
 }
 
+function jsonArg(name, fallback) {
+  try { return JSON.parse(decodeURIComponent(arg(name))) }
+  catch { return fallback }
+}
+
 contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   // Per-launch bearer token the local engine service requires on /api/*. It is
   // fetched through trusted IPC, never renderer argv (visible through `ps`).
@@ -18,6 +23,7 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   // Initial, non-PII snapshot. The live state (including optional email) is
   // delivered through __CC_AUTH so it never appears in process arguments.
   authState: { signedIn: arg('cc-signed-in') === '1', available: arg('cc-accounts') === '1' },
+  nativeVibrancy: arg('cc-native-vibrancy') === '1',
   preferences: {
     initial: {
       theme: ['system', 'light', 'dark'].includes(arg('cc-theme')) ? arg('cc-theme') : 'system',
@@ -30,6 +36,16 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
     get: () => ipcRenderer.invoke('preferences:get'),
     set: (patch) => ipcRenderer.invoke('preferences:set', patch),
     onChanged: (cb) => subscribe('preferences:changed', cb),
+  },
+  uiState: {
+    initial: jsonArg('cc-ui-state', {
+      sidebar: { collapsed: false, width: 232 }, lastView: 'overview',
+      knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+    }),
+    set: (patch) => ipcRenderer.invoke('ui-state:set', patch),
+  },
+  commands: {
+    onInvoke: (cb) => subscribe('commands:invoke', cb),
   },
   chooseFolder: () => ipcRenderer.invoke('contextcake:choose-folder'),
   metrics: {

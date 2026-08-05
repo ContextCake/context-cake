@@ -9,23 +9,26 @@ import {
   adaptConcept, adaptConflicts, adaptSources, createDataSource, LiveDataError, type Mode,
 } from './api'
 import type { LayerId, RouteId } from './theme'
+import { dispatchNavigationGuard, isViewId, parseHash, type ViewId } from './shell-navigation'
 
-export type ViewId = 'canvas' | 'overview' | 'sources' | 'triage' | 'conflicts' | 'concepts' | 'files'
+export type { ViewId } from './shell-navigation'
 export type TriageTab = 'review' | 'captured' | 'ignored'
 
-const VIEW_IDS: ViewId[] = ['canvas', 'overview', 'sources', 'triage', 'conflicts', 'concepts', 'files']
+const BROWSER_LAST_VIEW_KEY = 'contextcake.lastView'
+const BROWSER_KNOWLEDGE_VIEW_KEY = 'contextcake.knowledgeView'
+const BROWSER_REVIEW_VIEW_KEY = 'contextcake.reviewView'
 
-/** Parse the URL hash into a view + optional concept id (deep link). */
-function parseHash(): { view?: ViewId; concept?: string } {
-  if (typeof window === 'undefined') return {}
-  const h = window.location.hash.replace(/^#\/?/, '')
-  if (!h) return {}
-  const slash = h.indexOf('/')
-  const view = (slash === -1 ? h : h.slice(0, slash)) as ViewId
-  const rest = slash === -1 ? '' : h.slice(slash + 1)
-  if (!VIEW_IDS.includes(view)) return {}
-  if (view === 'concepts' && rest) return { view, concept: decodeURIComponent(rest) }
-  return { view }
+function initialRoute(): { view: ViewId; concept?: string } {
+  if (typeof window === 'undefined') return { view: 'overview' }
+  const explicit = parseHash(window.location.hash)
+  if (explicit.view) return { view: explicit.view, concept: explicit.concept }
+  const desktop = window.__CC_DESKTOP?.uiState?.initial.lastView
+  if (isViewId(desktop)) return { view: desktop }
+  try {
+    const browser = localStorage.getItem(BROWSER_LAST_VIEW_KEY)
+    if (isViewId(browser)) return { view: browser }
+  } catch { /* browser storage is optional */ }
+  return { view: 'overview' }
 }
 
 export interface Cite { layer: LayerId; label: string }
@@ -151,12 +154,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [signals, setSignals] = useState<Signal[]>(mode === 'demo' ? initialSignals : [])
   const activity = mode === 'demo' ? demoActivity : []
 
-  const [view, setView] = useState<ViewId>(() => parseHash().view ?? 'canvas')
+  const initial = useMemo(initialRoute, [])
+  const [view, setViewState] = useState<ViewId>(initial.view)
   const [triageTab, setTriageTab] = useState<TriageTab>('review')
   const [selSignal, setSelSignal] = useState<string | null>(mode === 'demo' ? 'sig-1' : null)
   const [selConflict, setSelConflict] = useState('')
   const [selConcept, setSelConcept] = useState('')
-  const [query, setQuery] = useState('')
+  const [queries, setQueries] = useState<Partial<Record<ViewId, string>>>({})
+  const query = queries[view] ?? ''
+  const setQuery = useCallback((value: string) => setQueries((current) => ({ ...current, [view]: value })), [view])
   const [chatOpen, setChatOpen] = useState(false)
   const [chatBusy, setChatBusy] = useState(false)
   const [chatInput, setChatInput] = useState('')
@@ -258,14 +264,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const signalsRef = useRef(signals); signalsRef.current = signals
   const selSignalRef = useRef(selSignal); selSignalRef.current = selSignal
   const selConflictRef = useRef(selConflict); selConflictRef.current = selConflict
+  const selConceptRef = useRef(selConcept); selConceptRef.current = selConcept
   const chatBusyRef = useRef(chatBusy); chatBusyRef.current = chatBusy
   const chatInputRef = useRef(chatInput); chatInputRef.current = chatInput
   const conceptsRef = useRef(concepts); conceptsRef.current = concepts
   const conflictsRef = useRef(conflicts); conflictsRef.current = conflicts
   const resolvingConflictRef = useRef<string | null>(null)
   const modeRef = useRef(mode); modeRef.current = mode
-  const pendingConceptRef = useRef<string | undefined>(parseHash().concept)
+  const pendingConceptRef = useRef<string | undefined>(initial.concept)
   const prevViewRef = useRef<ViewId>(view)
+
+  const setView = useCallback((next: ViewId) => {
+    if (next === view) return
+    if (!dispatchNavigationGuard()) return
+    setViewState(next)
+  }, [view])
+
+  useEffect(() => {
+    window.__CC_DESKTOP?.uiState?.set({
+      lastView: view,
+      ...(view === 'concepts' || view === 'files' ? { knowledgeView: view } : {}),
+      ...(view === 'triage' || view === 'conflicts' ? { reviewView: view } : {}),
+    }).catch(() => {})
+    if (!window.__CC_DESKTOP) {
+      try {
+        localStorage.setItem(BROWSER_LAST_VIEW_KEY, view)
+        if (view === 'concepts' || view === 'files') localStorage.setItem(BROWSER_KNOWLEDGE_VIEW_KEY, view)
+        if (view === 'triage' || view === 'conflicts') localStorage.setItem(BROWSER_REVIEW_VIEW_KEY, view)
+      } catch { /* browser storage is optional */ }
+    }
+  }, [view])
 
   // URL hash ⇄ state: reflect view/selected-concept for deep links, restore on
   // load (above), and support back/forward. pushState on view change (a real
@@ -287,13 +315,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onPop = () => {
-      const p = parseHash()
-      if (p.view) setView(p.view)
+      const p = parseHash(window.location.hash)
+      if (p.view && p.view !== view) {
+        if (!dispatchNavigationGuard()) {
+          const current = view === 'concepts' && selConceptRef.current
+            ? `#/concepts/${encodeURIComponent(selConceptRef.current)}` : `#/${view}`
+          window.history.replaceState(null, '', current)
+          return
+        }
+        setViewState(p.view)
+      }
       if (p.concept) setSelConcept(p.concept)
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [])
+  }, [view])
 
   const filtered = useCallback((tab: TriageTab): Signal[] => {
     const route = TAB_TO_ROUTE[tab]
@@ -422,6 +458,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
+  const openChat = useCallback(() => setChatOpen(true), [])
+  const closeChat = useCallback(() => setChatOpen(false), [])
 
   const load = useMemo<LoadState>(
     () => ({ shell: loading, concepts: conceptsLoading, indexingSources }),
@@ -434,9 +472,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     chatOpen, chatBusy, chatInput, chatMessages,
     concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
-    openChat: () => setChatOpen(true), closeChat: () => setChatOpen(false), setChatInput,
+    openChat, closeChat, setChatInput,
     filtered, route, resolveConflict, resolveSafeConflicts, send, reload,
-  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, route, resolveConflict, resolveSafeConflicts, send, reload])
+  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, route, resolveConflict, resolveSafeConflicts, send, reload, setView, setQuery, openChat, closeChat])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

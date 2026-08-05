@@ -36,7 +36,7 @@ function Empty({ title, detail }: { title: string; detail: string }) {
 }
 
 export function Files() {
-  const { mode, sources, reload } = useStore()
+  const { mode, sources, reload, query } = useStore()
   const [layers, setLayers] = useState<LayerFiles[] | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
@@ -48,7 +48,6 @@ export function Files() {
   const [savedAt, setSavedAt] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
-  const [filter, setFilter] = useState('')
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const selectedRef = useRef(selected)
   selectedRef.current = selected
@@ -207,30 +206,28 @@ export function Files() {
     return <Empty title="No file-backed sources yet" detail="Markdown folders and ContextCake folders show their files here. An MCP source serves a remote graph, so it has no local files to edit." />
   }
 
-  const visible = (files: LayerFile[]) => {
-    const q = filter.trim().toLowerCase()
-    return q ? files.filter((f) => f.path.toLowerCase().includes(q)) : files
+  const normalizedQuery = (query ?? '').trim().toLowerCase()
+  const visible = (files: LayerFile[], layer: string) => {
+    if (normalizedQuery && layer.toLowerCase().includes(normalizedQuery)) return files
+    return normalizedQuery
+      ? files.filter((fileEntry) => [fileEntry.path, fileEntry.name, fileEntry.rel]
+        .some((value) => value.toLowerCase().includes(normalizedQuery)))
+      : files
   }
+  const visibleLayers = (layers ?? [])
+    .map((layer) => ({ ...layer, files: visible(layer.files, layer.layer) }))
+    .filter((layer) => !normalizedQuery || layer.files.length > 0)
 
   return (
     <div style={css('display:grid; grid-template-columns:minmax(220px, 280px) minmax(0, 1fr); gap:0; height:100%; min-height:0;')}>
       <aside style={css(`display:flex; flex-direction:column; min-height:0; border-right:1px solid ${C.line}; background:${C.surface};`)}>
-        <div style={css(`padding:12px 12px 10px; border-bottom:1px solid ${C.line};`)}>
-          <label htmlFor="cc-files-filter" className="sr-only">Filter files</label>
-          <input
-            id="cc-files-filter"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter files…"
-            autoComplete="off"
-            style={css(`width:100%; box-sizing:border-box; padding:7px 10px; border-radius:8px; border:1px solid ${C.line}; background:${C.raised}; color:${C.ink}; font:inherit; font-size:12.5px;`)}
-          />
-        </div>
         <div style={css('flex:1; min-height:0; overflow-y:auto; padding:8px;')}>
           {layers === null ? (
             <p style={css(`margin:8px; font-size:12px; color:${C.caption};`)}>Loading files…</p>
-          ) : layers.map((layer) => {
-            const files = visible(layer.files)
+          ) : visibleLayers.length === 0 && allFiles.length > 0 ? (
+            <p style={css(`margin:8px; font-size:12px; line-height:1.5; color:${C.caption};`)}>No matching files. Try a file name, path, or layer.</p>
+          ) : visibleLayers.map((layer) => {
+            const files = layer.files
             return (
               <section key={layer.layer} style={css('margin-bottom:12px;')}>
                 <header style={css('display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:4px 6px;')}>

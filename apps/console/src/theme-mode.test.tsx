@@ -35,7 +35,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  for (const key of ['theme', 'themePreference', 'density', 'reducedTransparency', 'highContrast']) {
+  for (const key of ['theme', 'themePreference', 'density', 'reducedTransparency', 'highContrast', 'nativeVibrancy']) {
     delete document.documentElement.dataset[key]
   }
 })
@@ -51,6 +51,13 @@ describe('appearance preferences', () => {
     applyInitialAppearance()
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(document.documentElement.dataset.density).toBe('compact')
+    expect(document.documentElement.dataset.nativeVibrancy).toBe('false')
+  })
+
+  it('marks native material availability before the first paint', () => {
+    window.__CC_DESKTOP = { nativeVibrancy: true } as NonNullable<Window['__CC_DESKTOP']>
+    applyInitialAppearance()
+    expect(document.documentElement.dataset.nativeVibrancy).toBe('true')
   })
 
   it('resolves System immediately when the operating-system appearance changes', async () => {

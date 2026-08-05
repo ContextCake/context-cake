@@ -11,6 +11,7 @@ export function ChatPanel({ keyboardSuspended = false, onConnectAgent, onClose }
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const panelRef = useRef<HTMLElement>(null)
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [docked, setDocked] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia('(min-width: 1280px)').matches)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const copyMcpConfig = () => {
@@ -42,6 +43,15 @@ export function ChatPanel({ keyboardSuspended = false, onConnectAgent, onClose }
   useEffect(() => () => clearTimeout(copyTimer.current), [])
 
   useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia('(min-width: 1280px)')
+    const update = () => setDocked(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+
+  useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [chatMessages, chatBusy])
@@ -52,7 +62,7 @@ export function ChatPanel({ keyboardSuspended = false, onConnectAgent, onClose }
     inputRef.current?.focus()
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
-      if (e.key === 'Tab') {
+      if (e.key === 'Tab' && !docked) {
         const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('button,textarea,input,a[href],[tabindex]:not([tabindex="-1"])') ?? [])
         if (!focusable.length) return
         const position = focusable.indexOf(document.activeElement as HTMLElement)
@@ -62,12 +72,12 @@ export function ChatPanel({ keyboardSuspended = false, onConnectAgent, onClose }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [keyboardSuspended, onClose])
+  }, [docked, keyboardSuspended, onClose])
 
   return (
     <div className="cc-ask-root">
       <div className="cc-ask-scrim" onClick={onClose} />
-      <aside ref={panelRef} className="cc-ask-panel" role="dialog" aria-modal="true" aria-label="Ask ContextCake">
+      <aside ref={panelRef} className="cc-ask-panel" role={docked ? 'complementary' : 'dialog'} aria-modal={docked ? undefined : 'true'} aria-label="Ask ContextCake">
         <header style={css('display:flex; align-items:center; gap:11px; padding:16px 18px; border-bottom:1px solid #D8D6CC;')}>
           <div style={css('display:grid; place-items:center; width:30px; height:30px; border-radius:8px; background:#134F49;')}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#EAF7F5" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8z" /></svg>

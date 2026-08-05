@@ -4,7 +4,11 @@ import { installCli } from './cli-install.mjs'
 import { readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
 
 export function buildMenu(getWindow, onSettingsChange) {
-  const invoke = (command) => getWindow()?.webContents.send('commands:invoke', command)
+  const invoke = (command) => {
+    const window = getWindow()
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
+    window.webContents.send('commands:invoke', command)
+  }
   const template = [
     {
       label: app.name,

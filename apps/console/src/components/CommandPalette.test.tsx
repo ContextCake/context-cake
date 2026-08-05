@@ -19,6 +19,7 @@ it('filters commands deterministically and supports arrow/Enter execution with t
 
   const input = host.querySelector('input')!
   expect(document.activeElement).toBe(input)
+  expect(input.getAttribute('aria-label')).toBe('Search commands')
   expect(host.querySelector('[aria-live="polite"]')?.textContent).toBe('2 commands')
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set

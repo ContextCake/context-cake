@@ -636,7 +636,12 @@ async function createWindow() {
     ...restored.bounds,
     minWidth: 760,
     minHeight: 560,
-    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : {}),
+    ...(process.platform === 'darwin' ? {
+      titleBarStyle: 'hiddenInset',
+      vibrancy: 'sidebar',
+      visualEffectState: 'active',
+      backgroundColor: '#00000000',
+    } : {}),
     show: false,
     webPreferences: {
       preload: path.join(here, '..', 'preload.cjs'),
@@ -652,6 +657,7 @@ async function createWindow() {
         `--cc-anonymous-metrics=${preferences.anonymousMetrics === null ? '' : preferences.anonymousMetrics ? '1' : '0'}`,
         `--cc-reduced-transparency=${preferences.reducedTransparency ? '1' : '0'}`,
         `--cc-high-contrast=${preferences.highContrast ? '1' : '0'}`,
+        `--cc-native-vibrancy=${process.platform === 'darwin' ? '1' : '0'}`,
         `--cc-ui-state=${encodeURIComponent(JSON.stringify(uiState))}`,
         // Whether this build ships accounts at all. Static for the process, so
         // the renderer can drop the Account pane on first paint rather than
@@ -674,7 +680,10 @@ async function createWindow() {
     }
   })
 
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    if (restored.maximized) win.maximize()
+    win.show()
+  })
   win.webContents.once('did-finish-load', () => {
     sendToRenderer('auth:session-changed', currentAuthState())
     sendToRenderer('settings:sync-status', currentSyncState())
@@ -686,7 +695,6 @@ async function createWindow() {
   win.on('close', () => { clearTimeout(windowStateTimer); windowStateTimer = null; saveWindowState(win) })
   win.on('closed', () => { clearTimeout(windowStateTimer); windowStateTimer = null; win = null })
   await win.loadURL(`${service.origin}/console/`)
-  if (restored.maximized) win.maximize()
   startManifestSync()
 }
 

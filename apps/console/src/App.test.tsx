@@ -44,6 +44,9 @@ describe('Mac-first application shell', () => {
 
     await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: '5', metaKey: true, bubbles: true })))
     expect(container.querySelector('[data-destination="review"]')?.getAttribute('aria-current')).toBe('page')
+    expect(button('Queue 3')).toBeTruthy()
+    expect(button('Conflicts 3')).toBeTruthy()
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('')
   })
 
   it('opens the command palette with Command-K and restores focus after Escape', async () => {
@@ -58,6 +61,40 @@ describe('Mac-first application shell', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(container.querySelector('[aria-label="Command palette"]')).toBeNull()
     expect(document.activeElement).toBe(opener)
+  })
+
+  it('restores the pre-palette opener after running Ask from the palette', async () => {
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const opener = container.querySelector<HTMLButtonElement>('.cc-toolbar-leading button')!
+    opener.focus()
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })))
+    const input = container.querySelector<HTMLInputElement>('.cc-command-palette input')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'ask')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    expect(container.querySelector('[aria-label="Ask ContextCake"]')).toBeTruthy()
+
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(container.querySelector('[aria-label="Ask ContextCake"]')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+  })
+
+  it('exposes wide Ask as a nonmodal complementary pane', async () => {
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: query === '(min-width: 1280px)', media: query, onchange: null,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(),
+      dispatchEvent: vi.fn(() => true),
+    })))
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => button('Ask').click())
+    const ask = container.querySelector('[aria-label="Ask ContextCake"]')
+    expect(ask?.getAttribute('role')).toBe('complementary')
+    expect(ask?.hasAttribute('aria-modal')).toBe(false)
   })
 
   it('focuses contextual search with Command-F and clears it with Escape', async () => {
@@ -113,6 +150,12 @@ describe('Mac-first application shell', () => {
     expect(sidebar?.dataset.collapsed).toBe('true')
     expect(sidebar?.style.width).toBe('64px')
     expect(container.querySelector('[data-destination="review"]')?.getAttribute('aria-label')).toBe('Review, 6 items needing review')
+
+    await act(async () => {
+      separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }))
+    })
+    expect(sidebar?.dataset.collapsed).toBe('true')
+    expect(sidebar?.style.width).toBe('64px')
 
     await act(async () => {
       separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }))

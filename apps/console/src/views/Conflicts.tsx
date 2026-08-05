@@ -81,14 +81,14 @@ export function Conflicts() {
   const open = useMemo(() => conflicts.filter((conflict) => conflict.status === 'open'), [conflicts])
   const safe = useMemo(() => open.filter((conflict) => conflict.safe), [open])
   const needsJudgment = open.length - safe.length
-  const normalizedQuery = query.trim().toLowerCase()
+  const normalizedQuery = (query ?? '').trim().toLowerCase()
   const visibleConflicts = useMemo(() => conflicts.filter((conflict) => !normalizedQuery || [
     conflict.concept,
     conflict.title,
     conflict.section,
     conflict.status,
-    conflict.resolutionText,
     ...conflict.contributions.flatMap((contribution) => [contribution.layer, contribution.value, contribution.note]),
+    ...conflict.history.flatMap((record) => [record.reason, record.chosen.content, record.chosen.layer]),
   ].some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery))), [conflicts, normalizedQuery])
   const selConf = visibleConflicts.find((conflict) => conflict.id === selConflict) ?? visibleConflicts[0] ?? null
 

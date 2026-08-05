@@ -55,7 +55,7 @@ export function CommandPalette({ commands, onClose }: { commands: readonly Palet
         <label className="cc-palette-search">
           <SearchIcon size={20} />
           <span className="sr-only">Search commands</span>
-          <input ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" autoComplete="off" />
+          <input ref={input} aria-label="Search commands" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" autoComplete="off" />
           <ShortcutLabel>esc</ShortcutLabel>
         </label>
         <div className="cc-palette-count" aria-live="polite">{results.length} command{results.length === 1 ? '' : 's'}</div>

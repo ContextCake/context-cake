@@ -77,6 +77,7 @@ export function App() {
   const [sourceSetupComplete, setSourceSetupComplete] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [backgroundAnnouncement, setBackgroundAnnouncement] = useState('')
   const settingsOpener = useRef<HTMLElement | null>(null)
   const paletteOpener = useRef<HTMLElement | null>(null)
   const askOpener = useRef<HTMLElement | null>(null)
@@ -84,6 +85,7 @@ export function App() {
   const browserViews = useRef(readBrowserGroupedViews())
   const knowledgeView = useRef<'concepts' | 'files'>(window.__CC_DESKTOP?.uiState?.initial.knowledgeView ?? browserViews.current.knowledgeView)
   const reviewView = useRef<'triage' | 'conflicts'>(window.__CC_DESKTOP?.uiState?.initial.reviewView ?? browserViews.current.reviewView)
+  const backgroundCounts = useRef({ indexing: 0, failures: 0 })
   if (view === 'concepts' || view === 'files') knowledgeView.current = view
   if (view === 'triage' || view === 'conflicts') reviewView.current = view
 
@@ -124,10 +126,19 @@ export function App() {
     setDrawerOpen(false)
     openChat()
   }, [openChat])
+  const openAskFromPalette = useCallback(() => {
+    askOpener.current = paletteOpener.current?.isConnected ? paletteOpener.current : null
+    setDrawerOpen(false)
+    openChat()
+  }, [openChat])
   const closeAsk = useCallback(() => {
     const opener = askOpener.current
     closeChat()
-    window.requestAnimationFrame(() => opener?.isConnected && opener.focus())
+    window.requestAnimationFrame(() => {
+      const target = opener?.isConnected ? opener : document.querySelector<HTMLElement>('.cc-toolbar-ask')
+      target?.focus()
+      askOpener.current = null
+    })
   }, [closeChat])
   const closeDrawer = useCallback(() => {
     const opener = drawerOpener.current
@@ -155,10 +166,10 @@ export function App() {
     { id: 'conflicts', label: 'Go to Review: Conflicts', keywords: 'resolve', run: () => setView('conflicts') },
     ...(mode === 'live' ? [{ id: 'add-source', label: 'Add Source', keywords: 'folder repository', run: reopenWizard }] : []),
     ...(isDesktop ? [{ id: 'connect-agent', label: 'Connect Agent', keywords: 'cli mcp', run: openConnect }] : []),
-    { id: 'ask', label: 'Ask ContextCake', shortcut: '⇧⌘A', run: openAsk },
+    { id: 'ask', label: 'Ask ContextCake', shortcut: '⇧⌘A', run: openAskFromPalette },
     { id: 'settings', label: 'Open Settings', shortcut: '⌘,', run: openSettings },
     { id: 'sidebar', label: 'Toggle Sidebar', run: toggleSidebar },
-  ], [isDesktop, mode, setView, sources.length, sourceSetupComplete])
+  ], [isDesktop, mode, openAskFromPalette, setView, sources.length, sourceSetupComplete])
   const closeSettings = () => {
     const opener = settingsOpener.current
     setSettingsOpen(false)
@@ -180,6 +191,20 @@ export function App() {
       settingsOpener.current = null
     })
   }
+
+  useEffect(() => {
+    const indexing = load.indexingSources.length
+    const failures = loadErrors.length
+    const previous = backgroundCounts.current
+    if (indexing > 0) {
+      setBackgroundAnnouncement(`Indexing ${indexing} source${indexing === 1 ? '' : 's'}.`)
+    } else if (previous.indexing > 0) {
+      setBackgroundAnnouncement(`Indexing complete.${failures > 0 ? ` ${failures} concept${failures === 1 ? '' : 's'} failed to resolve.` : ''}`)
+    } else if (failures > previous.failures) {
+      setBackgroundAnnouncement(`${failures} concept${failures === 1 ? '' : 's'} failed to resolve.`)
+    }
+    backgroundCounts.current = { indexing, failures }
+  }, [load.indexingSources.length, loadErrors.length])
 
   // Mobile off-canvas nav drawer (inert on desktop, where the sidebar is static).
   useEffect(() => {
@@ -286,8 +311,7 @@ export function App() {
               onConnectAgent={isDesktop && !needsSetup ? openConnect : undefined}
             />
             <div className="sr-only" aria-live="polite">
-              {load.indexingSources.length > 0 ? `Indexing ${load.indexingSources.length} sources.` : 'Indexing complete.'}
-              {loadErrors.length > 0 ? ` ${loadErrors.length} concepts failed to resolve.` : ''}
+              {backgroundAnnouncement}
             </div>
             {loadErrors.length > 0 && (
               <div role="status" style={css(`display:flex; align-items:center; gap:8px; padding:8px 16px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; font-size:12px; color:${C.amberText};`)}>

@@ -74,6 +74,8 @@ declare global {
       version: string
       /** Initial auth snapshot; subscribe through __CC_AUTH for live state. */
       authState: DesktopAuthState
+      /** True only when the macOS window supplies native translucent material. */
+      nativeVibrancy?: boolean
       preferences?: {
         initial: DesktopPreferences
         get(): Promise<DesktopPreferences>

@@ -17,10 +17,12 @@ export function Header({
   onAddSource?: () => void
   onConnectAgent?: () => void
 }) {
-  const { view, setView, query, setQuery, load, loadErrors, mode } = useStore()
+  const { view, setView, query, setQuery, load, loadErrors, mode, signals, conflicts } = useStore()
   const search = useRef<HTMLInputElement>(null)
   const destination = destinationForView(view)
   const searchable = SEARCHABLE_VIEWS.has(view)
+  const queueCount = signals.filter((signal) => signal.route === 'review_required').length
+  const conflictCount = conflicts.filter((conflict) => conflict.status === 'open').length
 
   useEffect(() => {
     const focus = () => search.current?.focus()
@@ -39,7 +41,7 @@ export function Header({
           { value: 'concepts', label: 'Concepts' }, { value: 'files', label: 'Files' },
         ]} />}
         {destination === 'review' && <SegmentedControl label="Review view" value={view as 'triage' | 'conflicts'} onChange={setView} options={[
-          { value: 'triage', label: 'Queue' }, { value: 'conflicts', label: 'Conflicts' },
+          { value: 'triage', label: `Queue ${queueCount}` }, { value: 'conflicts', label: `Conflicts ${conflictCount}` },
         ]} />}
       </div>
       <div className="cc-toolbar-actions">

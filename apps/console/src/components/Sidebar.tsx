@@ -112,7 +112,7 @@ export function Sidebar({ onOpenSettings, onNavigate }: { onOpenSettings?: () =>
       event.preventDefault()
       const direction = event.key === 'ArrowLeft' ? -8 : 8
       setSidebar((current) => {
-        if (current.collapsed && direction > 0) return { collapsed: false, width: current.width }
+        if (current.collapsed) return direction > 0 ? { collapsed: false, width: current.width } : current
         const width = current.width + direction
         return width < MIN_WIDTH ? { ...current, collapsed: true } : { collapsed: false, width: clampWidth(width) }
       })
@@ -141,7 +141,7 @@ export function Sidebar({ onOpenSettings, onNavigate }: { onOpenSettings?: () =>
           return <button
             key={item.id} type="button" className="cc-nav-button" data-destination={item.id}
             aria-current={destination === item.id ? 'page' : undefined}
-            aria-label={sidebar.collapsed ? `${item.label}${badge ? `, ${badge} ${suffix}` : ''}` : undefined}
+            aria-label={sidebar.collapsed || badge ? `${item.label}${badge ? `, ${badge} ${suffix}` : ''}` : undefined}
             title={sidebar.collapsed ? item.label : undefined} onClick={() => go(item.id)}
           >
             {item.icon}<span className="cc-nav-label">{item.label}</span>

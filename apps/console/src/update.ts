@@ -6,12 +6,11 @@
 // check is disable-able per mode (see isUpdateCheckEnabled) so the public
 // demo/Pages embed stays network-silent by default.
 
-// The monorepo publishes releases under two tag namespaces: engine `v*` and
-// console `console-v*` (console-deploy.yml deploys on the latter). We list
-// recent releases and pick the newest console one — `/releases/latest` would
-// return whichever namespace released most recently and misreport versions.
+// The public Web Demo and Mac app now ship together from `app-v*` tags. The
+// engine/playground retains its own `v*` namespace, so we still filter the
+// repo-wide release list instead of relying on `/releases/latest`.
 const RELEASES_URL = 'https://api.github.com/repos/ContextCake/context-cake/releases?per_page=20'
-const TAG_PREFIX = /^console-v(?=\d)/
+const TAG_PREFIX = /^app-v(?=\d)/
 const STORAGE_KEY = 'cc-update-check'
 
 export interface UpdateInfo {
@@ -68,7 +67,7 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
     return null
   }
 
-  // Newest console release: releases come newest-first; skip drafts,
+  // Newest coordinated app/Web Demo release: releases come newest-first; skip drafts,
   // prereleases, and the engine's `v*` namespace.
   const releases = Array.isArray(data) ? (data as Array<Record<string, unknown>>) : []
   const release = releases.find((r) =>
@@ -106,8 +105,7 @@ export function __resetUpdateCheckCache(): void {
  */
 export function isUpdateCheckEnabled(mode: 'demo' | 'live'): boolean {
   if (typeof window === 'undefined') return false
-  // Inside the desktop app the native updater owns update UX; the web check
-  // (console-v* releases) would misreport against the app's own versioning.
+  // Inside the desktop app the native updater owns update UX.
   if (window.__CC_DESKTOP) return false
   let stored: string | null = null
   try {

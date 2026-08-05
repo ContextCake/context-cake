@@ -16,8 +16,11 @@ downloads in the background and installs on quit. The check is switchable
 (Settings → General) and never runs in development builds.
 
 A release is produced only by `app-release.yml`, triggered by pushing an
-`app-v*` tag. That workflow refuses to continue unless:
+`app-v*` tag. The same workflow deploys the matching public Web Demo and site
+from that exact commit after the signed app is published. It refuses to continue unless:
 
+- Cloudflare credentials for both coordinated public deployments are present
+  and can read both Pages projects before the signed app job starts;
 - the tagged commit is an ancestor of `main`;
 - the tag version equals `apps/desktop/package.json`;
 - no `## Open:` gate remains in `docs/release-gates.md`;
@@ -92,8 +95,8 @@ says the app has stopped being able to update itself.
 
 That matters because a known constraint makes silent failure likely:
 electron-updater's GitHub provider reads the *repository-wide* `latest`
-release, so publishing any non-app release (a `console-v*` tag, for instance)
-makes `latest-mac.yml` 404 and every check fail. The code comments this and
+release, so publishing any non-app full release makes `latest-mac.yml` 404 and
+every check fail. The code comments this and
 compensates with a convention — only `app-release.yml` may publish full
 releases; other release notes must be drafts or prereleases.
 

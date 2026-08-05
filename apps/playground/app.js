@@ -862,8 +862,8 @@ function escapeAttr(v) { return escapeHtml(v); }
 // ===========================================================================
 
 // List releases (newest first) and pick the newest ENGINE one: the monorepo
-// tags engine releases `v*` and console releases `console-v*`, and the
-// playground ships with the engine. `/releases/latest` is namespace-blind.
+// tags engine releases `v*` and coordinated product releases `app-v*`, while
+// the playground ships with the engine. `/releases/latest` is namespace-blind.
 const UPDATE_RELEASES_URL = "https://api.github.com/repos/ContextCake/context-cake/releases?per_page=20";
 const UPDATE_TAG_PREFIX = /^v(?=\d)/;
 const UPDATE_STORAGE_KEY = "cc-update-check";

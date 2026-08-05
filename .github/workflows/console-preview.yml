@@ -1,4 +1,4 @@
-name: Console Preview Deploy
+name: Web Demo Preview Deploy
 
 on:
   push:
@@ -55,7 +55,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: console-dist
+          name: web-demo-preview-dist
           path: apps/console/dist
           retention-days: 1
 
@@ -72,7 +72,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v8
         with:
-          name: console-dist
+          name: web-demo-preview-dist
           path: apps/console/dist
 
       - name: Compute preview alias
@@ -106,7 +106,7 @@ jobs:
       - name: Publish preview summary
         run: |
           {
-            echo "### Cloudflare Pages preview (console)"
+            echo "### Cloudflare Pages preview (Web Demo)"
             echo ""
             if [ -z "${{ env.CLOUDFLARE_API_TOKEN }}" ]; then
               echo "- Skipped: set the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repo secrets to enable Pages deploys."

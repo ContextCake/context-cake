@@ -22,20 +22,20 @@ Nothing is attached beyond the implicit HTTP request — no application-added pe
 data, tokens, identifiers, or telemetry. The request carries the same information any
 browser request to that URL would (the standard HTTP headers your client sends; GitHub
 sees whatever it would see from any anonymous visitor). From the response, each surface
-picks the newest release in its own tag namespace (`console-v*` for the console,
-`v*` for the playground/engine), compares it against the running version, and caches
+picks the newest release in its relevant tag namespace (`app-v*` for the shared
+app/Web Demo renderer, `v*` for the playground/engine), compares it against the running version, and caches
 the result for the session — at most one request per page load, no matter how many
 components ask.
 
 ## It is disable-able
 
-The Console exposes **Check for updates** under **Settings → General**. The
+The ContextCake interface exposes **Check for updates** under **Settings → General**. The
 Playground keeps the same preference in the small gear menu beside its update
 notice. Both controls use the `cc-update-check` localStorage flag:
 
-- **Console, demo build** (the public `/demo-app/` embed on this site): off by
+- **Web Demo** (embedded from `contextcake-console.pages.dev` on this site): off by
   default. The public embed is network-silent unless you turn the toggle on.
-- **Console, live/local use**: on by default.
+- **Live/local renderer**: on by default.
 - **Playground**: on by default — it is a local dev tool, not a public embed.
 
 When the toggle is off, no network request is made at all — the check function
@@ -114,7 +114,7 @@ identify the account. It then stores the token in `tokens.enc`, encrypted with
 OS-keychain-backed `safeStorage` when available. If encryption is unavailable, the
 token remains memory-only for that run and is not written as plaintext.
 
-The Console renderer can list only connection metadata: alias, login, GitHub host,
+The renderer can list only connection metadata: alias, login, GitHub host,
 token type, and creation time. It cannot read a stored token back. The token reaches
 the isolated engine through Electron's process message port, not command-line
 arguments or the engine environment. For Git-over-HTTPS clone and pull operations,
@@ -139,7 +139,7 @@ does not gate the local engine, sources, profiles, resolve tools, or MCP server.
 When you sign in with GitHub, authentication runs in your system browser
 through Supabase OAuth with PKCE. The desktop app persists the resulting session only
 when OS-keychain-backed encryption is available; otherwise the session stays in memory
-for that run. Raw tokens are never exposed to the Console renderer or written to logs.
+for that run. Raw tokens are never exposed to the renderer or written to logs.
 
 The server-side account data includes:
 

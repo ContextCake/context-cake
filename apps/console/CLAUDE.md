@@ -25,9 +25,12 @@ npm run preview     # serve the production build
 # Live mode against the playground server (from the repo root):
 npm run console:live   # builds, then serves console at /console/ + playground at /
 
-# Deploy the built dist/ to Cloudflare Pages
-npx wrangler pages deploy dist --project-name=contextcake-console --branch=main
+# Publish a non-production preview of the built dist/
+npx wrangler pages deploy dist --project-name=contextcake-console --branch=preview-local
 ```
+
+Production has no independent Console release. The `app-v*` ContextCake
+release builds and deploys the matching public Web Demo from the same commit.
 
 The gates are `npm run typecheck` (strict, `noUnusedLocals`/`noUnusedParameters`)
 and `npm test`; CI runs both. dev/build/typecheck/test all regenerate

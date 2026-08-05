@@ -1,7 +1,9 @@
 import { readFile } from 'node:fs/promises'
 
 const html = await readFile(new URL('../dist/install/index.html', import.meta.url), 'utf8')
+const demoHtml = await readFile(new URL('../dist/demo/index.html', import.meta.url), 'utf8')
 const desktopPackage = JSON.parse(await readFile(new URL('../../desktop/package.json', import.meta.url), 'utf8'))
+const sourceRelease = JSON.parse(await readFile(new URL('../src/data/source-release.json', import.meta.url), 'utf8'))
 
 function requireText(text, message) {
   if (!html.includes(text)) throw new Error(message)
@@ -25,8 +27,8 @@ requireText('Download for Mac', 'Mac download must remain the primary install ac
 requireText(`ContextCake-${desktopPackage.version}-arm64.dmg`, 'Mac download must target the current desktop version')
 requireText('href="/install" aria-current="page"', 'Install navigation must expose the current route')
 requireText('Show source installation', 'Versioned source installation must remain available')
-requireText('console-v0.2.0', 'Source installation must stay pinned to the published console tag')
-requireText('013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253', 'Archive checksum must remain visible in the generated page')
+requireText(`app-v${sourceRelease.version}`, 'Source installation must use an app release tag')
+requireText(sourceRelease.sha256, 'Archive checksum must remain visible in the generated page')
 
 requireOrder([
   'Add a source you already have',
@@ -39,5 +41,24 @@ forbidText('The next distribution layer', 'Planned distribution channels must no
 forbidText('After sign-in', 'Sign-in must not be presented as required for local setup')
 forbidText('theagent', 'Inline link whitespace collapsed in production HTML')
 forbidText('nopostinstall', 'Inline code whitespace collapsed in production HTML')
+
+const demoIframeMatch = demoHtml.match(/<iframe\b[^>]*\bsrc="([^"]+)"[^>]*>/i)
+if (!demoIframeMatch) throw new Error('The site demo must contain a Web Demo iframe')
+
+let embeddedDemoUrl
+try {
+  embeddedDemoUrl = new URL(demoIframeMatch[1])
+} catch {
+  throw new Error('The site demo iframe must use a valid URL')
+}
+if (embeddedDemoUrl.href !== 'https://contextcake-console.pages.dev/') {
+  throw new Error('The site demo must embed the canonical released Web Demo')
+}
+if (demoHtml.includes('/demo-app/')) {
+  throw new Error('The site must not ship an independently built renderer')
+}
+if (!demoHtml.includes('sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"')) {
+  throw new Error('The cross-origin Web Demo embed must retain its iframe sandbox')
+}
 
 console.log('install page verification passed (Mac activation + source fallback)')

@@ -87,9 +87,10 @@ Stated plainly, because a threat model that only lists wins is marketing.
   trusting what its documents say to an agent.
 - **The update channel is the largest single risk.** The app installs signed
   code automatically. Whoever can cut a release, or holds the signing identity,
-  can reach every install — a larger blast radius than any credential here. The
-  controls are GitHub repository permissions and Apple signing, both outside
-  this codebase.
+  can reach every install — a larger blast radius than any credential here.
+  Reviewed in [the update channel](./update-channel.md): the release workflow
+  itself is well gated, but nothing requires a release to come from it, and
+  `app-v*` tags are unprotected.
 - **Dependencies of the apps.** The engine has none by design. The Mac app and
   console do, and they ship in the artifact.
 

@@ -2,7 +2,7 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode,
 } from 'react'
 import {
-  activity as demoActivity, initialSignals, layerName,
+  activity as demoActivity, initialSignals,
   type Activity, type Concept, type Conflict, type Signal, type Source,
 } from './data'
 import {
@@ -106,6 +106,8 @@ export interface Store {
   activity: Activity[]
   /** Concepts that failed to resolve during load (live mode) — shown, not hidden. */
   loadErrors: { concept: string; error: string }[]
+  resolvingConflict: string | null
+  resolutionError: { message: string; partial: boolean } | null
 
   setView: (v: ViewId) => void
   setTriageTab: (t: TriageTab) => void
@@ -119,8 +121,8 @@ export interface Store {
 
   filtered: (tab: TriageTab) => Signal[]
   route: (target: RouteId) => void
-  /** Resolve a conflict — demo mode only (live mode is read-only, D6). */
-  resolveConflict: (mode: 'accept' | 'promote' | 'override' | 'annotate') => void
+  resolveConflict: (conflictId: string, sourceLayer: string, method: 'automatic' | 'manual') => Promise<void>
+  resolveSafeConflicts: () => Promise<void>
   send: (text?: string) => void
   reload: () => void
 }
@@ -142,6 +144,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [sources, setSources] = useState<Source[]>([])
   const [conflicts, setConflicts] = useState<Conflict[]>([])
   const [loadErrors, setLoadErrors] = useState<{ concept: string; error: string }[]>([])
+  const [resolvingConflict, setResolvingConflict] = useState<string | null>(null)
+  const [resolutionError, setResolutionError] = useState<{ message: string; partial: boolean } | null>(null)
   // Triage signals and the activity feed have no resolver equivalent — demo-only
   // fixtures (D6: live-mode triage is read-only, and there is no signal API).
   const [signals, setSignals] = useState<Signal[]>(mode === 'demo' ? initialSignals : [])
@@ -182,7 +186,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         shellReadyRef.current = true
         setLoading(false) // the shell can render now — everything else streams in
 
-        const { concepts: raw, errors, indexing, indexingSources: resolvingSources } = await source.resolveAll()
+        const [{ concepts: raw, errors, indexing, indexingSources: resolvingSources }, resolutionHistory] = await Promise.all([
+          source.resolveAll(),
+          source.conflictResolutions(),
+        ])
         if (cancelled) return
         // Only fail the whole page when nothing resolved AND nothing is still
         // being read; a partial pass mid-index is expected, not an error.
@@ -195,7 +202,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // leaves the banner running after polling has stopped.
         setIndexingSources(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
         setConcepts(raw.map(adaptConcept))
-        const derivedConflicts = adaptConflicts(raw)
+        const derivedConflicts = adaptConflicts(raw, resolutionHistory)
         setConflicts(derivedConflicts)
         // Honor a deep-linked concept from the URL hash; else default to the
         // first. Only claim the deep link once it actually resolved.
@@ -254,6 +261,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const chatBusyRef = useRef(chatBusy); chatBusyRef.current = chatBusy
   const chatInputRef = useRef(chatInput); chatInputRef.current = chatInput
   const conceptsRef = useRef(concepts); conceptsRef.current = concepts
+  const conflictsRef = useRef(conflicts); conflictsRef.current = conflicts
+  const resolvingConflictRef = useRef<string | null>(null)
   const modeRef = useRef(mode); modeRef.current = mode
   const pendingConceptRef = useRef<string | undefined>(parseHash().concept)
   const prevViewRef = useRef<ViewId>(view)
@@ -318,20 +327,71 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSelSignal(next ? next.id : null)
   }, [])
 
-  const resolveConflict = useCallback((action: 'accept' | 'promote' | 'override' | 'annotate') => {
-    if (modeRef.current !== 'demo') return // live mode is read-only (D6)
-    setConflicts((prev) => prev.map((c) => {
-      if (c.id !== selConflictRef.current) return c
-      const win = layerName(c.winner)
-      const others = c.contributions.filter((k) => k.layer !== c.winner).map((k) => layerName(k.layer)).join(' & ')
-      let resolutionText: string
-      if (action === 'accept') resolutionText = `${win} value confirmed as effective; ${others} retained as provenance.`
-      else if (action === 'promote') resolutionText = `${others} value promoted over ${win}; the cascade now serves it.`
-      else if (action === 'override') resolutionText = 'Personal override written — visible only to you until promoted to Team.'
-      else resolutionText = 'Both values annotated; the tension is documented for the next reader.'
-      return { ...c, status: 'resolved', resolutionText }
-    }))
-  }, [])
+  const applyResolution = useCallback(async (
+    conflict: Conflict,
+    sourceLayer: string,
+    method: 'automatic' | 'manual',
+  ) => {
+    const latest = conflict.history[conflict.history.length - 1]
+    const record = await source.resolveConflict({
+      conceptId: conflict.concept,
+      sectionKey: conflict.sectionKey,
+      selectedLayer: sourceLayer,
+      method,
+      ...(conflict.status === 'resolved' && latest ? { resolutionId: latest.id } : {}),
+    })
+    setConflicts((prev) => prev.map((item) => item.id === conflict.id
+      ? {
+          ...item,
+          status: 'resolved',
+          winner: item.contributions.find((entry) => entry.sourceLayer === sourceLayer)?.layer ?? item.winner,
+          history: [...item.history, record],
+        }
+      : item))
+    return record
+  }, [source])
+
+  const resolveConflict = useCallback(async (conflictId: string, sourceLayer: string, method: 'automatic' | 'manual') => {
+    const conflict = conflictsRef.current.find((item) => item.id === conflictId)
+    if (!conflict || resolvingConflictRef.current) return
+    resolvingConflictRef.current = conflictId
+    setResolvingConflict(conflictId)
+    setResolutionError(null)
+    try {
+      await applyResolution(conflict, sourceLayer, method)
+      // Let the source watcher/index begin before refreshing the full cascade.
+      window.setTimeout(() => setReloadKey((key) => key + 1), 300)
+    } catch (error) {
+      setResolutionError({ message: error instanceof Error ? error.message : String(error), partial: false })
+      throw error
+    } finally {
+      resolvingConflictRef.current = null
+      setResolvingConflict(null)
+    }
+  }, [applyResolution])
+
+  const resolveSafeConflicts = useCallback(async () => {
+    if (resolvingConflictRef.current) return
+    const safe = conflictsRef.current.filter((item) => item.status === 'open' && item.safe)
+    if (!safe.length) return
+    resolvingConflictRef.current = 'safe-batch'
+    setResolvingConflict('safe-batch')
+    setResolutionError(null)
+    let resolvedCount = 0
+    try {
+      for (const conflict of safe) {
+        const current = conflict.contributions[0]
+        await applyResolution(conflict, current.sourceLayer, 'automatic')
+        resolvedCount += 1
+      }
+      window.setTimeout(() => setReloadKey((key) => key + 1), 300)
+    } catch (error) {
+      setResolutionError({ message: error instanceof Error ? error.message : String(error), partial: resolvedCount > 0 })
+    } finally {
+      resolvingConflictRef.current = null
+      setResolvingConflict(null)
+    }
+  }, [applyResolution])
 
   const send = useCallback((text?: string) => {
     const q = (text != null ? text : chatInputRef.current).trim()
@@ -372,11 +432,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     mode, loading, load, error,
     view, triageTab, selSignal, selConflict, selConcept, query,
     chatOpen, chatBusy, chatInput, chatMessages,
-    concepts, sources, signals, conflicts, activity, loadErrors,
+    concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
     openChat: () => setChatOpen(true), closeChat: () => setChatOpen(false), setChatInput,
-    filtered, route, resolveConflict, send, reload,
-  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, filtered, route, resolveConflict, send, reload])
+    filtered, route, resolveConflict, resolveSafeConflicts, send, reload,
+  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, route, resolveConflict, resolveSafeConflicts, send, reload])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

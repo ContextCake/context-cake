@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  adaptConcept, adaptConflicts, adaptSources, apiFetch, LiveDataError, selectMode,
+  adaptConcept, adaptConflicts, adaptSources, apiFetch, LiveDataError, selectMode, trivialConflictReason,
 } from './api'
 import type { GraphSummary, ResolvedConcept } from './types'
 
@@ -416,6 +416,37 @@ describe('adaptConflicts', () => {
       },
     ]
     expect(adaptConflicts(concepts)).toEqual([])
+  })
+
+  it('classifies formatting-only prose but never guesses when words or code change', () => {
+    expect(trivialConflictReason(['Use **Postgres** for writes.', 'Use postgres for writes'])).toMatch(/same words/)
+    expect(trivialConflictReason(['Use Postgres.', 'Use MySQL.'])).toBeNull()
+    expect(trivialConflictReason(['Run `npm test`.', 'Run npm test.'])).toBeNull()
+  })
+
+  it('keeps a custom layer at its saved precedence after the source conflict is gone', () => {
+    const [resolved] = adaptConflicts([], [{
+      schemaVersion: 1,
+      id: 'resolution-1',
+      conflictId: 'decisions/primary-db::choice',
+      conceptId: 'decisions/primary-db',
+      title: 'Primary database',
+      sectionKey: 'choice',
+      sectionHeading: '## Choice {#choice}',
+      contributions: [
+        { layer: 'acme-eng', level: 2, content: 'SingleStore.', updated: '2026-01-01' },
+        { layer: 'org-policy', level: 0, content: 'Postgres.', updated: '2025-01-01' },
+      ],
+      chosen: { layer: 'acme-eng', level: 2, content: 'SingleStore.', updated: '2026-01-01' },
+      method: 'manual',
+      reason: 'You chose the acme-eng answer.',
+      actor: 'local-user',
+      decidedAt: '2026-08-05T00:00:00.000Z',
+    }])
+
+    expect(resolved.status).toBe('resolved')
+    expect(resolved.winner).toBe('team')
+    expect(resolved.contributions.map((item) => item.layer)).toEqual(['team', 'company'])
   })
 })
 

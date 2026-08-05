@@ -114,6 +114,11 @@ engine itself stays dependency-free.
 **Ownership** and **Related** are inherited untouched from `company`. Edit any of
 these files and hit **Sync** to see the merge react.
 
+`interfaces/auth-tokens` also contains a formatting-only disagreement in
+**Header**. The Console marks it safe for the conflict wand because both layers
+use the same words in the same order; only case, punctuation, and emphasis
+differ.
+
 ## How it fits
 
 The server is a thin, dependency-free shell over the real engine — it does not

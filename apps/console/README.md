@@ -1,11 +1,12 @@
 # ContextCake Console
 
-The React front end for inspecting a resolved ContextCake cascade. It runs in
+The React front end for inspecting and resolving a ContextCake cascade. It runs in
 three environments from the same codebase:
 
 - **demo** — bundled sample data for the public site;
 - **live browser** — reads the local engine through `/api/graph`,
-  `/api/resolve*`, and the source-management endpoints;
+  `/api/resolve*`, `/api/conflict-resolutions`, and the source-management
+  endpoints;
 - **ContextCake for Mac** — the live build inside Electron, with native folder
   selection, CLI actions, optional account sync, and a per-launch API token.
 
@@ -44,8 +45,13 @@ playground/service command documented in the repository instructions.
   is demo-only until the engine exposes an activity API.
 - **Queue** demonstrates review, stored, and discarded signal routing in demo
   mode; live/Desktop mode has no signal API yet and is read-only.
-- **Resolve** compares live dissenting layers. Resolution mutations currently
-  apply only in demo mode; live/Desktop mode is read-only.
+- **Resolve** clears formatting-only conflicts automatically and presents
+  meaning-changing conflicts as direct answer choices. In live/Desktop mode,
+  choosing an answer preflights every contributing writable local layer,
+  updates them together, and appends the original answers and decision to
+  `.contextcake/conflict-resolutions.ndjson` beside the manifest. History can
+  be reopened to choose a different saved answer later. The service refuses
+  the whole change if a source is remote, missing, or changed since review.
 - **Concepts** shows the effective concept with per-section provenance.
 - **Ask ContextCake** uses the resolved cascade when a compatible
   `window.claude.complete` harness bridge is present. Otherwise it returns a

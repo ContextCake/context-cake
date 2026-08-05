@@ -59,7 +59,7 @@ describe('App settings surface', () => {
     expect(sidebar?.dataset.collapsed).toBe('true')
     expect(sidebar?.style.width).toBe('72px')
     expect(container.querySelector('[data-view="triage"]')?.getAttribute('aria-label')).toBe('Queue, 3 items awaiting review')
-    expect(container.querySelector('[data-view="conflicts"]')?.getAttribute('aria-label')).toBe('Resolve, 2 open conflicts')
+    expect(container.querySelector('[data-view="conflicts"]')?.getAttribute('aria-label')).toBe('Resolve, 3 open conflicts')
 
     await act(async () => {
       separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }))

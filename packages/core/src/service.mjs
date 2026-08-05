@@ -24,7 +24,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { buildSources, resolveTokenState } from "./sources/index.mjs";
 import { probeDocs } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
@@ -38,11 +38,13 @@ import {
 import {
   layerRootMap, listFilesApi, readFileApi, serveRawApi, writeFileApi, writeSectionApi,
 } from "./layer-files.mjs";
+import { createConflictResolutionLog, trivialConflictReason } from "./conflict-resolutions.mjs";
 import {
   classifyManifest,
   getManifestProfileLayers,
   mutateContextManifest,
   readContextManifest,
+  withManifestLockAsync,
 } from "./manifest.mjs";
 
 // Re-exported so hosts (apps/playground/server.mjs) keep importing the shared
@@ -190,6 +192,7 @@ export function createEngineService({
   const CONSOLE_DIR = consoleDist ? path.resolve(consoleDist) : null;
   // Git-backed sources clone next to the manifest that declares them.
   const CACHE_DIR = path.join(MANIFEST_DIR, ".cache", "repos");
+  const conflictResolutionLog = createConflictResolutionLog(MANIFEST);
 
   // ---- source lifecycle ------------------------------------------------------
   //
@@ -526,6 +529,15 @@ export function createEngineService({
       if (p === "/api/graph") { json(res, 200, await buildGraph(waitParam(url))); return true; }
       if (p === "/api/resolve") { json(res, 200, await resolveOne(url.searchParams.get("concept"))); return true; }
       if (p === "/api/resolve-all") { json(res, 200, await resolveAllApi(waitParam(url))); return true; }
+      if (p === "/api/conflict-resolutions") {
+        if (req.method === "GET") { json(res, 200, { resolutions: await conflictResolutionLog.list() }); return true; }
+        if (req.method === "POST") {
+          if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
+          const rawBody = await readBody(req);
+          json(res, 200, await withManifestLockAsync(MANIFEST, () => resolveConflictApi(rawBody)));
+          return true;
+        }
+      }
       if (p === "/api/settings") {
         if (req.method === "GET") { json(res, 200, getSettingsApi()); return true; }
         if (req.method === "PATCH" || req.method === "PUT") {
@@ -714,6 +726,94 @@ export function createEngineService({
     const resolved = await resolveConcept(conceptId, sources);
     if (!resolved) throw httpError(404, `Concept not found in any source: ${conceptId}`);
     return resolved;
+  }
+
+  /**
+   * Apply one conflict choice across every contributing local layer, then keep
+   * the original choices in the append-only decision log. The server derives
+   * choices from current resolver output (or a prior record for "change
+   * decision") so clients cannot smuggle arbitrary file content into this API.
+   */
+  async function resolveConflictApi(rawBody) {
+    const body = parseJson(rawBody);
+    const { conceptId, sectionKey, selectedLayer, method, resolutionId } = body;
+    if (![conceptId, sectionKey, selectedLayer].every((value) => typeof value === "string" && value)) {
+      throw httpError(400, "Provide conceptId, sectionKey, and selectedLayer");
+    }
+    if (method !== "automatic" && method !== "manual") {
+      throw httpError(400, "method must be automatic or manual");
+    }
+
+    const conflictId = `${conceptId}::${sectionKey}`;
+    let contributions;
+    let expectedContent;
+    let title;
+    let sectionHeading;
+    let supersedes;
+
+    if (resolutionId !== undefined) {
+      if (typeof resolutionId !== "string" || !resolutionId) throw httpError(400, "resolutionId must be a non-empty string");
+      const prior = await conflictResolutionLog.find(resolutionId);
+      if (!prior || prior.conflictId !== conflictId) throw httpError(404, "That saved conflict decision was not found");
+      contributions = prior.contributions;
+      expectedContent = Object.fromEntries(contributions.map((item) => [item.layer, prior.chosen.content]));
+      title = prior.title;
+      sectionHeading = prior.sectionHeading;
+      supersedes = prior.id;
+    } else {
+      const resolved = await resolveOne(conceptId);
+      const section = resolved.sections.find((item) => item.key === sectionKey);
+      if (!section) throw httpError(404, `Section not found: ${sectionKey}`);
+      if (!section.conflicts?.length) throw httpError(409, "This section no longer has a conflict. Reload before resolving it.");
+      const levels = new Map(resolved.contributors.map((item) => [item.layer, item.level]));
+      contributions = [
+        { layer: section.sourceLayer, level: levels.get(section.sourceLayer), content: section.content, updated: section.sourceUpdated },
+        ...section.conflicts.map((item) => ({ layer: item.layer, level: levels.get(item.layer), content: item.content, updated: item.updated })),
+      ];
+      expectedContent = Object.fromEntries(contributions.map((item) => [item.layer, item.content]));
+      title = resolved.frontmatter?.title ?? conceptId;
+      sectionHeading = section.heading;
+    }
+
+    const chosen = contributions.find((item) => item.layer === selectedLayer);
+    if (!chosen) throw httpError(400, `The ${selectedLayer} layer is not one of this conflict's choices`);
+    const safeReason = trivialConflictReason(contributions.map((item) => item.content));
+    if (method === "automatic") {
+      if (resolutionId !== undefined) throw httpError(400, "Past decisions must be changed manually");
+      if (!safeReason) throw httpError(409, "This conflict changes meaning and needs your judgment. Nothing was changed.");
+      if (selectedLayer !== contributions[0].layer) {
+        throw httpError(400, "Automatic resolution must keep the answer already in use");
+      }
+    }
+
+    // Prove the log location is writable before source files are touched.
+    await conflictResolutionLog.prepare();
+    const write = await writeSectionApi(JSON.stringify({
+      conceptId,
+      sectionKey,
+      layers: contributions.map((item) => item.layer),
+      content: chosen.content,
+      expectedContent,
+      requireAll: true,
+    }), fileRoots());
+
+    const record = await conflictResolutionLog.append({
+      id: randomUUID(),
+      conflictId,
+      conceptId,
+      title: String(title),
+      sectionKey,
+      sectionHeading,
+      contributions,
+      chosen,
+      method,
+      reason: method === "automatic" ? safeReason : `You chose the ${selectedLayer} answer.`,
+      actor: "local-user",
+      decidedAt: new Date().toISOString(),
+      ...(supersedes ? { supersedes } : {}),
+    });
+    invalidateIndex();
+    return { ok: true, resolution: record, written: write.written };
   }
 
   // Resolve every indexed concept in one pass. The console's initial load calls

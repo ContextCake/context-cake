@@ -9,7 +9,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StoreProvider, useStore } from './store'
 
-const mocks = vi.hoisted(() => ({ graph: vi.fn(), resolveAll: vi.fn() }))
+const mocks = vi.hoisted(() => ({ graph: vi.fn(), resolveAll: vi.fn(), conflictResolutions: vi.fn() }))
 
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api')
@@ -21,6 +21,8 @@ vi.mock('./api', async () => {
       resolveAll: mocks.resolveAll,
       resolve: vi.fn(),
       listConcepts: vi.fn(),
+      conflictResolutions: mocks.conflictResolutions,
+      resolveConflict: vi.fn(),
     }),
   }
 })
@@ -73,6 +75,8 @@ beforeEach(() => {
   root = createRoot(container)
   mocks.graph.mockReset()
   mocks.resolveAll.mockReset()
+  mocks.conflictResolutions.mockReset()
+  mocks.conflictResolutions.mockResolvedValue([])
   vi.useFakeTimers()
 })
 

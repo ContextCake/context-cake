@@ -86,7 +86,10 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
   const [openId, setOpenId] = useState<string | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [wideInspector, setWideInspector] = useState(false)
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null)
+  const inspectorOpener = useRef<HTMLButtonElement | null>(null)
+  const inspectorRef = useRef<HTMLElement | null>(null)
 
   const fit = useCallback(() => {
     const el = wrapRef.current
@@ -107,8 +110,9 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
   useEffect(() => {
     const el = wrapRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => fit())
+    const ro = new ResizeObserver(() => { setWideInspector(el.clientWidth >= 840); fit() })
     ro.observe(el)
+    setWideInspector(el.clientWidth >= 840)
     return () => ro.disconnect()
   }, [fit])
 
@@ -145,7 +149,11 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* noop */ }
   }
 
-  const openConcept = (c: Concept) => { setOpenId(c.id); setSelConcept(c.id) }
+  const openConcept = (c: Concept, opener: HTMLButtonElement) => { inspectorOpener.current = opener; setOpenId(c.id); setSelConcept(c.id) }
+  const closeInspector = () => {
+    setOpenId(null)
+    requestAnimationFrame(() => inspectorOpener.current?.focus())
+  }
   const openConflictFor = (conceptId: string) => {
     const cf = conflicts.find((c) => c.concept === conceptId)
     if (cf) { setSelConflict(cf.id); setView('conflicts') }
@@ -154,10 +162,27 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
   // Escape closes the node slide-over.
   useEffect(() => {
     if (!openId || keyboardSuspended) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenId(null) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeInspector() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [keyboardSuspended, openId])
+  useEffect(() => {
+    if (!openId || wideInspector || keyboardSuspended) return
+    const panel = inspectorRef.current
+    const items = () => Array.from(panel?.querySelectorAll<HTMLElement>('button:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])') ?? [])
+    items()[0]?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const focusable = items()
+      if (!focusable.length) return
+      const position = focusable.indexOf(document.activeElement as HTMLElement)
+      const next = event.shiftKey ? (position - 1 + focusable.length) % focusable.length : (position + 1) % focusable.length
+      event.preventDefault()
+      focusable[next]?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [keyboardSuspended, openId, wideInspector])
   const zoom = (dir: number) => setViewT((v) => {
     const el = wrapRef.current!, px = el.clientWidth / 2, py = el.clientHeight / 2
     const next = Math.min(2, Math.max(0.4, v.scale * (dir > 0 ? 1.2 : 1 / 1.2)))
@@ -177,7 +202,7 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        style={{ position: 'absolute', inset: 0, cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none' }}
+        style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: wideInspector && openConceptObj ? 360 : 0, cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none' }}
       >
         <div style={{ position: 'absolute', top: 0, left: 0, transformOrigin: '0 0', transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`, width: worldW, height: worldH }}>
           {/* lane backgrounds + labels */}
@@ -247,7 +272,7 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
               <button
                 key={n.c.id}
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => openConcept(n.c)}
+                onClick={(event) => openConcept(n.c, event.currentTarget)}
                 onMouseEnter={() => setHoverId(n.c.id)}
                 onMouseLeave={() => setHoverId(null)}
                 style={{ position: 'absolute', left: n.x, top: n.y, width: NODE_W, height: NODE_H, boxShadow: glow, ...css(`display:flex; flex-direction:column; gap:0; text-align:left; padding:12px 14px; background:${C.raised}; border:1px solid ${selected ? col.strokeE : C.line}; border-left:3px solid ${col.strokeE}; border-radius:12px; cursor:pointer; font:inherit;`) }}
@@ -294,10 +319,10 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
       {/* node detail slide-over */}
       {openConceptObj && (
         <div>
-          <div onClick={() => setOpenId(null)} style={css('position:absolute; inset:0; background:var(--cc-scrim); animation:ccFade 0.2s ease;')} />
-          <aside role="dialog" aria-modal="true" aria-label={`${openConceptObj.title} — concept detail`} style={css(`position:absolute; top:0; right:0; height:100%; width:436px; display:flex; flex-direction:column; background:${C.surface}; border-left:1px solid ${C.lineStrong}; box-shadow:-24px 0 60px var(--cc-shadow); animation:ccSlide 0.26s cubic-bezier(0.16,1,0.3,1);`)}>
+          {!wideInspector && <div onClick={closeInspector} style={css('position:absolute; inset:0; background:var(--cc-scrim); animation:ccFade 0.2s ease;')} />}
+          <aside ref={inspectorRef} role={wideInspector ? 'complementary' : 'dialog'} aria-modal={wideInspector ? undefined : 'true'} aria-label={`${openConceptObj.title} — concept detail`} style={css(`position:absolute; top:0; right:0; height:100%; width:${wideInspector ? 360 : 420}px; max-width:100%; display:flex; flex-direction:column; background:${C.surface}; border-left:1px solid ${C.lineStrong}; box-shadow:${wideInspector ? 'none' : '-24px 0 60px var(--cc-shadow)'}; animation:ccSlide 0.18s var(--cc-ease-out);`)}>
             <div style={css(`display:flex; align-items:center; justify-content:flex-end; padding:12px 14px 0;`)}>
-              <button className="cc-h-eae" onClick={() => setOpenId(null)} aria-label="Close concept detail" style={css(`display:grid; place-items:center; width:30px; height:30px; border:none; background:transparent; border-radius:7px; cursor:pointer; color:${C.caption};`)}>
+              <button className="cc-h-eae" onClick={closeInspector} aria-label="Close concept detail" style={css(`display:grid; place-items:center; width:30px; height:30px; border:none; background:transparent; border-radius:7px; cursor:pointer; color:${C.caption};`)}>
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
               </button>
             </div>

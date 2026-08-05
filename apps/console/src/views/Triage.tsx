@@ -1,11 +1,13 @@
+import { useEffect, useRef, useState } from 'react'
 import { C, css, badgeStyle, lc, MONO, rc } from '../theme'
 import { layerName, layers } from '../data'
 import { useStore, type TriageTab } from '../store'
+import { useDetailSurface } from '../components/useDetailSurface'
 
 const TAB_DEFS: [TriageTab, string, 'review_required' | 'team_candidate' | 'ignore'][] = [
   ['review', 'Review', 'review_required'],
-  ['captured', 'Stored', 'team_candidate'],
-  ['ignored', 'Discarded', 'ignore'],
+  ['captured', 'Captured', 'team_candidate'],
+  ['ignored', 'Ignored', 'ignore'],
 ]
 
 export function Triage() {
@@ -13,6 +15,14 @@ export function Triage() {
 
   const curList = filtered(triageTab)
   const selSig = signals.find((s) => s.id === selSignal) || null
+  const [detailOpen, setDetailOpen] = useState(Boolean(selSignal))
+  const selectedButton = useRef<HTMLButtonElement | null>(null)
+  const detail = useDetailSurface<HTMLDivElement, HTMLElement>(detailOpen)
+  useEffect(() => {
+    const close = () => { setDetailOpen(false); requestAnimationFrame(() => selectedButton.current?.focus({ preventScroll: true })) }
+    window.addEventListener('contextcake:close-detail', close)
+    return () => window.removeEventListener('contextcake:close-detail', close)
+  }, [])
 
   if (signals.length === 0) {
     return (
@@ -20,7 +30,7 @@ export function Triage() {
         <div style={css('max-width:380px;')}>
           <div style={css('font-weight:600; font-size:14.5px; color:#1A1915; margin-bottom:8px;')}>No captured signals</div>
           <p style={css('margin:0; font-size:12.5px; color:#57564F; line-height:1.5;')}>
-            Live triage is read-only (D6). Run <code style={css(`font-family:${MONO}; font-size:11.5px; padding:1px 5px; background:#F1EFE7; border:1px solid #D8D6CC; border-radius:5px;`)}>ingest.mjs</code> to populate the review queue.
+            The live Queue is read-only and currently has no captured signals. Run <code style={css(`font-family:${MONO}; font-size:11.5px; padding:1px 5px; background:#F1EFE7; border:1px solid #D8D6CC; border-radius:5px;`)}>ingest.mjs</code> to populate it.
           </p>
         </div>
       </div>
@@ -47,7 +57,7 @@ export function Triage() {
         })}
       </div>
 
-      <div className="cc-triage-grid">
+      <div ref={detail.containerRef} className="cc-triage-grid">
         <div style={css('display:flex; flex-direction:column; gap:11px; min-width:0;')}>
           {curList.length === 0 && (
             <div style={css('display:grid; place-items:center; min-height:220px; border:1px dashed #C3C1B8; border-radius:12px; color:#8A8A82; font-size:13px;')}>Nothing here — inbox zero.</div>
@@ -60,8 +70,8 @@ export function Triage() {
               <button
                 key={s.id}
                 className="cc-h-bd-strong"
-                onClick={() => setSelSignal(s.id)}
-                style={css(`display:block; width:100%; text-align:left; padding:15px 16px; background:${selected ? '#FFFFFF' : C.surface}; border:1px solid ${selected ? C.lineStrong : C.line}; border-left:4px solid ${r.accent}; border-radius:11px; cursor:pointer; font:inherit; ${selected ? 'box-shadow:0 2px 10px rgba(26,25,21,0.06);' : ''}`)}
+                onClick={(event) => { selectedButton.current = event.currentTarget; setSelSignal(s.id); setDetailOpen(true) }}
+                style={css(`display:block; width:100%; text-align:left; padding:15px 16px; background:${selected ? C.tealFill : C.surface}; border:1px solid ${selected ? C.tealStroke : C.line}; border-left:4px solid ${r.accent}; border-radius:10px; cursor:pointer; font:inherit;`)}
               >
                 <div style={css('display:flex; align-items:flex-start; justify-content:space-between; gap:12px;')}>
                   <h3 style={css('margin:0; font-size:14.5px; font-weight:600; line-height:1.3;')}>{s.title}</h3>
@@ -86,7 +96,8 @@ export function Triage() {
         </div>
 
         {/* decision panel */}
-        <aside className="cc-triage-panel" style={css('position:sticky; top:88px; display:flex; flex-direction:column; gap:0;')}>
+        <aside ref={detail.panelRef} {...detail.panelProps} aria-label={selSig ? `${selSig.title} queue detail` : 'Queue detail'} className="cc-triage-panel" data-open={detailOpen || undefined} style={css('position:sticky; top:88px; display:flex; flex-direction:column; gap:0;')}>
+          <button type="button" className="cc-detail-close" onClick={() => { setDetailOpen(false); requestAnimationFrame(() => selectedButton.current?.focus({ preventScroll: true })) }}>Close</button>
           {selSig ? (() => {
             const r = rc(selSig.route)
             return (

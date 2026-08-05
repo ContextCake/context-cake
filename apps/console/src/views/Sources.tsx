@@ -5,11 +5,12 @@
 // so instead of pretending otherwise. Errors render verbatim — including the
 // engine's pack-invariant messages — never paraphrased into vagueness.
 // Demo mode shows the same rows read-only.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { apiFetch } from '../api'
 import { LayerChip } from '../components/LayerChip'
 import { LevelStepper } from '../components/SetupWizard'
+import { useDetailSurface } from '../components/useDetailSurface'
 import { useStore } from '../store'
 import type { Source } from '../data'
 
@@ -103,6 +104,10 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   const [syncing, setSyncing] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ name: string; text: string } | null>(null)
   const [syncErr, setSyncErr] = useState<{ name: string; text: string } | null>(null)
+  const [selectedName, setSelectedName] = useState<string | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const selectedButton = useRef<HTMLButtonElement | null>(null)
+  const detail = useDetailSurface<HTMLDivElement, HTMLElement>(detailOpen)
 
   const normalizedQuery = (query ?? '').trim().toLowerCase()
   const ordered = [...sources]
@@ -115,6 +120,27 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
       source.origin,
     ].some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery)))
     .sort((a, b) => b.level - a.level || a.name.localeCompare(b.name))
+
+  useEffect(() => {
+    if (selectedName && sources.some((source) => source.name === selectedName)) return
+    setSelectedName(ordered[0]?.name ?? null)
+  }, [ordered, selectedName, sources])
+
+  const selected = ordered.find((source) => source.name === selectedName) ?? ordered[0] ?? null
+  const selectSource = (name: string, button?: HTMLButtonElement) => {
+    setSelectedName(name)
+    selectedButton.current = button ?? null
+    setDetailOpen(true)
+  }
+  const closeDetail = () => {
+    setDetailOpen(false)
+    requestAnimationFrame(() => selectedButton.current?.focus({ preventScroll: true }))
+  }
+  useEffect(() => {
+    const close = () => closeDetail()
+    window.addEventListener('contextcake:close-detail', close)
+    return () => window.removeEventListener('contextcake:close-detail', close)
+  }, [])
 
   const openEdit = (s: Source) => {
     setPanel({ name: s.name, kind: 'edit' })
@@ -179,66 +205,61 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     }
   }
 
+  if (sources.length === 0) return (
+    <div className="cc-sources-empty">
+      <div><h2>No sources yet</h2><p>Nothing is feeding the cascade. Add a folder, repository, or MCP server to get started.</p>{live && onAddSource && <button type="button" style={btnSmallPrimary()} onClick={onAddSource}>Add Source</button>}</div>
+    </div>
+  )
+
+  if (ordered.length === 0) return <div className="cc-sources-empty"><div><h2>No matching sources</h2><p>Try a source name, layer, kind, status, repository, or error message.</p></div></div>
+
   return (
-    <div style={css('display:flex; flex-direction:column; gap:14px; max-width:860px;')}>
+    <div className="cc-sources-workspace">
       <div style={css('display:flex; align-items:center; justify-content:space-between; gap:12px;')}>
         <p style={css(`margin:0; font-size:12.5px; line-height:1.5; color:${C.caption};`)}>
           {live
-            ? 'Each source is one layer of the cascade. Name and level can change here; to fix a path, repo, or command, remove the source and add it again.'
-            : 'Demo data — source management needs the live engine. Open the console from the ContextCake app, or run npm run console:live.'}
+            ? 'Select a source to inspect health, metadata, and available actions.'
+            : 'Demo data is read-only. Source management needs the live engine.'}
         </p>
         {live && onAddSource && (
           <button type="button" className="cc-h-tealfill2" style={{ ...btnSmallPrimary(), flex: '0 0 auto' }} onClick={onAddSource}>
-            Add source
+            Add Source
           </button>
         )}
       </div>
 
-      {sources.length === 0 && (
-        <div style={css(`display:grid; place-items:center; min-height:220px; background:${C.surface}; border:1px dashed ${C.lineStrong}; border-radius:13px; padding:32px; text-align:center;`)}>
-          <div style={css('max-width:380px;')}>
-            <div style={css(`font-weight:600; font-size:14.5px; color:${C.ink}; margin-bottom:8px;`)}>No sources yet</div>
-            <p style={css(`margin:0; font-size:12.5px; color:${C.caption}; line-height:1.5;`)}>Nothing is feeding the cascade. Add a folder, repository, or MCP server to get started.</p>
-          </div>
+      <div ref={detail.containerRef} className="cc-sources-split">
+        <div className="cc-source-navigator" role="listbox" aria-label="Sources">
+          {ordered.map((source, index) => <button key={source.name} type="button" role="option" aria-selected={source.name === selected?.name} onClick={(event) => selectSource(source.name, event.currentTarget)} onKeyDown={(event) => {
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+            event.preventDefault()
+            const next = (index + (event.key === 'ArrowDown' ? 1 : -1) + ordered.length) % ordered.length
+            const buttons = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="option"]')
+            selectSource(ordered[next].name, buttons?.[next])
+            buttons?.[next]?.focus()
+          }}>
+            <span aria-hidden="true" style={{ background: statusColor(source.status) }} />
+            <span><strong>{source.name}</strong><small>{source.sourceKind} · level {source.level} · {source.conceptCount} concept{source.conceptCount === 1 ? '' : 's'}</small></span>
+            <em>{source.status}</em>
+          </button>)}
         </div>
-      )}
 
-      {sources.length > 0 && ordered.length === 0 && (
-        <div style={css(`display:grid; place-items:center; min-height:220px; background:${C.surface}; border:1px dashed ${C.lineStrong}; border-radius:13px; padding:32px; text-align:center;`)}>
-          <div style={css('max-width:380px;')}>
-            <div style={css(`font-weight:600; font-size:14.5px; color:${C.ink}; margin-bottom:8px;`)}>No matching sources</div>
-            <p style={css(`margin:0; font-size:12.5px; color:${C.caption}; line-height:1.5;`)}>Try a source name, layer, kind, status, repository, or error message.</p>
-          </div>
-        </div>
-      )}
+        {selected && (() => {
+          const s = selected
+          const isOpen = panel?.name === s.name
+          const editing = isOpen && panel?.kind === 'edit'
+          const removing = isOpen && panel?.kind === 'remove'
+          return <section ref={detail.panelRef} {...detail.panelProps} className="cc-source-detail" data-open={detailOpen || undefined} aria-label={`Source ${s.name} detail`}>
+            <button type="button" className="cc-detail-close" onClick={closeDetail}>Close</button>
+            <div className="cc-source-detail-head"><div><div className="cc-source-title"><span aria-hidden="true" style={{ background: statusColor(s.status) }} /><h2>{s.name}</h2>{s.live && <LiveMarker />}</div><div className="cc-source-chips"><LayerChip id={s.layer} /><span>level {s.level}</span><span>{s.sourceKind}</span><span>{s.conceptCount} concept{s.conceptCount === 1 ? '' : 's'}</span></div></div><strong>{s.status}</strong></div>
 
-      {ordered.map((s) => {
-        const isOpen = panel?.name === s.name
-        const editing = isOpen && panel?.kind === 'edit'
-        const removing = isOpen && panel?.kind === 'remove'
-        return (
-          <section
-            key={s.name}
-            aria-label={`Source ${s.name}`}
-            style={css(`background:${C.surface}; border:1px solid ${C.line}; border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; gap:10px;`)}
-          >
-            <div style={css('display:flex; align-items:center; gap:10px; flex-wrap:wrap;')}>
-              <span style={css(`font-family:${MONO}; font-size:13.5px; font-weight:600; color:${C.ink}; overflow-wrap:anywhere;`)}>{s.name}</span>
-              <LayerChip id={s.layer} />
-              {s.live && <LiveMarker />}
-              <span style={css(`font-size:11px; color:${C.faint}; font-family:${MONO};`)}>level {s.level} · {s.sourceKind}</span>
-              <div style={css('display:flex; align-items:center; gap:6px; margin-left:auto;')}>
-                <span aria-hidden="true" style={css(`width:7px; height:7px; border-radius:999px; background:${statusColor(s.status)};`)} />
-                <span style={css(`font-size:11.5px; color:${C.caption};`)}>{s.status}</span>
-              </div>
-            </div>
-
-            <div style={css(`display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; font-size:11.5px; color:${C.caption};`)}>
-              <span>{s.conceptCount} concept{s.conceptCount === 1 ? '' : 's'}</span>
-              {s.lastSuccessAt && <span title={s.lastSuccessAt}>last success {fmtTime(s.lastSuccessAt)}</span>}
-              {s.lastErrorAt && <span title={s.lastErrorAt} style={css(`color:${C.amberText};`)}>last error {fmtTime(s.lastErrorAt)}</span>}
-            </div>
-
+            <dl className="cc-source-metadata">
+              <div><dt>Last success</dt><dd>{s.lastSuccessAt ? fmtTime(s.lastSuccessAt) : 'Not yet'}</dd></div>
+              <div><dt>Last error</dt><dd>{s.lastErrorAt ? fmtTime(s.lastErrorAt) : 'None'}</dd></div>
+              <div><dt>Sync</dt><dd>{canSync(s) ? 'Available' : 'Not supported for this source kind'}</dd></div>
+              {s.origin && <div><dt>Repository</dt><dd>{s.origin}</dd></div>}
+            </dl>
+            <p className="cc-source-immutable">The path, repository, or command is fixed for this source. To change it, remove the source and add it again.</p>
             {s.error && (
               <div role="alert" style={css(`padding:8px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-family:${MONO}; font-size:11px; line-height:1.5; color:${C.amberText}; overflow-wrap:anywhere;`)}>
                 {s.error}
@@ -320,8 +341,8 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
               </div>
             )}
           </section>
-        )
-      })}
+        })()}
+      </div>
     </div>
   )
 }

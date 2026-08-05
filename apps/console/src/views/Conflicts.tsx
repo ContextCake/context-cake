@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { C, css, lc, MONO } from '../theme'
 import { layerLevel, layerName } from '../data'
 import type { Conflict, Contribution } from '../data'
 import { LayerChip } from '../components/LayerChip'
 import { Markdown } from '../components/Markdown'
 import { useStore } from '../store'
+import { useDetailSurface } from '../components/useDetailSurface'
 
 function WandIcon() {
   return (
@@ -91,6 +92,9 @@ export function Conflicts() {
     ...conflict.history.flatMap((record) => [record.reason, record.chosen.content, record.chosen.layer]),
   ].some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery))), [conflicts, normalizedQuery])
   const selConf = visibleConflicts.find((conflict) => conflict.id === selConflict) ?? visibleConflicts[0] ?? null
+  const [detailOpen, setDetailOpen] = useState(Boolean(selConflict))
+  const selectedButton = useRef<HTMLButtonElement | null>(null)
+  const detail = useDetailSurface<HTMLDivElement, HTMLElement>(detailOpen)
 
   useEffect(() => {
     setChanging(false)
@@ -98,6 +102,15 @@ export function Conflicts() {
     const latest = selConf.history[selConf.history.length - 1]
     setSelectedLayer(latest?.chosen.layer ?? '')
   }, [selConf?.id, selConf?.history.length])
+
+  useEffect(() => {
+    const close = () => {
+      setDetailOpen(false)
+      requestAnimationFrame(() => selectedButton.current?.focus({ preventScroll: true }))
+    }
+    window.addEventListener('contextcake:close-detail', close)
+    return () => window.removeEventListener('contextcake:close-detail', close)
+  }, [])
 
   if (conflicts.length === 0) {
     return (
@@ -158,19 +171,25 @@ export function Conflicts() {
         </div>
       )}
 
-      <div className="cc-conflict-layout">
-        <div className="cc-conflict-list" aria-label="Conflicts">
+      <div ref={detail.containerRef} className="cc-conflict-layout cc-navigator-detail">
+        <div className="cc-conflict-list" role="listbox" aria-label="Conflicts">
           {visibleConflicts.map((conflict) => {
             const selected = conflict.id === selConf?.id
             const latest = conflict.history[conflict.history.length - 1]
             return (
               <button
                 type="button"
+                role="option"
+                aria-selected={selected}
                 key={conflict.id}
                 className="cc-conflict-row"
                 data-selected={selected ? 'true' : 'false'}
                 data-status={conflict.status}
-                onClick={() => setSelConflict(conflict.id)}
+                onClick={(event) => {
+                  selectedButton.current = event.currentTarget
+                  setSelConflict(conflict.id)
+                  setDetailOpen(true)
+                }}
               >
                 <span className="cc-conflict-row-top">
                   <code>{conflict.concept}</code>
@@ -192,10 +211,21 @@ export function Conflicts() {
 
         {selConf && (
           <section
-            className="cc-conflict-detail"
+            ref={detail.panelRef}
+            {...detail.panelProps}
+            className="cc-conflict-detail cc-navigator-detail-panel"
+            data-open={detailOpen || undefined}
             data-mode={selConf.status === 'resolved' && !changing ? 'history' : 'decision'}
-            aria-labelledby="cc-conflict-question"
+            aria-label={`${selConf.title} conflict detail`}
           >
+            <button
+              type="button"
+              className="cc-detail-close"
+              onClick={() => {
+                setDetailOpen(false)
+                requestAnimationFrame(() => selectedButton.current?.focus({ preventScroll: true }))
+              }}
+            >Close</button>
             <div className="cc-conflict-path">
               <code>{selConf.concept}</code>
               <span>§ {selConf.section}</span>

@@ -15,6 +15,7 @@ function jsonArg(name, fallback) {
 }
 
 contextBridge.exposeInMainWorld('__CC_DESKTOP', {
+  windowRole: arg('cc-window-role') === 'settings' ? 'settings' : 'main',
   // Per-launch bearer token the local engine service requires on /api/*. It is
   // fetched through trusted IPC, never renderer argv (visible through `ps`).
   getApiToken: () => ipcRenderer.invoke('contextcake:get-api-token'),
@@ -47,11 +48,15 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   commands: {
     onInvoke: (cb) => subscribe('commands:invoke', cb),
   },
-  chooseFolder: () => ipcRenderer.invoke('contextcake:choose-folder'),
-  metrics: {
-    getEnabled: () => ipcRenderer.invoke('contextcake:metrics-get'),
-    setEnabled: (enabled) => ipcRenderer.invoke('contextcake:metrics-set', enabled),
+  windows: {
+    openSettings: (pane) => ipcRenderer.invoke('windows:open-settings', pane),
+    onSettingsPane: (cb) => subscribe('windows:settings-pane', cb),
   },
+  data: {
+    requestReload: () => ipcRenderer.invoke('data:reload-requested'),
+    onReloadRequested: (cb) => subscribe('data:reload-requested', cb),
+  },
+  chooseFolder: () => ipcRenderer.invoke('contextcake:choose-folder'),
   cli: {
     getStatus: () => ipcRenderer.invoke('contextcake:cli-status'),
     install: () => ipcRenderer.invoke('contextcake:cli-install'),
@@ -83,10 +88,7 @@ contextBridge.exposeInMainWorld('__CC_AUTH', {
   deleteAccount: () => ipcRenderer.invoke('auth:delete-account'),
   onSessionChanged: (cb) => subscribe('auth:session-changed', cb),
   onError: (cb) => subscribe('auth:error', cb),
-  syncSettings: (settings) => ipcRenderer.invoke('settings:push', settings),
   pullSettings: () => ipcRenderer.invoke('settings:pull'),
   getSyncState: () => ipcRenderer.invoke('settings:sync-state'),
   onSyncStatus: (cb) => subscribe('settings:sync-status', cb),
-  onSettingsPulled: (cb) => subscribe('settings:pulled', cb),
-  bootstrapTheme: (theme) => ipcRenderer.invoke('settings:bootstrap-theme', theme),
 })

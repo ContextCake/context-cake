@@ -28,6 +28,9 @@ npm run test:navigation # exact-origin navigation and IPC guards
 npm run test:cli-status # CLI installation-state detection
 npm run smoke      # boot headlessly, verify the token-guarded service, exit
 npm run smoke:bootfail # startup failures exit instead of hanging
+npm run smoke:settings # verify the single-instance Settings window
+npm run smoke:ui   # verify responsive shell behavior and renderer error-free boot
+npm run smoke:ui:artifacts # capture deterministic review screenshots
 npm run test:isolation # prove indexing cannot stall the Electron UI thread
 npm run pack       # unpacked .app in dist/ (ad-hoc signed without Apple secrets)
 npm run dist       # DMG + zip in dist/ (ad-hoc signed without Apple secrets; CI releases are signed + notarized)
@@ -37,7 +40,8 @@ npm run dist       # DMG + zip in dist/ (ad-hoc signed without Apple secrets; CI
 
 | Path | Role |
 |---|---|
-| `src/main/main.mjs` | App lifecycle, window, deep-link hook (`contextcake://`) |
+| `src/main/main.mjs` | App lifecycle, main and Settings windows, trusted IPC, deep-link hook (`contextcake://`) |
+| `src/main/trusted-windows.mjs` | Exact-origin, exact-frame, role-scoped renderer registry |
 | `src/main/service-host.mjs` | Supervises the utility-process engine and its loopback service |
 | `src/main/engine-process.mjs` | Runs `packages/core/src/service.mjs` off the Electron UI thread |
 | `src/main/auth.mjs` | Main-process OAuth broker, PKCE callback, encrypted session lifecycle |
@@ -46,7 +50,7 @@ npm run dist       # DMG + zip in dist/ (ad-hoc signed without Apple secrets; CI
 | `src/main/settings-sync.mjs` | Owner-scoped settings sync with path/secret scrub-and-reject checks |
 | `src/main/updater.mjs` | electron-updater against GitHub Releases (`app-v*`), settings-gated |
 | `src/main/cli-install.mjs` | Symlinks the CLI shim into `/usr/local/bin` |
-| `src/preload.cjs` | Sandboxed bridges: trusted bearer-token IPC, launch metadata, native folder picker, and CLI actions in `window.__CC_DESKTOP`; auth/settings IPC in `window.__CC_AUTH` |
+| `src/preload.cjs` | Sandboxed, fixed-purpose bridges for preferences, UI state, windows, data reload, auth, folder selection, and CLI actions |
 | `src/cli/cli.mjs` | `contextcake` dispatcher over the bundled engine entrypoints |
 | `resources/bin/contextcake` | Shell shim installed for the CLI |
 | `electron-builder.yml` | Packaging: DMG/zip, arm64, hardened runtime, protocols |
@@ -123,6 +127,18 @@ to the optional Company MCP source in first-run setup, which executes a locally
 configured command and must come from a trusted source.
 
 ## Release
+
+The desktop navigation shortcuts are `Command-1` through `Command-5`,
+`Command-K` for the command palette, `Command-F` for contextual search,
+`Command-Shift-A` for Ask, `Command-,` for Settings, and `Command-S` while
+editing a file. The native View menu exposes the same commands.
+
+Before release, verify the main window and the separate Settings window in a
+packaged Apple Silicon build. Confirm System appearance follows macOS while both
+windows are open, window/sidebar/route/density state survives relaunch, and no
+external navigation can replace either renderer. Exercise the responsive shell
+at 760×560, 900×640, 1360×860, and 1600×1000, including drawer, split/detail,
+Ask, and keyboard-only paths.
 
 `app-v*` tags drive the release workflow (signing + notarization + GitHub
 Release with `latest-mac.yml` and `SHA256SUMS`), using the Apple Developer

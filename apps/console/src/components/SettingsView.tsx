@@ -1,237 +1,168 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useThemeMode } from '../theme-mode'
 import { isUpdateCheckEnabled, setUpdateCheckEnabled } from '../update'
 import type { Mode } from '../api'
 import { AccountPanel } from './AccountPanel'
 import { IndexingSettings } from './IndexingSettings'
 import { IntegrationsPanel } from './IntegrationsPanel'
+import { AccountIcon, ConnectionsIcon, IndexingIcon, PrivacyIcon, SettingsIcon } from './icons'
 import { SegmentedControl } from './ui'
 
-type SettingsPane = 'general' | 'indexing' | 'integrations' | 'account'
+export type SettingsPane = 'general' | 'indexing' | 'integrations' | 'account' | 'privacy'
 
-const GearIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
-)
+const DOCUMENTATION_URL = 'https://contextcake.com/docs/reference/updates-and-privacy/'
+const VALID_PANES = new Set<SettingsPane>(['general', 'indexing', 'integrations', 'account', 'privacy'])
 
-const AccountIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.4" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" /></svg>
-)
+function focusables(root: HTMLElement | null) {
+  return Array.from(root?.querySelectorAll<HTMLElement>('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') ?? [])
+}
 
-const IntegrationsIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.8-2.8a4 4 0 0 0-5.7-5.7l-1.6 1.6" /><path d="M13.5 10.5a4 4 0 0 0-5.7 0L5 13.3a4 4 0 1 0 5.7 5.7l1.6-1.6" /></svg>
-)
-
-const IndexingIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6" /><path d="M4.5 12v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6" /></svg>
-)
-
-export function SettingsView({
-  appMode, onClose, onIndexingChange,
-}: {
+export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'overlay' }: {
   appMode: Mode
-  onClose: () => void
+  onClose?: () => void
   onIndexingChange?: () => void
+  surface?: 'window' | 'overlay'
 }) {
-  const [pane, setPane] = useState<SettingsPane>('general')
+  const desktop = Boolean(window.__CC_DESKTOP)
+  const requestedInitial = window.__CC_DESKTOP?.uiState?.initial.settingsPane
+  const [pane, setPaneState] = useState<SettingsPane>(VALID_PANES.has(requestedInitial as SettingsPane) ? requestedInitial as SettingsPane : 'general')
   const [updatesEnabled, setUpdatesEnabled] = useState(() => isUpdateCheckEnabled(appMode))
   const [metricsEnabled, setMetricsEnabled] = useState<boolean | null>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const { preference: theme, density, setPreference: setTheme, setDensity } = useThemeMode()
-  const desktop = Boolean(window.__CC_DESKTOP)
-  // Builds ship without accounts by default, so the pane is hidden rather than
-  // shown empty. Browser and demo builds never had sign-in to offer.
   const accountsAvailable = window.__CC_DESKTOP?.authState?.available === true && Boolean(window.__CC_AUTH)
-  // Independent of accounts: a build with sign-in switched off still connects
-  // GitHub, because reading your own private repo is a local capability.
   const integrationsAvailable = Boolean(window.__CC_INTEGRATIONS)
+
+  const panes = useMemo(() => [
+    { id: 'general' as const, label: 'General', icon: SettingsIcon, show: true },
+    { id: 'indexing' as const, label: 'Indexing', icon: IndexingIcon, show: appMode === 'live' },
+    { id: 'integrations' as const, label: 'Connections', icon: ConnectionsIcon, show: integrationsAvailable },
+    { id: 'account' as const, label: 'Account', icon: AccountIcon, show: accountsAvailable },
+    { id: 'privacy' as const, label: 'Privacy', icon: PrivacyIcon, show: true },
+  ].filter((item) => item.show), [accountsAvailable, appMode, integrationsAvailable])
+
+  const setPane = (next: SettingsPane) => {
+    if (!panes.some((item) => item.id === next)) return
+    setPaneState(next)
+    window.__CC_DESKTOP?.uiState?.set({ settingsPane: next }).catch(() => {})
+  }
+
+  useEffect(() => {
+    if (panes.some((item) => item.id === pane)) return
+    setPaneState('general')
+    window.__CC_DESKTOP?.uiState?.set({ settingsPane: 'general' }).catch(() => {})
+  }, [pane, panes])
+
+  useEffect(() => window.__CC_DESKTOP?.windows?.onSettingsPane((next) => {
+    if (VALID_PANES.has(next)) setPane(next)
+  }), [panes])
 
   useEffect(() => {
     let active = true
     const preferences = window.__CC_DESKTOP?.preferences
-    preferences?.get()
-      .then((value) => {
-        if (!active) return
-        setMetricsEnabled(value.anonymousMetrics ?? false)
-        setUpdatesEnabled(value.updateCheck)
-      })
-      .catch(() => { if (active) setMetricsEnabled(false) })
+    preferences?.get().then((value) => {
+      if (!active) return
+      setMetricsEnabled(value.anonymousMetrics)
+      setUpdatesEnabled(value.updateCheck)
+    }).catch(() => { if (active) setMetricsEnabled(false) })
     const unsubscribe = preferences?.onChanged((value) => {
       if (!active) return
-      setMetricsEnabled(value.anonymousMetrics ?? false)
+      setMetricsEnabled(value.anonymousMetrics)
       setUpdatesEnabled(value.updateCheck)
     })
     return () => { active = false; unsubscribe?.() }
   }, [])
 
+  useEffect(() => {
+    if (surface !== 'overlay') return
+    const root = rootRef.current
+    focusables(root)[0]?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose?.(); return }
+      if (event.key !== 'Tab') return
+      const items = focusables(root)
+      if (!items.length) return
+      const position = items.indexOf(document.activeElement as HTMLElement)
+      const next = event.shiftKey ? (position - 1 + items.length) % items.length : (position + 1) % items.length
+      event.preventDefault()
+      items[next]?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, surface])
+
   const toggleUpdates = async () => {
-    const next = !updatesEnabled
+    const previous = updatesEnabled
+    const next = !previous
     setUpdatesEnabled(next)
     if (window.__CC_DESKTOP?.preferences) {
       try { setUpdatesEnabled((await window.__CC_DESKTOP.preferences.set({ updateCheck: next })).updateCheck) }
-      catch { setUpdatesEnabled(!next) }
-    } else {
-      setUpdateCheckEnabled(next)
-    }
+      catch { setUpdatesEnabled(previous) }
+    } else setUpdateCheckEnabled(next)
   }
 
   const toggleMetrics = async () => {
     if (!window.__CC_DESKTOP?.preferences || metricsEnabled === null) return
     const previous = metricsEnabled
-    const next = !previous
-    setMetricsEnabled(next)
-    try {
-      setMetricsEnabled((await window.__CC_DESKTOP.preferences.set({ anonymousMetrics: next })).anonymousMetrics ?? false)
-    } catch {
-      setMetricsEnabled(previous)
-    }
+    setMetricsEnabled(!previous)
+    try { setMetricsEnabled((await window.__CC_DESKTOP.preferences.set({ anonymousMetrics: !previous })).anonymousMetrics) }
+    catch { setMetricsEnabled(previous) }
+  }
+
+  const indexingChanged = () => {
+    onIndexingChange?.()
+    if (surface === 'window') window.__CC_DESKTOP?.data?.requestReload().catch(() => {})
   }
 
   return (
-    <div className="cc-settings-screen">
-      <aside className="cc-settings-sidebar" aria-label="Settings navigation">
-        <button type="button" className="cc-settings-back" onClick={onClose} autoFocus>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
-          Back to app
-        </button>
-
-        <div className="cc-settings-brand">
-          <span className="cc-settings-brand-mark" aria-hidden="true">C</span>
-          <span>Settings</span>
-        </div>
-
-        <nav className="cc-settings-nav">
-          <button type="button" aria-current={pane === 'general' ? 'page' : undefined} onClick={() => setPane('general')}>
-            <GearIcon />
-            General
-          </button>
-          {appMode === 'live' && (
-            <button type="button" aria-current={pane === 'indexing' ? 'page' : undefined} onClick={() => setPane('indexing')}>
-              <IndexingIcon />
-              Indexing
-            </button>
-          )}
-          {integrationsAvailable && (
-            <button type="button" aria-current={pane === 'integrations' ? 'page' : undefined} onClick={() => setPane('integrations')}>
-              <IntegrationsIcon />
-              Connections
-            </button>
-          )}
-          {accountsAvailable && (
-            <button type="button" aria-current={pane === 'account' ? 'page' : undefined} onClick={() => setPane('account')}>
-              <AccountIcon />
-              Account
-            </button>
-          )}
+    <div ref={rootRef} className="cc-settings-screen" role={surface === 'overlay' ? 'dialog' : undefined} aria-modal={surface === 'overlay' || undefined} aria-label="ContextCake Settings" data-surface={surface}>
+      <header className="cc-settings-toolbar">
+        {surface === 'overlay' && <button type="button" className="cc-settings-back" onClick={onClose} aria-label="Close Settings">Close</button>}
+        <nav className="cc-settings-nav" aria-label="Settings panes">
+          {panes.map(({ id, label, icon: PaneIcon }) => (
+            <button key={id} type="button" aria-current={pane === id ? 'page' : undefined} onClick={() => setPane(id)}><PaneIcon size={20} /><span>{label}</span></button>
+          ))}
         </nav>
-      </aside>
+      </header>
 
       <main className="cc-settings-content">
         <div className="cc-settings-column">
-          {pane === 'indexing' ? (
-            <>
-              <header className="cc-settings-header">
-                <p>Settings</p>
-                <h1>Indexing</h1>
-                <span>Control how much of each source ContextCake reads.</span>
-              </header>
-              <IndexingSettings onChanged={onIndexingChange} />
-            </>
-          ) : pane === 'general' ? (
-            <>
-              <header className="cc-settings-header">
-                <p>Settings</p>
-                <h1>General</h1>
-                <span>Adjust how ContextCake looks and behaves on this Mac.</span>
-              </header>
+          {pane === 'general' && <>
+            <header className="cc-settings-header"><h1>General</h1><span>Adjust how ContextCake looks and behaves.</span></header>
+            <section className="cc-settings-section" aria-labelledby="cc-settings-appearance">
+              <h2 id="cc-settings-appearance">Appearance</h2>
+              <div className="cc-settings-group">
+                <div className="cc-settings-row"><div><strong>Theme</strong><span>{desktop ? 'System follows the current appearance of this Mac.' : 'System follows your browser and operating system.'}</span></div><SegmentedControl label="Theme" value={theme} onChange={setTheme} options={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} /></div>
+                <div className="cc-settings-row"><div><strong>Density</strong><span>Comfortable gives controls more room. Compact fits more knowledge on screen.</span></div><SegmentedControl label="Density" value={density} onChange={setDensity} options={[{ value: 'comfortable', label: 'Comfortable' }, { value: 'compact', label: 'Compact' }]} /></div>
+              </div>
+            </section>
+            <section className="cc-settings-section" aria-labelledby="cc-settings-application">
+              <h2 id="cc-settings-application">Application</h2>
+              <div className="cc-settings-group">
+                <div className="cc-settings-row"><div><strong>Automatic update checks</strong><span>{desktop ? 'Check for new desktop releases automatically.' : 'Check GitHub for new ContextCake console releases.'}</span></div><label className="cc-switch"><input type="checkbox" checked={updatesEnabled} onChange={toggleUpdates} aria-label="Check for updates automatically" /><span aria-hidden="true" /></label></div>
+                <div className="cc-settings-row"><div><strong>Installed version</strong><span>The version of ContextCake currently running.</span></div><span className="cc-settings-value">{window.__CC_DESKTOP?.version || __APP_VERSION__}</span></div>
+              </div>
+            </section>
+          </>}
 
-              <section className="cc-settings-section" aria-labelledby="cc-settings-appearance">
-                <h2 id="cc-settings-appearance">Appearance</h2>
-                <div className="cc-settings-group">
-                  <div className="cc-settings-row">
-                    <div>
-                      <strong>Theme</strong>
-                      <span>Choose the appearance used throughout ContextCake.</span>
-                    </div>
-                    <SegmentedControl label="Theme" value={theme} onChange={setTheme} options={[
-                      { value: 'system', label: 'System' },
-                      { value: 'light', label: 'Light' },
-                      { value: 'dark', label: 'Dark' },
-                    ]} />
-                  </div>
-                  <div className="cc-settings-row">
-                    <div>
-                      <strong>Density</strong>
-                      <span>Comfortable gives controls more room. Compact fits more knowledge on screen.</span>
-                    </div>
-                    <SegmentedControl label="Density" value={density} onChange={setDensity} options={[
-                      { value: 'comfortable', label: 'Comfortable' },
-                      { value: 'compact', label: 'Compact' },
-                    ]} />
-                  </div>
-                </div>
-              </section>
+          {pane === 'indexing' && <><header className="cc-settings-header"><h1>Indexing</h1><span>Global limits for how much ContextCake reads from every source.</span></header><IndexingSettings onChanged={indexingChanged} /></>}
+          {pane === 'integrations' && <><header className="cc-settings-header"><h1>Connections</h1><span>Connect accounts so ContextCake can read private sources.</span></header><IntegrationsPanel /></>}
+          {pane === 'account' && accountsAvailable && <><header className="cc-settings-header"><h1>Account</h1><span>Optional sync for preferences and safe source metadata across Macs.</span></header><AccountPanel /></>}
 
-              <section className="cc-settings-section" aria-labelledby="cc-settings-application">
-                <h2 id="cc-settings-application">Application</h2>
-                <div className="cc-settings-group">
-                  <div className="cc-settings-row">
-                    <div>
-                      <strong>Automatic updates</strong>
-                      <span>{desktop ? 'Check for new desktop releases automatically.' : 'Check GitHub for new ContextCake console releases.'}</span>
-                    </div>
-                    <label className="cc-switch">
-                      <input type="checkbox" checked={updatesEnabled} onChange={toggleUpdates} />
-                      <span aria-hidden="true" />
-                      <span className="sr-only">Check for updates automatically</span>
-                    </label>
-                  </div>
-                  {desktop && (
-                    <div className="cc-settings-row">
-                      <div>
-                        <strong>Anonymous usage metrics</strong>
-                        <span>Share the app version and a one-time signal through a tiny GitHub download when ContextCake opens successfully. We use this to improve the app. GitHub receives ordinary download request metadata. The request never includes your files, paths, prompts, account details, or a device ID.</span>
-                      </div>
-                      <label className="cc-switch">
-                        <input
-                          type="checkbox"
-                          checked={metricsEnabled === true}
-                          disabled={metricsEnabled === null}
-                          onChange={toggleMetrics}
-                          aria-label="Share anonymous usage metrics"
-                        />
-                        <span aria-hidden="true" />
-                        <span className="sr-only">Share anonymous usage metrics</span>
-                      </label>
-                    </div>
-                  )}
-                  <div className="cc-settings-row">
-                    <div>
-                      <strong>Version</strong>
-                      <span>The installed ContextCake console version.</span>
-                    </div>
-                    <span className="cc-settings-value">{__APP_VERSION__}</span>
-                  </div>
-                </div>
-              </section>
-            </>
-          ) : pane === 'integrations' ? (
-            <>
-              <header className="cc-settings-header">
-                <p>Settings</p>
-                <h1>Connections</h1>
-                <span>Connect accounts so ContextCake can read private sources.</span>
-              </header>
-              <IntegrationsPanel />
-            </>
-          ) : accountsAvailable && window.__CC_AUTH ? (
-            <>
-              <header className="cc-settings-header">
-                <p>Settings</p>
-                <h1>Account</h1>
-                <span>Sign in to keep preferences and source metadata consistent across Macs.</span>
-              </header>
-              <AccountPanel />
-            </>
-          ) : null}
+          {pane === 'privacy' && <>
+            <header className="cc-settings-header"><h1>Privacy</h1><span>What stays local and what leaves this Mac.</span></header>
+            <section className="cc-settings-section" aria-labelledby="cc-settings-metrics">
+              <h2 id="cc-settings-metrics">Anonymous metrics</h2>
+              <div className="cc-settings-group">
+                {desktop ? <div className="cc-settings-row"><div><strong>Share anonymous usage metrics</strong><span>ContextCake makes one small GitHub download containing the installed app version and a one-time successful-open signal. GitHub receives ordinary request metadata such as the network address used to connect. It excludes files, paths, prompts, document content, account details, credentials, and device identifiers.</span></div><label className="cc-switch"><input type="checkbox" checked={metricsEnabled === true} disabled={metricsEnabled === null} onChange={toggleMetrics} aria-label="Share anonymous usage metrics" /><span aria-hidden="true" /></label></div> : <div className="cc-settings-row"><div><strong>Desktop metrics are not active</strong><span>The browser and demo surfaces do not send ContextCake desktop usage metrics.</span></div></div>}
+              </div>
+            </section>
+            <section className="cc-settings-section" aria-labelledby="cc-settings-local-first">
+              <h2 id="cc-settings-local-first">Local-first operation</h2>
+              <div className="cc-settings-group"><div className="cc-settings-row"><div><strong>Your context stays on this Mac</strong><span>Local engine work does not upload your files, paths, prompts, commands, or document content. Signing in is optional and only syncs approved preferences and sanitized source metadata.</span></div></div></div>
+              <a className="cc-settings-doc-link" href={DOCUMENTATION_URL} target="_blank" rel="noreferrer">Read Updates &amp; Privacy documentation</a>
+            </section>
+          </>}
         </div>
       </main>
     </div>

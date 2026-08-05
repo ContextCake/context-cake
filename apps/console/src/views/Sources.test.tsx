@@ -42,6 +42,13 @@ function buttonByAria(label: string): HTMLButtonElement {
   return match
 }
 
+function sourceButton(name: string): HTMLButtonElement {
+  const match = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="option"]'))
+    .find((item) => item.querySelector('strong')?.textContent === name)
+  if (!match) throw new Error(`Source button not found: ${name}`)
+  return match
+}
+
 async function enter(selector: string, value: string) {
   const input = container.querySelector<HTMLInputElement>(selector)
   await act(async () => {
@@ -83,9 +90,9 @@ describe('Sources rows', () => {
     expect(container.textContent).toContain('acme-docs')
     expect(container.textContent).toContain('degraded')
     expect(container.textContent).toContain('GitHub API 403 on /repos/acme/payments')
-    expect(container.textContent).toContain('last success')
-    expect(container.textContent).toContain('last error')
-    expect(container.textContent).toContain('level 2 · github')
+    expect(container.textContent).toContain('Last success')
+    expect(container.textContent).toContain('Last error')
+    expect(container.textContent).toContain('github · level 2')
   })
 
   it('surfaces missing and host-mismatched credentials without exposing a secret', async () => {
@@ -95,8 +102,11 @@ describe('Sources rows', () => {
       src({ name: 'env', authAlias: 'env:GITHUB_TOKEN', authState: 'missing-token' }),
     ])
 
+    await act(async () => sourceButton('missing').click())
     expect(container.textContent).toContain('Credential keychain:github.com/octocat is not connected')
+    await act(async () => sourceButton('mismatch').click())
     expect(container.textContent).toContain('bound to a different GitHub host')
+    await act(async () => sourceButton('env').click())
     expect(container.textContent).toContain('Environment credential GITHUB_TOKEN is not set')
   })
 
@@ -110,7 +120,7 @@ describe('Sources rows', () => {
   it('renders read-only in demo mode', async () => {
     await mount([src({})], 'demo')
 
-    expect(container.textContent).toContain('source management needs the live engine')
+    expect(container.textContent).toContain('Source management needs the live engine')
     expect(container.querySelector('button[aria-label^="Remove"]')).toBeNull()
     expect(container.querySelector('button[aria-label^="Rename"]')).toBeNull()
   })
@@ -207,8 +217,11 @@ describe('Sources sync', () => {
       src({ name: 'plain-folder', sourceKind: 'files' }),
     ])
 
+    await act(async () => sourceButton('rest-repo').click())
     expect(container.querySelector('button[aria-label="Sync rest-repo now"]')).toBeTruthy()
+    await act(async () => sourceButton('clone-repo').click())
     expect(container.querySelector('button[aria-label="Sync clone-repo now"]')).toBeTruthy()
+    await act(async () => sourceButton('plain-folder').click())
     expect(container.querySelector('button[aria-label="Sync plain-folder now"]')).toBeNull()
   })
 

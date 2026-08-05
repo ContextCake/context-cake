@@ -107,6 +107,13 @@ export function App() {
     setConnectOpen(true)
   }
   const openSettings = () => {
+    if (window.__CC_DESKTOP?.windows) {
+      setDrawerOpen(false)
+      // Omit a pane so the native window can restore the user's last one.
+      // Explicit pane requests remain available for flows such as OAuth.
+      window.__CC_DESKTOP.windows.openSettings().catch(() => {})
+      return
+    }
     settingsOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setDrawerOpen(false)
     setSettingsOpen(true)
@@ -213,6 +220,7 @@ export function App() {
     const focusable = () => Array.from(sidebar?.querySelectorAll<HTMLElement>('button,a[href],[tabindex]:not([tabindex="-1"])') ?? [])
     sidebar?.querySelector<HTMLElement>('.cc-nav-button')?.focus()
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return
       if (e.key === 'Escape') { e.preventDefault(); closeDrawer(); return }
       if (e.key !== 'Tab') return
       const items = focusable()
@@ -227,6 +235,10 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Contextual controls get first refusal. In particular, Escape must
+      // clear a populated search field without also dismissing its detail
+      // sheet as the event bubbles to this shell-level handler.
+      if (e.defaultPrevented) return
       const command = e.metaKey || e.ctrlKey
       const target = e.target
       const editing = target instanceof Element && target.matches('input, textarea, select, [contenteditable="true"]')
@@ -251,11 +263,13 @@ export function App() {
       } else if (e.key === 'Escape' && settingsOpen) {
         e.preventDefault()
         closeSettings()
+      } else if (e.key === 'Escape' && !showWizard && !connectOpen && !chatOpen) {
+        window.dispatchEvent(new Event('contextcake:close-detail'))
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [connectOpen, paletteOpen, settingsOpen, showWizard, view, setView])
+  }, [chatOpen, connectOpen, paletteOpen, settingsOpen, showWizard, view, setView])
 
   useEffect(() => window.__CC_DESKTOP?.commands?.onInvoke((command) => {
     const active = document.activeElement
@@ -272,6 +286,8 @@ export function App() {
       if (number >= 1 && number <= 5) setView(viewForDestination(destinations[number - 1], knowledgeView.current, reviewView.current))
     }
   }), [connectOpen, paletteOpen, setView, settingsOpen, showWizard, view])
+
+  useEffect(() => window.__CC_DESKTOP?.data?.onReloadRequested(() => reload()), [reload])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

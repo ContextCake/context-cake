@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { apiFetch } from '../api'
 import { Markdown } from '../components/Markdown'
+import { useDetailSurface } from '../components/useDetailSurface'
 import { useStore } from '../store'
 import type { FileContent, LayerFile, LayerFiles } from '../types'
 
@@ -48,7 +49,10 @@ export function Files() {
   const [savedAt, setSavedAt] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
   const editorRef = useRef<HTMLTextAreaElement>(null)
+  const selectedButtonRef = useRef<HTMLButtonElement | null>(null)
+  const detail = useDetailSurface<HTMLDivElement, HTMLElement>(detailOpen)
   const selectedRef = useRef(selected)
   selectedRef.current = selected
 
@@ -150,11 +154,31 @@ export function Files() {
     }
   }, [dirty, file?.path])
 
-  const chooseFile = (path: string) => {
-    if (path === selected) return
+  const chooseFile = (path: string, opener?: HTMLButtonElement) => {
+    if (path === selected) {
+      selectedButtonRef.current = opener ?? null
+      setDetailOpen(true)
+      return
+    }
     if (dirty && !window.confirm(`Discard unsaved changes to ${file?.path ?? 'this file'}?`)) return
+    selectedButtonRef.current = opener ?? null
     setSelected(path)
+    setDetailOpen(true)
   }
+
+  const closeDetail = useCallback(() => {
+    setDetailOpen(false)
+    requestAnimationFrame(() => selectedButtonRef.current?.focus({ preventScroll: true }))
+  }, [])
+
+  useEffect(() => {
+    if (!detailOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); closeDetail() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [closeDetail, detailOpen])
 
   const save = useCallback(async () => {
     if (!file || !dirty || saving) return
@@ -219,8 +243,8 @@ export function Files() {
     .filter((layer) => !normalizedQuery || layer.files.length > 0)
 
   return (
-    <div style={css('display:grid; grid-template-columns:minmax(220px, 280px) minmax(0, 1fr); gap:0; height:100%; min-height:0;')}>
-      <aside style={css(`display:flex; flex-direction:column; min-height:0; border-right:1px solid ${C.line}; background:${C.surface};`)}>
+    <div ref={detail.containerRef} className="cc-files-workspace" style={css('display:grid; grid-template-columns:minmax(220px, 280px) minmax(0, 1fr); gap:0; height:100%; min-height:0;')}>
+      <aside className="cc-files-navigator" style={css(`display:flex; flex-direction:column; min-height:0; border-right:1px solid ${C.line}; background:${C.surface};`)}>
         <div style={css('flex:1; min-height:0; overflow-y:auto; padding:8px;')}>
           {layers === null ? (
             <p style={css(`margin:8px; font-size:12px; color:${C.caption};`)}>Loading files…</p>
@@ -247,7 +271,7 @@ export function Files() {
                     <button
                       key={f.path}
                       type="button"
-                      onClick={() => chooseFile(f.path)}
+                      onClick={(event) => chooseFile(f.path, event.currentTarget)}
                       aria-current={active ? 'true' : undefined}
                       title={f.path}
                       style={css(`display:block; width:100%; text-align:left; padding:6px 8px; margin-bottom:2px; border:none; border-radius:7px; cursor:pointer; font:inherit; font-family:${MONO}; font-size:11.5px; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:${active ? C.tealFill : 'transparent'}; color:${active ? C.tealText : C.body};`)}
@@ -262,7 +286,8 @@ export function Files() {
         </div>
       </aside>
 
-      <section style={css('display:flex; flex-direction:column; min-height:0; min-width:0;')}>
+      <section ref={detail.panelRef} {...detail.panelProps} aria-label={file ? `${file.path} file detail` : 'File detail'} className="cc-files-detail" data-open={detailOpen || undefined} style={css('display:flex; flex-direction:column; min-height:0; min-width:0;')}>
+        <button type="button" className="cc-detail-close" onClick={closeDetail}>Close</button>
         {!file && !fileError && <Empty title="Select a file" detail="Pick a file on the left to read or edit it." />}
         {fileError && !file && <Empty title="Couldn't open that file" detail={fileError} />}
         {file && (

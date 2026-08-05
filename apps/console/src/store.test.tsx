@@ -32,7 +32,7 @@ let root: Root
 
 /** Renders the store's load state so assertions read it from the DOM. */
 function Probe() {
-  const { load, concepts, sources, reload } = useStore()
+  const { load, concepts, sources, reload, view, selConcept } = useStore()
   return (
     <div
       data-shell={String(load.shell)}
@@ -40,6 +40,8 @@ function Probe() {
       data-indexing={load.indexingSources.join(',')}
       data-count={String(concepts.length)}
       data-sources={String(sources.length)}
+      data-view={view}
+      data-selection={selConcept}
     ><button type="button" onClick={reload}>reload</button></div>
   )
 }
@@ -77,6 +79,8 @@ beforeEach(() => {
   mocks.resolveAll.mockReset()
   mocks.conflictResolutions.mockReset()
   mocks.conflictResolutions.mockResolvedValue([])
+  window.history.replaceState(null, '', '/#/overview')
+  window.localStorage.clear()
   vi.useFakeTimers()
 })
 
@@ -195,5 +199,22 @@ describe('store load state', () => {
 
     expect(probe().dataset.shell).toBe('false')
     expect(probe().dataset.sources).toBe('1')
+  })
+
+  it('keeps a bare Concepts history entry bare when navigating back from a deep link', async () => {
+    window.history.replaceState(null, '', '/#/concepts/interfaces%2Fauth')
+    mocks.graph.mockResolvedValue(graphPayload([]))
+    mocks.resolveAll.mockResolvedValue({
+      concepts: [conceptPayload('interfaces/auth')], errors: [], indexing: false,
+    })
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    expect(probe().dataset.selection).toBe('interfaces/auth')
+
+    window.history.pushState(null, '', '#/concepts')
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    expect(probe().dataset.view).toBe('concepts')
+    expect(probe().dataset.selection).toBe('interfaces/auth')
+    expect(window.location.hash).toBe('#/concepts')
   })
 })

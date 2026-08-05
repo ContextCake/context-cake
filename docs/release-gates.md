@@ -78,6 +78,12 @@ Three things cannot be simulated: a **packaged** app, a **second physical
 machine**, and the **hosted** database. Each needs a person — the OAuth flow
 requires entering real credentials.
 
+The packaged acceptance must use the separate Settings window. Confirm
+`Command-,`, the application menu, sidebar Settings control, and command palette
+all focus the same window; closing it during pending OAuth cancels the attempt;
+and a successful callback focuses Account only when Settings is already open.
+Repeat a System appearance change with both trusted windows open.
+
 **These are due again on any build packaged with `CC_ACCOUNTS=1`.** Do not ship
 one without them.
 

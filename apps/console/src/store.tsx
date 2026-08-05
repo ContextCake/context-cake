@@ -159,7 +159,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [triageTab, setTriageTab] = useState<TriageTab>('review')
   const [selSignal, setSelSignal] = useState<string | null>(mode === 'demo' ? 'sig-1' : null)
   const [selConflict, setSelConflict] = useState('')
-  const [selConcept, setSelConcept] = useState('')
+  const [selConcept, setSelConceptState] = useState('')
+  // A bare #/concepts route can still show the first concept in the desktop
+  // split without turning itself into a deep link. An explicit row selection
+  // switches the route to the deep-link form.
+  const [conceptRouteMode, setConceptRouteMode] = useState<'bare' | 'deep'>(initial.concept ? 'deep' : 'bare')
+  const setSelConcept = useCallback((id: string) => {
+    setConceptRouteMode('deep')
+    setSelConceptState(id)
+  }, [])
   const [queries, setQueries] = useState<Partial<Record<ViewId, string>>>({})
   const query = queries[view] ?? ''
   const setQuery = useCallback((value: string) => setQueries((current) => ({ ...current, [view]: value })), [view])
@@ -215,10 +223,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const pendingId = pendingConceptRef.current
         if (pendingId && raw.some((c) => c.id === pendingId)) {
           setView('concepts')
+          setConceptRouteMode('deep')
           setSelConcept(pendingId)
           pendingConceptRef.current = undefined
         } else if (!indexing) {
-          setSelConcept((prev) => prev || raw[0]?.id || '')
+          setSelConceptState((prev) => prev || raw[0]?.id || '')
           pendingConceptRef.current = undefined
         }
         setSelConflict((prev) => prev || derivedConflicts[0]?.id || '')
@@ -277,6 +286,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const setView = useCallback((next: ViewId) => {
     if (next === view) return
     if (!dispatchNavigationGuard()) return
+    if (next === 'concepts') setConceptRouteMode('bare')
     setViewState(next)
   }, [view])
 
@@ -303,7 +313,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // leave the URL alone — rewriting it here would permanently clobber the
     // deep link before the data arrives to honor it.
     if (pendingConceptRef.current) return
-    const target = view === 'concepts' && selConcept
+    const target = view === 'concepts' && selConcept && conceptRouteMode === 'deep'
       ? `#/concepts/${encodeURIComponent(selConcept)}`
       : `#/${view}`
     if (window.location.hash === target) { prevViewRef.current = view; return }
@@ -311,7 +321,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     prevViewRef.current = view
     if (viewChanged) window.history.pushState(null, '', target)
     else window.history.replaceState(null, '', target)
-  }, [view, selConcept])
+  }, [conceptRouteMode, view, selConcept])
 
   useEffect(() => {
     const onPop = () => {
@@ -325,7 +335,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         setViewState(p.view)
       }
-      if (p.concept) setSelConcept(p.concept)
+      // A bare Concepts route is a real stable URL, not an alias for whichever
+      // concept happened to be selected before Back/Forward. Clear the prior
+      // deep-link selection so the URL effect cannot rewrite history.
+      if (p.view === 'concepts') {
+        setConceptRouteMode(p.concept ? 'deep' : 'bare')
+        setSelConceptState(p.concept ?? conceptsRef.current[0]?.id ?? '')
+      }
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)

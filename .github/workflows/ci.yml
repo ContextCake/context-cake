@@ -119,9 +119,32 @@ jobs:
         working-directory: apps/console
         run: npm run build:live
 
+      - name: Lockfile agrees with package.json
+        working-directory: apps/desktop
+        # A stale lockfile merged silently once: a branch cut before a version
+        # bump carried the old root version and reverted a dependency patch
+        # with it. `npm ci` accepts the mismatch without a word, and the release
+        # workflow only compares the tag against package.json — so nothing
+        # noticed until a security audit went looking.
+        run: |
+          PKG=$(node -p 'require("./package.json").version')
+          LOCK=$(node -p 'require("./package-lock.json").packages[""].version')
+          if [ "$PKG" != "$LOCK" ]; then
+            echo "::error::package.json is $PKG but package-lock.json root is $LOCK — run 'npm install --package-lock-only' in apps/desktop"
+            exit 1
+          fi
+          echo "package.json and lockfile agree at $PKG"
+
       - name: Install desktop dependencies
         working-directory: apps/desktop
         run: npm ci
+
+      - name: Audit shipped dependencies
+        working-directory: apps/desktop
+        # Production-only: these are the packages that end up inside the
+        # artifact users auto-install. Dev-tree findings are tracked through
+        # Dependabot rather than blocking every PR on a transitive build tool.
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Navigation guard test
         working-directory: apps/desktop

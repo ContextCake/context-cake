@@ -21,6 +21,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { assertInsideRoot, httpError, json, parseJson, MIME } from "./http-util.mjs";
 import { defaultWalkLimits } from "./sources/okf-local.mjs";
+import { FILES_EXTENSIONS } from "./sources/files.mjs";
 
 // Files the editor treats as editable text. SVG is text AND image: editable as
 // source, previewable as an image.
@@ -209,30 +210,49 @@ export async function writeSectionApi(rawBody, roots) {
   }
   if (!Array.isArray(layers) || !layers.length) throw httpError(400, "Provide layers: string[]");
   const modified = body.modified ?? {};
+  const expectedContent = body.expectedContent ?? {};
   if (typeof modified !== "object" || Array.isArray(modified)) {
     throw httpError(400, "modified must map layer name -> mtime ISO string");
+  }
+  if (typeof expectedContent !== "object" || Array.isArray(expectedContent)) {
+    throw httpError(400, "expectedContent must map layer name -> section text");
   }
 
   const today = new Date().toISOString().slice(0, 10);
   const writes = [];
   const skipped = [];
   for (const layer of layers) {
-    let target;
-    try { target = resolveLayerFile(`${layer}/${conceptId}.md`, roots); }
-    catch (err) { skipped.push({ layer, reason: err.message }); continue; }
+    let target = null;
     let stat = null;
-    if (target.ext === ".md") { try { stat = await fsp.stat(target.abs); } catch { stat = null; } }
-    if (!stat?.isFile()) { skipped.push({ layer, reason: "no such concept file" }); continue; }
-    const { text, replaced } = replaceSection(
-      await fsp.readFile(target.abs, "utf8"), sectionKey, content, { refreshUpdatedTo: today },
-    );
+    try {
+      const root = roots.get(layer);
+      const extensions = root?.kind === "files" ? FILES_EXTENSIONS : [".md"];
+      for (const ext of extensions) {
+        const candidate = resolveLayerFile(`${layer}/${conceptId}${ext}`, roots);
+        try { stat = await fsp.stat(candidate.abs); } catch { stat = null; }
+        if (stat?.isFile()) { target = candidate; break; }
+      }
+    } catch (err) { skipped.push({ layer, reason: err.message }); continue; }
+    if (!target || !stat?.isFile()) { skipped.push({ layer, reason: "no such concept file" }); continue; }
+    const originalText = await fsp.readFile(target.abs, "utf8");
+    const currentContent = readSectionBody(originalText, sectionKey, { plainText: target.ext === ".txt" });
+    const { text, replaced } = target.ext === ".txt"
+      ? replacePlainTextBody(originalText, sectionKey, content)
+      : replaceSection(originalText, sectionKey, content, { refreshUpdatedTo: today });
     if (!replaced) { skipped.push({ layer, reason: `section "${sectionKey}" not found` }); continue; }
-    writes.push({ layer, abs: target.abs, text, mtime: stat.mtime.toISOString() });
+    writes.push({ layer, abs: target.abs, text, currentContent, mtime: stat.mtime.toISOString() });
+  }
+  if (body.requireAll === true && skipped.length > 0) {
+    throw httpError(409, `Nothing was changed. ${skipped.map((item) => `${item.layer}: ${item.reason}`).join("; ")}`);
   }
   for (const write of writes) {
-    const expected = modified[write.layer];
-    if (expected !== undefined && expected !== write.mtime) {
+    const expectedMtime = modified[write.layer];
+    if (expectedMtime !== undefined && expectedMtime !== write.mtime) {
       throw httpError(409, `${write.layer}/${conceptId}.md changed on disk after you loaded this conflict. Reload and merge again — nothing was written.`);
+    }
+    const expectedSection = expectedContent[write.layer];
+    if (expectedSection !== undefined && expectedSection !== write.currentContent) {
+      throw httpError(409, `${write.layer}/${conceptId}.md changed after this conflict was loaded. Reload it before resolving — nothing was written.`);
     }
   }
   // A section write into a clone-backed layer dirties .cache/repos, and a later
@@ -285,6 +305,35 @@ export function replaceSection(text, key, newBody, { refreshUpdatedTo = null } =
     ...lines.slice(end),
   ];
   return { text: rebuilt.join(nl), replaced: true };
+}
+
+/** Return the trimmed body for a section, or null when the section is absent. */
+export function readSectionBody(text, key, { plainText = false } = {}) {
+  if (plainText) return key === "body" ? String(text).trim() : null;
+  const lines = String(text).split(/\r?\n/);
+  const isFence = (line) => /^\s{0,3}(```|~~~)/.test(line);
+  let start = -1;
+  let inFence = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (isFence(lines[i])) { inFence = !inFence; continue; }
+    if (inFence) continue;
+    const match = lines[i].match(/^#{1,6}\s+(.+?)\s*$/);
+    if (match && headingKey(match[1]) === key) { start = i + 1; break; }
+  }
+  if (start === -1) return null;
+  let end = lines.length;
+  inFence = false;
+  for (let i = start; i < lines.length; i += 1) {
+    if (isFence(lines[i])) { inFence = !inFence; continue; }
+    if (!inFence && /^#{1,6}\s+/.test(lines[i])) { end = i; break; }
+  }
+  return lines.slice(start, end).join("\n").trim();
+}
+
+function replacePlainTextBody(text, key, newBody) {
+  if (key !== "body") return { text, replaced: false };
+  const nl = text.includes("\r\n") ? "\r\n" : "\n";
+  return { text: `${newBody}${text.endsWith("\n") ? nl : ""}`, replaced: true };
 }
 
 // Rewrite only the value of an `updated=` token inside the heading's first

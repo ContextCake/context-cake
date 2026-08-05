@@ -163,6 +163,40 @@ export interface FileContent {
   reason?: string
 }
 
+export interface ConflictResolutionContribution {
+  layer: string
+  /** Source precedence retained so custom layer names keep the right visual scope. */
+  level?: number
+  content: string
+  updated: string | null
+}
+
+/** One append-only decision returned by GET /api/conflict-resolutions. */
+export interface ConflictResolutionRecord {
+  schemaVersion: 1
+  id: string
+  conflictId: string
+  conceptId: string
+  title: string
+  sectionKey: string
+  sectionHeading: string
+  contributions: ConflictResolutionContribution[]
+  chosen: ConflictResolutionContribution
+  method: 'automatic' | 'manual'
+  reason: string
+  actor: 'local-user'
+  decidedAt: string
+  supersedes?: string
+}
+
+export interface ResolveConflictRequest {
+  conceptId: string
+  sectionKey: string
+  selectedLayer: string
+  method: 'automatic' | 'manual'
+  resolutionId?: string
+}
+
 /** The shape build-demo-data.mjs emits and DemoSource imports. */
 export interface DemoBundle {
   graph: GraphSummary

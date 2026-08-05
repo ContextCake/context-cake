@@ -13,7 +13,8 @@
 
 import demoBundleRaw from './generated/demo-cascade.json'
 import type {
-  DemoBundle, GraphSummary, GraphSource, ResolvedConcept, ResolvedSection,
+  ConflictResolutionRecord, DemoBundle, GraphSummary, GraphSource, ResolveConflictRequest,
+  ResolvedConcept, ResolvedSection,
 } from './types'
 import type { Concept, ConceptSection, Conflict, Dissent, Source } from './data'
 import type { LayerId } from './theme'
@@ -51,6 +52,8 @@ export interface DataSource {
   /** Resolve every concept in one pass (one request / one sources-open in live mode). */
   resolveAll(): Promise<ResolveAllResult>
   listConcepts(): Promise<string[]>
+  conflictResolutions(): Promise<ConflictResolutionRecord[]>
+  resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord>
 }
 
 // ---- Transport --------------------------------------------------------------
@@ -117,6 +120,7 @@ export function selectMode(): Mode {
 class DemoSource implements DataSource {
   readonly mode = 'demo'
   private bundle: DemoBundle
+  private resolutions: ConflictResolutionRecord[] = []
   constructor(bundle: DemoBundle) { this.bundle = bundle }
   async graph(): Promise<GraphSummary> { return this.bundle.graph }
   async resolve(id: string): Promise<ResolvedConcept> {
@@ -128,6 +132,51 @@ class DemoSource implements DataSource {
     return { concepts: this.bundle.concepts, errors: [] }
   }
   async listConcepts(): Promise<string[]> { return this.bundle.concepts.map((c) => c.id) }
+  async conflictResolutions(): Promise<ConflictResolutionRecord[]> { return this.resolutions }
+  async resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord> {
+    const prior = request.resolutionId
+      ? this.resolutions.find((item) => item.id === request.resolutionId)
+      : undefined
+    const concept = this.bundle.concepts.find((item) => item.id === request.conceptId)
+    const section = concept?.sections.find((item) => item.key === request.sectionKey)
+    if (!prior && (!concept || !section?.conflicts?.length)) throw new LiveDataError('bad-status', 'This conflict is no longer open.', 409)
+    const levels = new Map(concept?.contributors.map((item) => [item.layer, item.level]) ?? [])
+    const contributions = prior?.contributions ?? [
+      { layer: section!.sourceLayer, level: levels.get(section!.sourceLayer), content: section!.content, updated: section!.sourceUpdated },
+      ...section!.conflicts!.map((item) => ({ layer: item.layer, level: levels.get(item.layer), content: item.content, updated: item.updated })),
+    ]
+    const chosen = contributions.find((item) => item.layer === request.selectedLayer)
+    if (!chosen) throw new LiveDataError('bad-status', 'That answer is no longer available.', 409)
+    const reason = trivialConflictReason(contributions.map((item) => item.content))
+    if (request.method === 'automatic' && (!reason || request.selectedLayer !== contributions[0].layer)) {
+      throw new LiveDataError('bad-status', 'This conflict needs your judgment.', 409)
+    }
+    const record: ConflictResolutionRecord = {
+      schemaVersion: 1,
+      id: `demo-${Date.now()}-${this.resolutions.length + 1}`,
+      conflictId: `${request.conceptId}::${request.sectionKey}`,
+      conceptId: request.conceptId,
+      title: String(prior?.title ?? concept?.frontmatter?.title ?? request.conceptId),
+      sectionKey: request.sectionKey,
+      sectionHeading: prior?.sectionHeading ?? section!.heading,
+      contributions,
+      chosen,
+      method: request.method,
+      reason: request.method === 'automatic' ? reason! : `You chose the ${request.selectedLayer} answer.`,
+      actor: 'local-user',
+      decidedAt: new Date().toISOString(),
+      ...(prior ? { supersedes: prior.id } : {}),
+    }
+    this.resolutions.push(record)
+    if (section) {
+      section.content = chosen.content
+      section.sourceLayer = chosen.layer
+      section.sourceUpdated = chosen.updated
+      delete section.conflicts
+      delete section.fresherDissent
+    }
+    return record
+  }
 }
 
 class LiveSource implements DataSource {
@@ -167,10 +216,31 @@ class LiveSource implements DataSource {
     const g = await this.graph()
     return g.concepts.map((c) => c.id)
   }
+  async conflictResolutions(): Promise<ConflictResolutionRecord[]> {
+    try {
+      return (await this.get<{ resolutions: ConflictResolutionRecord[] }>('/api/conflict-resolutions')).resolutions
+    } catch (error) {
+      // Compatibility with an older read-only service: conflicts still render,
+      // but no past decisions are invented.
+      if (error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404) return []
+      throw error
+    }
+  }
+  async resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord> {
+    const response = await this.request<{ resolution: ConflictResolutionRecord }>('/api/conflict-resolutions', {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify(request),
+    })
+    return response.resolution
+  }
   private async get<T>(path: string): Promise<T> {
+    return this.request<T>(path, { headers: { accept: 'application/json' } })
+  }
+  private async request<T>(path: string, init: RequestInit): Promise<T> {
     let res: Response
     try {
-      res = await apiFetch(path, { headers: { accept: 'application/json' } })
+      res = await apiFetch(path, init)
     } catch (e) {
       throw new LiveDataError(
         'unreachable',
@@ -180,7 +250,12 @@ class LiveSource implements DataSource {
       )
     }
     if (!res.ok) {
-      throw new LiveDataError('bad-status', `Server returned ${res.status} for ${path}`, res.status)
+      let detail = ''
+      try {
+        const body = await res.clone().json() as { error?: unknown }
+        if (typeof body.error === 'string') detail = body.error
+      } catch { /* keep the status fallback */ }
+      throw new LiveDataError('bad-status', detail || `Server returned ${res.status} for ${path}`, res.status)
     }
     try {
       return (await res.json()) as T
@@ -335,38 +410,87 @@ export function adaptSources(g: GraphSummary): Source[] {
   })
 }
 
-/** Derive conflict cards from resolved concepts — one per conflicted section. */
-export function adaptConflicts(concepts: ResolvedConcept[]): Conflict[] {
+/** Same conservative classifier the service enforces for the magic wand. */
+export function trivialConflictReason(values: string[]): string | null {
+  if (values.length < 2) return null
+  const signatures = values.map((value) => {
+    if (!value.trim() || /```|~~~|`|!?\[[^\]]*\]\(|<\/?[a-z][^>]*>|https?:\/\/|\|[^\n]*\|/i.test(value)) return null
+    const tokens = value.normalize('NFKC').replace(/[*_~]/g, '').toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)
+    return tokens?.length ? tokens.join('\u001f') : null
+  })
+  return signatures.some((value) => value === null) || new Set(signatures).size !== 1
+    ? null
+    : 'The answers use the same words in the same order; only formatting differs.'
+}
+
+/** Derive open conflicts plus resolved decisions retained by the local log. */
+export function adaptConflicts(concepts: ResolvedConcept[], resolutions: ConflictResolutionRecord[] = []): Conflict[] {
   const out: Conflict[] = []
+  const historyByConflict = new Map<string, ConflictResolutionRecord[]>()
+  for (const resolution of resolutions) {
+    const history = historyByConflict.get(resolution.conflictId) ?? []
+    history.push(resolution)
+    historyByConflict.set(resolution.conflictId, history)
+  }
   for (const c of concepts) {
     const title = (c.frontmatter?.title as string) ?? c.id
     const levels = contributorLevels(c)
     for (const s of c.sections) {
       if (!s.conflicts?.length) continue
       const winner = layerOf(s.sourceLayer, levels.get(s.sourceLayer) ?? 0)
+      const id = `${c.id}::${s.key}`
+      const history = historyByConflict.get(id) ?? []
+      const contributions = [
+        { layer: winner, sourceLayer: s.sourceLayer, value: s.content, updated: s.sourceUpdated ?? '' },
+        ...s.conflicts.map((k) => ({
+          layer: layerOf(k.layer, levels.get(k.layer) ?? 0),
+          sourceLayer: k.layer,
+          value: k.content,
+          updated: k.updated ?? '',
+          ...(s.fresherDissent === true && newerAtDayGranularity(k.updated, s.sourceUpdated)
+            ? { fresherDissent: true }
+            : {}),
+        })),
+      ]
       out.push({
-        id: `${c.id}::${s.key}`,
+        id,
         concept: c.id,
+        sectionKey: s.key,
         section: headingText(s.heading),
         title: `${headingText(s.heading)} — ${title}`,
+        // A conflict present in current resolver output is open even if an
+        // older decision exists: a source changed after that decision.
         status: 'open',
         winner,
-        contributions: [
-          { layer: winner, value: s.content, updated: s.sourceUpdated ?? '' },
-          // The engine's per-section `fresherDissent` says *some* dissent is
-          // newer than the effective value; re-apply the same C-b day rule per
-          // dissent so the badge lands on the newer one(s), not on every card.
-          ...s.conflicts.map((k) => ({
-            layer: layerOf(k.layer, levels.get(k.layer) ?? 0),
-            value: k.content,
-            updated: k.updated ?? '',
-            ...(s.fresherDissent === true && newerAtDayGranularity(k.updated, s.sourceUpdated)
-              ? { fresherDissent: true }
-              : {}),
-          })),
-        ],
+        contributions,
+        safe: trivialConflictReason(contributions.map((item) => item.value)) !== null,
+        history,
       })
     }
+  }
+  // Once source files agree, the resolver no longer emits a conflict. Keep it
+  // visible from the durable record so “resolved” never means “forgotten”.
+  for (const [id, history] of historyByConflict) {
+    if (out.some((item) => item.id === id)) continue
+    const latest = history[history.length - 1]
+    const contributions = latest.contributions.map((item) => ({
+      layer: layerOf(item.layer, item.level ?? (item.layer === 'personal' ? 3 : item.layer === 'team' ? 2 : 0)),
+      sourceLayer: item.layer,
+      value: item.content,
+      updated: item.updated ?? '',
+    }))
+    out.push({
+      id,
+      concept: latest.conceptId,
+      sectionKey: latest.sectionKey,
+      section: headingText(latest.sectionHeading),
+      title: `${headingText(latest.sectionHeading)} — ${latest.title}`,
+      status: 'resolved',
+      winner: layerOf(latest.chosen.layer, latest.chosen.level ?? (latest.chosen.layer === 'personal' ? 3 : latest.chosen.layer === 'team' ? 2 : 0)),
+      contributions,
+      safe: false,
+      history,
+    })
   }
   return out
 }

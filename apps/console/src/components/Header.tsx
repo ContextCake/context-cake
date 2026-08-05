@@ -5,7 +5,7 @@ const TITLES: Record<ViewId, [string, string]> = {
   overview: ['Cascade health', 'Source coverage, sync state, and decisions that need attention.'],
   sources: ['Sources', 'Add, rename, re-level, sync, or remove what feeds the cascade.'],
   triage: ['Review queue', 'Decide what becomes shared knowledge. S stores, R keeps review, D discards.'],
-  conflicts: ['Resolver', 'Compare layer values and lock the effective read.'],
+  conflicts: ['Resolve conflicts', 'Clear safe differences fast. Use your judgment when meaning changes.'],
   concepts: ['Resolved knowledge', 'Browse concepts, sections, and provenance across the cascade.'],
   files: ['Context files', 'Read and edit the files behind each source, as Markdown or raw text.'],
 }

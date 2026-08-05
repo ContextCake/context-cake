@@ -8,6 +8,10 @@ tags: [auth, contract]
 
 # Auth tokens
 
+## Header {#header}
+
+Send the token as **Bearer** in the Authorization header.
+
 ## Format {#format}
 
 JWT, RS256, 15-minute expiry. The `aud` claim must name the calling service. Tokens

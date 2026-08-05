@@ -1,3 +1,4 @@
+import type { ConflictResolutionRecord } from './types'
 import type { LayerId, RouteId } from './theme'
 
 export interface Layer {
@@ -33,14 +34,15 @@ export interface Signal {
 }
 
 export interface Contribution {
-  layer: LayerId; value: string; updated: string; note?: string
+  layer: LayerId; sourceLayer: string; value: string; updated: string; note?: string
   /** This dissent is strictly newer than the effective value (day granularity, C-b). */
   fresherDissent?: boolean
 }
 export interface Conflict {
-  id: string; concept: string; section: string; title: string
+  id: string; concept: string; sectionKey: string; section: string; title: string
   status: 'open' | 'resolved'; contributions: Contribution[]; winner: LayerId
-  resolutionText?: string
+  safe: boolean
+  history: ConflictResolutionRecord[]
 }
 
 export interface Dissent { layer: LayerId; value: string; updated?: string | null }

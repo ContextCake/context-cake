@@ -175,6 +175,53 @@ code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"ki
 MT2="$(curl -s "${AUTH[@]}" "$BASE/api/file?path=m2/merge-me.md" | JQ 'd.modified')"
 code 409 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"merge-me\",\"sectionKey\":\"pick\",\"layers\":[\"t\",\"m2\"],\"content\":\"HOMOGENIZED\",\"modified\":{\"t\":\"$MT\",\"m2\":\"$MT2\"}}" "$BASE/api/section")" "one stale layer fails the whole multi-layer write"
 grep -q 'HOMOGENIZED' "$TMP/m2/merge-me.md" && fail "partial write reached the fresh layer" || pass "the fresh layer was not partially homogenized"
+
+echo "conflict decisions: safe automation, plain choice, and append-only history"
+code 409 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"merge-me","sectionKey":"pick","selectedLayer":"t","method":"automatic"}' "$BASE/api/conflict-resolutions")" "meaning-changing conflict refuses the wand"
+grep -q 'other value.' "$TMP/m2/merge-me.md" && pass "refused wand left dissent untouched" || fail "refused wand changed dissent"
+MANUAL="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"merge-me","sectionKey":"pick","selectedLayer":"m2","method":"manual"}' "$BASE/api/conflict-resolutions")"
+[ "$(JQ 'String(d.ok)' <<<"$MANUAL")" = "true" ] && pass "manual answer applied" || fail "manual answer failed ($MANUAL)"
+[ "$(JQ 'String(d.resolution.contributions.every((item) => item.level === 1))' <<<"$MANUAL")" = "true" ] && pass "history retains custom layer precedence" || fail "history dropped layer precedence ($MANUAL)"
+grep -q 'other value.' "$TMP/bundle/merge-me.md" && pass "manual answer reached the former winner" || fail "manual answer missed former winner"
+RID="$(JQ 'd.resolution.id' <<<"$MANUAL")"
+HISTORY="$(curl -s "${AUTH[@]}" "$BASE/api/conflict-resolutions")"
+[ "$(JQ 'String(d.resolutions.length)' <<<"$HISTORY")" = "1" ] && pass "decision appears in append-only history" || fail "decision history shape ($HISTORY)"
+grep -q 'AGREED.' <<<"$HISTORY" && pass "history retains the original answer" || fail "history dropped original answer"
+CHANGED="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"merge-me\",\"sectionKey\":\"pick\",\"selectedLayer\":\"t\",\"method\":\"manual\",\"resolutionId\":\"$RID\"}" "$BASE/api/conflict-resolutions")"
+[ "$(JQ 'String(d.ok)' <<<"$CHANGED")" = "true" ] && pass "past decision can be changed" || fail "change decision failed ($CHANGED)"
+grep -q 'AGREED.' "$TMP/m2/merge-me.md" && pass "changed decision reused the saved original answer" || fail "saved answer was not restored"
+[ "$(curl -s "${AUTH[@]}" "$BASE/api/conflict-resolutions" | JQ 'String(d.resolutions.length)')" = "2" ] && pass "changed decision appends instead of rewriting history" || fail "changed decision did not append"
+code 405 "$(C -X POST -H 'content-type: application/json' -d '{}' "$BASE2/api/conflict-resolutions")" "resolution respects the service mutation gate"
+
+printf -- '# Format only\n\n## Pick {#pick}\n\nUse **Postgres** for writes.\n' > "$TMP/bundle/format-only.md"
+printf -- '# Format only\n\n## Pick {#pick}\n\nUse postgres for writes\n' > "$TMP/m2/format-only.mdx"
+AUTO="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"format-only","sectionKey":"pick","selectedLayer":"t","method":"automatic"}' "$BASE/api/conflict-resolutions")"
+[ "$(JQ 'd.resolution.method' <<<"$AUTO")" = "automatic" ] && pass "format-only conflict resolves automatically" || fail "format-only resolution failed ($AUTO)"
+grep -q 'Use \*\*Postgres\*\* for writes.' "$TMP/m2/format-only.mdx" && pass "wand keeps .mdx contributors in sync" || fail "wand missed the .mdx contributor"
+
+printf -- '# Race\n\n## Pick {#pick}\n\nred\n' > "$TMP/bundle/race.md"
+printf -- '# Race\n\n## Pick {#pick}\n\nblue\n' > "$TMP/m2/race.mdx"
+curl -s -o "$TMP/race-t.json" -w '%{http_code}' -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"race","sectionKey":"pick","selectedLayer":"t","method":"manual"}' "$BASE/api/conflict-resolutions" > "$TMP/race-t.status" &
+RACE_T_PID=$!
+curl -s -o "$TMP/race-m2.json" -w '%{http_code}' -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"race","sectionKey":"pick","selectedLayer":"m2","method":"manual"}' "$BASE/api/conflict-resolutions" > "$TMP/race-m2.status" &
+RACE_M2_PID=$!
+wait "$RACE_T_PID" "$RACE_M2_PID"
+RACE_T="$(<"$TMP/race-t.status")"
+RACE_M2="$(<"$TMP/race-m2.status")"
+if { [ "$RACE_T" = "200" ] && [ "$RACE_M2" = "409" ]; } || { [ "$RACE_T" = "409" ] && [ "$RACE_M2" = "200" ]; }; then
+  pass "simultaneous decisions serialize instead of racing"
+else
+  fail "simultaneous decisions raced ($RACE_T, $RACE_M2)"
+fi
+
+mkdir -p "$TMP/m3"
+printf -- 'keep the local plain-text note\n' > "$TMP/m2/plain-text.txt"
+printf -- 'replace this plain-text note\n' > "$TMP/m3/plain-text.txt"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"m3\",\"level\":0,\"path\":\"$TMP/m3\"}" "$BASE/api/sources")" "add plain-text contributor"
+PLAIN="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"plain-text","sectionKey":"body","selectedLayer":"m2","method":"manual"}' "$BASE/api/conflict-resolutions")"
+[ "$(JQ 'String(d.ok)' <<<"$PLAIN")" = "true" ] && pass "plain-text conflict resolves" || fail "plain-text resolution failed ($PLAIN)"
+grep -qx 'keep the local plain-text note' "$TMP/m3/plain-text.txt" && pass "plain-text contributor was updated" || fail "plain-text contributor was not updated"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=m3")" "cleanup plain-text contributor"
 # No updated= attr -> none is invented; the anchor stays byte-identical.
 MTN="$(curl -s "${AUTH[@]}" "$BASE/api/file?path=t/note.md" | JQ 'd.modified')"
 code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"note\",\"sectionKey\":\"body\",\"layers\":[\"t\"],\"content\":\"still hello.\",\"modified\":{\"t\":\"$MTN\"}}" "$BASE/api/section")" "write to a heading without updated="

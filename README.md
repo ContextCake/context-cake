@@ -49,7 +49,7 @@ ContextCake keeps each scope separate, then resolves them at read time. The resu
 | --- | --- |
 | Local nuance without copying every policy | Higher-priority layers override only the sections they address. Everything else inherits. |
 | An AI agent that can explain its answer | Returns provenance for frontmatter and every resolved section. |
-| A safe view of disagreement | Keeps competing values as dated conflicts instead of silently deleting them. |
+| A safe way through disagreement | Clears formatting-only conflicts automatically; asks a direct question when meaning changes; keeps the original answers and every decision in append-only local history. |
 | Knowledge from more than one system | Layers any folder of Markdown, any GitHub repository, local [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundles, and trusted foreign MCP graphs in one cascade. |
 
 ## The layer cake

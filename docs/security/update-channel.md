@@ -31,6 +31,14 @@ checks and they run on every release.
 That is a better pipeline than most projects this size have. The findings below
 are about what sits outside it.
 
+One qualification on the first bullet, because it is easy to read as more than
+it is. The ruleset on `main` enforces deletion and non-fast-forward protection
+only — there is no required review and no required status check — and
+`app-release.yml` does not run the test suite. "An ancestor of `main`" therefore
+means the commit was on `main` at some point, not that anyone reviewed it or
+that its tests passed. Adding a required check-runs gate to the release job
+would close the gap between what that line implies and what it enforces.
+
 ## Findings
 
 ### 1. The gates are on the workflow, not on the release — high
@@ -46,9 +54,27 @@ release can be altered rather than replaced.
 The tag-on-main check constrains *what code* ships. It does not constrain *who
 ships* or *what artifact* is attached.
 
-**Fix:** restrict who may publish releases, and add build provenance (below) so
-an artifact that did not come from the workflow is distinguishable from one that
-did.
+What this does **not** buy an attacker is arbitrary code execution. Squirrel.Mac
+refuses a bundle whose signature fails the installed app's designated
+requirement, so a replacement artifact still has to be signed by the same
+Developer ID. Repository write alone is not enough; the certificate is a second,
+separate thing to steal. That control is also the only artifact-level check on
+this path — electron-updater performs no macOS signature verification of its
+own — which makes a Team ID change something that would silently break updates
+for every existing install.
+
+**Rollback is the sharp version of this.** An attacker with release write does
+not need to forge anything: they declare a high version in `latest-mac.yml` and
+attach an *older, genuinely signed* build. The hash matches, because they wrote
+the file that states it. Squirrel.Mac accepts it, because it really is the same
+Developer ID. Every installation silently downgrades to code with known
+vulnerabilities, and the update system reports success. Same precondition as
+above, so not a separate hole — but it is what makes the hole worth closing.
+
+**Fix:** restrict who may publish releases, add build provenance (below), and
+refuse to apply an update whose version is not strictly greater than the highest
+version this installation has seen — a `semver` comparison and a stored floor in
+`initUpdater`.
 
 ### 2. Tags are unprotected — high
 
@@ -111,11 +137,25 @@ runner that holds the signing certificate and the notary key, during the job
 that produces the artifact users auto-install. A build-chain compromise there
 is worse than a runtime one, because its output is signed.
 
-PR #90 was intended to close these and the alerts remain open — the installed
-versions still sit below the patched thresholds.
+**Corrected 2026-08-05.** An earlier draft of this page said "PR #90 was
+intended to close these and the alerts remain open," implying the fix had not
+been attempted. The real history is worse and more instructive: #90 *did* raise
+all three pins. PR #89 merged nineteen minutes later carrying a lockfile cut
+before both #90 and the 0.4.0 version bump, which reverted the pins and left the
+lockfile root at 0.3.0 against a `package.json` of 0.4.0. `npm ci` accepts that
+mismatch silently, and the release workflow compares the tag against
+`package.json` only — so a release could have been built from a lockfile
+describing a different version of the app. Dependabot re-opened the alerts, but
+a re-opened alert reads like noise beside a merged PR titled "patch undici and
+fast-uri."
 
-**Fix:** raise the pins; then treat the release job's dependency tree as
-security-relevant in its own right, not as developer tooling.
+Fixed in PR #95: pins restored, `npm audit` clean at zero across the tree, and
+two CI guards — the desktop lockfile root version must equal `package.json`, and
+`npm audit --omit=dev --audit-level=high` runs on the packages that ship.
+
+**Remaining fix:** treat the release job's dependency tree as security-relevant
+in its own right rather than as developer tooling. "Raise the pins" was never
+the durable answer; a guard that fails the build is.
 
 ### 6. `SHA256SUMS` does not protect the auto-update path — low
 

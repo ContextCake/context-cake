@@ -119,6 +119,12 @@ web-console organization UI.
   including company baseline, regardless of who authored the content.
 - [ ] WHEN a user deliberately sets a local source at or below the organization
   band THE SYSTEM SHALL honor that choice, because the user is the one making it.
+- [ ] WHEN an organization source and a locally-added source sit at the same
+  level THE SYSTEM SHALL resolve the local one as effective, regardless of
+  either document's `updated` date.
+- [ ] WHERE a published record supplies a date THE SYSTEM SHALL NOT let it
+  affect ordering beyond the moment the directory was read, so a publisher
+  cannot win a tie by dating a document into the future.
 - [ ] WHEN an organization source and a personal source define the same concept
   section THE SYSTEM SHALL resolve the personal one as effective and SHALL
   surface the organization's value as dissent.

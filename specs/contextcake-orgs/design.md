@@ -118,7 +118,26 @@ proposed a range of 1–49, which — since higher wins — would have let a pub
 outrank the user's own decisions. A cap is only a safety property if it caps in
 the direction precedence runs.
 
-Two consequences worth stating:
+**Equal levels are decided by a date the publisher controls.** `sectionBeats`
+(`resolver.mjs:157`) is a strict `>`, so an equal-level contest keeps whichever
+contributor was ordered first — and `orderContributors` (`:72-77`) sorts equal
+levels by the document's own `updated` frontmatter, newest first. That field is
+written by whoever wrote the document. An org-published source dated
+`2999-01-01` therefore wins any tie at the same level.
+
+The default guarantee still holds: a locally-added source defaults to level 1
+and beats org content at 0 outright, no tie involved. But the tie is reachable
+in exactly the case the spec singles out — Dana deliberately placing her own
+company handbook at level 0, where an org source also sits. Two required
+consequences:
+
+- The materializer must clamp a published record's effective `updated` to the
+  time the directory was read, so a publisher cannot date its way to the front.
+- A tie between an org-origin and a local-origin source at the same level must
+  resolve to the local one regardless of dates. Provenance breaks the tie, not
+  recency.
+
+Two further consequences worth stating:
 
 - An organization publishes **baseline**, not override. That is the correct
   semantics for a company handbook: it is what applies unless you have decided
@@ -200,6 +219,7 @@ is quietly removed.
 | `subdir` of `../../etc` | Rejected |
 | Record at `level: 49` | Clamped to 0 at receipt **and** at materialization |
 | Org source vs. local source at default level, same concept | Local wins; org appears as dissent |
+| Org record dated `2999-01-01`, tied at level 0 with a local source | Local wins; a publisher-supplied date never breaks a tie |
 | Pointer change on a confirmed source | Returns to pending; layer keeps old target until re-confirmed |
 | Directory of 65 KB, or 201 records | Whole file discarded |
 | Directory with `version: 2` | Whole file discarded |

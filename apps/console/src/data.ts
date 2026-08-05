@@ -11,6 +11,9 @@ export interface Source {
   coverage: number; focus: string; status: 'serving' | 'synced' | 'degraded' | 'error' | 'empty'
   /** Raw engine kind ('okf-local' | 'files' | 'github' | 'mcp') for management UI. */
   sourceKind: string
+  /** Credential state reported by the engine; aliases are names, never secrets. */
+  authAlias?: string | null
+  authState?: 'ok' | 'anonymous' | 'missing-token' | 'host-mismatch'
   level: number
   conceptCount: number
   /** Git remote a clone-backed layer came from; enables Sync alongside kind 'github'. */

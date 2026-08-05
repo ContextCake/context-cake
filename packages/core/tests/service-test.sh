@@ -331,4 +331,87 @@ grep -q '"t"' "$TMP/manifest2.json" && pass "manifest untouched by blocked mutat
 FT="$(curl -s "$BASE2/nope")"
 grep -q host-fallthrough <<<"$FT" && pass "fall-through works on this host too" || fail "fall-through host2 ($FT)"
 
-[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard)" || { echo "service test FAILED"; exit 1; }
+echo "injected credentials: reported, never echoed"
+# The engine receives secrets by value from whoever owns the keychain. Two
+# things have to hold at once: the credential must actually reach the adapter,
+# and it must never come back out of an HTTP response. A source that names a
+# credential it did not get has to say so — otherwise a withheld token is
+# indistinguishable from an empty repo.
+cat > "$TMP/creds.mjs" <<'EOF'
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const { createEngineService } = await import(pathToFileURL(process.env.SERVICE_MJS).href);
+
+const dir = process.argv[2];
+const SECRET = "gh" + "u_" + "S".repeat(36);
+
+// A stand-in GitHub API that answers just enough to index one document.
+const FILE = "---\ntype: note\ntitle: Remote\nupdated: 2026-07-01\n---\n\n# Remote\n\n## S {#s}\n\nremote body.\n";
+let sawAuth = null;
+const api = http.createServer((req, res) => {
+  const url = new URL(req.url, "http://localhost");
+  sawAuth = req.headers.authorization ?? sawAuth;
+  const json = (c, b) => { res.writeHead(c, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
+  if (url.pathname === "/repos/acme/kb") return json(200, { default_branch: "main", pushed_at: "2026-07-20T12:00:00Z" });
+  if (url.pathname.startsWith("/repos/acme/kb/git/trees/")) {
+    return json(200, { truncated: false, tree: [{ path: "README.md", type: "blob", size: FILE.length }] });
+  }
+  if (url.pathname === "/repos/acme/kb/commits") return json(200, []);
+  if (url.pathname.startsWith("/repos/acme/kb/contents/")) {
+    res.writeHead(200, { "content-type": "text/plain", "content-length": Buffer.byteLength(FILE) });
+    return res.end(FILE);
+  }
+  return json(404, { message: "Not Found" });
+});
+await new Promise((r) => api.listen(0, "127.0.0.1", r));
+const apiHost = "127.0.0.1:" + api.address().port;
+const apiBase = "http://" + apiHost;
+
+const manifestPath = path.join(dir, "creds-manifest.json");
+fs.writeFileSync(manifestPath, JSON.stringify({
+  layers: [{ name: "remote", level: 2, source: "github", repo: "acme/kb", apiBase, auth: "keychain:github.com/octo" }],
+}));
+
+const svc = createEngineService({
+  manifestPath,
+  tokens: { "github.com/octo": { secret: SECRET, host: apiHost } },
+});
+const server = http.createServer(async (req, res) => {
+  if (await svc.handleRequest(req, res)) return;
+  res.writeHead(404); res.end();
+});
+await new Promise((r) => server.listen(0, "127.0.0.1", r));
+const base = "http://127.0.0.1:" + server.address().port;
+
+const graph = async () => (await fetch(base + "/api/graph?wait=4000")).text();
+const bound = await graph();
+const boundSource = JSON.parse(bound).sources.find((s) => s.name === "remote");
+
+// Take the token away; the same layer must degrade loudly, not silently.
+svc.setTokens({});
+const unbound = await graph();
+const unboundSource = JSON.parse(unbound).sources.find((s) => s.name === "remote");
+
+svc.close(); server.close(); api.close();
+console.log(JSON.stringify({
+  reachedAdapter: sawAuth === "Bearer " + SECRET,
+  leakedBound: bound.includes(SECRET),
+  leakedUnbound: unbound.includes(SECRET),
+  boundState: boundSource?.authState,
+  boundAlias: boundSource?.authAlias,
+  boundIndexed: (boundSource?.conceptCount ?? 0) > 0,
+  unboundState: unboundSource?.authState,
+}));
+EOF
+CRED="$(node "$TMP/creds.mjs" "$TMP" 2>/dev/null)"
+grep -q '"reachedAdapter":true' <<<"$CRED" && pass "injected credential reaches the adapter as a bearer" || fail "credential did not reach adapter ($CRED)"
+grep -q '"leakedBound":false' <<<"$CRED" && pass "the secret appears nowhere in /api/graph" || fail "SECRET LEAKED in graph payload ($CRED)"
+grep -q '"leakedUnbound":false' <<<"$CRED" && pass "the secret stays absent after setTokens" || fail "SECRET LEAKED after setTokens ($CRED)"
+grep -q '"boundState":"ok"' <<<"$CRED" && pass "a satisfied credential reports authState ok" || fail "authState not ok ($CRED)"
+grep -q '"boundAlias":"github.com/octo"' <<<"$CRED" && pass "the alias (a name, not a secret) is reported" || fail "authAlias missing ($CRED)"
+grep -q '"boundIndexed":true' <<<"$CRED" && pass "the credentialed layer actually indexed" || fail "credentialed layer did not index ($CRED)"
+grep -q '"unboundState":"missing-token"' <<<"$CRED" && pass "setTokens re-indexes and reports the now-missing credential" || fail "setTokens did not invalidate ($CRED)"
+
+[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection)" || { echo "service test FAILED"; exit 1; }

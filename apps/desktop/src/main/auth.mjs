@@ -4,78 +4,17 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createClient } from '@supabase/supabase-js'
+import { createEncryptedStorage } from './encrypted-storage.mjs'
 
 const CALLBACK_URL = 'contextcake://auth/callback'
 const OAUTH_STATE_KEY = 'contextcake.oauth.state'
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000
 
-/**
- * Supabase needs one storage adapter for both the PKCE verifier and the
- * resulting session. Encrypt the complete adapter payload with Electron's
- * safeStorage so neither value ever lands on disk as plaintext.
- */
-export function createEncryptedStorage({ configDir, safeStorage, canWrite = () => true }) {
-  const file = path.join(configDir, 'session.enc')
-  const memory = new Map()
-
-  const encryptionAvailable = () => {
-    try { return safeStorage?.isEncryptionAvailable() === true } catch { return false }
-  }
-
-  const readMap = () => {
-    if (!encryptionAvailable()) return Object.fromEntries(memory)
-    try {
-      const encrypted = fs.readFileSync(file)
-      const plaintext = safeStorage.decryptString(encrypted)
-      const parsed = JSON.parse(plaintext)
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
-    } catch {
-      // Missing, locked, or stale Keychain material is a signed-out state.
-      return {}
-    }
-  }
-
-  const writeMap = (values) => {
-    if (!encryptionAvailable()) {
-      memory.clear()
-      for (const [key, value] of Object.entries(values)) memory.set(key, value)
-      return
-    }
-    fs.mkdirSync(configDir, { recursive: true })
-    const encrypted = safeStorage.encryptString(JSON.stringify(values))
-    const temporary = `${file}.tmp`
-    fs.writeFileSync(temporary, encrypted, { mode: 0o600 })
-    fs.renameSync(temporary, file)
-    try { fs.chmodSync(file, 0o600) } catch { /* best effort on non-POSIX test hosts */ }
-  }
-
-  const clear = () => {
-    memory.clear()
-    try { fs.rmSync(file) } catch (err) {
-      if (err?.code !== 'ENOENT') throw err
-    }
-  }
-
-  return {
-    file,
-    getItem(key) {
-      const value = readMap()[key]
-      return typeof value === 'string' ? value : null
-    },
-    setItem(key, value) {
-      if (!canWrite()) return
-      writeMap({ ...readMap(), [key]: value })
-    },
-    removeItem(key) {
-      if (!canWrite()) return
-      const next = readMap()
-      delete next[key]
-      if (Object.keys(next).length === 0) clear()
-      else writeMap(next)
-    },
-    clear,
-  }
-}
+// Supabase needs one storage adapter for both the PKCE verifier and the
+// resulting session; it lives in `session.enc`. The store itself is generic and
+// now shared with the GitHub credential broker — see encrypted-storage.mjs for
+// what safeStorage does and does not protect against.
+export { createEncryptedStorage }
 
 function publicState(available, session, notice = '') {
   if (!session?.user) return { available, signedIn: false, ...(notice ? { notice } : {}) }

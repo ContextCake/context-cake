@@ -37,6 +37,28 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   no `electron` module: pass it plain paths via argv. The bearer token travels
   up the engine message port and reaches the preload only through trusted IPC;
   it must never appear in engine or renderer argv (visible in `ps`).
+- **Source credentials are separate from accounts, and separate from the API
+  bearer.** `src/main/github-connections.mjs` holds GitHub tokens in
+  `tokens.enc` (its own file, not `session.enc` — clearing a sign-in must not
+  drop a GitHub connection). They reach the engine as an alias → `{secret, host}`
+  map over the utilityProcess message port (`sendTokens`), never argv or env,
+  for the same `ps`-visibility reason the bearer travels up it. Connecting
+  GitHub works with accounts switched off — that independence is why
+  `registerIntegrationIpc()` is registered outside `initializeAccounts()`.
+  `list()` returns metadata only; there is deliberately no IPC channel that
+  hands a stored secret to the renderer. Every connection records the host it
+  was minted for — twice, `apiHost` and `gitHost` — which is what lets the
+  engine withhold it from a layer whose `apiBase`, or a remote whose URL,
+  points elsewhere.
+- **Never hand git a credential without resetting its helper chain first.**
+  `gitCloneOrPull` (engine, `service.mjs`) passes `-c credential.helper=`
+  before its own one-shot helper. Git's chain is cumulative and normally ends
+  at `osxkeychain`, so supplying a token without the reset makes *git* write it
+  into the login keychain — a copy outside `tokens.enc`, surviving uninstall,
+  invisible to Disconnect. The secret rides the child's env (argv is
+  `ps`-readable); `GIT_TRACE*`/`GIT_CURL_VERBOSE` are stripped so a tracing var
+  already in the user's shell can't dump the exchange. Proven against the real
+  git binary in `packages/core/tests/git-auth.test.mjs`.
 - **Every path that ends the app must stop the engine first** via
   `shutdownEngine()` in `main.mjs`. `app.exit()` does not fire `before-quit`,
   so skipping it makes a normal shutdown look like a crash and reports a

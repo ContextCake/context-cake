@@ -27,7 +27,7 @@ import { parseDocument, DOC_EXTENSIONS } from "./files.mjs";
 
 // What a repo is assumed to hold unless the layer says otherwise.
 const DEFAULT_PATHS = ["CLAUDE.md", "AGENTS.md", "README.md", "docs/**", ".context/**"];
-const DEFAULT_API_BASE = "https://api.github.com";
+export const DEFAULT_API_BASE = "https://api.github.com";
 const MAX_FILE_BYTES = 1_000_000; // a context doc that big is a data file, not context
 const INDEX_TTL_MS = 300_000;
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -118,7 +118,17 @@ export function createGithubSource({
     if (token) headers.Authorization = `Bearer ${token}`;
     // Errors quote only the pathname, never the built URL — apiBase is caller
     // configuration and may carry userinfo.
-    const res = await fetch(url, { headers, redirect: "follow", signal: AbortSignal.timeout(requestTimeoutMs) });
+    //
+    // "manual", not "follow", precisely because the request is credentialed:
+    // following a redirect would re-send the Authorization header to whatever
+    // host the 3xx names, and whether it gets stripped cross-origin depends on
+    // the fetch implementation. The token is bound to one host upstream
+    // (sources/index.mjs); honoring a redirect would hand that decision back to
+    // the server. A redirect is reported as the failure it is.
+    const res = await fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(requestTimeoutMs) });
+    if (res.status >= 300 && res.status < 400) {
+      throw new Error(`GitHub API ${res.status} redirect on ${pathname} — not followed on a credentialed request`);
+    }
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`GitHub API ${res.status} on ${pathname}`);
     if (!raw) return res.json();

@@ -32,6 +32,20 @@ interface CliResult {
 }
 
 declare global {
+  /**
+   * A stored source credential as the renderer is allowed to see it: which
+   * account, on which host, added when. Deliberately no token field — the
+   * secret never crosses the bridge outward.
+   */
+  type GithubConnection = {
+    alias: string
+    login: string
+    gitHost: string
+    apiHost: string
+    tokenType: 'pat' | 'device'
+    createdAt: string
+  }
+
   interface Window {
     __CC_DESKTOP?: {
       /** Fetch the per-launch engine bearer through the desktop's trusted IPC gate. */
@@ -52,6 +66,15 @@ declare global {
         getStatus: () => Promise<CliResult>
         install: () => Promise<CliResult>
       }
+    }
+    /**
+     * Source credentials. Separate from __CC_AUTH on purpose: connecting
+     * GitHub needs no ContextCake account and exists in builds that ship none.
+     */
+    __CC_INTEGRATIONS?: {
+      list(): Promise<GithubConnection[]>
+      addToken(token: string, host?: string): Promise<GithubConnection>
+      disconnect(alias: string): Promise<{ removed: boolean }>
     }
     __CC_AUTH?: {
       getState(): Promise<DesktopAuthState>

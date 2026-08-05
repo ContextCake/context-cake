@@ -95,28 +95,41 @@ export async function startEngineService({ onCrash } = {}) {
         settled = true
         started = true
         clearTimeout(timer)
+        const postWithAck = (payload) => {
+          if (closing) return Promise.resolve()
+          return new Promise((done) => {
+            const id = nextRequestId++
+            pendingAcks.set(id, done)
+            // A missed ack must not leave a caller awaiting forever.
+            const ackTimer = setTimeout(() => {
+              if (pendingAcks.delete(id)) done()
+            }, RELOAD_TIMEOUT_MS)
+            ackTimer.unref?.()
+            try {
+              child.postMessage({ ...payload, id })
+            } catch {
+              clearTimeout(ackTimer)
+              pendingAcks.delete(id)
+              done()
+            }
+          })
+        }
+
         resolve({
           origin: message.origin,
           token: message.token,
           /** Re-read the manifest in the engine; resolves once it acknowledges. */
           reload() {
-            if (closing) return Promise.resolve()
-            return new Promise((done) => {
-              const id = nextRequestId++
-              pendingAcks.set(id, done)
-              // A missed ack must not leave a caller awaiting forever.
-              const ackTimer = setTimeout(() => {
-                if (pendingAcks.delete(id)) done()
-              }, RELOAD_TIMEOUT_MS)
-              ackTimer.unref?.()
-              try {
-                child.postMessage({ type: 'reload', id })
-              } catch {
-                clearTimeout(ackTimer)
-                pendingAcks.delete(id)
-                done()
-              }
-            })
+            return postWithAck({ type: 'reload' })
+          },
+          /**
+           * Hand the engine the credentials for remote sources. Travels the
+           * message port for the same reason the bearer token comes back up
+           * it — argv and env are readable by any process running as this
+           * user, and this payload is the secrets themselves.
+           */
+          sendTokens(tokens) {
+            return postWithAck({ type: 'tokens', tokens: tokens ?? {} })
           },
           mutateManifest(buildCandidate) {
             return withManifestLock(manifestPath(), () => {

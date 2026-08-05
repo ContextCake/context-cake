@@ -54,6 +54,7 @@ let reverseTree = false;
 let mode = null;
 let lastAuth = null;
 let requests = 0;
+let redirectTo = null; // when set, every API call answers 3xx toward this URL
 let treeCalls = []; // which trees were actually requested — scoping is about the REQUEST
 
 const server = http.createServer((req, res) => {
@@ -68,9 +69,11 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/__edit") { editedDate = url.searchParams.get("date") || null; return json(200, { editedDate }); }
   if (url.pathname === "/__reverse") { reverseTree = url.searchParams.get("on") === "1"; return json(200, { reverseTree }); }
   if (url.pathname === "/__trees") { const t = treeCalls; if (url.searchParams.get("reset")) treeCalls = []; return json(200, { trees: t }); }
+  if (url.pathname === "/__redirect") { redirectTo = url.searchParams.get("to") || null; return json(200, { redirectTo }); }
 
   requests += 1;
   lastAuth = req.headers.authorization ?? null;
+  if (redirectTo) { res.writeHead(302, { location: redirectTo }); return res.end(); }
   if (mode === "forbidden") return json(403, { message: "API rate limit exceeded" });
 
   if (url.pathname === "/repos/acme/payments") {
@@ -268,6 +271,39 @@ grep -q '^THROW' <<<"$(sed -n 9p <<<"$auth_out")" || fail "an auth array must be
 node "$tmpdir/load.mjs" "$api" acme/payments/CLAUDE "tok-abc123" > /dev/null
 sent="$(curl -fsS "$api/__auth")"
 grep -q 'Bearer tok-abc123' <<<"$sent" || fail "the token should be sent as an Authorization bearer header" "$sent"
+
+# ...and stops there. Following a 3xx on a credentialed request would re-send the
+# bearer to whatever host the redirect names, handing the "where does this token
+# go" decision back to the server. The sink below is a different origin standing
+# in for that target: it must never be touched, and must never see the token.
+cat > "$tmpdir/redirect.mjs" <<EOF
+import http from "node:http";
+import { createGithubSource } from "${sources_dir}/github.mjs";
+
+let sinkHits = 0;
+let sinkAuth = null;
+const sink = http.createServer((req, res) => {
+  sinkHits += 1;
+  sinkAuth = req.headers.authorization ?? null;
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end("{}");
+});
+await new Promise((r) => sink.listen(0, "127.0.0.1", r));
+const sinkUrl = "http://127.0.0.1:" + sink.address().port + "/stolen";
+
+const api = process.argv[2];
+await fetch(api + "/__redirect?to=" + encodeURIComponent(sinkUrl));
+const s = createGithubSource({ name: "repo", level: 3, repo: "acme/payments", apiBase: api, token: "tok-redirect" });
+const ids = await s.listConceptIds();
+const health = s.health();
+await fetch(api + "/__redirect");
+sink.close();
+console.log(JSON.stringify({ ids: ids.length, sinkHits, sinkAuth, ok: health.ok, lastError: health.lastError }));
+EOF
+red="$(node "$tmpdir/redirect.mjs" "$api" 2>/dev/null)"
+grep -q '"sinkHits":0' <<<"$red" || fail "a credentialed request must not follow a redirect" "$red"
+grep -q '"sinkAuth":null' <<<"$red" || fail "the bearer token must never reach the redirect target" "$red"
+grep -q '"ok":false' <<<"$red" || fail "an unfollowed redirect should be reported, not silently empty" "$red"
 
 # --- 5. Cascade: a github layer over an okf-local layer, sections merged ------
 

@@ -322,6 +322,8 @@ export function adaptSources(g: GraphSummary): Source[] {
       // Management fields (Sources view): the raw engine kind plus health
       // timestamps ride along so remove/rename/sync can render honestly.
       sourceKind: s.kind,
+      authAlias: s.authAlias ?? null,
+      authState: s.authState ?? 'anonymous',
       level: s.level,
       conceptCount: s.conceptCount,
       origin: s.origin ?? null,

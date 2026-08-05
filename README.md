@@ -155,7 +155,7 @@ A manifest defines the sources and their precedence. Four source adapters cover 
 | Source kind | What becomes a layer |
 | --- | --- |
 | `files` | Any folder of `.md`, `.mdx`, or `.txt` — repository docs, an Obsidian vault, a wiki export. No conversion needed. |
-| `github` | Any GitHub repository, read over the API without a clone: `CLAUDE.md`, `AGENTS.md`, `README.md`, and `docs/**` by default. |
+| `github` | Any public or authenticated GitHub repository, read over the API without a clone: `CLAUDE.md`, `AGENTS.md`, `README.md`, and `docs/**` by default. |
 | `okf-local` | A local OKF bundle — Markdown directories with YAML frontmatter for types, dates, and links. |
 | `mcp` | A trusted foreign MCP graph, translated into the same resolved view at read time. |
 

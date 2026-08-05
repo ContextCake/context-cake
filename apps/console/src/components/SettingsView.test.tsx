@@ -68,6 +68,7 @@ beforeEach(() => {
   window.localStorage.clear()
   delete window.__CC_AUTH
   delete window.__CC_DESKTOP
+  delete window.__CC_INTEGRATIONS
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -78,6 +79,7 @@ afterEach(async () => {
   container.remove()
   document.documentElement.removeAttribute('data-theme')
   delete window.__CC_AUTH
+  delete window.__CC_INTEGRATIONS
 })
 
 describe('SettingsView', () => {
@@ -112,6 +114,30 @@ describe('SettingsView', () => {
 
     await act(async () => button('Back to app').click())
     expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('offers GitHub connections independently of ContextCake accounts', async () => {
+    const list = vi.fn().mockResolvedValue([{
+      alias: 'github.com/octocat', login: 'octocat', gitHost: 'github.com',
+      apiHost: 'api.github.com', tokenType: 'pat', createdAt: '2026-08-04T00:00:00.000Z',
+    }])
+    window.__CC_INTEGRATIONS = {
+      list,
+      addToken: vi.fn(),
+      disconnect: vi.fn().mockResolvedValue({ removed: true }),
+    }
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+
+    expect(findButton('Account')).toBeUndefined()
+    await act(async () => button('Connections').click())
+    await act(async () => {})
+    expect(list).toHaveBeenCalled()
+    expect(container.textContent).toContain('octocat')
+    expect(container.textContent).toContain('keychain:github.com/octocat')
   })
 
   it('applies theme changes immediately', async () => {

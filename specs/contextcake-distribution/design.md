@@ -132,8 +132,7 @@ from the same engine + manifest contract; it is a packaging task, not new code.
 
 ## 7. Update pipeline (one release → every channel)
 
-1. Maintainer tags `app-vX.Y.Z` (tag commit must be an ancestor of `main`,
-   mirroring `console-deploy.yml`).
+1. Maintainer tags `app-vX.Y.Z` (tag commit must be an ancestor of `main`).
 2. `app-release.yml` (macOS runner): build console renderer → electron-builder
    package → codesign (Developer ID, hardened runtime) → `notarytool submit
    --wait` → staple → generate `SHA256SUMS` → create the GitHub Release with
@@ -142,8 +141,14 @@ from the same engine + manifest contract; it is a packaging task, not new code.
    its public asset `download_count` provides a directional first-launch metric
    without an SDK, event body, or application-generated identifier. GitHub
    Releases is thereby the **single authoritative version source** for the app,
-   the CLI's update hint, the site's download button, the Homebrew cask, and the
-   changelog page.
+   Web Demo, CLI's update hint, site's download button, Homebrew
+   cask, and changelog page. After the signed release is published, the workflow
+   deploys the Web Demo artifact and site built from the same tag, and records
+   the tag and commit in the Web Demo's `release.json`. A post-deploy verifier
+   fails the workflow unless that provenance and the site's app/demo links all
+   agree with the release tag.
+   The source-install route may deliberately pin an older checksum-verified
+   `app-v*` archive; it is a source snapshot, not a second release train.
 3. In-app: electron-updater checks on launch + every 6 hours over HTTPS to
    `github.com`/`objects.githubusercontent.com` only; a Settings toggle
    disables all checks; the check carries version/platform/arch and no PII

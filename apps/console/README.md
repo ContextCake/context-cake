@@ -106,16 +106,18 @@ src/
   styles.css
 ```
 
-## Deploy
+## Preview and release
 
-Cloudflare Pages project `contextcake-console` serves `dist/`. A merge to
-`main` is not a production release: production deploys from `console-v*` tags
-or an explicit Wrangler deploy. See [`../../docs/go-live.md`](../../docs/go-live.md)
-for the complete surface-level release contract.
+Cloudflare Pages project `contextcake-console` serves the public Web Demo from
+`dist/`. Merges to `main` can publish review previews, but there is no separate
+Console release train. An `app-v*` ContextCake release builds the demo and Mac
+renderer from the same commit, publishes the signed app, then deploys the Web
+Demo and version-aware site to production. See [`../../docs/go-live.md`](../../docs/go-live.md) for the
+complete release contract.
 
 ```bash
 npm run build
-npx wrangler pages deploy dist --project-name=contextcake-console --branch=main
+npx wrangler pages deploy dist --project-name=contextcake-console --branch=preview-local
 ```
 
 The original design handoff remains under `project/`; see

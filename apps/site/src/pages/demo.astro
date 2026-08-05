@@ -2,10 +2,9 @@
 import Base from '../layouts/Base.astro';
 import Icon from '../components/Icon.astro';
 
-// Point at index.html explicitly: Cloudflare Pages resolves the directory, but
-// `astro dev` does not serve a trailing-slash directory index, so `/demo-app/`
-// 404s the iframe in local dev.
-const demoUrl = '/demo-app/index.html';
+// One canonical Web Demo is deployed from the same app-v* release commit as
+// the Mac app. The site embeds that deployment instead of rebuilding a copy.
+const demoUrl = 'https://contextcake-console.pages.dev/';
 
 const narrativePoints = [
 	{
@@ -59,7 +58,7 @@ const narrativePoints = [
 						<span class="chrome-dots" aria-hidden="true"><i></i><i></i><i></i></span>
 						<span class="chrome-title">
 							<span class="chrome-live" aria-hidden="true"></span>
-							console.contextcake.com<span class="chrome-path"> · decisions/primary-db</span>
+							ContextCake Web Demo<span class="chrome-path"> · decisions/primary-db</span>
 						</span>
 						<span class="chrome-actions">
 							<a class="chrome-btn" href={demoUrl} target="_blank" rel="noreferrer">
@@ -82,8 +81,10 @@ const narrativePoints = [
 						<iframe
 							class="demo-frame"
 							src={demoUrl}
-							title="ContextCake console demo"
+							title="ContextCake Web Demo"
 							loading="eager"
+							referrerpolicy="no-referrer"
+							sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
 						/>
 						<span class="frame-hint" data-demo-hint aria-hidden="true">
 							<Icon name="maximize" size={15} strokeWidth={2.2} />

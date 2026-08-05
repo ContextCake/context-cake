@@ -22,14 +22,15 @@ structure, code style, and three-tier boundaries (✅ always / ⚠️ ask first 
 - `src/content/docs/docs/` owns Starlight docs pages.
 - `src/styles/tokens.css` is the color/type token source of truth.
 - `scripts/build-demo-data.mjs` shells out to `packages/core/src/resolver.mjs` and writes generated demo data.
-- `scripts/build-console-demo.mjs` builds `apps/console` into the site demo app mount.
+- `/demo` embeds the canonical Web Demo at `contextcake-console.pages.dev`; the site never builds or publishes a second renderer copy.
+- `scripts/clean-legacy-demo.mjs` removes stale generated `/demo-app/` output before local and production builds.
 
 ## Gotchas
 
 - Colors/fonts ONLY via `var(--cc-*)` tokens from `src/styles/tokens.css`. The layer
   colors are product semantics (personal amber / team teal / company indigo).
-- Install story is **versioned release archive first**. Do not make `git clone` the
-  primary user install path; keep source checkout as an audit/contribution path.
+- Install story is **signed Mac app first**. Keep the checksum-pinned `app-v*`
+  source snapshot as an audit, Linux/WSL, and contribution fallback.
   Never add an `npm install` step for the engine.
 - Docs routes live under `src/content/docs/docs/` (the extra `docs/` gives `/docs/*`
   URLs; the marketing pages own `/`). Sidebar is explicit in `astro.config.mjs`.

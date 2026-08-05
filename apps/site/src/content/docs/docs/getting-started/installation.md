@@ -44,7 +44,7 @@ contains the matching ZIP and checksums.
 
 ## Choose a route
 
-Every route below targets the same `console-v0.2.0` source tag. Use the archive
+Every route below targets the same `app-v0.5.0` coordinated release tag. Use the archive
 when you want the smallest inspectable download, or a shallow Git checkout when
 you already work with source-control tools.
 
@@ -53,11 +53,11 @@ you already work with source-control tools.
 On macOS, Linux, or WSL:
 
 ```bash
-curl --fail --location https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz \\
-  --output context-cake-console-v0.2.0.tar.gz
+curl --fail --location https://github.com/ContextCake/context-cake/archive/refs/tags/app-v0.5.0.tar.gz \\
+  --output context-cake-app-v0.5.0.tar.gz
 ```
 
-You can also [download the same archive in your browser](https://github.com/ContextCake/context-cake/archive/refs/tags/console-v0.2.0.tar.gz).
+You can also [download the same archive in your browser](https://github.com/ContextCake/context-cake/archive/refs/tags/app-v0.5.0.tar.gz).
 
 ### GitHub CLI
 
@@ -65,14 +65,14 @@ If you already use `gh`, create a shallow checkout at the same tag:
 
 ```bash
 gh repo clone ContextCake/context-cake contextcake -- \\
-  --branch console-v0.2.0 --depth 1
+  --branch app-v0.5.0 --depth 1
 cd contextcake
 ```
 
 ### Git
 
 ```bash
-git clone --branch console-v0.2.0 --depth 1 \\
+git clone --branch app-v0.5.0 --depth 1 \\
   https://github.com/ContextCake/context-cake.git contextcake
 cd contextcake
 ```
@@ -84,13 +84,13 @@ Git and GitHub CLI users can skip directly to [Verify the resolver](#verify-the-
 If you downloaded the archive with curl or your browser, verify it before unpacking:
 
 ```bash
-printf '%s  %s\n' '013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253' 'context-cake-console-v0.2.0.tar.gz' | shasum -a 256 --check &&
+printf '%s  %s\n' 'c0f99cdbf3fb1b483d9324a471afff54a63457da79e17ba652231f0e1f99a984' 'context-cake-app-v0.5.0.tar.gz' | shasum -a 256 --check &&
 mkdir contextcake &&
-tar -xzf context-cake-console-v0.2.0.tar.gz -C contextcake --strip-components=1 &&
+tar -xzf context-cake-app-v0.5.0.tar.gz -C contextcake --strip-components=1 &&
 cd contextcake
 ```
 
-These commands target the `console-v0.2.0` tag instead of following the
+These commands target the `app-v0.5.0` release instead of following the
 latest source checkout, and stop before extraction if the downloaded bytes do not
 match the published SHA-256.
 

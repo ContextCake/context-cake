@@ -21,7 +21,7 @@ const releases = [
     ],
   },
   { tag_name: 'app-v9.9.9', draft: true, assets: [{ name: 'fake.dmg', download_count: 500 }] },
-  { tag_name: 'console-v0.2.0', assets: [{ name: 'source.tgz', download_count: 99 }] },
+  { tag_name: 'v0.2.0', assets: [{ name: 'source.tgz', download_count: 99 }] },
 ]
 
 test('summarizes app release assets without pretending downloads are unique people', () => {
@@ -39,7 +39,7 @@ test('summarizes app release assets without pretending downloads are unique peop
   assert.match(markdown, /app-v0\.3\.0 \| 2 \| 1 \| not tracked/)
   assert.match(markdown, /directional, not unique-person counts/)
   assert.doesNotMatch(markdown, /app-v9\.9\.9/)
-  assert.doesNotMatch(markdown, /console-v/)
+  assert.doesNotMatch(markdown, /v0\.2\.0/)
 })
 
 test('loads every GitHub releases page before calculating totals', async () => {

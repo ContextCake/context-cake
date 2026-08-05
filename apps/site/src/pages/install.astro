@@ -5,13 +5,19 @@ import Base from '../layouts/Base.astro';
 import CodeBlock from '../components/CodeBlock.astro';
 import Icon from '../components/Icon.astro';
 import demo from '../data/demo-cascade.json';
-import { appVersion, appTag, appDownloadUrl, appReleaseUrl } from '../data/app-release';
+import {
+	appVersion,
+	appTag,
+	appDownloadUrl,
+	appReleaseUrl,
+} from '../data/app-release';
+import {
+	sourceTag,
+	sourceDownloadUrl,
+	sourceArchiveSha256,
+} from '../data/source-release';
 
-const sourceVersion = '0.2.0';
-const sourceTag = `console-v${sourceVersion}`;
 const archiveName = `context-cake-${sourceTag}.tar.gz`;
-const archiveSha256 = '013525569cd3c3cdfac77d22bf1976a1d0bc6e8ffcbdcfbbaa8bd92502bc4253';
-const sourceDownloadUrl = `https://github.com/ContextCake/context-cake/archive/refs/tags/${sourceTag}.tar.gz`;
 const sourceTagUrl = `https://github.com/ContextCake/context-cake/tree/${sourceTag}`;
 
 const terminalDownload = `curl --fail --location ${sourceDownloadUrl} \\
@@ -22,7 +28,7 @@ cd contextcake`;
 const gitCheckout = `git clone --branch ${sourceTag} --depth 1 \\
   https://github.com/ContextCake/context-cake.git contextcake
 cd contextcake`;
-const unpackCommand = `printf '%s  %s\\n' '${archiveSha256}' '${archiveName}' | shasum -a 256 --check &&
+const unpackCommand = `printf '%s  %s\\n' '${sourceArchiveSha256}' '${archiveName}' | shasum -a 256 --check &&
 mkdir contextcake &&
 tar -xzf ${archiveName} -C contextcake --strip-components=1 &&
 cd contextcake`;

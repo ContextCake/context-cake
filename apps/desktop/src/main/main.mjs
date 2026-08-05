@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } from 'electron'
 import { startEngineService } from './service-host.mjs'
+import { createGithubConnections, verifyGithubToken } from './github-connections.mjs'
 import { buildMenu } from './menu.mjs'
 import { configDir, manifestPath, settingsPath } from './paths.mjs'
 import { markSettingsDirty, readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
@@ -372,6 +373,49 @@ async function handleDeepLink(url) {
   }
 }
 
+// ---- GitHub integration credentials -----------------------------------------
+//
+// Independent of accounts on purpose: reading your own private repo must not
+// require a ContextCake sign-in. The store lives in the main process; the
+// renderer only ever sees metadata (see list()), and the secrets reach the
+// engine over its message port, never argv or env.
+
+let githubConnections = null
+
+function connections() {
+  githubConnections ??= createGithubConnections({ configDir: configDir(), safeStorage })
+  return githubConnections
+}
+
+async function pushGithubTokens() {
+  if (!service?.sendTokens) return
+  try {
+    await service.sendTokens(connections().injectionMap())
+  } catch {
+    // Never surface the payload in an error path.
+    console.error('[contextcake] could not hand credentials to the engine')
+  }
+}
+
+function registerIntegrationIpc() {
+  const handle = handleTrustedIpc
+  handle('integrations:list', () => connections().list())
+  handle('integrations:add-token', async ({ token, host } = {}) => {
+    // Verify before storing: it names the account (so the alias reflects the
+    // real login) and turns a typo into a clear message instead of a layer
+    // that silently reads as empty later.
+    const { login, gitHost } = await verifyGithubToken({ token, host })
+    const added = connections().add({ login, token, host: gitHost, tokenType: 'pat' })
+    await pushGithubTokens()
+    return added
+  })
+  handle('integrations:disconnect', async (alias) => {
+    const removed = connections().remove(String(alias ?? ''))
+    if (removed) await pushGithubTokens()
+    return { removed }
+  })
+}
+
 function registerAccountIpc() {
   const handle = handleTrustedIpc
 
@@ -469,6 +513,11 @@ async function initializeAccounts() {
 // Native shell IPC is fixed-purpose and protected by the same exact-window,
 // exact-origin check as account IPC. The renderer cannot execute arbitrary
 // processes or select a path without the user approving the native panel.
+// Registered here rather than inside initializeAccounts(): connecting GitHub
+// works in a build that ships no accounts at all, and that independence should
+// be structural rather than a coincidence of call order.
+registerIntegrationIpc()
+
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
 handleTrustedIpc('contextcake:cli-install', () => installCli(win, { showSuccess: false }))
 handleTrustedIpc('contextcake:metrics-get', () => {
@@ -503,6 +552,10 @@ async function createWindow() {
   // already-loaded window at a new port, so an unexpected exit is fatal —
   // same clean dialog-and-exit as a failed boot.
   service ??= await startEngineService({ onCrash: handleFatal })
+  // Hand the engine its source credentials before the window loads, so a
+  // private layer indexes on first paint instead of appearing empty and then
+  // filling in.
+  await pushGithubTokens()
 
   win = new BrowserWindow({
     width: 1360,

@@ -356,13 +356,18 @@ describe('adaptSources', () => {
         {
           name: 'acme-docs', level: 2, kind: 'github', conceptCount: 4, tokens: 10, latestUpdated: null,
           status: 'ok', error: null, lastSuccessAt: '2026-08-01T10:00:00.000Z', lastErrorAt: null, live: true,
+          authAlias: 'github.com/octocat', authState: 'ok',
         },
         { name: 'notes', level: 3, kind: 'files', conceptCount: 2, tokens: 4, latestUpdated: null, status: 'ok', error: null, origin: null },
       ],
       concepts: [],
     }
     const [repo, notes] = adaptSources(graph)
-    expect(repo).toMatchObject({ sourceKind: 'github', level: 2, conceptCount: 4, lastSuccessAt: '2026-08-01T10:00:00.000Z', live: true })
+    expect(repo).toMatchObject({
+      sourceKind: 'github', level: 2, conceptCount: 4,
+      lastSuccessAt: '2026-08-01T10:00:00.000Z', live: true,
+      authAlias: 'github.com/octocat', authState: 'ok',
+    })
     expect(notes.sourceKind).toBe('files')
     expect(notes.live).toBeUndefined()
   })

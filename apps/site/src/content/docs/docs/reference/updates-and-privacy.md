@@ -105,6 +105,26 @@ are switchable, and account traffic is opt-in. For the browser UIs, the update f
 persists in localStorage; the packaged app stores its native update preference in the
 local application settings file.
 
+## GitHub source connections
+
+GitHub source connections are local and independent of optional ContextCake
+accounts. When you paste a personal access token under **Settings → Connections**,
+the app makes one credentialed request to that GitHub host to verify the token and
+identify the account. It then stores the token in `tokens.enc`, encrypted with
+OS-keychain-backed `safeStorage` when available. If encryption is unavailable, the
+token remains memory-only for that run and is not written as plaintext.
+
+The Console renderer can list only connection metadata: alias, login, GitHub host,
+token type, and creation time. It cannot read a stored token back. The token reaches
+the isolated engine through Electron's process message port, not command-line
+arguments or the engine environment. For Git-over-HTTPS clone and pull operations,
+the engine passes a matching host-bound token to that individual Git child through
+its environment, with tracing disabled and persistent credential helpers reset.
+
+Disconnecting deletes the local stored copy but cannot revoke the token at GitHub.
+Revoke it separately in the GitHub account's token settings. Connection metadata and
+tokens are never included in settings sync.
+
 ## Optional desktop accounts
 
 > **Availability: not shipped.** Released builds of ContextCake for Mac contain

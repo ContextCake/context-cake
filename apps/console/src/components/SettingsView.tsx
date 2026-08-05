@@ -4,8 +4,9 @@ import { isUpdateCheckEnabled, setUpdateCheckEnabled } from '../update'
 import type { Mode } from '../api'
 import { AccountPanel } from './AccountPanel'
 import { IndexingSettings } from './IndexingSettings'
+import { IntegrationsPanel } from './IntegrationsPanel'
 
-type SettingsPane = 'general' | 'indexing' | 'account'
+type SettingsPane = 'general' | 'indexing' | 'integrations' | 'account'
 
 const GearIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
@@ -13,6 +14,10 @@ const GearIcon = () => (
 
 const AccountIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.4" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" /></svg>
+)
+
+const IntegrationsIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.8-2.8a4 4 0 0 0-5.7-5.7l-1.6 1.6" /><path d="M13.5 10.5a4 4 0 0 0-5.7 0L5 13.3a4 4 0 1 0 5.7 5.7l1.6-1.6" /></svg>
 )
 
 const IndexingIcon = () => (
@@ -34,6 +39,9 @@ export function SettingsView({
   // Builds ship without accounts by default, so the pane is hidden rather than
   // shown empty. Browser and demo builds never had sign-in to offer.
   const accountsAvailable = window.__CC_DESKTOP?.authState?.available === true && Boolean(window.__CC_AUTH)
+  // Independent of accounts: a build with sign-in switched off still connects
+  // GitHub, because reading your own private repo is a local capability.
+  const integrationsAvailable = Boolean(window.__CC_INTEGRATIONS)
 
   useEffect(() => {
     let active = true
@@ -87,6 +95,12 @@ export function SettingsView({
             <button type="button" aria-current={pane === 'indexing' ? 'page' : undefined} onClick={() => setPane('indexing')}>
               <IndexingIcon />
               Indexing
+            </button>
+          )}
+          {integrationsAvailable && (
+            <button type="button" aria-current={pane === 'integrations' ? 'page' : undefined} onClick={() => setPane('integrations')}>
+              <IntegrationsIcon />
+              Connections
             </button>
           )}
           {accountsAvailable && (
@@ -179,6 +193,15 @@ export function SettingsView({
                   </div>
                 </div>
               </section>
+            </>
+          ) : pane === 'integrations' ? (
+            <>
+              <header className="cc-settings-header">
+                <p>Settings</p>
+                <h1>Connections</h1>
+                <span>Connect accounts so ContextCake can read private sources.</span>
+              </header>
+              <IntegrationsPanel />
             </>
           ) : accountsAvailable && window.__CC_AUTH ? (
             <>

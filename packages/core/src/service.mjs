@@ -25,7 +25,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { buildSources } from "./sources/index.mjs";
+import { buildSources, resolveTokenState } from "./sources/index.mjs";
 import { probeDocs } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createMcpSource } from "./sources/mcp.mjs";
@@ -179,6 +179,10 @@ export function createEngineService({
   token = null,          // optional: when set, every /api/* request must carry
                          //   Authorization: Bearer <token> — else 401
   allowMutations = true, // when false, mutating /api routes return 405
+  tokens = {},           // optional: alias -> {secret, host} for remote sources.
+                         //   Injected by the caller that owns the OS keychain;
+                         //   the engine never reads a keychain itself and never
+                         //   returns these over HTTP. See setTokens().
 } = {}) {
   if (!manifestPath) throw new Error("createEngineService: manifestPath is required");
   const MANIFEST = path.resolve(manifestPath);
@@ -198,6 +202,12 @@ export function createEngineService({
   // until the manifest changes, reload(), or close().
 
   let closed = false;
+  // Credentials for remote sources, and a counter that changes whenever they
+  // do. The epoch is load-bearing: an index entry is keyed by its layer's
+  // configuration, and connecting an account changes no layer JSON at all — so
+  // without it a source indexed anonymously would keep serving that partial
+  // index after the token arrived, and look simply empty.
+  let tokenState = { tokens: tokens ?? {}, epoch: 0 };
   let cache = null; // { stamp, manifest, settings, sources, keys }
   // Background index entries, keyed by the layer's own configuration so that
   // adding a second source does NOT re-index the first — the common setup flow.
@@ -254,12 +264,13 @@ export function createEngineService({
       stamp,
       manifest,
       settings,
-      sources: buildSources(manifest, MANIFEST_DIR),
+      sources: buildSources(manifest, MANIFEST_DIR, { tokens: tokenState.tokens }),
       // Identity of a source's *configuration* (plus the settings that govern
-      // indexing), so an unrelated manifest edit doesn't discard a finished
-      // index — and, because a migrated profile carries the same layer objects,
-      // a v2 migration reuses every existing index too.
-      keys: layers.map((l) => `${JSON.stringify(l)}::${JSON.stringify(settings)}`),
+      // indexing, plus the credential epoch for layers that actually name a
+      // credential). A token that arrives after an anonymous GitHub index must
+      // invalidate that index, but connecting an account must not rescan every
+      // local folder and MCP graph in the cascade.
+      keys: layers.map((l) => `${JSON.stringify(l)}::${JSON.stringify(settings)}::t${l.source === "github" && l.auth ? tokenState.epoch : 0}`),
     };
     const prev = cache;
     cache = next;
@@ -280,6 +291,16 @@ export function createEngineService({
     cache = null;
     deferClose(prev);
     return getSources();
+  }
+
+  // Replace the injected credentials wholesale (connect, disconnect, or an
+  // account switch). Bumping the epoch before the rebuild is what makes the
+  // affected sources re-index against their new auth rather than keep serving
+  // the index they built without it. Never logged, never echoed back.
+  function setTokens(next) {
+    tokenState = { tokens: next ?? {}, epoch: tokenState.epoch + 1 };
+    if (closed) return;
+    reload();
   }
 
   function close() {
@@ -631,10 +652,24 @@ export function createEngineService({
       // WE have read the source yet, health says whether the source itself is
       // answering. Only a source we finished reading can be called degraded.
       const degraded = status === "ok" && health?.ok === false && health.lastErrorScope === "index";
+      // Which credential this source names and whether it actually got one.
+      // The alias is a name, never a secret, and the secret is deliberately
+      // dropped on the floor here — this object is an HTTP response body.
+      // "host-mismatch" is the interesting state: the layer asked for a token
+      // that exists but is bound elsewhere, which is a withheld credential
+      // rather than a missing one, and reads as a silent empty layer unless
+      // it's said out loud.
+      let auth = { alias: null, state: "anonymous" };
+      try {
+        const { alias, state } = resolveTokenState(meta, tokenState.tokens);
+        auth = { alias, state };
+      } catch { /* a malformed auth already failed manifest validation */ }
       return {
         name: s.name,
         level: s.level,
         kind,
+        authAlias: auth.alias,
+        authState: auth.state,
         location: kind === "mcp" ? [meta.command, ...(meta.args ?? [])].join(" ") : meta.path,
         origin: meta.origin ?? null, // e.g. a github repo a clone came from
         live: meta.live === true, // the team's live capture layer, if this is it
@@ -782,13 +817,11 @@ export function createEngineService({
       await probeMcp({ name, level, command, args: probeArgs });
       layer = { name, level, source: "mcp", command, args };
     } else if (b.kind === "github-rest") {
-      // The "Public repo" wizard path: a REST-read layer, no clone. It reads
-      // anonymously in 0.4.0 by design — a keychain alias would silently
-      // resolve to null and false-green a private repo as empty, so auth (and
-      // apiBase, which decides where a credential would be SENT) are rejected
-      // outright rather than ignored. Private repos take the git-clone kind;
-      // headless users may hand-edit {"auth":{"tokenEnv":"NAME"}} into the
-      // manifest, which the adapter already honors.
+      // The "Public repo" wizard path: a REST-read layer, no clone. This form
+      // deliberately writes an anonymous github layer, so auth/apiBase are
+      // rejected rather than silently ignored. Private repos take the git-clone
+      // kind in the wizard; authenticated REST layers remain an explicit
+      // manifest feature because they must name the intended credential alias.
       if (b.auth !== undefined || b.apiBase !== undefined) {
         throw httpError(400, "A public-repo source reads anonymously — remove auth/apiBase. For private repos use the Private repo (git) option.");
       }
@@ -1036,20 +1069,112 @@ export function createEngineService({
     return { ok: true, synced: name };
   }
 
+  // Which stored credential, if any, may be offered to a given clone URL.
+  // Host-bound like every other use of these secrets: a token connected for
+  // github.com is never handed to a remote on another host, so a manifest that
+  // names a credential and an origin it chose cannot combine them.
+  function gitCredentialsForUrl(url) {
+    let host;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:") return []; // ssh uses the agent, not us
+      host = parsed.host.toLowerCase();
+    } catch {
+      return [];
+    }
+    const secrets = [];
+    for (const entry of Object.values(tokenState.tokens)) {
+      if (!entry || typeof entry !== "object" || !entry.secret) continue;
+      if (String(entry.gitHost ?? "").toLowerCase() === host && !secrets.includes(entry.secret)) {
+        secrets.push(entry.secret);
+      }
+    }
+    return secrets;
+  }
+
+  // Auth failures from git are wordy and blame the wrong thing ("could not read
+  // Username"). The API turns them into one flag the UI can act on, because the
+  // fix is a specific action — connect an account — not a retry.
+  function looksLikeAuthFailure(text) {
+    return /authentication failed|could not read (username|password)|terminal prompts disabled|repository not found|403|401/i.test(text);
+  }
+
   async function gitCloneOrPull(url, dir, ref) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    try {
-      if (fs.existsSync(path.join(dir, ".git"))) {
-        await execFileP("git", ["-C", dir, "pull", "--ff-only"], { timeout: 60000 });
-      } else {
-        const args = ["clone", "--depth", "1"];
-        if (ref) args.push("--branch", ref);
-        args.push(url, dir);
-        await execFileP("git", args, { timeout: 120000 });
+    const secrets = gitCredentialsForUrl(url);
+    const attempts = secrets.length ? secrets : [null];
+    const pulling = fs.existsSync(path.join(dir, ".git"));
+
+    // Two things matter here beyond "the clone works".
+    //
+    // First, the credential must not outlive this command. Git's helper chain
+    // is cumulative and normally ends at osxkeychain, so simply supplying a
+    // token would have git WRITE it into the login keychain — a copy outside
+    // our own store, keyed to the host, surviving uninstall and invisible to
+    // the app's own disconnect. Setting credential.helper to empty first
+    // clears the inherited chain; the one-shot below is then the only helper,
+    // and it stores nothing.
+    //
+    // Second, the secret rides the child's environment rather than argv: the
+    // helper *text* is visible in `ps`, the value it dereferences is not.
+    // GIT_TRACE and friends are stripped for the same reason — a tracing
+    // variable already in the user's shell would otherwise dump the exchange.
+    let lastError = null;
+    for (let i = 0; i < attempts.length; i += 1) {
+      const secret = attempts[i];
+      const config = [];
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (/^GIT_(TRACE|CURL_VERBOSE)/i.test(key)) delete env[key];
       }
-    } catch (err) {
-      const detail = String(err.stderr || err.message || "").trim().split("\n").pop();
-      throw httpError(502, `git failed: ${detail}`);
+      env.GIT_TERMINAL_PROMPT = "0"; // never block on an invisible prompt
+      env.GIT_CONFIG_NOSYSTEM = "1"; // system config can't inject a helper either
+      if (secret) {
+        env.CC_GIT_TOKEN = secret;
+        config.push(
+          "-c", "credential.helper=",
+          "-c", 'credential.helper=!f() { echo username=x-access-token; echo "password=$CC_GIT_TOKEN"; }; f',
+        );
+      }
+
+      try {
+        if (pulling) {
+          await execFileP("git", [...config, "-C", dir, "pull", "--ff-only"], { timeout: 60000, env });
+        } else {
+          const args = [...config, "clone", "--depth", "1"];
+          if (ref) args.push("--branch", ref);
+          args.push(url, dir);
+          await execFileP("git", args, { timeout: 120000, env });
+        }
+        return;
+      } catch (err) {
+        lastError = err;
+        const text = String(err.stderr || err.message || "");
+        const retryingAnotherAccount = looksLikeAuthFailure(text) && i < attempts.length - 1;
+        // A failed or timed-out clone may leave a partial app-managed
+        // directory. Remove it even after the final attempt so a later user
+        // retry does not fail with "destination path already exists" instead
+        // of retrying the remote.
+        if (!pulling) {
+          try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* the git failure remains the useful error */ }
+        }
+        if (!retryingAnotherAccount) break;
+      }
+    }
+
+    if (lastError) {
+      let text = String(lastError.stderr || lastError.message || "");
+      // The token should never appear in git's output, but this error string
+      // reaches an HTTP response body — so make it structurally impossible
+      // rather than merely unlikely.
+      for (const secret of secrets) text = text.split(secret).join("[redacted]");
+      const detail = text.trim().split("\n").pop();
+      const needsAuth = looksLikeAuthFailure(text);
+      throw httpError(502, `git failed: ${detail}`, {
+        needsAuth,
+        ...(needsAuth && secrets.length === 0 ? { hint: "This repository looks private. Connect a GitHub account in Settings → Connections, then try again." } : {}),
+        ...(needsAuth && secrets.length > 0 ? { hint: "None of the connected GitHub accounts can access this repository. Check their access, or connect a different account." } : {}),
+      });
     }
   }
 
@@ -1075,5 +1200,5 @@ export function createEngineService({
     });
   }
 
-  return { handleRequest, close, getSources, reload };
+  return { handleRequest, close, getSources, reload, setTokens };
 }

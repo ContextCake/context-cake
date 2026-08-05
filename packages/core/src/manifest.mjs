@@ -430,11 +430,48 @@ function validateLayer(layer, owner) {
     throw new Error(`Layer ${layer.name} requires a path.`);
   }
   if (kind === "github" && typeof layer.repo !== "string") throw new Error(`Layer ${layer.name} requires a GitHub repo.`);
+  if (kind === "github") validateApiBase(layer.apiBase, `Layer ${layer.name}`);
   if (kind === "mcp" && typeof layer.command !== "string") throw new Error(`Layer ${layer.name} requires an MCP command.`);
   if (layer.args !== undefined && (!Array.isArray(layer.args) || layer.args.some((value) => typeof value !== "string"))) {
     throw new Error(`Layer ${layer.name} args must be an array of strings.`);
   }
   validateAuthReference(layer.auth, `Layer ${layer.name}`);
+}
+
+// The GitHub Enterprise knob decides where a named credential gets SENT, so it
+// is the other half of the auth contract: `auth` says which secret, `apiBase`
+// says to whom. A manifest you did not author could otherwise aim a real token
+// at a host of its choosing. This rejects the shapes that make that easy
+// (http, embedded userinfo, a query that could smuggle a second target); the
+// binding that actually withholds the secret from an unexpected host lives at
+// injection time in sources/index.mjs. Validation is the first half of that
+// control, never the whole of it.
+export function validateApiBase(apiBase, label) {
+  if (apiBase === undefined || apiBase === null) return;
+  if (typeof apiBase !== "string" || !apiBase.trim()) {
+    throw new Error(`${label} apiBase must be an https URL.`);
+  }
+  let url;
+  try {
+    url = new URL(apiBase);
+  } catch {
+    throw new Error(`${label} apiBase must be a valid https URL.`);
+  }
+  // Loopback over http is the one carve-out, on the same reasoning browsers use
+  // for secure contexts: a host only reachable from this machine is not the
+  // remote-exfiltration target this rule exists to stop, and it is what lets a
+  // mock API prove the credentialed path end to end.
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHost(url.hostname))) {
+    throw new Error(`${label} apiBase must use https (http only for loopback).`);
+  }
+  if (url.username || url.password) throw new Error(`${label} apiBase must not embed credentials.`);
+  if (url.search || url.hash) throw new Error(`${label} apiBase must not carry a query or fragment.`);
+}
+
+// Accepts a hostname or a host:port, including bracketed IPv6.
+export function isLoopbackHost(host) {
+  const h = String(host ?? "").toLowerCase().replace(/:\d+$/, "");
+  return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1" || h.endsWith(".localhost");
 }
 
 function validatePendingSources(sources, owner) {

@@ -41,6 +41,8 @@ npm run dist       # DMG + zip in dist/ (ad-hoc signed without Apple secrets; CI
 | `src/main/service-host.mjs` | Supervises the utility-process engine and its loopback service |
 | `src/main/engine-process.mjs` | Runs `packages/core/src/service.mjs` off the Electron UI thread |
 | `src/main/auth.mjs` | Main-process OAuth broker, PKCE callback, encrypted session lifecycle |
+| `src/main/github-connections.mjs` | Main-process GitHub token verification, encrypted connection store, and metadata-only broker |
+| `src/main/encrypted-storage.mjs` | Shared OS-keychain-backed encrypted file adapter for sessions and integration credentials |
 | `src/main/settings-sync.mjs` | Owner-scoped settings sync with path/secret scrub-and-reject checks |
 | `src/main/updater.mjs` | electron-updater against GitHub Releases (`app-v*`), settings-gated |
 | `src/main/cli-install.mjs` | Symlinks the CLI shim into `/usr/local/bin` |
@@ -55,6 +57,9 @@ npm run dist       # DMG + zip in dist/ (ad-hoc signed without Apple secrets; CI
 - Caches: `~/Library/Caches/ContextCake/`
 - Account session: persisted as encrypted `session.enc` only when Keychain-backed
   `safeStorage` is available; otherwise it remains memory-only for that run
+- GitHub source connections: persisted separately in encrypted `tokens.enc` only
+  when Keychain-backed `safeStorage` is available; otherwise they remain
+  memory-only for that run. Disconnecting does not revoke the token at GitHub.
 - Updater rollout ID: electron-updater stores a random `.updaterId` in the config
   directory and sends it as `x-user-staging-id` when checking for staged updates
 - Supabase project config: optional `supabase.json` (`url` + public `anonKey`), or

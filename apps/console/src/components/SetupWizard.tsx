@@ -57,7 +57,14 @@ async function postSource(body: Record<string, unknown>): Promise<AddResult> {
     signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
   })
   const data = await res.json().catch(() => ({}) as { error?: string })
-  if (!res.ok) throw new SourceApiError((data as { error?: string }).error ?? `Server returned ${res.status}`, res.status)
+  if (!res.ok) {
+    const body = data as { error?: string; hint?: string }
+    // A private repo fails here with git's own wording ("could not read
+    // Username"), which tells the user nothing about what to do. When the
+    // engine recognizes an auth failure it sends the actionable sentence
+    // instead — prefer it over the raw git line.
+    throw new SourceApiError(body.hint ?? body.error ?? `Server returned ${res.status}`, res.status)
+  }
   return data as AddResult
 }
 

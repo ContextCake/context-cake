@@ -63,6 +63,9 @@ export interface GraphSource {
   name: string
   level: number
   kind: string // 'okf-local' | 'files' | 'mcp'
+  /** Credential reference metadata only; the engine never returns the secret. */
+  authAlias?: string | null
+  authState?: 'ok' | 'anonymous' | 'missing-token' | 'host-mismatch'
   location?: string
   origin?: string | null
   conceptCount: number

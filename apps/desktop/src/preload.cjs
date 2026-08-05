@@ -29,6 +29,16 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   },
 })
 
+// Source credentials. Separate from __CC_AUTH because it is a separate thing:
+// connecting GitHub needs no ContextCake account, and this surface exists even
+// in builds that ship none. Only a token going IN ever crosses this bridge —
+// list() answers with metadata, never a secret.
+contextBridge.exposeInMainWorld('__CC_INTEGRATIONS', {
+  list: () => ipcRenderer.invoke('integrations:list'),
+  addToken: (token, host) => ipcRenderer.invoke('integrations:add-token', { token, host }),
+  disconnect: (alias) => ipcRenderer.invoke('integrations:disconnect', alias),
+})
+
 function subscribe(channel, cb) {
   if (typeof cb !== 'function') throw new TypeError('IPC listener must be a function')
   const listener = (_event, value) => cb(value)

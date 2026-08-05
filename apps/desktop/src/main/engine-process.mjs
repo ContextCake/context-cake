@@ -14,11 +14,16 @@
 //                   { type: 'boot-error', message }
 //                   { type: 'ack', id }
 //   parent → child  { type: 'reload', id }
+//                   { type: 'tokens', id, tokens }
 //                   { type: 'close' }
 //
 // The bearer token is generated HERE and handed up the message port rather
 // than passed down in argv — process arguments are readable by any local user
 // via `ps`, and the token is what keeps them out of the API.
+//
+// Source credentials travel the same way, in the opposite direction: the main
+// process owns the Keychain and posts an alias -> {secret, host} map down this
+// port. Same reasoning, same guarantee — never argv, never the child's env.
 
 import http from 'node:http'
 import crypto from 'node:crypto'
@@ -77,6 +82,12 @@ async function start() {
     if (!message || typeof message !== 'object') return
     if (message.type === 'reload') {
       try { service.reload() } catch (err) { console.error('[engine-service] reload failed', err) }
+      post({ type: 'ack', id: message.id })
+      return
+    }
+    if (message.type === 'tokens') {
+      // Errors here must not quote the payload: it is the credentials.
+      try { service.setTokens(message.tokens ?? {}) } catch { console.error('[engine-service] applying credentials failed') }
       post({ type: 'ack', id: message.id })
       return
     }

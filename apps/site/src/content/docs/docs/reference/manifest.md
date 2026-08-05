@@ -139,6 +139,7 @@ same repository at different refs therefore cannot share cached content.
 | `ref` | no | `github` | Branch or tag to read. Defaults to the repository's default branch. |
 | `paths` | no | `github` | Glob selectors for which files become concepts. Replaces the defaults when set. |
 | `auth` | no | `github` | A credential *reference* — `"keychain:<alias>"` or `{"tokenEnv": "NAME"}`. Never a token. |
+| `apiBase` | no | `github` | GitHub Enterprise API base. Must be HTTPS with no userinfo, query, or fragment; HTTP is accepted only for loopback development. |
 | `cache` | no | all | `{ "ttlSeconds": N, "dir": "..." }`. Strongly recommended for `github`. |
 
 ## Precedence is by level
@@ -245,19 +246,26 @@ sources.
 
 The manifest never holds a token. `auth` may only *name* one:
 
-- `{"tokenEnv": "NAME"}` — read the token from that environment variable. This
-  is the authenticated route that works today, for headless, CLI, and CI runs.
-- `"keychain:<alias>"` — reserved for a host application that resolves the alias
-  and injects the secret when it builds the sources; the engine never opens a
-  keychain itself. The Mac app does not perform this injection yet — in the app,
-  an alias resolves to nothing and the layer reads anonymously. To read a
-  private repository from the app today, add it as a repository source instead:
-  the app clones it with your existing git credentials or SSH key.
+- `{"tokenEnv": "NAME"}` — read the token from that environment variable for
+  headless, CLI, and CI runs. Environment tokens are bound to `api.github.com`
+  by default. For GitHub Enterprise, list allowed API hosts in the comma-separated
+  `CONTEXTCAKE_API_HOSTS` environment variable.
+- `"keychain:<alias>"` — resolve an alias injected by a host application; the
+  engine never opens a keychain itself. In ContextCake for Mac, connect a token
+  under **Settings → Connections**, then use the exact alias shown there. The
+  token is kept in `tokens.enc`, encrypted with OS-keychain-backed `safeStorage`
+  when available, and only the alias and connection status return to the Console.
 
 The object form must contain exactly the one `tokenEnv` field. Extra fields and
 every other shape are rejected outright, so a raw credential cannot hide beside
 an otherwise-valid reference. A repository you can read without a token needs no
-`auth` at all; an alias with nothing injected reads anonymously rather than failing.
+`auth` at all. An alias with nothing injected reads anonymously, and `/api/graph`
+reports `authState: "missing-token"`; a token withheld from the wrong host reports
+`authState: "host-mismatch"`.
+
+Credentialed API requests never follow redirects. A stored token is also bound to
+the API host recorded when it was connected, so changing `apiBase` cannot redirect
+that token to a different host.
 
 ## How paths resolve
 
@@ -275,12 +283,11 @@ against it. Treat the manifest the way you treat any MCP client config: only poi
 `--manifest` at files you trust. Read [The trust boundary](/docs/concepts/trust-boundary)
 before pointing a manifest at sources you didn't write.
 
-The same applies to credentials. A `github` layer may set `apiBase` to reach GitHub
-Enterprise — which means a manifest that pairs a hostile `apiBase` with a legitimate
-`auth` alias would send that credential to a host of its choosing. The alias names a
-secret the *app* holds, so the manifest never sees the token itself, but it does decide
-where the token is sent. Review `apiBase` and `auth` together on any manifest you did
-not write, and prefer omitting `apiBase` entirely unless you genuinely run Enterprise.
+Credentials have an additional boundary. A `github` layer may set `apiBase` for
+GitHub Enterprise, but ContextCake validates that URL and withholds any stored token
+whose recorded API host does not match it. Credentialed requests also refuse
+redirects. Review `apiBase` and `auth` together for configuration accuracy, but a
+hostile `apiBase` cannot borrow a token connected for another host.
 
 ## Pack-managed layers
 

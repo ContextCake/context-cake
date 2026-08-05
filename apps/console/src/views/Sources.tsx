@@ -72,6 +72,23 @@ function LiveWarning({ verb }: { verb: 'Removing' | 'Renaming' }) {
   )
 }
 
+function CredentialWarning({ source }: { source: Source }) {
+  if (source.authState !== 'missing-token' && source.authState !== 'host-mismatch') return null
+  const alias = source.authAlias ?? 'unknown'
+  const isEnv = alias.startsWith('env:')
+  const label = isEnv ? `Environment credential ${alias.slice(4)}` : `Credential keychain:${alias}`
+  const text = source.authState === 'host-mismatch'
+    ? `${label} was withheld because it is bound to a different GitHub host.`
+    : isEnv
+      ? `${label} is not set in the engine environment.`
+      : `${label} is not connected. Add it in Settings → Connections.`
+  return (
+    <div role="alert" style={css(`padding:8px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.5; color:${C.amberText}; overflow-wrap:anywhere;`)}>
+      {text}
+    </div>
+  )
+}
+
 type Panel = { name: string; kind: 'edit' | 'remove' } | null
 
 export function Sources({ onAddSource }: { onAddSource?: () => void }) {
@@ -208,6 +225,8 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                 {s.error}
               </div>
             )}
+
+            <CredentialWarning source={s} />
 
             {notice?.name === s.name && (
               <div role="status" style={css(`padding:8px 10px; border-radius:8px; background:${C.tealFill}; border:1px solid ${C.tealStroke}; font-size:11.5px; color:${C.tealText};`)}>

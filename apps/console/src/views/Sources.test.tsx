@@ -88,6 +88,18 @@ describe('Sources rows', () => {
     expect(container.textContent).toContain('level 2 · github')
   })
 
+  it('surfaces missing and host-mismatched credentials without exposing a secret', async () => {
+    await mount([
+      src({ name: 'missing', authAlias: 'github.com/octocat', authState: 'missing-token' }),
+      src({ name: 'mismatch', authAlias: 'github.com/work', authState: 'host-mismatch' }),
+      src({ name: 'env', authAlias: 'env:GITHUB_TOKEN', authState: 'missing-token' }),
+    ])
+
+    expect(container.textContent).toContain('Credential keychain:github.com/octocat is not connected')
+    expect(container.textContent).toContain('bound to a different GitHub host')
+    expect(container.textContent).toContain('Environment credential GITHUB_TOKEN is not set')
+  })
+
   it('marks the live team layer and keeps the three-lane model for arbitrary names', async () => {
     await mount([src({ name: 'acme-eng', level: 2, layer: 'team', live: true })])
 

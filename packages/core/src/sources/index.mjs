@@ -12,12 +12,14 @@
 import path from "node:path";
 import { createOkfLocalSource } from "./okf-local.mjs";
 import { createFilesSource } from "./files.mjs";
-import { createGithubSource } from "./github.mjs";
+import { createGithubSource, DEFAULT_API_BASE as DEFAULT_GITHUB_API_BASE } from "./github.mjs";
 import { createMcpSource } from "./mcp.mjs";
 import { withCache } from "./cache.mjs";
 import { withGitSync } from "./git-sync.mjs";
 import { resolveSettings, walkLimitsFrom } from "../settings.mjs";
-import { sourceConfigFingerprint } from "../manifest.mjs";
+import { sourceConfigFingerprint, isLoopbackHost } from "../manifest.mjs";
+
+const DEFAULT_GITHUB_API_HOST = new URL(DEFAULT_GITHUB_API_BASE).host.toLowerCase();
 
 export function buildSources(manifest, manifestDir, { tokens = {}, profileId = null } = {}) {
   // Indexing limits are user settings, so they must reach the adapters that
@@ -71,25 +73,77 @@ export function buildSources(manifest, manifestDir, { tokens = {}, profileId = n
   });
 }
 
+// Where a layer's credential would actually be sent. Only a remote kind has a
+// target at all — a local bundle has nothing to bind against. Parsing through
+// URL is what makes the comparison safe: it punycodes an IDNA homograph and
+// strips any userinfo, so "evil.example" cannot masquerade as the bound host.
+export function authTargetHost(layer) {
+  const kind = layer.source ?? "okf-local";
+  if (kind !== "github") return null;
+  try {
+    return new URL(layer.apiBase ?? DEFAULT_GITHUB_API_BASE).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+// Headless runs have no keychain to carry a binding, so a tokenEnv secret is
+// bound to github.com by default: an untrusted manifest that names an env var
+// and points apiBase at a host of its choosing gets nothing. Operators who
+// genuinely run against GitHub Enterprise name their hosts here.
+function envAllowedHosts() {
+  const raw = process.env.CONTEXTCAKE_API_HOSTS;
+  const hosts = new Set([DEFAULT_GITHUB_API_HOST]);
+  if (raw) for (const h of raw.split(",")) { const v = h.trim().toLowerCase(); if (v) hosts.add(v); }
+  return hosts;
+}
+
+// A tokens map value is either a bare secret (legacy/test callers, unbound —
+// the caller is asserting the binding itself) or {secret, host}, which is what
+// the desktop broker injects. The bound form is the one that survives a
+// hostile manifest.
+function normalizeTokenEntry(entry) {
+  if (entry == null) return { secret: null, boundHost: null };
+  if (typeof entry === "string") return { secret: entry || null, boundHost: null };
+  if (typeof entry === "object" && typeof entry.secret === "string") {
+    return {
+      secret: entry.secret || null,
+      boundHost: typeof entry.host === "string" && entry.host ? entry.host.toLowerCase() : null,
+    };
+  }
+  return { secret: null, boundHost: null };
+}
+
 // Credential indirection: a manifest may only NAME a credential. The two legal
 // forms are "keychain:<alias>", resolved from the injected `tokens` map (the app
 // owns the keychain; the engine never opens it), and {"tokenEnv": "NAME"} for
 // headless runs. Every other shape is rejected, which is what structurally keeps
 // a raw token out of a manifest instead of relying on anyone to notice one.
 //
+// Naming a credential is not the same as being allowed to send it. Every
+// resolution is host-bound: a secret minted for one host is withheld from a
+// layer pointing anywhere else, so `apiBase` cannot be used to redirect a real
+// token at an attacker. The withheld case is reported, not silently swallowed —
+// see resolveTokenState's `state`, surfaced as authState in /api/graph.
+//
 // An alias with no injected secret resolves to null rather than throwing: the
 // layer then reads anonymously, so a public repo still works and a private one
 // degrades to the adapter's warn-and-continue path.
-export function resolveToken(layer, tokens = {}) {
+export function resolveTokenState(layer, tokens = {}, { host } = {}) {
+  const target = host === undefined ? authTargetHost(layer) : host;
   const auth = layer.auth;
-  if (auth == null) return null;
+  if (auth == null) return { secret: null, state: "anonymous", alias: null };
   if (typeof auth === "string") {
     if (!auth.startsWith("keychain:") || auth.length === "keychain:".length) {
       throw new Error(
         `Layer "${layer.name}": "auth" must be "keychain:<alias>" or {"tokenEnv":"NAME"} — a manifest never holds a credential`,
       );
     }
-    return tokens[auth.slice("keychain:".length)] ?? null;
+    const alias = auth.slice("keychain:".length);
+    const { secret, boundHost } = normalizeTokenEntry(tokens[alias]);
+    if (!secret) return { secret: null, state: "missing-token", alias };
+    if (boundHost && target && boundHost !== target) return { secret: null, state: "host-mismatch", alias };
+    return { secret, state: "ok", alias };
   }
   if (
     typeof auth === "object" &&
@@ -99,9 +153,19 @@ export function resolveToken(layer, tokens = {}) {
     typeof auth.tokenEnv === "string" &&
     auth.tokenEnv
   ) {
-    return process.env[auth.tokenEnv] ?? null;
+    const alias = `env:${auth.tokenEnv}`;
+    const secret = process.env[auth.tokenEnv] || null;
+    if (!secret) return { secret: null, state: "missing-token", alias };
+    if (target && !envAllowedHosts().has(target) && !isLoopbackHost(target)) {
+      return { secret: null, state: "host-mismatch", alias };
+    }
+    return { secret, state: "ok", alias };
   }
   throw new Error(
     `Layer "${layer.name}": unrecognized "auth" form — use "keychain:<alias>" or {"tokenEnv":"NAME"}`,
   );
+}
+
+export function resolveToken(layer, tokens = {}, options = {}) {
+  return resolveTokenState(layer, tokens, options).secret;
 }

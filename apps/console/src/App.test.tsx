@@ -34,8 +34,61 @@ afterEach(async () => {
   document.documentElement.removeAttribute('data-theme')
 })
 
-describe('App settings surface', () => {
-  it('uses logo-only branding and supports collapsing or resizing the sidebar', async () => {
+describe('Mac-first application shell', () => {
+  it('opens an empty route on Home and exposes the five keyboard destinations', async () => {
+    window.history.replaceState(null, '', '/?mode=demo')
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(container.querySelector('[data-destination="home"]')?.getAttribute('aria-current')).toBe('page')
+    expect(window.location.hash).toBe('#/overview')
+
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: '5', metaKey: true, bubbles: true })))
+    expect(container.querySelector('[data-destination="review"]')?.getAttribute('aria-current')).toBe('page')
+  })
+
+  it('opens the command palette with Command-K and restores focus after Escape', async () => {
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const opener = container.querySelector<HTMLButtonElement>('.cc-toolbar-leading button')!
+    opener.focus()
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })))
+    expect(container.querySelector('[aria-label="Command palette"]')).toBeTruthy()
+    expect(document.activeElement).toBe(container.querySelector('.cc-command-palette input'))
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(container.querySelector('[aria-label="Command palette"]')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+  })
+
+  it('focuses contextual search with Command-F and clears it with Escape', async () => {
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => button('Knowledge').click())
+
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true })))
+    const search = container.querySelector<HTMLInputElement>('input[data-context-search]')
+    expect(document.activeElement).toBe(search)
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(search, 'auth')
+      search!.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(search?.value).toBe('auth')
+    await act(async () => search?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(search?.value).toBe('')
+  })
+
+  it('routes every shell navigation path through the unsaved-work guard', async () => {
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const guard = (event: Event) => event.preventDefault()
+    window.addEventListener('contextcake:before-navigate', guard)
+    await act(async () => button('Home').click())
+    expect(container.querySelector('[data-destination="cascade"]')?.getAttribute('aria-current')).toBe('page')
+    window.removeEventListener('contextcake:before-navigate', guard)
+  })
+
+  it('uses five destinations and supports the 64–300 px sidebar contract', async () => {
     await act(async () => root.render(
       <ThemeModeProvider>
         <StoreProvider><App /></StoreProvider>
@@ -46,30 +99,30 @@ describe('App settings surface', () => {
     const sidebar = container.querySelector<HTMLElement>('.cc-sidebar')
     const brand = container.querySelector('.cc-brand')
     const separator = container.querySelector<HTMLElement>('.cc-sidebar-resizer')
-    expect(brand?.querySelector('img[alt="ContextCake"]')).toBeTruthy()
-    expect(brand?.textContent).toBe('')
+    expect(brand?.querySelector('img')).toBeTruthy()
+    expect(brand?.textContent).toBe('ContextCake')
+    expect(container.querySelectorAll('.cc-nav-button')).toHaveLength(5)
     expect(sidebar?.dataset.collapsed).toBe('false')
-    expect(sidebar?.style.width).toBe('244px')
+    expect(sidebar?.style.width).toBe('232px')
 
     await act(async () => {
-      separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 244 }))
+      separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 232 }))
       window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 80 }))
       window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 80 }))
     })
     expect(sidebar?.dataset.collapsed).toBe('true')
-    expect(sidebar?.style.width).toBe('72px')
-    expect(container.querySelector('[data-view="triage"]')?.getAttribute('aria-label')).toBe('Queue, 3 items awaiting review')
-    expect(container.querySelector('[data-view="conflicts"]')?.getAttribute('aria-label')).toBe('Resolve, 3 open conflicts')
+    expect(sidebar?.style.width).toBe('64px')
+    expect(container.querySelector('[data-destination="review"]')?.getAttribute('aria-label')).toBe('Review, 6 items needing review')
 
     await act(async () => {
       separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }))
     })
     expect(sidebar?.dataset.collapsed).toBe('false')
-    expect(sidebar?.style.width).toBe('244px')
-    expect(JSON.parse(window.localStorage.getItem('contextcake.sidebar') ?? '{}')).toEqual({ collapsed: false, width: 244 })
+    expect(sidebar?.style.width).toBe('232px')
+    expect(JSON.parse(window.localStorage.getItem('contextcake.sidebar') ?? '{}')).toEqual({ collapsed: false, width: 232 })
 
     await act(async () => {
-      separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 244 }))
+      separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 232 }))
     })
     expect(document.body.style.cursor).toBe('col-resize')
     await act(async () => window.dispatchEvent(new Event('blur')))
@@ -102,7 +155,7 @@ describe('App settings surface', () => {
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
     expect(container.querySelector('.cc-settings-screen')).toBeNull()
     expect(container.querySelector('.cc-app-shell')).toBe(shell)
-    expect(document.activeElement).toBe(container.querySelector('.cc-menu-btn'))
+    expect(document.activeElement).toBe(container.querySelector('.cc-toolbar-leading button'))
   })
 
   it('does not open Settings over the Connect Agent dialog', async () => {
@@ -122,7 +175,8 @@ describe('App settings surface', () => {
     ))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
-    await act(async () => button('Connect an agent').click())
+    await act(async () => button('Sources').click())
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Connect Agent"]')?.click())
     expect(container.querySelector('.cc-connect-dialog')).toBeTruthy()
 
     await act(async () => {
@@ -140,7 +194,7 @@ describe('App settings surface', () => {
     ))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
-    await act(async () => button('Ask ContextCake').click())
+    await act(async () => button('Ask').click())
     expect(container.querySelector('[aria-label="Ask ContextCake"]')).toBeTruthy()
     await act(async () => button('Settings⌘,').click())
 

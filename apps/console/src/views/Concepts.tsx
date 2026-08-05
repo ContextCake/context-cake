@@ -10,7 +10,7 @@ export function Concepts() {
   const selCpt = concepts.find((c) => c.id === selConcept) || null
 
   return (
-    <div style={css('display:grid; grid-template-columns:310px minmax(0,1fr); gap:20px; align-items:start;')}>
+    <div className="cc-navigator-detail" style={css('display:grid; grid-template-columns:minmax(240px,280px) minmax(0,1fr); gap:12px; align-items:start;')}>
       <div style={css('display:flex; flex-direction:column; gap:8px;')}>
         {list.map((c) => {
           const selected = c.id === selConcept
@@ -37,7 +37,7 @@ export function Concepts() {
       </div>
 
       {selCpt && (
-        <section style={css('background:#FBFAF6; border:1px solid #D8D6CC; border-radius:14px; padding:24px; min-width:0;')}>
+        <section className="cc-navigator-detail-panel" style={css('background:#FBFAF6; border:1px solid #D8D6CC; border-radius:14px; padding:24px; min-width:0;')}>
           <ConceptDetail concept={selCpt} />
         </section>
       )}

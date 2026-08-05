@@ -73,15 +73,24 @@ function Choice({
 export function Conflicts() {
   const {
     conflicts, selConflict, setSelConflict, resolveConflict, resolveSafeConflicts,
-    resolvingConflict, resolutionError,
+    resolvingConflict, resolutionError, query,
   } = useStore()
-  const selConf = conflicts.find((conflict) => conflict.id === selConflict) ?? conflicts[0] ?? null
   const [selectedLayer, setSelectedLayer] = useState('')
   const [changing, setChanging] = useState(false)
 
   const open = useMemo(() => conflicts.filter((conflict) => conflict.status === 'open'), [conflicts])
   const safe = useMemo(() => open.filter((conflict) => conflict.safe), [open])
   const needsJudgment = open.length - safe.length
+  const normalizedQuery = query.trim().toLowerCase()
+  const visibleConflicts = useMemo(() => conflicts.filter((conflict) => !normalizedQuery || [
+    conflict.concept,
+    conflict.title,
+    conflict.section,
+    conflict.status,
+    conflict.resolutionText,
+    ...conflict.contributions.flatMap((contribution) => [contribution.layer, contribution.value, contribution.note]),
+  ].some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery))), [conflicts, normalizedQuery])
+  const selConf = visibleConflicts.find((conflict) => conflict.id === selConflict) ?? visibleConflicts[0] ?? null
 
   useEffect(() => {
     setChanging(false)
@@ -96,6 +105,17 @@ export function Conflicts() {
         <div style={css('max-width:400px;')}>
           <div style={css('font-weight:650; font-size:15px; color:var(--cc-ink); margin-bottom:8px;')}>No conflicts</div>
           <p style={css('margin:0; font-size:13px; color:var(--cc-body); line-height:1.55;')}>Every section agrees across the cascade. New disagreements will appear here with their source and date.</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (visibleConflicts.length === 0) {
+    return (
+      <div className="cc-conflict-empty">
+        <div style={css('max-width:400px;')}>
+          <div style={css('font-weight:650; font-size:15px; color:var(--cc-ink); margin-bottom:8px;')}>No matching conflicts</div>
+          <p style={css('margin:0; font-size:13px; color:var(--cc-body); line-height:1.55;')}>Try a concept, section, status, layer, or conflicting value.</p>
         </div>
       </div>
     )
@@ -140,7 +160,7 @@ export function Conflicts() {
 
       <div className="cc-conflict-layout">
         <div className="cc-conflict-list" aria-label="Conflicts">
-          {conflicts.map((conflict) => {
+          {visibleConflicts.map((conflict) => {
             const selected = conflict.id === selConf?.id
             const latest = conflict.history[conflict.history.length - 1]
             return (

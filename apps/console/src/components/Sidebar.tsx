@@ -1,117 +1,74 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { useStore, type ViewId } from '../store'
-import { UpdatePill } from './UpdatePill'
+import { useStore } from '../store'
+import { destinationForView, readBrowserGroupedViews, viewForDestination, type ShellDestination } from '../shell-navigation'
+import { CascadeIcon, HomeIcon, KnowledgeIcon, ReviewIcon, SettingsIcon, SourcesIcon } from './icons'
 
 const contextCakeLogo = `${import.meta.env.BASE_URL}favicon.svg`
-
-const SIDEBAR_PREF_KEY = 'contextcake.sidebar'
-const COLLAPSED_WIDTH = 72
-const MIN_EXPANDED_WIDTH = 188
-const DEFAULT_WIDTH = 244
-const MAX_WIDTH = 360
-const COLLAPSE_THRESHOLD = 136
+const BROWSER_KEY = 'contextcake.sidebar'
+const COLLAPSED_WIDTH = 64
+const MIN_WIDTH = 208
+const DEFAULT_WIDTH = 232
+const MAX_WIDTH = 300
 
 type SidebarPreference = { collapsed: boolean; width: number }
+const clampWidth = (width: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width))
 
-const clampWidth = (width: number) => Math.min(MAX_WIDTH, Math.max(MIN_EXPANDED_WIDTH, width))
-
-function readSidebarPreference(): SidebarPreference {
-  if (typeof window === 'undefined') return { collapsed: false, width: DEFAULT_WIDTH }
+function readPreference(): SidebarPreference {
+  const desktop = window.__CC_DESKTOP?.uiState?.initial.sidebar
+  if (desktop) return { collapsed: desktop.collapsed === true, width: clampWidth(desktop.width) }
   try {
-    const value = JSON.parse(window.localStorage.getItem(SIDEBAR_PREF_KEY) ?? '{}') as Partial<SidebarPreference>
-    return {
-      collapsed: value.collapsed === true,
-      width: typeof value.width === 'number' && Number.isFinite(value.width) ? clampWidth(value.width) : DEFAULT_WIDTH,
-    }
-  } catch {
-    return { collapsed: false, width: DEFAULT_WIDTH }
-  }
+    const value = JSON.parse(localStorage.getItem(BROWSER_KEY) ?? '{}') as Partial<SidebarPreference>
+    return { collapsed: value.collapsed === true, width: Number.isFinite(value.width) ? clampWidth(value.width!) : DEFAULT_WIDTH }
+  } catch { return { collapsed: false, width: DEFAULT_WIDTH } }
 }
 
-const NAV: Array<{ id: ViewId; label: string; icon: ReactNode }> = [
-  {
-    id: 'canvas',
-    label: 'Canvas',
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="7" height="6" rx="1.6" /><rect x="14" y="8" width="7" height="6" rx="1.6" /><rect x="7" y="15" width="7" height="5" rx="1.6" /></svg>,
-  },
-  {
-    id: 'overview',
-    label: 'Overview',
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></svg>,
-  },
-  {
-    id: 'sources',
-    label: 'Sources',
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5.5" rx="7" ry="2.5" /><path d="M5 5.5v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-6" /><path d="M5 11.5v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-6" /></svg>,
-  },
-  {
-    id: 'triage',
-    label: 'Queue',
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5h18M3 12h18M3 19h10" /></svg>,
-  },
-  {
-    id: 'conflicts',
-    label: 'Resolve',
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.4" /><circle cx="6" cy="18" r="2.4" /><circle cx="18" cy="12" r="2.4" /><path d="M8.2 6h4.2a3 3 0 0 1 3 3v.6M8.2 18h4.2a3 3 0 0 0 3-3v-.6" /></svg>,
-  },
-  {
-    id: 'concepts',
-    label: 'Concepts',
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="7" r="2.2" /><circle cx="18" cy="6" r="2.2" /><circle cx="12" cy="17" r="2.2" /><path d="M7.6 8.6 10.6 15M16.4 7.7 13 15.4M8 7h7.8" /></svg>,
-  },
-  {
-    id: 'files',
-    label: 'Files',
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M9 13h6M9 17h4" /></svg>,
-  },
+const NAV: Array<{ id: ShellDestination; label: string; icon: ReactNode }> = [
+  { id: 'home', label: 'Home', icon: <HomeIcon /> },
+  { id: 'cascade', label: 'Cascade', icon: <CascadeIcon /> },
+  { id: 'knowledge', label: 'Knowledge', icon: <KnowledgeIcon /> },
+  { id: 'sources', label: 'Sources', icon: <SourcesIcon /> },
+  { id: 'review', label: 'Review', icon: <ReviewIcon /> },
 ]
 
-/**
- * Left navigation sidebar: brand, vertical nav, and a pinned foot of utilities
- * (setup, Ask, settings). On mobile it becomes an off-canvas
- * drawer — `onNavigate` lets the shell close it after a nav choice.
- */
-export function Sidebar({
-  onReopenSetup,
-  sourceActionLabel = 'Set up sources',
-  onConnectAgent,
-  onOpenSettings,
-  onNavigate,
-}: {
-  onReopenSetup?: () => void
-  sourceActionLabel?: string
-  onConnectAgent?: () => void
-  onOpenSettings?: () => void
-  onNavigate?: () => void
-}) {
-  const { view, setView, openChat, signals, conflicts, mode } = useStore()
-  const [sidebar, setSidebar] = useState(readSidebarPreference)
+export function Sidebar({ onOpenSettings, onNavigate }: { onOpenSettings?: () => void; onNavigate?: () => void }) {
+  const { view, setView, signals, conflicts, sources } = useStore()
+  const [sidebar, setSidebar] = useState(readPreference)
   const [resizing, setResizing] = useState(false)
   const resizeCleanup = useRef<(() => void) | null>(null)
-  const desktop = Boolean(window.__CC_DESKTOP)
-  const triageCount = signals.filter((s) => s.route === 'review_required').length
-  const openConflicts = conflicts.filter((c) => c.status === 'open').length
-  const badgeFor = (id: ViewId) => (id === 'triage' ? triageCount : id === 'conflicts' ? openConflicts : 0)
+  const browserViews = useRef(readBrowserGroupedViews())
+  const knowledgeView = useRef(window.__CC_DESKTOP?.uiState?.initial.knowledgeView ?? browserViews.current.knowledgeView)
+  const reviewView = useRef(window.__CC_DESKTOP?.uiState?.initial.reviewView ?? browserViews.current.reviewView)
+  if (view === 'concepts' || view === 'files') knowledgeView.current = view
+  if (view === 'triage' || view === 'conflicts') reviewView.current = view
 
-  const go = (id: ViewId) => {
-    const allowed = window.dispatchEvent(new Event('contextcake:before-navigate', { cancelable: true }))
-    if (!allowed) return
-    setView(id)
+  const reviewCount = signals.filter((signal) => signal.route === 'review_required').length
+    + conflicts.filter((conflict) => conflict.status === 'open').length
+  const sourceErrors = sources.filter((source) => source.status === 'degraded' || source.status === 'error').length
+
+  const go = (destination: ShellDestination) => {
+    setView(viewForDestination(destination, knowledgeView.current, reviewView.current))
     onNavigate?.()
   }
 
   useEffect(() => {
-    try { window.localStorage.setItem(SIDEBAR_PREF_KEY, JSON.stringify(sidebar)) } catch { /* local persistence is optional */ }
+    window.__CC_DESKTOP?.uiState?.set({ sidebar }).catch(() => {})
+    if (!window.__CC_DESKTOP) {
+      try { localStorage.setItem(BROWSER_KEY, JSON.stringify(sidebar)) } catch { /* optional */ }
+    }
   }, [sidebar])
+
+  useEffect(() => {
+    const toggle = () => setSidebar((current) => ({ ...current, collapsed: !current.collapsed }))
+    window.addEventListener('contextcake:toggle-sidebar', toggle)
+    return () => window.removeEventListener('contextcake:toggle-sidebar', toggle)
+  }, [])
 
   useEffect(() => () => resizeCleanup.current?.(), [])
 
-  const toggleCollapsed = () => setSidebar((current) => ({ ...current, collapsed: !current.collapsed }))
-  const setWidthFromDrag = (width: number) => {
-    setSidebar((current) => width < COLLAPSE_THRESHOLD
-      ? { ...current, collapsed: true }
-      : { collapsed: false, width: clampWidth(width) })
-  }
+  const setWidthFromDrag = (width: number) => setSidebar((current) => width < MIN_WIDTH - 24
+    ? { ...current, collapsed: true }
+    : { collapsed: false, width: clampWidth(width) })
+
   const beginResize = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()
@@ -125,7 +82,6 @@ export function Sidebar({
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     setResizing(true)
-
     const move = (moveEvent: PointerEvent) => {
       if (Number.isInteger(pointerId) && moveEvent.pointerId !== pointerId) return
       setWidthFromDrag(startWidth + moveEvent.clientX - startX)
@@ -150,115 +106,53 @@ export function Sidebar({
     handle.addEventListener('lostpointercapture', cleanup)
     if (Number.isInteger(pointerId)) handle.setPointerCapture(pointerId)
   }
+
   const resizeWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Home') {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
       event.preventDefault()
-      setSidebar((current) => ({ ...current, collapsed: true }))
-    } else if (event.key === 'End') {
-      event.preventDefault()
-      setSidebar({ collapsed: false, width: MAX_WIDTH })
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault()
+      const direction = event.key === 'ArrowLeft' ? -8 : 8
       setSidebar((current) => {
-        if (current.collapsed || current.width - 16 < MIN_EXPANDED_WIDTH) return { ...current, collapsed: true }
-        return { collapsed: false, width: current.width - 16 }
+        if (current.collapsed && direction > 0) return { collapsed: false, width: current.width }
+        const width = current.width + direction
+        return width < MIN_WIDTH ? { ...current, collapsed: true } : { collapsed: false, width: clampWidth(width) }
       })
-    } else if (event.key === 'ArrowRight') {
-      event.preventDefault()
-      setSidebar((current) => ({ collapsed: false, width: current.collapsed ? current.width : clampWidth(current.width + 16) }))
     }
   }
 
   const displayedWidth = sidebar.collapsed ? COLLAPSED_WIDTH : sidebar.width
-  const actionTitle = (label: string) => sidebar.collapsed ? label : undefined
+  const destination = destinationForView(view)
 
   return (
-    <aside
-      className="cc-sidebar"
-      data-collapsed={sidebar.collapsed ? 'true' : 'false'}
-      data-resizing={resizing ? 'true' : 'false'}
-      style={{ width: displayedWidth } as CSSProperties}
-    >
+    <aside className="cc-sidebar" data-collapsed={sidebar.collapsed} data-resizing={resizing} style={{ width: displayedWidth } as CSSProperties}>
       <div className="cc-brand">
-        <img className="cc-brand-logo" src={contextCakeLogo} alt="ContextCake" />
+        <img className="cc-brand-logo" src={contextCakeLogo} alt="" />
+        <span className="cc-brand-name">ContextCake</span>
       </div>
-      <button
-        type="button"
-        className="cc-sidebar-toggle"
-        onClick={toggleCollapsed}
-        aria-label={sidebar.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        title={sidebar.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d={sidebar.collapsed ? 'm9 6 6 6-6 6' : 'm15 6-6 6 6 6'} /></svg>
-      </button>
       <div
-        className="cc-sidebar-resizer"
-        role="separator"
-        aria-label="Resize sidebar"
-        aria-orientation="vertical"
-        aria-valuemin={COLLAPSED_WIDTH}
-        aria-valuemax={MAX_WIDTH}
-        aria-valuenow={displayedWidth}
-        tabIndex={0}
-        onPointerDown={beginResize}
-        onKeyDown={resizeWithKeyboard}
+        className="cc-sidebar-resizer" role="separator" aria-label="Resize sidebar" aria-orientation="vertical"
+        aria-valuemin={COLLAPSED_WIDTH} aria-valuemax={MAX_WIDTH} aria-valuenow={displayedWidth} tabIndex={0}
+        onPointerDown={beginResize} onKeyDown={resizeWithKeyboard}
+        onDoubleClick={() => setSidebar({ collapsed: false, width: DEFAULT_WIDTH })}
       ><span aria-hidden="true" /></div>
-
-      <nav className="cc-nav" aria-label="Explore navigation">
+      <nav className="cc-nav" aria-label="Main navigation">
         {NAV.map((item) => {
-          const badge = badgeFor(item.id)
-          const accessibleLabel = badge > 0
-            ? `${item.label}, ${badge} ${item.id === 'triage' ? 'items awaiting review' : 'open conflicts'}`
-            : item.label
-          return (
-            <button
-              key={item.id}
-              className="cc-nav-button"
-              onClick={() => go(item.id)}
-              aria-current={view === item.id ? 'true' : undefined}
-              aria-label={sidebar.collapsed ? accessibleLabel : undefined}
-              data-view={item.id}
-              title={actionTitle(item.label)}
-            >
-              {item.icon}
-              <span className="cc-nav-label">{item.label}</span>
-              {badge > 0 && <span className="cc-nav-badge">{badge}</span>}
-            </button>
-          )
+          const badge = item.id === 'review' ? reviewCount : item.id === 'sources' ? sourceErrors : 0
+          const suffix = item.id === 'review' ? 'items needing review' : 'source errors'
+          return <button
+            key={item.id} type="button" className="cc-nav-button" data-destination={item.id}
+            aria-current={destination === item.id ? 'page' : undefined}
+            aria-label={sidebar.collapsed ? `${item.label}${badge ? `, ${badge} ${suffix}` : ''}` : undefined}
+            title={sidebar.collapsed ? item.label : undefined} onClick={() => go(item.id)}
+          >
+            {item.icon}<span className="cc-nav-label">{item.label}</span>
+            {badge > 0 && <span className={`cc-nav-badge ${item.id === 'sources' ? 'is-error' : ''}`}>{badge}</span>}
+          </button>
         })}
       </nav>
-
       <div className="cc-sidebar-foot">
-        {onReopenSetup && (
-          <button type="button" className="cc-setup-cta" onClick={onReopenSetup} aria-label={sidebar.collapsed ? sourceActionLabel : undefined} title={actionTitle(sourceActionLabel)}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d={sourceActionLabel === 'Add source' ? 'M12 5v14M5 12h14' : 'M5 12.5 9.2 17 19 7'} /></svg>
-            <span className="cc-sidebar-action-label">{sourceActionLabel}</span>
-          </button>
-        )}
-        {onConnectAgent && (
-          <button type="button" className="cc-connect-cta" onClick={onConnectAgent} aria-label={sidebar.collapsed ? 'Connect an agent' : undefined} title={actionTitle('Connect an agent')}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 12h8M12 8v8" /><rect x="3" y="4" width="18" height="16" rx="3" /></svg>
-            <span className="cc-sidebar-action-label">Connect an agent</span>
-          </button>
-        )}
-        <button className="cc-ask-button" onClick={openChat} aria-label={sidebar.collapsed ? 'Ask ContextCake' : undefined} title={actionTitle('Ask ContextCake')}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8z" /></svg>
-          <span className="cc-sidebar-action-label">Ask ContextCake</span>
+        <button type="button" className="cc-settings-cta" onClick={onOpenSettings} aria-label={sidebar.collapsed ? 'Settings' : undefined} title={sidebar.collapsed ? 'Settings' : undefined}>
+          <SettingsIcon /><span>Settings</span><kbd>⌘,</kbd>
         </button>
-        <UpdatePill mode={mode} />
-        {mode === 'live' && !desktop && (
-          <a className="cc-configure-link" href="/" aria-label={sidebar.collapsed ? 'Configure sources' : undefined} title={actionTitle('Configure sources')}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" /></svg>
-            <span className="cc-sidebar-action-label">Configure sources</span>
-          </a>
-        )}
-        {onOpenSettings && (
-          <button type="button" className="cc-settings-cta" onClick={onOpenSettings} aria-label={sidebar.collapsed ? 'Settings' : undefined} title={actionTitle('Settings')}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
-            <span>Settings</span>
-            <kbd>⌘,</kbd>
-          </button>
-        )}
       </div>
     </aside>
   )

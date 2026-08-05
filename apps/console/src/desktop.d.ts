@@ -31,6 +31,14 @@ type DesktopPreferences = {
   highContrast: boolean
 }
 
+type DeviceUiState = {
+  sidebar: { collapsed: boolean; width: number }
+  lastView: import('./shell-navigation').ViewId
+  knowledgeView: import('./shell-navigation').KnowledgeSubview
+  reviewView: import('./shell-navigation').ReviewSubview
+  settingsPane: 'general' | 'indexing' | 'integrations' | 'account' | 'privacy'
+}
+
 interface CliResult {
   status: CliStatus
   message: string
@@ -71,6 +79,13 @@ declare global {
         get(): Promise<DesktopPreferences>
         set(patch: Partial<Pick<DesktopPreferences, 'theme' | 'density' | 'updateCheck' | 'anonymousMetrics'>>): Promise<DesktopPreferences>
         onChanged(cb: (preferences: DesktopPreferences) => void): () => void
+      }
+      uiState?: {
+        initial: DeviceUiState
+        set(patch: Partial<DeviceUiState>): Promise<DeviceUiState>
+      }
+      commands?: {
+        onInvoke(cb: (command: 'command-palette' | 'search' | 'ask' | 'settings' | 'toggle-sidebar' | `destination:${1 | 2 | 3 | 4 | 5}`) => void): () => void
       }
       /** Open the native macOS directory picker. Null means the user canceled. */
       chooseFolder?: () => Promise<string | null>

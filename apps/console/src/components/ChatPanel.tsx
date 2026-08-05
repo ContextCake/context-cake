@@ -5,10 +5,11 @@ import { useStore } from '../store'
 const SUGGESTIONS = ['What database do we use?', 'How do we handle on-call?']
 const MCP_CONFIG_CMD = 'claude mcp add contextcake -- node mcp-server.mjs --manifest layers.json'
 
-export function ChatPanel({ keyboardSuspended = false, onConnectAgent }: { keyboardSuspended?: boolean; onConnectAgent?: () => void }) {
-  const { chatMessages, chatBusy, chatInput, setChatInput, closeChat, send } = useStore()
+export function ChatPanel({ keyboardSuspended = false, onConnectAgent, onClose }: { keyboardSuspended?: boolean; onConnectAgent?: () => void; onClose: () => void }) {
+  const { chatMessages, chatBusy, chatInput, setChatInput, send } = useStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const panelRef = useRef<HTMLElement>(null)
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle')
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -34,7 +35,7 @@ export function ChatPanel({ keyboardSuspended = false, onConnectAgent }: { keybo
       copyMcpConfig()
       return
     }
-    closeChat()
+    onClose()
     onConnectAgent()
   }
 
@@ -49,15 +50,24 @@ export function ChatPanel({ keyboardSuspended = false, onConnectAgent }: { keybo
   useEffect(() => {
     if (keyboardSuspended) return
     inputRef.current?.focus()
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeChat() }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key === 'Tab') {
+        const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('button,textarea,input,a[href],[tabindex]:not([tabindex="-1"])') ?? [])
+        if (!focusable.length) return
+        const position = focusable.indexOf(document.activeElement as HTMLElement)
+        const next = e.shiftKey ? (position - 1 + focusable.length) % focusable.length : (position + 1) % focusable.length
+        e.preventDefault(); focusable[next]?.focus()
+      }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [closeChat, keyboardSuspended])
+  }, [keyboardSuspended, onClose])
 
   return (
-    <div>
-      <div onClick={closeChat} style={css('position:fixed; inset:0; background:rgba(26,25,21,0.28); z-index:40;')} />
-      <aside role="dialog" aria-modal="true" aria-label="Ask ContextCake" style={css('position:fixed; top:0; right:0; height:100vh; width:412px; z-index:41; display:flex; flex-direction:column; background:#FBFAF6; border-left:1px solid #C3C1B8; box-shadow:-24px 0 60px rgba(26,25,21,0.14); animation:ccSlide 0.26s cubic-bezier(0.16,1,0.3,1);')}>
+    <div className="cc-ask-root">
+      <div className="cc-ask-scrim" onClick={onClose} />
+      <aside ref={panelRef} className="cc-ask-panel" role="dialog" aria-modal="true" aria-label="Ask ContextCake">
         <header style={css('display:flex; align-items:center; gap:11px; padding:16px 18px; border-bottom:1px solid #D8D6CC;')}>
           <div style={css('display:grid; place-items:center; width:30px; height:30px; border-radius:8px; background:#134F49;')}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#EAF7F5" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8z" /></svg>
@@ -74,7 +84,7 @@ export function ChatPanel({ keyboardSuspended = false, onConnectAgent }: { keybo
           >
             {onConnectAgent ? 'Connect an agent' : copied === 'copied' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy MCP config'}
           </button>
-          <button className="cc-h-eae" onClick={closeChat} aria-label="Close chat" style={css('display:grid; place-items:center; width:30px; height:30px; border:none; background:transparent; border-radius:7px; cursor:pointer; color:#57564F;')}>
+          <button className="cc-h-eae" onClick={onClose} aria-label="Close chat" style={css('display:grid; place-items:center; width:30px; height:30px; border:none; background:transparent; border-radius:7px; cursor:pointer; color:#57564F;')}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </header>

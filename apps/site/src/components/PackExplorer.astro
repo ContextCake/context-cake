@@ -14,6 +14,17 @@ const { defaultFile, explorer, featuredFiles = [], id, title = 'Pack explorer' }
 const selectedFile = defaultFile ?? explorer.files[0]?.path ?? '';
 const validPaths = new Set(explorer.files.map((file) => file.path));
 const quickFiles = featuredFiles.filter((file) => validPaths.has(file.path));
+const initialExpanded = new Set(
+	selectedFile
+		.split('/')
+		.slice(0, -1)
+		.map((_, index, parts) => parts.slice(0, index + 1).join('/')),
+);
+const entryAncestors = (entryPath: string) =>
+	entryPath
+		.split('/')
+		.slice(0, -1)
+		.map((_, index, parts) => parts.slice(0, index + 1).join('/'));
 
 const renderedFiles = await Promise.all(
 	explorer.files.map(async (file) => ({
@@ -29,8 +40,11 @@ const renderedFiles = await Promise.all(
 <section class="pack-explorer" data-pack-explorer={id}>
 	<div class="explorer-sidebar">
 		<div class="terminal-head">
-			<span>tree</span>
-			<code>{explorer.rootLabel}</code>
+			<div class="tree-title"><span>Files</span><code>{explorer.rootLabel}</code></div>
+			<label class="file-search">
+				<span class="sr-only">Search Pack files</span>
+				<input type="search" placeholder="Search files" autocomplete="off" data-file-search />
+			</label>
 		</div>
 		<div class="tree-lines" role="tree" aria-label={title}>
 			{explorer.treeEntries.map((entry) =>
@@ -43,7 +57,8 @@ const renderedFiles = await Promise.all(
 						style={`--depth:${entry.depth}`}
 						role="treeitem"
 						type="button"
-						aria-expanded="true"
+						aria-expanded={initialExpanded.has(entry.path)}
+						hidden={!entryAncestors(entry.path).every((ancestor) => initialExpanded.has(ancestor))}
 					>
 						<span class="chevron" aria-hidden="true">▸</span>
 						<span class="tree-name">{entry.name}</span>
@@ -57,6 +72,7 @@ const renderedFiles = await Promise.all(
 						style={`--depth:${entry.depth}`}
 						role="treeitem"
 						type="button"
+						hidden={!entryAncestors(entry.path).every((ancestor) => initialExpanded.has(ancestor))}
 					>
 						<span class="dot" aria-hidden="true"></span>
 						<span class="tree-name">{entry.name}</span>
@@ -64,6 +80,7 @@ const renderedFiles = await Promise.all(
 				),
 			)}
 		</div>
+		<p class="tree-empty" data-tree-empty role="status" hidden>No matching files</p>
 	</div>
 
 	<div class="explorer-preview">
@@ -145,6 +162,8 @@ const renderedFiles = await Promise.all(
 		padding: 0.9rem 1rem;
 		border-bottom: 1px solid var(--cc-border);
 	}
+	.terminal-head { display: grid; align-items: stretch; gap: 0.7rem; }
+	.tree-title { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 	.terminal-head span,
 	.preview-label,
 	.preview-lang {
@@ -159,6 +178,30 @@ const renderedFiles = await Promise.all(
 		color: var(--cc-text);
 		font-family: var(--cc-font-mono);
 		font-size: 0.88rem;
+	}
+	.file-search input {
+		width: 100%;
+		height: 44px;
+		box-sizing: border-box;
+		padding: 0 0.7rem;
+		border: 1px solid var(--cc-border);
+		border-radius: var(--cc-radius-sm);
+		background: var(--cc-surface-solid);
+		color: var(--cc-text);
+		font: inherit;
+		font-size: 0.86rem;
+	}
+	.file-search input::placeholder { color: var(--cc-text-muted); opacity: 1; }
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
 	}
 	.tree-lines {
 		padding: 0.5rem 0;
@@ -210,6 +253,7 @@ const renderedFiles = await Promise.all(
 	.tree-name {
 		overflow-wrap: anywhere;
 	}
+	.tree-empty { margin: 0; padding: 1.25rem 1rem; color: var(--cc-text-muted); text-align: center; }
 	.preview-pane {
 		position: relative;
 		overflow: hidden;
@@ -391,8 +435,10 @@ const renderedFiles = await Promise.all(
 		background: transparent !important;
 	}
 	.markdown-body :global(blockquote) {
-		padding: 0.2rem 0 0.2rem 1rem;
-		border-left: 3px solid color-mix(in srgb, var(--cc-layer-team) 50%, var(--cc-border));
+		padding: 0.75rem 1rem;
+		border: 1px solid color-mix(in srgb, var(--cc-layer-team) 35%, var(--cc-border));
+		border-radius: var(--cc-radius-sm);
+		background: var(--cc-surface-soft);
 		color: var(--cc-text-body);
 	}
 	.markdown-body :global(table) {
@@ -432,6 +478,11 @@ const renderedFiles = await Promise.all(
 		.preview-body {
 			max-height: none;
 		}
+		.tree-row,
+		.jump-chip,
+		.view-btn {
+			min-height: 44px;
+		}
 	}
 </style>
 
@@ -469,6 +520,8 @@ const renderedFiles = await Promise.all(
 		const folders = Array.from(explorer.querySelectorAll<HTMLElement>('[data-folder-path]'));
 		const triggers = explorer.querySelectorAll<HTMLElement>('[data-file-trigger]');
 		const panes = explorer.querySelectorAll<HTMLElement>('[data-file-panel]');
+		const search = explorer.querySelector<HTMLInputElement>('[data-file-search]');
+		const empty = explorer.querySelector<HTMLElement>('[data-tree-empty]');
 
 		for (const pane of panes) {
 			for (const body of pane.querySelectorAll<HTMLElement>('.preview-body')) {
@@ -483,16 +536,40 @@ const renderedFiles = await Promise.all(
 		});
 
 		// --- collapsible folders ---
-		const expanded = new Set<string>(folders.map((f) => f.dataset.folderPath || ''));
+		const expanded = new Set<string>(
+			folders
+				.filter((folder) => folder.getAttribute('aria-expanded') === 'true')
+				.map((folder) => folder.dataset.folderPath || ''),
+		);
 		function refreshTree() {
+			const query = search?.value.trim().toLocaleLowerCase() ?? '';
+			const directMatches = query
+				? rows
+					.filter((row) => (row.dataset.path || '').toLocaleLowerCase().includes(query))
+					.map((row) => row.dataset.path || '')
+				: [];
+			const matchingDirectories = new Set(
+				folders
+					.filter((folder) => (folder.dataset.folderPath || '').toLocaleLowerCase().includes(query))
+					.map((folder) => folder.dataset.folderPath || ''),
+			);
+			let visibleRows = 0;
 			for (const row of rows) {
 				const p = row.dataset.path || '';
-				row.hidden = !ancestorsOf(p).every((a) => expanded.has(a));
+				const visible = query
+					? directMatches.includes(p) ||
+						directMatches.some((match) => match.startsWith(`${p}/`)) ||
+						Array.from(matchingDirectories).some((directory) => p.startsWith(`${directory}/`))
+					: ancestorsOf(p).every((a) => expanded.has(a));
+				row.hidden = !visible;
+				if (visible) visibleRows += 1;
 			}
 			for (const f of folders) {
 				const fp = f.dataset.folderPath || '';
-				f.setAttribute('aria-expanded', expanded.has(fp) ? 'true' : 'false');
+				const searchExpanded = query && directMatches.some((match) => match.startsWith(`${fp}/`));
+				f.setAttribute('aria-expanded', expanded.has(fp) || searchExpanded ? 'true' : 'false');
 			}
+			if (empty) empty.hidden = visibleRows !== 0;
 		}
 		for (const f of folders) {
 			f.addEventListener('click', () => {
@@ -502,10 +579,12 @@ const renderedFiles = await Promise.all(
 				refreshTree();
 			});
 		}
+		search?.addEventListener('input', refreshTree);
 		refreshTree();
 
 		// --- file selection ---
 		function selectFile(target: string) {
+			for (const ancestor of ancestorsOf(target)) expanded.add(ancestor);
 			for (const t of triggers) t.classList.toggle('active', t.getAttribute('data-file-trigger') === target);
 			for (const pane of panes) {
 				const isActive = pane.getAttribute('data-file-panel') === target;
@@ -513,6 +592,7 @@ const renderedFiles = await Promise.all(
 				pane.classList.toggle('active', isActive);
 				if (isActive) updateOverflow(pane);
 			}
+			refreshTree();
 		}
 		for (const trigger of triggers) {
 			trigger.addEventListener('click', () => {

@@ -1,0 +1,411 @@
+---
+import Base from '../layouts/Base.astro';
+import PackExplorer from './PackExplorer.astro';
+import type { PackExplorerData } from '../lib/pack-explorer';
+
+type Accent = 'team' | 'personal';
+type TextRow = readonly [string, string];
+type WorkflowStep = readonly [string, string, string];
+
+interface Action {
+	href: string;
+	label: string;
+	primary?: boolean;
+}
+
+interface AvailabilityPlan {
+	body: string;
+	cadence: string;
+	href?: string;
+	label: string;
+	link: string;
+	price: string;
+	priceSuffix: string;
+	primary?: boolean;
+	disabled?: boolean;
+}
+
+interface Props {
+	accent: Accent;
+	actions: Action[];
+	availability: {
+		description: string;
+		id: string;
+		note?: string;
+		plans: AvailabilityPlan[];
+		title: string;
+	};
+	compatibility: {
+		rows: TextRow[];
+		title: string;
+	};
+	credibility: string;
+	credibilityLinks?: Action[];
+	explorer: PackExplorerData;
+	explorerCopy: {
+		defaultFile: string;
+		description: string;
+		featuredFiles: Array<{ label: string; path: string }>;
+		id: string;
+		title: string;
+		treeLabel: string;
+	};
+	faqs: Array<{ q: string; a: string }>;
+	fitRows: TextRow[];
+	headline: string;
+	insideRows: TextRow[];
+	lede: string;
+	name: string;
+	quickFacts: TextRow[];
+	seoDescription: string;
+	seoTitle: string;
+	status: string;
+	trustRows?: TextRow[];
+	useCases: TextRow[];
+	valuePoints: string[];
+	workflow: {
+		description: string;
+		steps: WorkflowStep[];
+		title: string;
+	};
+}
+
+const {
+	accent,
+	actions,
+	availability,
+	compatibility,
+	credibility,
+	credibilityLinks = [],
+	explorer,
+	explorerCopy,
+	faqs,
+	fitRows,
+	headline,
+	insideRows,
+	lede,
+	name,
+	quickFacts,
+	seoDescription,
+	seoTitle,
+	status,
+	trustRows = [],
+	useCases,
+	valuePoints,
+	workflow,
+} = Astro.props;
+---
+
+<Base title={seoTitle} description={seoDescription}>
+	<main class={`pack-product pack-product--${accent}`}>
+		<a class="back-link" href="/packs">← All Packs</a>
+
+		<section class="product-hero" aria-labelledby="pack-title">
+			<div class="product-intro">
+				<div class="product-label">
+					<span>ContextCake Pack</span>
+					<span class="status"><i aria-hidden="true"></i>{status}</span>
+				</div>
+				<h1 id="pack-title">{name}</h1>
+				<p class="promise">{headline}</p>
+				<p class="lede">{lede}</p>
+				<div class="hero-actions" aria-label="Primary actions">
+					{actions.map((action) => (
+						<a class:list={['button', { primary: action.primary }]} href={action.href}>{action.label}</a>
+					))}
+				</div>
+				<ul class="value-list" aria-label="What this Pack includes">
+					{valuePoints.map((item) => <li>{item}</li>)}
+				</ul>
+			</div>
+
+			<aside class="product-summary" aria-label="Pack summary">
+				<dl class="quick-facts">
+					{quickFacts.map(([term, body]) => <div><dt>{term}</dt><dd>{body}</dd></div>)}
+				</dl>
+				<dl class="fit-list">
+					{fitRows.map(([term, body]) => <div><dt>{term}</dt><dd>{body}</dd></div>)}
+				</dl>
+			</aside>
+		</section>
+
+		<nav class="product-nav" aria-label="On this Pack page">
+			<a href="#overview">Overview</a>
+			<a href="#explorer">Browse files</a>
+			<a href={`#${availability.id}`}>Availability</a>
+			<a href="#details">Details</a>
+		</nav>
+
+		<section id="overview" class="workflow-section" aria-labelledby="workflow-title">
+			<div class="section-heading">
+				<h2 id="workflow-title">{workflow.title}</h2>
+				<p>{workflow.description}</p>
+			</div>
+			<ol class="workflow-list">
+				{workflow.steps.map(([num, title, body]) => (
+					<li>
+						<span aria-hidden="true">{num}</span>
+						<div><h3>{title}</h3><p>{body}</p></div>
+					</li>
+				))}
+			</ol>
+		</section>
+
+		<section id="explorer" class="explorer-section" aria-labelledby="explorer-title">
+			<div class="section-heading">
+				<h2 id="explorer-title">{explorerCopy.title}</h2>
+				<p>{explorerCopy.description}</p>
+			</div>
+			<PackExplorer
+				id={explorerCopy.id}
+				explorer={explorer}
+				featuredFiles={explorerCopy.featuredFiles}
+				defaultFile={explorerCopy.defaultFile}
+				title={explorerCopy.treeLabel}
+			/>
+		</section>
+
+		<section id={availability.id} class="availability" aria-labelledby="availability-title">
+			<div class="section-heading">
+				<h2 id="availability-title">{availability.title}</h2>
+				<p>{availability.description}</p>
+			</div>
+			<div class="plan-list">
+				{availability.plans.map((plan) => (
+					<article class:list={['plan', { 'plan--primary': plan.primary }]}>
+						<div class="plan-topline"><span>{plan.label}</span><strong>{plan.price}</strong><small>{plan.priceSuffix}</small></div>
+						<p class="plan-cadence">{plan.cadence}</p>
+						<p class="plan-body">{plan.body}</p>
+						{plan.disabled ? (
+							<span class="button button--disabled" aria-disabled="true">{plan.link}</span>
+						) : (
+							<a class:list={['button', { primary: plan.primary }]} href={plan.href}>{plan.link}</a>
+						)}
+					</article>
+				))}
+			</div>
+			{availability.note && <p class="section-note">{availability.note}</p>}
+		</section>
+
+		<section id="details" class="details-section" aria-labelledby="details-title">
+			<div class="section-heading details-heading">
+				<h2 id="details-title">What you’re getting</h2>
+				<p>The practical fit, contents, permissions, and tool support in one place.</p>
+			</div>
+			<div class="detail-columns">
+				<section aria-labelledby="uses-title">
+					<h3 id="uses-title">Use it for</h3>
+					<dl class="detail-list">{useCases.map(([term, body]) => <div><dt>{term}</dt><dd>{body}</dd></div>)}</dl>
+				</section>
+				<section aria-labelledby="inside-title">
+					<h3 id="inside-title">Inside the Pack</h3>
+					<dl class="detail-list">{insideRows.map(([term, body]) => <div><dt>{term}</dt><dd>{body}</dd></div>)}</dl>
+				</section>
+			</div>
+
+			<div class="reference-columns">
+				<section aria-labelledby="compatibility-title">
+					<h3 id="compatibility-title">{compatibility.title}</h3>
+					<dl class="reference-list">{compatibility.rows.map(([term, body]) => <div><dt>{term}</dt><dd>{body}</dd></div>)}</dl>
+				</section>
+				{trustRows.length > 0 && (
+					<section aria-labelledby="trust-title">
+						<h3 id="trust-title">Trust and permissions</h3>
+						<dl class="reference-list">{trustRows.map(([term, body]) => <div><dt>{term}</dt><dd>{body}</dd></div>)}</dl>
+					</section>
+				)}
+			</div>
+		</section>
+
+		<section class="faq" aria-labelledby="faq-title">
+			<h2 id="faq-title">Common questions</h2>
+			<div class="faq-list">
+				{faqs.map((item) => <details><summary>{item.q}</summary><p>{item.a}</p></details>)}
+			</div>
+		</section>
+
+		<section class="credibility" aria-label="About this Pack">
+			<p>{credibility}</p>
+			<div>{credibilityLinks.map((link) => <a href={link.href}>{link.label}</a>)}</div>
+		</section>
+	</main>
+</Base>
+
+<style>
+	.pack-product {
+		--pack-accent: var(--cc-layer-team);
+		max-width: 76rem;
+		margin: 0 auto;
+		padding: 2rem 1.5rem 2rem;
+	}
+	.pack-product--personal { --pack-accent: var(--cc-layer-personal); }
+	.back-link {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+		color: var(--cc-text-body);
+		font-weight: 600;
+		text-decoration: none;
+	}
+	.back-link:hover { color: var(--cc-text); }
+	.product-hero {
+		display: grid;
+		grid-template-columns: minmax(0, 1.5fr) minmax(18rem, 0.65fr);
+		gap: clamp(2rem, 5vw, 5rem);
+		align-items: start;
+		padding: 2rem 0 2.5rem;
+	}
+	.product-label {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.7rem 1rem;
+		margin-bottom: 1rem;
+		color: var(--cc-text-muted);
+		font-family: var(--cc-font-mono);
+		font-size: 0.76rem;
+		font-weight: 700;
+	}
+	.status { display: inline-flex; align-items: center; gap: 0.45rem; color: var(--cc-text-body); }
+	.status i { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--pack-accent); }
+	h1, h2, h3, p { letter-spacing: 0; }
+	h1 {
+		max-width: 15ch;
+		margin: 0;
+		font-size: clamp(2.4rem, 4.4vw, 4.35rem);
+		line-height: 0.98;
+		letter-spacing: -0.035em;
+		text-wrap: balance;
+	}
+	.promise {
+		max-width: 28ch;
+		margin: 1.1rem 0 0;
+		color: var(--cc-text);
+		font-size: clamp(1.2rem, 1.8vw, 1.55rem);
+		font-weight: 600;
+		line-height: 1.35;
+		text-wrap: balance;
+	}
+	.lede { max-width: 62ch; margin: 0.8rem 0 0; color: var(--cc-text-body); font-size: 1.03rem; line-height: 1.65; }
+	.hero-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; margin-top: 1.5rem; }
+	.button {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 44px;
+		padding: 0 1rem;
+		border: 1px solid var(--cc-border-strong);
+		border-radius: var(--cc-radius-sm);
+		background: transparent;
+		color: var(--cc-text);
+		font-weight: 700;
+		text-decoration: none;
+		transition: background var(--cc-transition), border-color var(--cc-transition), color var(--cc-transition);
+	}
+	.button:hover { border-color: var(--cc-text-muted); background: var(--cc-surface-soft); }
+	.button.primary { border-color: var(--cc-cta); background: var(--cc-cta); color: var(--cc-on-cta); }
+	.button.primary:hover { background: var(--cc-cta-hover); }
+	.button--disabled { border-style: dashed; color: var(--cc-text-muted); cursor: default; }
+	.value-list {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.55rem 1rem;
+		max-width: 46rem;
+		margin: 1.5rem 0 0;
+		padding: 1.25rem 0 0;
+		border-top: 1px solid var(--cc-border);
+		list-style: none;
+	}
+	.value-list li { position: relative; padding-left: 1rem; color: var(--cc-text-body); line-height: 1.45; }
+	.value-list li::before { content: ''; position: absolute; top: 0.55em; left: 0; width: 0.38rem; height: 0.38rem; border-radius: 50%; background: var(--pack-accent); }
+	.product-summary {
+		padding: 1.2rem;
+		border-top: 3px solid var(--pack-accent);
+		background: var(--cc-surface);
+	}
+	.quick-facts, .fit-list { margin: 0; }
+	.quick-facts div, .fit-list div { display: grid; grid-template-columns: 6.5rem 1fr; gap: 0.8rem; padding: 0.7rem 0; border-bottom: 1px solid var(--cc-border); }
+	.quick-facts dt, .fit-list dt { color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.72rem; font-weight: 700; }
+	.quick-facts dd, .fit-list dd { margin: 0; color: var(--cc-text); line-height: 1.45; }
+	.quick-facts dd { font-weight: 700; }
+	.fit-list { margin-top: 0.65rem; }
+	.fit-list div { grid-template-columns: 1fr; gap: 0.2rem; }
+	.fit-list div:last-child { border-bottom: 0; }
+	.fit-list dt { color: var(--cc-text); font-family: var(--cc-font-body); font-size: 0.92rem; }
+	.fit-list dd { color: var(--cc-text-body); font-size: 0.94rem; }
+	.product-nav {
+		position: sticky;
+		top: 0;
+		z-index: 2;
+		display: flex;
+		gap: 0.25rem;
+		padding: 0.45rem;
+		border-block: 1px solid var(--cc-border);
+		background: color-mix(in srgb, var(--cc-canvas) 94%, transparent);
+		backdrop-filter: blur(12px);
+	}
+	.product-nav a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.8rem; border-radius: var(--cc-radius-sm); color: var(--cc-text-body); font-size: 0.92rem; font-weight: 600; text-decoration: none; }
+	.product-nav a:hover { background: var(--cc-surface-soft); color: var(--cc-text); }
+	.workflow-section, .explorer-section, .availability, .details-section, .faq { padding-top: 4rem; scroll-margin-top: 4rem; }
+	.section-heading { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr); gap: 2rem; align-items: end; margin-bottom: 1.5rem; }
+	.section-heading h2, .faq h2 { max-width: 18ch; margin: 0; font-size: clamp(1.7rem, 2.6vw, 2.5rem); line-height: 1.05; text-wrap: balance; }
+	.section-heading p { max-width: 62ch; margin: 0; color: var(--cc-text-body); line-height: 1.6; }
+	.workflow-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0; border-top: 1px solid var(--cc-border-strong); list-style: none; }
+	.workflow-list li { display: grid; grid-template-columns: 2rem 1fr; gap: 0.65rem; padding: 1.1rem 1rem 0 0; border-bottom: 1px solid var(--cc-border); }
+	.workflow-list li + li { padding-left: 1rem; border-left: 1px solid var(--cc-border); }
+	.workflow-list li > span { color: var(--pack-accent); font-family: var(--cc-font-mono); font-size: 0.75rem; font-weight: 700; }
+	.workflow-list h3 { margin: 0; font-size: 1rem; }
+	.workflow-list p { margin: 0.4rem 0 1.1rem; color: var(--cc-text-body); font-size: 0.92rem; line-height: 1.5; }
+	.plan-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); border-block: 1px solid var(--cc-border-strong); }
+	.plan { display: flex; flex-direction: column; padding: 1.25rem 1.25rem 1.35rem; }
+	.plan + .plan { border-left: 1px solid var(--cc-border); }
+	.plan--primary { background: var(--cc-surface); }
+	.plan-topline { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 0.2rem 0.8rem; }
+	.plan-topline > span { color: var(--pack-accent); font-family: var(--cc-font-mono); font-size: 0.72rem; font-weight: 700; }
+	.plan-topline strong { color: var(--cc-text); font-size: 1.6rem; line-height: 1; }
+	.plan-topline small { grid-column: 2; color: var(--cc-text-muted); }
+	.plan-cadence { margin: 0.85rem 0 0; color: var(--cc-text); font-weight: 600; line-height: 1.45; }
+	.plan-body { flex: 1; margin: 0.5rem 0 0; color: var(--cc-text-body); font-size: 0.94rem; line-height: 1.55; }
+	.plan .button { align-self: start; margin-top: 1.1rem; }
+	.section-note { margin: 1rem 0 0; color: var(--cc-text-muted); font-size: 0.9rem; }
+	.details-heading { padding-bottom: 1.25rem; border-bottom: 1px solid var(--cc-border-strong); }
+	.detail-columns, .reference-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3rem; }
+	.reference-columns { margin-top: 3rem; padding-top: 2.5rem; border-top: 1px solid var(--cc-border-strong); }
+	.detail-columns h3, .reference-columns h3 { margin: 0 0 1rem; font-size: 1.15rem; }
+	.detail-list, .reference-list { margin: 0; }
+	.detail-list div, .reference-list div { padding: 0.9rem 0; border-top: 1px solid var(--cc-border); }
+	.detail-list dt, .reference-list dt { color: var(--cc-text); font-weight: 700; }
+	.detail-list dd, .reference-list dd { margin: 0.25rem 0 0; color: var(--cc-text-body); font-size: 0.94rem; line-height: 1.55; }
+	.reference-list div { display: grid; grid-template-columns: 8rem 1fr; gap: 1rem; }
+	.reference-list dd { margin-top: 0; }
+	.faq h2 { margin-bottom: 1rem; }
+	.faq-list { border-top: 1px solid var(--cc-border-strong); }
+	details { padding: 1rem 0; border-bottom: 1px solid var(--cc-border); }
+	summary { min-height: 44px; color: var(--cc-text); cursor: pointer; font-weight: 700; }
+	details p { max-width: 70ch; margin: 0.4rem 0 0; color: var(--cc-text-body); line-height: 1.6; }
+	.credibility { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem 2rem; margin-top: 3.5rem; padding-top: 1.25rem; border-top: 1px solid var(--cc-border); }
+	.credibility p { max-width: 64ch; margin: 0; color: var(--cc-text-muted); font-size: 0.92rem; line-height: 1.55; }
+	.credibility div { display: flex; flex-wrap: wrap; gap: 1rem; }
+	.credibility a { color: var(--cc-text); font-weight: 700; text-underline-offset: 0.24em; }
+	@media (max-width: 920px) {
+		.product-hero, .section-heading, .detail-columns, .reference-columns { grid-template-columns: 1fr; }
+		.workflow-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+		.workflow-list li:nth-child(3) { padding-left: 0; border-left: 0; }
+		.plan:nth-child(odd) { border-left: 0; }
+	}
+	@media (max-width: 640px) {
+		.pack-product { padding-inline: 1rem; }
+		.product-hero { padding-top: 1.25rem; }
+		h1 { font-size: 2.45rem; }
+		.value-list, .workflow-list { grid-template-columns: 1fr; }
+		.workflow-list li + li { padding-left: 0; border-left: 0; }
+		.product-nav { margin-inline: -1rem; overflow-x: auto; padding-inline: 1rem; }
+		.product-nav a { white-space: nowrap; }
+		.plan-list { grid-template-columns: 1fr; }
+		.plan + .plan { border-top: 1px solid var(--cc-border); border-left: 0; }
+		.reference-list div { grid-template-columns: 1fr; gap: 0.25rem; }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.button { transition: none; }
+	}
+</style>

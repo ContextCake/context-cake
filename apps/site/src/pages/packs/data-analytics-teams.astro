@@ -1,7 +1,6 @@
 ---
 import { fileURLToPath } from 'node:url';
-import PackExplorer from '../../components/PackExplorer.astro';
-import Base from '../../layouts/Base.astro';
+import PackProductPage from '../../components/PackProductPage.astro';
 import { loadPackExplorer } from '../../lib/pack-explorer';
 
 const packRoot = fileURLToPath(
@@ -14,34 +13,11 @@ const explorer = await loadPackExplorer(packRoot, 'data-analytics-team');
 const fileCount = explorer.files.length;
 const folderCount = explorer.treeEntries.filter((entry) => entry.kind === 'dir').length;
 
-// Checkout infrastructure is kept but dormant — live payments are deferred while the base
-// pack ships as a free preview. To start selling: fill these links and set paymentsLive = true.
+// Checkout stays dormant while the complete Pack ships as a free preview.
 const LEMONSQUEEZY_BASE_PACK_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_BASE_PACK';
 const LEMONSQUEEZY_TEAM_PACK_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_TEAM_PACK';
 const LEMONSQUEEZY_UPDATES_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_UPDATES';
 const paymentsLive = false;
-
-const fitRows = [
-	['Good fit', 'Small in-house data and analytics teams handling recurring stakeholder requests.'],
-	['Not for', 'Teams shopping for a BI tool, warehouse connector, or live metrics product.'],
-	['Creator', 'ContextCake · first-party Pack.'],
-	['Reviewed', 'July 17, 2026 · content-only permissions.'],
-	['Delivery', 'Plain markdown files first, with Claude Code plugin packaging included.'],
-];
-
-const valuePoints = [
-	'Clarification workflow for vague requests',
-	'Source-of-truth and validation rules',
-	'Spec, checklist, and summary templates',
-	'Local overlay guidance for team-specific edits',
-];
-
-const quickFacts = [
-	['Files', `${fileCount} source files`],
-	['Folders', `${folderCount} directories`],
-	['License', '$99 personal · $249 team'],
-	['Overlay', 'Base Pack + local edits'],
-];
 
 const featuredFiles = [
 	{ label: 'Start here', path: 'skills/data-analytics-team-pack/START-HERE.md' },
@@ -50,796 +26,143 @@ const featuredFiles = [
 	{ label: 'Source rules', path: 'skills/data-analytics-team-pack/policies-and-rules/source-of-truth-precedence.md' },
 ];
 
-const workflowSteps = [
-	['01', 'Clarify', 'Turn a vague ask into a written spec: the real question, the metric definition, the source of truth, and what “done” means.'],
-	['02', 'Build', 'Create the query, model, or report from the definition agreed to in the spec.'],
-	['03', 'Validate', 'Reconcile the result to the source of truth before it ships. Catch the wrong number before the stakeholder does.'],
-	['04', 'Deliver', 'Send the answer with its confidence, caveats, and next action instead of an unexplained screenshot.'],
-];
-
-const insideRows = [
-	['Answer the same request faster', 'A clarification workflow and spec template that stop the back-and-forth on vague asks.'],
-	['Keep numbers consistent', 'Source-of-truth and metric-definition rules so two people report the same figure the same way.'],
-	['Ship results you can defend', 'A validation checklist and insight-summary template that make caveats and confidence explicit.'],
-	['Keep your own edits separate', 'Local overlay guidance so team-specific rules live outside the pack and survive updates.'],
-];
-
-const useCases = [
-	['Dashboard requests', 'When the same stakeholder question shows up every week with slightly different framing.'],
-	['Analyst onboarding', 'When new team members need the team’s standards without digging through old chats.'],
-	['AI drafting guardrails', 'When Claude, ChatGPT, Cursor, or Copilot can draft the work but still need team rules.'],
-	['Insight delivery', 'When a stakeholder needs the answer, caveats, confidence, and a clear next action in one summary.'],
-];
-
-const pricingPlans = [
-	{
-		label: 'Personal license',
-		price: '$99',
-		priceSuffix: 'one-time',
-		cadence: 'Yours to keep. No subscription required.',
-		title: 'One professional',
-		body: 'The full Pack for one named user: workflows, templates, examples, policies, and tool guides. Delivered as plain files plus cross-tool guidance.',
-		href: LEMONSQUEEZY_BASE_PACK_URL,
-		link: 'Buy the personal license',
-		primary: true,
-	},
-	{
-		label: 'Team license',
-		price: '$249',
-		priceSuffix: 'one-time',
-		cadence: 'Up to five named users in one organization.',
-		title: 'A small analytics team',
-		body: 'The same complete Pack licensed for up to five people, with the base version retained permanently.',
-		href: LEMONSQUEEZY_TEAM_PACK_URL,
-		link: 'Buy the team license',
-		primary: false,
-	},
-	{
-		label: 'Optional updates',
-		price: '$9',
-		priceSuffix: '/ month',
-		cadence: 'Personal updates. Team pricing reviewed separately.',
-		title: 'Curated updates',
-		body: 'Later examples, guidance, and templates arrive as reviewable editorial releases. The base Pack keeps working without them.',
-		href: LEMONSQUEEZY_UPDATES_URL,
-		link: 'Add monthly updates',
-		primary: false,
-	},
-];
-
-const compatRows = [
-	['Plain files', 'Open and edit the Markdown in any text editor. No additional tool is required.'],
-	['Claude Code', 'Install as a plugin, or point Claude at the unzipped files.'],
-	['ChatGPT', 'Upload the files as project or knowledge files, then reference them in prompts.'],
-	['Cursor & Copilot', 'Keep the files in your repo so the assistant reads them as working context.'],
-];
-
-const trustRows = [
-	['Source', 'Original first-party workflows, templates, examples, and guidance authored for ContextCake.'],
-	['Rights', 'ContextCake attests that it owns or can commercially distribute every included item.'],
-	['Permissions', 'Content only: no executable code, network access, bundled MCP server, credentials, or escaping symlinks.'],
-	['Update policy', 'Corrections stay available to base purchasers. New editorial releases may require the optional update subscription.'],
-];
-
-const faqs = [
-	{
-		q: 'Is this a BI tool or data catalog?',
-		a: 'No. It is a file-based working kit for analytics teams. It does not connect to your warehouse or manage live data.',
-	},
-	{
-		q: 'Do we need any special software to use it?',
-		a: 'No. The baseline deliverable is plain files you can read and edit in any editor. Claude Code packaging is included for teams that want it, but it is optional.',
-	},
-	{
-		q: 'Can we customize it?',
-		a: 'Yes. The intended model is to keep the base pack clean and put team-specific policies, examples, and exceptions in your own local overlay so updates stay easy to merge.',
-	},
-	{
-		q: 'What do the optional updates include?',
-		a: 'Curated editorial releases: clearer examples, sharper guidance, and new templates. Canceling stops future releases; every version already delivered remains yours.',
-	},
-	{
-		q: 'Do I need ContextCake Pro to install it?',
-		a: 'No. Packs are separate purchases. The Free application can install and use any free Pack or Pack you purchase.',
-	},
-];
+const availabilityPlans = paymentsLive
+	? [
+		{
+			label: 'Personal license', price: '$99', priceSuffix: 'one-time',
+			cadence: 'One named user · yours to keep.',
+			body: 'The complete Pack as plain files, with workflows, templates, examples, policies, and cross-tool guidance.',
+			href: LEMONSQUEEZY_BASE_PACK_URL, link: 'Buy personal', primary: true,
+		},
+		{
+			label: 'Team license', price: '$249', priceSuffix: 'one-time',
+			cadence: 'Up to five named users.',
+			body: 'The same complete Pack licensed for a small analytics team, with the delivered version retained permanently.',
+			href: LEMONSQUEEZY_TEAM_PACK_URL, link: 'Buy for a team',
+		},
+		{
+			label: 'Optional updates', price: '$9', priceSuffix: '/ month',
+			cadence: 'Personal editorial updates.',
+			body: 'Later examples, guidance, and templates arrive as reviewable releases. The base Pack keeps working without them.',
+			href: LEMONSQUEEZY_UPDATES_URL, link: 'Add updates',
+		},
+	]
+	: [
+		{
+			label: 'Preview open now', price: 'Free', priceSuffix: 'in preview',
+			cadence: 'Read the complete Pack before commercial launch.',
+			body: `Inspect all ${fileCount} files across ${folderCount} directories, including the workflows, templates, examples, policies, and tool guides.`,
+			href: '#explorer', link: 'Read the full Pack', primary: true,
+		},
+		{
+			label: 'Personal license', price: '$99', priceSuffix: 'one-time',
+			cadence: 'One named user · retained permanently.',
+			body: 'The full Pack as plain files with cross-tool guidance. ContextCake Pro is not required.',
+			link: 'Coming soon', disabled: true,
+		},
+		{
+			label: 'Team license', price: '$249', priceSuffix: 'one-time',
+			cadence: 'Up to five named users.',
+			body: 'Optional editorial updates are planned separately. Canceling updates never disables retained files.',
+			link: 'Coming soon', disabled: true,
+		},
+	];
 ---
 
-<Base
-	title="ContextCake Pack: Data & Analytics Teams"
-	description="A file-based pack for data teams that need repeatable request scoping, validation, and insight delivery standards across AI tools."
->
-	<main class="pack-page">
-		<section class="hero" aria-labelledby="hero-title">
-			<div class="hero-copy">
-				<p class="eyebrow">ContextCake Pack</p>
-				<h1 id="hero-title">A working kit for recurring analytics requests.</h1>
-				<p class="lede">
-					Use the same process each time a stakeholder asks for a metric, dashboard, or analysis:
-					clarify the request, agree on the definition, validate the result, and explain the answer.
-				</p>
-				<div class="hero-actions" aria-label="Primary actions">
-					<a class="button primary" href="#explorer">Read the pack free</a>
-					<a class="button" href="#pricing">What’s coming</a>
-				</div>
-				<dl class="quick-facts" aria-label="Pack quick facts">
-					{quickFacts.map(([term, body]) => (
-						<div>
-							<dt>{term}</dt>
-							<dd>{body}</dd>
-						</div>
-					))}
-				</dl>
-				<ul class="value-list" aria-label="What the pack includes">
-					{valuePoints.map((item) => <li>{item}</li>)}
-				</ul>
-			</div>
-
-			<aside class="summary-panel" aria-label="Pack fit summary">
-				<p class="panel-label">At a glance</p>
-				<dl class="fit-list">
-					{fitRows.map(([term, body]) => (
-						<div>
-							<dt>{term}</dt>
-							<dd>{body}</dd>
-						</div>
-					))}
-				</dl>
-			</aside>
-		</section>
-
-		<section class="workflow" aria-labelledby="workflow-title">
-			<div class="section-head">
-				<div>
-					<p class="eyebrow">The workflow</p>
-					<h2 id="workflow-title">One request, four steps.</h2>
-				</div>
-				<p>
-					The Pack turns the usual path from request to delivery into four written steps
-					that the team can repeat and review.
-				</p>
-			</div>
-			<ol class="workflow-grid" aria-label="The four-step workflow">
-				{workflowSteps.map(([num, title, body]) => (
-					<li class="step">
-						<span class="step-num" aria-hidden="true">{num}</span>
-						<h3>{title}</h3>
-						<p>{body}</p>
-					</li>
-				))}
-			</ol>
-		</section>
-
-		<section id="explorer" class="explorer-section" aria-labelledby="explorer-title">
-			<div class="section-head">
-				<div>
-					<p class="eyebrow">Look inside</p>
-					<h2 id="explorer-title">Read the files before you install them.</h2>
-				</div>
-				<p>
-					Choose a file from the tree to read it. The featured files show the request
-					workflow, spec template, and source-of-truth rules first.
-				</p>
-			</div>
-			<PackExplorer
-				id="data-analytics-pack-explorer"
-				explorer={explorer}
-				featuredFiles={featuredFiles}
-				defaultFile="skills/data-analytics-team-pack/START-HERE.md"
-				title="Data & Analytics Teams pack explorer"
-			/>
-		</section>
-
-		<section class="detail-band" aria-labelledby="pack-uses-title">
-			<div class="detail-column">
-				<div class="section-head compact-head">
-					<div>
-						<p class="eyebrow">Use it for</p>
-						<h2 id="pack-uses-title">Common uses.</h2>
-					</div>
-				</div>
-				<div class="case-grid">
-					{useCases.map(([title, body]) => (
-						<article>
-							<h3>{title}</h3>
-							<p>{body}</p>
-						</article>
-					))}
-				</div>
-			</div>
-
-			<div class="detail-column">
-				<div class="section-head compact-head">
-					<div>
-						<p class="eyebrow">What’s inside</p>
-						<h2 id="inside-title">Included workflows and templates.</h2>
-					</div>
-				</div>
-				<dl class="inside-list">
-					{insideRows.map(([term, body]) => (
-						<div>
-							<dt>{term}</dt>
-							<dd>{body}</dd>
-						</div>
-					))}
-				</dl>
-			</div>
-		</section>
-
-		<section id="pricing" class="pricing" aria-labelledby="pricing-title">
-			<div class="section-head">
-				<div>
-					<p class="eyebrow">{paymentsLive ? 'Pricing' : 'Early access'}</p>
-					<h2 id="pricing-title">{paymentsLive ? 'Buy the Pack once. Add updates if you want them.' : 'Read it now. Paid licenses are coming later.'}</h2>
-				</div>
-				<p>
-					{paymentsLive
-						? 'The base Pack is a one-time purchase. A separate monthly subscription adds future editorial releases but is not required to keep using the version you bought.'
-						: 'The full Pack is free to inspect during preview. Commercial launch pricing is set at $99 personal or $249 for up to five users; checkout remains off until fulfillment and entitlements are ready.'}
-				</p>
-			</div>
-
-			{paymentsLive ? (
-				<div class="plan-grid">
-					{pricingPlans.map((plan) => (
-						<article class={`plan${plan.primary ? ' plan-primary' : ''}`}>
-							<p class="card-label">{plan.label}</p>
-							<p class="price">
-								<span class="price-amount">{plan.price}</span>
-								<span class="price-suffix">{plan.priceSuffix}</span>
-							</p>
-							<p class="cadence">{plan.cadence}</p>
-							<h3>{plan.title}</h3>
-							<p class="plan-body">{plan.body}</p>
-							<a class={`button${plan.primary ? ' primary' : ''}`} href={plan.href}>{plan.link}</a>
-						</article>
-					))}
-				</div>
-			) : (
-				<div class="plan-grid preview-plans">
-					<article class="plan plan-primary">
-						<p class="card-label">Preview open now</p>
-						<p class="price">
-							<span class="price-amount">Free</span>
-							<span class="price-suffix">in preview</span>
-						</p>
-						<p class="cadence">Read the complete Pack before commercial launch.</p>
-						<h3>Inspect every file</h3>
-						<p class="plan-body">The full Pack is available to read during preview, including its workflows, templates, examples, policies, and tool guides.</p>
-						<a class="button primary" href="#explorer">Read the full pack</a>
-					</article>
-					<article class="plan">
-						<p class="card-label">Personal license · coming soon</p>
-						<p class="price">
-							<span class="price-amount">$99</span>
-							<span class="price-suffix">one-time</span>
-						</p>
-						<p class="cadence">One named user · retained permanently.</p>
-						<h3>Personal Pack license</h3>
-						<p class="plan-body">The full Pack as plain files, with cross-tool guidance. ContextCake Pro is not required.</p>
-						<span class="button coming-soon" aria-disabled="true">Coming soon</span>
-					</article>
-					<article class="plan">
-						<p class="card-label">Team license · coming soon</p>
-						<p class="price">
-							<span class="price-amount">$249</span>
-							<span class="price-suffix">one-time</span>
-						</p>
-						<p class="cadence">Up to five named users in one organization.</p>
-						<h3>Small-team Pack license</h3>
-						<p class="plan-body">Optional editorial updates are planned at $9/month personal; the team equivalent will be reviewed separately. Canceling never disables retained files.</p>
-						<span class="button coming-soon" aria-disabled="true">Coming soon</span>
-					</article>
-				</div>
-			)}
-
-			{!paymentsLive && (
-				<p class="pricing-note">
-					No checkout yet. The complete Pack is open for inspection while fulfillment,
-					entitlements, and update delivery are finished.
-				</p>
-			)}
-		</section>
-
-		<section id="license" class="trust" aria-labelledby="trust-title">
-			<div class="section-head compact-head">
-				<div><p class="eyebrow">Trust and license</p><h2 id="trust-title">Sources, rights, and permissions.</h2></div>
-			</div>
-			<dl class="compat-grid">
-				{trustRows.map(([term, body]) => <div><dt>{term}</dt><dd>{body}</dd></div>)}
-			</dl>
-		</section>
-
-		<section class="compatibility" aria-labelledby="compat-title">
-			<div class="section-head compact-head">
-				<div>
-					<p class="eyebrow">Works with your tools</p>
-					<h2 id="compat-title">Use the Markdown directly or package it for your tool.</h2>
-				</div>
-			</div>
-			<dl class="compat-grid">
-				{compatRows.map(([term, body]) => (
-					<div>
-						<dt>{term}</dt>
-						<dd>{body}</dd>
-					</div>
-				))}
-			</dl>
-		</section>
-
-		<section class="faq" aria-labelledby="faq-title">
-			<div class="section-head">
-				<div>
-					<p class="eyebrow">FAQ</p>
-					<h2 id="faq-title">Common questions.</h2>
-				</div>
-			</div>
-			<div class="faq-list">
-				{faqs.map((item) => (
-					<details>
-						<summary>{item.q}</summary>
-						<p>{item.a}</p>
-					</details>
-				))}
-			</div>
-		</section>
-
-		<section class="credibility" aria-label="About ContextCake">
-			<p>
-				Made and reviewed by <strong>ContextCake</strong>. Pack Contract v1, content only,
-				with no scripts, network access, credentials, or bundled services.
-			</p>
-			<div class="credibility-links"><a class="view-link" href="/creators">Create a Pack</a><a class="view-link" href="/pricing">See ContextCake pricing</a></div>
-		</section>
-	</main>
-</Base>
-
-<style>
-	.pack-page {
-		max-width: 76rem;
-		margin: 0 auto;
-		padding: 2.5rem 1.5rem 2rem;
-	}
-	.hero {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(18rem, 23rem);
-		gap: 1.2rem;
-		align-items: start;
-		padding: 0.75rem 0 2rem;
-		border-bottom: 1px solid var(--cc-border);
-	}
-	.eyebrow,
-	.panel-label,
-	.card-label {
-		margin: 0 0 0.75rem;
-		color: var(--cc-layer-team);
-		font-family: var(--cc-font-mono);
-		font-size: 0.78rem;
-		font-weight: 700;
-		letter-spacing: 0;
-		text-transform: uppercase;
-	}
-	h1,
-	h2,
-	h3,
-	p {
-		letter-spacing: 0;
-	}
-	h1 {
-		max-width: 10ch;
-		margin: 0;
-		font-size: clamp(2rem, 3vw, 3rem);
-		line-height: 0.98;
-	}
-	.lede,
-	.section-head > p:last-child,
-	.fit-list dd,
-	.case-grid p,
-	.inside-list dd,
-	.plan-body,
-	.compat-grid dd,
-	.faq p {
-		color: var(--cc-text-body);
-		line-height: 1.62;
-	}
-	.lede {
-		max-width: 58ch;
-		margin: 0.95rem 0 0;
-		font-size: 1.08rem;
-	}
-	.hero-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.8rem;
-		margin-top: 1.25rem;
-	}
-	.quick-facts {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 0.65rem;
-		margin: 1rem 0 0;
-	}
-	.quick-facts div {
-		padding: 0.8rem 0.85rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-md);
-		background: color-mix(in srgb, var(--cc-surface) 70%, transparent);
-	}
-	.quick-facts dt {
-		margin: 0;
-		color: var(--cc-layer-team);
-		font-family: var(--cc-font-mono);
-		font-size: 0.72rem;
-		font-weight: 700;
-		text-transform: uppercase;
-	}
-	.quick-facts dd {
-		margin: 0.35rem 0 0;
-		color: var(--cc-text);
-		font-size: 0.94rem;
-		font-weight: 700;
-		line-height: 1.35;
-	}
-	.button {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-height: 44px;
-		padding: 0 1rem;
-		border: 1px solid var(--cc-border);
-		border-radius: 6px;
-		color: var(--cc-text);
-		font-weight: 700;
-		text-decoration: none;
-	}
-	.button.primary {
-		border-color: var(--cc-cta);
-		background: var(--cc-cta);
-		color: var(--cc-on-cta);
-	}
-	.button[aria-disabled='true'] {
-		opacity: 0.7;
-		cursor: default;
-	}
-	.button.coming-soon {
-		border-style: dashed;
-		color: var(--cc-text-body);
-	}
-	.value-list {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 0.55rem 1rem;
-		margin: 1rem 0 0;
-		padding: 0;
-		list-style: none;
-		max-width: 48rem;
-	}
-	.value-list li {
-		color: var(--cc-text-body);
-	}
-	.value-list li::before {
-		content: '';
-		display: inline-block;
-		width: 0.5rem;
-		height: 0.5rem;
-		margin-right: 0.55rem;
-		border-radius: 2px;
-		background: var(--cc-layer-personal);
-		vertical-align: 0.08em;
-	}
-	.summary-panel {
-		padding: 1rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-md);
-		background: color-mix(in srgb, var(--cc-surface) 82%, transparent);
-		box-shadow: var(--cc-shadow-panel);
-	}
-	.fit-list {
-		display: grid;
-		gap: 0.85rem;
-		margin: 0;
-	}
-	.fit-list div {
-		display: grid;
-		gap: 0.18rem;
-	}
-	.fit-list dt {
-		color: var(--cc-text);
-		font-weight: 700;
-	}
-	.fit-list dd {
-		margin: 0;
-		font-size: 0.98rem;
-	}
-	.workflow,
-	.explorer-section,
-	.detail-band,
-	.pricing,
-	.trust,
-	.compatibility,
-	.faq {
-		padding: 2.25rem 0 0;
-	}
-	.section-head {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 0.88fr);
-		gap: 1.4rem;
-		align-items: end;
-		margin-bottom: 1.25rem;
-	}
-	.section-head h2 {
-		max-width: 14ch;
-		margin: 0;
-		font-size: clamp(1.45rem, 2vw, 2.05rem);
-		line-height: 1.04;
-	}
-	.section-head > p:last-child {
-		margin: 0;
-		font-size: 1rem;
-	}
-	.compact-head {
-		margin-bottom: 1rem;
-	}
-	.compact-head .section-head > p:last-child {
-		display: none;
-	}
-	.workflow-grid {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 0.9rem;
-		margin: 0;
-		padding: 0;
-		list-style: none;
-	}
-	.step {
-		padding: 1.1rem 1rem 1.2rem;
-		border: 1px solid var(--cc-border);
-		border-top: 4px solid var(--cc-layer-team);
-		border-radius: var(--cc-radius-md);
-		background: color-mix(in srgb, var(--cc-surface) 72%, transparent);
-	}
-	.workflow-grid li:nth-child(2) { border-top-color: var(--cc-layer-company); }
-	.workflow-grid li:nth-child(2) .step-num { color: var(--cc-layer-company); }
-	.workflow-grid li:nth-child(3) { border-top-color: var(--cc-layer-personal); }
-	.workflow-grid li:nth-child(3) .step-num { color: var(--cc-layer-personal); }
-	.workflow-grid li:nth-child(4) { border-top-color: var(--cc-cta); }
-	.workflow-grid li:nth-child(4) .step-num { color: var(--cc-cta); }
-	.step-num {
-		display: block;
-		color: var(--cc-layer-team);
-		font-family: var(--cc-font-mono);
-		font-size: 0.92rem;
-		font-weight: 700;
-	}
-	.step h3 {
-		margin: 0.5rem 0 0;
-		color: var(--cc-text);
-		font-size: 1.12rem;
-	}
-	.step p {
-		margin: 0.5rem 0 0;
-		font-size: 0.95rem;
-	}
-	.detail-band {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 1.1rem;
-		align-items: start;
-	}
-	.detail-column {
-		min-width: 0;
-	}
-	.case-grid {
-		display: grid;
-		gap: 0.9rem;
-		grid-template-columns: 1fr;
-	}
-	.case-grid article {
-		padding: 1rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-md);
-		background: color-mix(in srgb, var(--cc-surface) 72%, transparent);
-		border-top: 4px solid var(--cc-layer-team);
-	}
-	.case-grid article:nth-child(2) {
-		border-top-color: var(--cc-layer-company);
-	}
-	.case-grid article:nth-child(3) {
-		border-top-color: var(--cc-layer-personal);
-	}
-	.case-grid article:nth-child(4) {
-		border-top-color: var(--cc-cta);
-	}
-	.case-grid h3 {
-		margin: 0;
-		color: var(--cc-text);
-		font-size: 1.12rem;
-	}
-	.case-grid p {
-		margin: 0.55rem 0 0;
-		font-size: 0.98rem;
-	}
-	.inside-list {
-		display: grid;
-		gap: 0.85rem;
-		margin: 0;
-	}
-	.inside-list div {
-		display: grid;
-		gap: 0.2rem;
-		padding: 0 0 0.85rem;
-		border-bottom: 1px solid var(--cc-border);
-	}
-	.inside-list div:last-child {
-		padding-bottom: 0;
-		border-bottom: 0;
-	}
-	.inside-list dt {
-		color: var(--cc-text);
-		font-weight: 700;
-	}
-	.inside-list dd {
-		margin: 0;
-		font-size: 0.98rem;
-	}
-	.plan-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 1rem;
-	}
-	.preview-plans {
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-	}
-	.plan {
-		display: flex;
-		flex-direction: column;
-		padding: 1.25rem 1.2rem 1.35rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-md);
-		background: color-mix(in srgb, var(--cc-surface) 74%, transparent);
-	}
-	.plan-primary {
-		border-color: color-mix(in srgb, var(--cc-cta) 55%, var(--cc-border));
-		box-shadow: var(--cc-shadow-panel);
-	}
-	.price {
-		display: flex;
-		align-items: baseline;
-		gap: 0.4rem;
-		margin: 0.2rem 0 0;
-	}
-	.price-amount {
-		color: var(--cc-text);
-		font-size: 2rem;
-		font-weight: 700;
-		line-height: 1;
-	}
-	.price-suffix {
-		color: var(--cc-text-body);
-		font-family: var(--cc-font-mono);
-		font-size: 0.8rem;
-		text-transform: uppercase;
-		letter-spacing: 0;
-	}
-	.cadence {
-		margin: 0.4rem 0 0;
-		color: var(--cc-text-body);
-		font-size: 0.9rem;
-	}
-	.plan h3 {
-		margin: 0.75rem 0 0;
-		color: var(--cc-text);
-		font-size: 1.1rem;
-	}
-	.plan-body {
-		margin: 0.5rem 0 0;
-		font-size: 0.98rem;
-	}
-	.plan .button {
-		margin-top: 1.1rem;
-		width: fit-content;
-	}
-	.pricing-note {
-		margin: 1rem 0 0;
-		color: var(--cc-text-body);
-		font-size: 0.94rem;
-	}
-	.compat-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 0.85rem 1.1rem;
-		margin: 0;
-	}
-	.compat-grid div {
-		display: grid;
-		gap: 0.2rem;
-		padding: 0.9rem 1rem;
-		border: 1px solid var(--cc-border);
-		border-radius: var(--cc-radius-md);
-		background: color-mix(in srgb, var(--cc-surface) 70%, transparent);
-	}
-	.compat-grid dt {
-		color: var(--cc-text);
-		font-weight: 700;
-	}
-	.compat-grid dd {
-		margin: 0;
-		font-size: 0.96rem;
-	}
-	.faq-list {
-		display: grid;
-		gap: 0.6rem;
-	}
-	details {
-		padding: 1rem 0;
-		border-top: 1px solid var(--cc-border);
-	}
-	summary {
-		color: var(--cc-text);
-		cursor: pointer;
-		font-weight: 700;
-	}
-	.credibility {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.75rem 1.5rem;
-		margin-top: 2.5rem;
-		padding: 1.25rem 0 0;
-		border-top: 1px solid var(--cc-border);
-	}
-	.credibility p {
-		max-width: 52ch;
-		margin: 0;
-		color: var(--cc-text-body);
-		line-height: 1.55;
-	}
-	.credibility strong {
-		color: var(--cc-text);
-	}
-	.credibility-links {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 1rem;
-	}
-	.view-link {
-		display: inline-flex;
-		align-items: center;
-		min-height: 44px;
-		color: var(--cc-text);
-		font-weight: 700;
-		text-decoration-thickness: 1px;
-		text-underline-offset: 0.24em;
-	}
-	@media (max-width: 920px) {
-		.hero,
-		.section-head,
-		.detail-band {
-			grid-template-columns: 1fr;
-		}
-		.workflow-grid {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-		.quick-facts {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-		.preview-plans {
-			grid-template-columns: 1fr;
-		}
-	}
-	@media (max-width: 620px) {
-		.pack-page {
-			padding-top: 2rem;
-		}
-		.workflow-grid,
-		.plan-grid,
-		.compat-grid,
-		.quick-facts {
-			grid-template-columns: 1fr;
-		}
-		.value-list {
-			grid-template-columns: 1fr;
-		}
-	}
-</style>
+<PackProductPage
+	accent="personal"
+	seoTitle="ContextCake Pack: Data & Analytics Teams"
+	seoDescription="A file-based Pack for data teams that need repeatable request scoping, validation, and insight delivery standards across AI tools."
+	name="Data & Analytics Teams"
+	status="Free preview"
+	headline="A working kit for recurring analytics requests."
+	lede="Use the same process each time a stakeholder asks for a metric, dashboard, or analysis: clarify the request, agree on the definition, validate the result, and explain the answer."
+	actions={[
+		{ label: 'Browse the files', href: '#explorer', primary: true },
+		{ label: 'Preview & pricing', href: '#availability' },
+	]}
+	quickFacts={[
+		['Creator', 'ContextCake'],
+		['License', '$99 personal · $249 team'],
+		['Reviewed', 'July 17, 2026'],
+		['Permissions', 'Content only'],
+	]}
+	fitRows={[
+		['Good for', 'Small data and analytics teams handling recurring stakeholder requests.'],
+		['Not for', 'Teams shopping for a BI tool, warehouse connector, or live metrics product.'],
+		['Delivery', 'Plain Markdown files with optional Claude Code packaging.'],
+	]}
+	valuePoints={[
+		'Clarification workflow for vague requests',
+		'Source-of-truth and validation rules',
+		'Spec, checklist, and summary templates',
+		'Local overlay guidance for team-specific edits',
+	]}
+	workflow={{
+		title: 'One request, four written steps',
+		description: 'The Pack turns the usual path from request to delivery into a process the team can repeat, review, and improve.',
+		steps: [
+			['01', 'Clarify', 'Turn the ask into a written spec with definitions, source, and acceptance criteria.'],
+			['02', 'Build', 'Create the query, model, or report from the definition the team agreed to.'],
+			['03', 'Validate', 'Reconcile the result to the source of truth before a stakeholder sees it.'],
+			['04', 'Deliver', 'Send the answer with confidence, caveats, and a clear next action.'],
+		],
+	}}
+	explorer={explorer}
+	explorerCopy={{
+		id: 'data-analytics-pack-explorer',
+		title: 'Browse the complete Pack',
+		description: 'Search the file tree or start with the request workflow, spec template, and source-of-truth rules.',
+		featuredFiles,
+		defaultFile: 'skills/data-analytics-team-pack/START-HERE.md',
+		treeLabel: 'Data & Analytics Teams Pack files',
+	}}
+	availability={{
+		id: 'availability',
+		title: paymentsLive ? 'Buy once. Add updates only if they help.' : 'Read it now. Paid licenses come later.',
+		description: paymentsLive
+			? 'The base Pack is a one-time purchase. A separate subscription adds future editorial releases but is not required to keep using what you bought.'
+			: 'The full Pack is open during preview. Commercial pricing is set; checkout remains off until fulfillment and entitlements are ready.',
+		plans: availabilityPlans,
+		note: paymentsLive ? undefined : 'No checkout yet. The complete Pack stays open for inspection while fulfillment, entitlements, and update delivery are finished.',
+	}}
+	useCases={[
+		['Dashboard requests', 'Handle the same stakeholder question when it returns with slightly different framing.'],
+		['Analyst onboarding', 'Give new team members the standards without sending them through old chats.'],
+		['AI drafting guardrails', 'Let an AI tool draft while keeping the team’s rules and boundaries in view.'],
+		['Insight delivery', 'Send the answer, caveats, confidence, and next action in one summary.'],
+	]}
+	insideRows={[
+		['Request clarification', 'A workflow and spec template that reduce back-and-forth on vague asks.'],
+		['Source-of-truth rules', 'Metric and precedence guidance that keeps answers consistent.'],
+		['Validation and delivery', 'A checklist and insight-summary template that make confidence explicit.'],
+		['Local overlay', 'A safe place for team-specific policies and examples that survives updates.'],
+	]}
+	compatibility={{
+		title: 'Use the Markdown directly or with your AI tool',
+		rows: [
+			['Plain files', 'Open and edit the Markdown in any text editor.'],
+			['Claude Code', 'Install as a plugin or point Claude at the unzipped files.'],
+			['ChatGPT', 'Upload the files as project or knowledge files.'],
+			['Cursor & Copilot', 'Keep the files in your repo as working context.'],
+		],
+	}}
+	trustRows={[
+		['Source', 'Original first-party workflows, templates, examples, and guidance.'],
+		['Rights', 'ContextCake owns or can commercially distribute every included item.'],
+		['Permissions', 'No executable code, network access, bundled server, credentials, or escaping symlinks.'],
+		['Updates', 'Corrections remain available; new editorial releases may be licensed separately.'],
+	]}
+	faqs={[
+		{ q: 'Is this a BI tool or data catalog?', a: 'No. It is a file-based working kit and does not connect to your warehouse or manage live data.' },
+		{ q: 'Do we need special software?', a: 'No. Plain files are the baseline. Claude Code packaging is optional.' },
+		{ q: 'Can we customize it?', a: 'Yes. Keep team-specific rules in a separate local overlay so Pack updates remain easy to review.' },
+		{ q: 'What do optional updates include?', a: 'Curated editorial releases with clearer examples, sharper guidance, and new templates.' },
+		{ q: 'Do I need ContextCake Pro?', a: 'No. Packs are separate products, and the Free app can install any Pack you own.' },
+	]}
+	credibility="Made and reviewed by ContextCake. Pack Contract v1 · content only · no scripts, network access, credentials, or bundled services."
+	credibilityLinks={[
+		{ label: 'Create a Pack', href: '/creators' },
+		{ label: 'See app pricing', href: '/pricing' },
+	]}
+/>

@@ -262,13 +262,20 @@ function isSkippedPath(filename) {
 // extension check cannot already accept. A path that is GONE by the time we
 // look (deleted, renamed away, moved out) counts as a change: whatever it was,
 // the index may hold it.
-function isIndexableFile(root, filename, kind) {
+//
+// Async because this runs inside the fs.watch callback, on the event loop of a
+// service whose whole premise is that no slow source blocks it. One statSync
+// against an iCloud, Dropbox or SMB-backed vault — the exact mounts that made
+// the per-source budget 120s — stalls every request for the mount's timeout.
+// The caller already defers its real work behind a debounce, so awaiting here
+// costs nothing.
+async function isIndexableFile(root, filename, kind) {
   if (filename == null) return true;
   const extensions = kind === "files" ? FILES_EXTENSIONS : [".md"];
   const ext = path.extname(String(filename).split(/[\\/]/).pop()).toLowerCase();
   if (extensions.includes(ext)) return true;
   try {
-    return fs.statSync(path.join(root, String(filename))).isDirectory();
+    return (await fsp.stat(path.join(root, String(filename)))).isDirectory();
   } catch {
     return true;
   }
@@ -819,11 +826,14 @@ export function createEngineService({
     for (const root of roots) {
       if (watchers.has(root)) continue;
       let watcher;
+      // onChange is async and must never reject into the watcher: an unhandled
+      // rejection here would take the whole service down over one fs event.
+      const notify = (_event, filename) => { onChange(root, filename).catch(() => {}); };
       try {
-        watcher = fs.watch(root, { recursive: true, persistent: false }, (_event, filename) => onChange(root, filename));
+        watcher = fs.watch(root, { recursive: true, persistent: false }, notify);
       } catch (err) {
         try {
-          watcher = fs.watch(root, { persistent: false }, (_event, filename) => onChange(root, filename));
+          watcher = fs.watch(root, { persistent: false }, notify);
           console.error(`[service watcher] ${root}: recursive watching unavailable (${err.message}) — edits in subfolders will not refresh this layer until it is re-read`);
         } catch {
           continue; // unwatchable (missing, permissions, descriptor limits) — reads still work
@@ -844,13 +854,16 @@ export function createEngineService({
     return null;
   }
 
-  function onChange(root, filename) {
-    const state = watchers.get(root);
-    if (!state) return;
+  async function onChange(root, filename) {
+    if (!watchers.has(root)) return;
     if (isSkippedPath(filename)) return;
     const layer = layerAtRoot(root);
     if (!layer) return; // no source reads this root any more; syncWatchers drops the watcher
-    if (!isIndexableFile(root, filename, layer.kind)) return;
+    if (!(await isIndexableFile(root, filename, layer.kind))) return;
+    // Re-read after the await: the watcher can be dropped (source removed,
+    // service closed) while the filesystem is answering.
+    const state = watchers.get(root);
+    if (!state) return;
     clearTimeout(state.timer);
     state.timer = setTimeout(() => {
       const current = layerAtRoot(root);

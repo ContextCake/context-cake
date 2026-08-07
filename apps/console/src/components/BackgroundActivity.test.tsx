@@ -11,7 +11,11 @@ import { LiveDataError } from '../api'
 import type { BackgroundTask, Store } from '../store'
 
 const mocks = vi.hoisted(() => ({ store: { current: null as unknown as Store } }))
-vi.mock('../store', () => ({ useStore: () => mocks.store.current }))
+// The store is three contexts now; this component reads the data half.
+vi.mock('../store', () => {
+  const store = () => mocks.store.current
+  return { useStore: store, useStoreData: store, useStoreNav: store, useStoreInput: store }
+})
 
 let container: HTMLDivElement
 let root: Root

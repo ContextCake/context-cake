@@ -19,7 +19,7 @@ import { Markdown } from '../components/Markdown'
 import { useDetailSurface } from '../components/useDetailSurface'
 import { filesRevalidation, readLayerFile, useLayerFiles } from '../layer-files'
 import { useReveal } from '../reveal'
-import { useStore } from '../store'
+import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import type { FileContent, LayerFile } from '../types'
 
 type Tab = 'rendered' | 'raw'
@@ -95,7 +95,9 @@ function conceptForFile(file: FileContent | null, concepts: Concept[]): { concep
 }
 
 export function Files() {
-  const { mode, concepts, sources, reload, reloadKey, query, filesScope, filesPath, setFilesScope, setFilesPath, openConcept } = useStore()
+  const { mode, concepts, sources, reload, reloadKey, setFilesScope, setFilesPath, openConcept } = useStoreData()
+  const { filesScope, filesPath } = useStoreNav()
+  const { query } = useStoreInput()
   const [file, setFile] = useState<FileContent | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('rendered')
@@ -512,3 +514,14 @@ export function Files() {
     </div>
   )
 }
+
+
+/**
+ * Deliberately NOT wrapped in React.memo, unlike its sibling views. A memoized
+ * component with no props only ever re-renders from a context it subscribes to,
+ * and this view's suite drives updates by mutating a module-scoped store mock
+ * and re-rendering the same element — with a memo in the way those renders are
+ * skipped and the tests silently stop exercising anything. Those are the tests
+ * that hold the navigator's focus guarantee and its DOM-order invariant, and
+ * the memo would only save renders caused by the shell's own local state.
+ */

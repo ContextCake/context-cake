@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { C, css, lc, MONO } from '../theme'
-import { useStore } from '../store'
+import { useStoreData, useStoreInput } from '../store'
 
 const SUGGESTIONS = ['What database do we use?', 'How do we handle on-call?']
 const MCP_CONFIG_CMD = 'claude mcp add contextcake -- node mcp-server.mjs --manifest layers.json'
 
-export function ChatPanel({ keyboardSuspended = false, onConnectAgent, onClose }: { keyboardSuspended?: boolean; onConnectAgent?: () => void; onClose: () => void }) {
-  const { chatMessages, chatBusy, chatInput, setChatInput, send } = useStore()
+function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: { keyboardSuspended?: boolean; onConnectAgent?: () => void; onClose: () => void }) {
+  const { setChatInput, send } = useStoreData()
+  const { chatMessages, chatBusy, chatInput } = useStoreInput()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const panelRef = useRef<HTMLElement>(null)
@@ -163,3 +164,11 @@ export function ChatPanel({ keyboardSuspended = false, onConnectAgent, onClose }
     </div>
   )
 }
+
+/**
+ * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
+ * background-activity tick — and this view has no business repainting for any
+ * of them. It re-renders when the store slices it subscribes to change, and
+ * otherwise not at all.
+ */
+export const ChatPanel = memo(ChatPanelInner)

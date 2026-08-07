@@ -1,11 +1,12 @@
+import { memo } from 'react'
 import { progressLabel, progressPercent } from '../api'
 import { layerName, layers } from '../data'
-import { useStore } from '../store'
+import { useStoreData } from '../store'
 import { LayerChip } from '../components/LayerChip'
 import { EmptyState, StatusBadge } from '../components/ui'
 
-export function Overview() {
-  const { mode, setView, signals, conflicts, sources, concepts, activity, loadErrors } = useStore()
+function OverviewInner() {
+  const { mode, setView, signals, conflicts, sources, concepts, activity, loadErrors } = useStoreData()
   const queue = signals.filter((signal) => signal.route === 'review_required')
   const openConflicts = conflicts.filter((conflict) => conflict.status === 'open')
   const failedSources = sources.filter((source) => source.status === 'error' || source.status === 'degraded')
@@ -52,3 +53,11 @@ export function Overview() {
     </div>
   )
 }
+
+/**
+ * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
+ * background-activity tick — and this view has no business repainting for any
+ * of them. It re-renders when the store slices it subscribes to change, and
+ * otherwise not at all.
+ */
+export const Overview = memo(OverviewInner)

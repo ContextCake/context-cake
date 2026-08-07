@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { C, css, lc, MONO, type LayerId } from '../theme'
 import { layerLevel, layers, type Concept } from '../data'
 import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
-import { useStore } from '../store'
+import { useStoreData } from '../store'
 
 // ---- layout constants (world coordinates) ----
 const NODE_W = 214, NODE_H = 96
@@ -71,8 +71,8 @@ function edgePath(x1: number, y1: number, x2: number, y2: number) {
   return `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`
 }
 
-export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: boolean }) {
-  const { setSelConcept, setSelConflict, setView, conflicts, concepts } = useStore()
+function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolean }) {
+  const { setSelConcept, setSelConflict, setView, conflicts, concepts } = useStoreData()
   // Memoized: pan/zoom re-renders every pointermove — don't re-lay-out for those.
   const { nodes, ghosts, worldW, worldH } = useMemo(() => computeLayout(concepts), [concepts])
   const laneCounts = useMemo(() => {
@@ -342,3 +342,11 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
     </div>
   )
 }
+
+/**
+ * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
+ * background-activity tick — and this view has no business repainting for any
+ * of them. It re-renders when the store slices it subscribes to change, and
+ * otherwise not at all.
+ */
+export const Canvas = memo(CanvasInner)

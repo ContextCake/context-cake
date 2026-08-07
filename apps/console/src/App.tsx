@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useStore } from './store'
+import { useStoreData, useStoreNav } from './store'
 import { C, css, MONO } from './theme'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
@@ -66,7 +66,11 @@ function ErrorState({ kind, message, reload }: { kind: LiveErrorKind; message: s
 }
 
 export function App() {
-  const { view, setView, chatOpen, openChat, closeChat, route, loading, load, error, reload, retryNow, mode, sources, loadErrors, openFilesScope } = useStore()
+  // Deliberately three narrow subscriptions rather than `useStore()`: the shell
+  // owns every memoized child below, so an App render is a whole-tree render.
+  // Typing in the toolbar search must not cause one.
+  const { setView, openChat, closeChat, route, loading, load, error, reload, retryNow, mode, sources, loadErrors, openFilesScope } = useStoreData()
+  const { view, chatOpen } = useStoreNav()
   // Undefined = not yet decided by the auto-trigger effect below; true/false
   // once the user (or the trigger) has taken an explicit stance. Kept separate
   // from `needsSetup` so the wizard's own Success step stays visible even
@@ -102,15 +106,18 @@ export function App() {
 
   const showWizard = wizardOpen === true
   const closeWizard = () => setWizardOpen(false)
-  const reopenWizard = () => setWizardOpen(true)
-  const openConnect = () => {
+  // Handlers that reach a memoized child (Sidebar, Header, Sources, ChatPanel)
+  // are stable identities. A fresh arrow function per render would re-render
+  // the child through its memo and give the whole split back.
+  const reopenWizard = useCallback(() => setWizardOpen(true), [])
+  const openConnect = useCallback(() => {
     if (sources.length === 0 && !sourceSetupComplete) {
       setWizardOpen(true)
       return
     }
     setConnectOpen(true)
-  }
-  const openSettings = () => {
+  }, [sources.length, sourceSetupComplete])
+  const openSettings = useCallback(() => {
     if (window.__CC_DESKTOP?.windows) {
       setDrawerOpen(false)
       // Omit a pane so the native window can restore the user's last one.
@@ -121,7 +128,7 @@ export function App() {
     settingsOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setDrawerOpen(false)
     setSettingsOpen(true)
-  }
+  }, [])
   const openPalette = () => {
     paletteOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setDrawerOpen(false)
@@ -156,7 +163,7 @@ export function App() {
     setDrawerOpen(false)
     window.requestAnimationFrame(() => opener?.isConnected && opener.focus())
   }, [])
-  const toggleSidebar = () => {
+  const toggleSidebar = useCallback(() => {
     if (window.innerWidth < 900) {
       if (drawerOpen) closeDrawer()
       else {
@@ -165,7 +172,7 @@ export function App() {
       }
     }
     else window.dispatchEvent(new Event('contextcake:toggle-sidebar'))
-  }
+  }, [closeDrawer, drawerOpen])
 
   const paletteCommands = useMemo<PaletteCommand[]>(() => [
     { id: 'home', label: 'Go to Home', keywords: 'overview', shortcut: '⌘1', run: () => setView('overview') },
@@ -189,7 +196,7 @@ export function App() {
     { id: 'ask', label: 'Ask ContextCake', shortcut: '⇧⌘A', run: openAskFromPalette },
     { id: 'settings', label: 'Open Settings', shortcut: '⌘,', run: openSettings },
     { id: 'sidebar', label: 'Toggle Sidebar', run: toggleSidebar },
-  ], [isDesktop, mode, openAskFromPalette, openFilesScope, setView, sources, sourceSetupComplete])
+  ], [isDesktop, mode, openAskFromPalette, openConnect, openFilesScope, openSettings, reopenWizard, setView, sources, toggleSidebar])
   const closeSettings = () => {
     const opener = settingsOpener.current
     setSettingsOpen(false)

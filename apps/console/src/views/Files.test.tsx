@@ -30,24 +30,38 @@ vi.mock('../api', () => ({ apiFetch: mocks.apiFetch }))
 // and quietly pass tests that assert nothing moved.
 vi.mock('../store', async () => {
   const { useState } = await import('react')
+  // The scope/path setters live in the data context and the values live in the
+  // nav context, so the mock has to bridge them: the nav hook owns the useState
+  // pair and publishes its setters here for the data hook's stable wrappers.
+  const bridge: {
+    scope?: (value: string | null) => void
+    path?: (value: string | null) => void
+  } = {}
+  const setFilesScope = (value: string | null) => bridge.scope?.(value)
+  const setFilesPath = (value: string | null) => bridge.path?.(value)
+  const useStoreData = () => ({
+    mode: mocks.store.mode,
+    sources: mocks.store.sources,
+    concepts: mocks.store.concepts,
+    reload: mocks.reload,
+    reloadKey: mocks.store.reloadKey,
+    setFilesScope,
+    setFilesPath,
+    openConcept: mocks.openConcept,
+  })
+  const useStoreNav = () => {
+    const [filesScope, setScope] = useState<string | null>(mocks.store.scope)
+    const [filesPath, setPath] = useState<string | null>(mocks.store.path)
+    bridge.scope = setScope
+    bridge.path = setPath
+    return { filesScope, filesPath }
+  }
+  const useStoreInput = () => ({ query: mocks.store.query })
   return {
-    useStore: () => {
-      const [filesScope, setFilesScope] = useState<string | null>(mocks.store.scope)
-      const [filesPath, setFilesPath] = useState<string | null>(mocks.store.path)
-      return {
-        mode: mocks.store.mode,
-        sources: mocks.store.sources,
-        concepts: mocks.store.concepts,
-        reload: mocks.reload,
-        reloadKey: mocks.store.reloadKey,
-        query: mocks.store.query,
-        filesScope,
-        filesPath,
-        setFilesScope,
-        setFilesPath,
-        openConcept: mocks.openConcept,
-      }
-    },
+    useStoreData,
+    useStoreNav,
+    useStoreInput,
+    useStore: () => ({ ...useStoreData(), ...useStoreNav(), ...useStoreInput() }),
   }
 })
 

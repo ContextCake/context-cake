@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { C, css, badgeStyle, lc, MONO, rc } from '../theme'
 import { layerName, layers } from '../data'
-import { useStore, type TriageTab } from '../store'
+import { useStoreData, useStoreNav, type TriageTab } from '../store'
 import { useDetailSurface } from '../components/useDetailSurface'
 
 const TAB_DEFS: [TriageTab, string, 'review_required' | 'team_candidate' | 'ignore'][] = [
@@ -10,8 +10,9 @@ const TAB_DEFS: [TriageTab, string, 'review_required' | 'team_candidate' | 'igno
   ['ignored', 'Ignored', 'ignore'],
 ]
 
-export function Triage() {
-  const { triageTab, setTriageTab, selSignal, setSelSignal, filtered, signals, setView, route } = useStore()
+function TriageInner() {
+  const { setTriageTab, setSelSignal, filtered, signals, setView, route } = useStoreData()
+  const { triageTab, selSignal } = useStoreNav()
 
   const curList = filtered(triageTab)
   const selSig = signals.find((s) => s.id === selSignal) || null
@@ -172,3 +173,11 @@ export function Triage() {
     </div>
   )
 }
+
+/**
+ * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
+ * background-activity tick — and this view has no business repainting for any
+ * of them. It re-renders when the store slices it subscribes to change, and
+ * otherwise not at all.
+ */
+export const Triage = memo(TriageInner)

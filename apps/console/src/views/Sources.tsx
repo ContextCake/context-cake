@@ -14,7 +14,7 @@ import { LevelStepper } from '../components/SetupWizard'
 import { useDetailSurface } from '../components/useDetailSurface'
 import { filesRevalidation, useLayerFiles } from '../layer-files'
 import { useReveal } from '../reveal'
-import { useStore } from '../store'
+import { useStoreData, useStoreInput } from '../store'
 import type { Source } from '../data'
 import type { LayerFiles } from '../types'
 
@@ -190,7 +190,8 @@ function filesSummary(source: Source, entry: LayerFiles | undefined, known: bool
 }
 
 export function Sources({ onAddSource }: { onAddSource?: () => void }) {
-  const { mode, sources, reload, reloadKey, query, openFilesScope } = useStore()
+  const { mode, sources, reload, reloadKey, openFilesScope } = useStoreData()
+  const { query } = useStoreInput()
   const live = mode === 'live'
   // The same listing the Files view builds its tree from: a source's file count
   // and root path are already in that payload, and were being thrown away.
@@ -622,3 +623,14 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     </div>
   )
 }
+
+
+/**
+ * Deliberately NOT wrapped in React.memo, unlike its sibling views. A memoized
+ * component with no props only ever re-renders from a context it subscribes to,
+ * and this view's suite drives updates by mutating a module-scoped store mock
+ * and re-rendering the same element — with a memo in the way those renders are
+ * skipped and the tests silently stop exercising anything. Those are the tests
+ * that hold the navigator's focus guarantee and its DOM-order invariant, and
+ * the memo would only save renders caused by the shell's own local state.
+ */

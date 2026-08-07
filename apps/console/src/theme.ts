@@ -75,10 +75,34 @@ const HEX_VARS: Record<string, string> = {
 const HEX_RE = /#[0-9a-fA-F]{6}/g
 
 /**
+ * Parsed declaration strings, keyed by the string itself.
+ *
+ * `css()` is called inline in JSX, so it re-parses on every render of every
+ * element that uses it — and the strings are overwhelmingly constant. Most keys
+ * are literals, but plenty interpolate a coordinate or a width, so the cache is
+ * capped and dropped wholesale when it fills rather than growing with the
+ * number of distinct pixel values a canvas has ever produced.
+ *
+ * Entries are shared between callers, so the returned object must be treated as
+ * read-only — which is what React expects of a `style` prop anyway.
+ */
+const cssCache = new Map<string, React.CSSProperties>()
+const CSS_CACHE_MAX = 4096
+
+/**
  * Parse a semicolon-delimited CSS declaration string into a React style object,
  * remapping known literal hex colors to their theme variables along the way.
  */
 export function css(decl: string): React.CSSProperties {
+  const cached = cssCache.get(decl)
+  if (cached) return cached
+  const parsed = parseDeclarations(decl)
+  if (cssCache.size >= CSS_CACHE_MAX) cssCache.clear()
+  cssCache.set(decl, parsed)
+  return parsed
+}
+
+function parseDeclarations(decl: string): React.CSSProperties {
   const mapped = decl
     .replace(HEX_RE, (h) => { const v = HEX_VARS[h.toUpperCase()]; return v ? `var(${v})` : h })
     .replace('rgba(241,240,234,0.82)', 'var(--cc-header-bg)')

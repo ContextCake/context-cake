@@ -61,6 +61,73 @@ test('flushSettingsSync lands a pending write for an exit that cannot await', as
   assert.equal(readFile().theme, 'light')
 })
 
+test('a device-local write bumps the sync revision without marking anything dirty', async () => {
+  await settings.flushSettings()
+  const before = readFile()._sync ?? {}
+  settings.writeLocalSettings({ uiState: { lastView: 'files' } })
+  await settings.flushSettings()
+  const after = readFile()._sync
+  // settings-sync compares this to notice a local change made during its ~15s
+  // round trip. `dirty`/`localUpdatedAt` cannot serve for that: a device-local
+  // write deliberately never touches them, which is why a uiState (or window
+  // geometry, or reduced-transparency) change made during a pull was reverted
+  // with nothing anywhere detecting it.
+  assert.equal(after.revision, (before.revision ?? 0) + 1)
+  assert.deepEqual(after.dirtyFields, before.dirtyFields ?? [])
+  assert.equal(after.localUpdatedAt, before.localUpdatedAt)
+})
+
+test('a write that cannot reach disk is reported, retained, and retried', async (t) => {
+  await settings.flushSettings()
+  t.after(() => { process.env.CC_TEST_USER_DATA = userData })
+  // A config dir that cannot be created. The real-world shapes of this are a
+  // full disk and a read-only ~/Library/Application Support.
+  const blocker = path.join(userData, 'not-a-directory')
+  fs.writeFileSync(blocker, 'this is a file, so mkdir -p under it fails\n')
+  process.env.CC_TEST_USER_DATA = path.join(blocker, 'ContextCake')
+
+  const failed = settings.writeLocalSettings({ density: 'compact' })
+  assert.equal(await settings.flushSettings(), false)
+  // The change must still be what this process reads. Discarding it is what
+  // made the very next readSettings() answer with the stale file — the user's
+  // preference gone, reported as saved, with nothing left to retry.
+  assert.equal(settings.readSettings().density, 'compact')
+  assert.deepEqual(
+    await failed.written.then(({ ok }) => ok),
+    false,
+    'a write that failed must say so to the caller that made it',
+  )
+  assert.ok((await failed.written).error instanceof Error)
+
+  // And it is owed, not lost: the next write carries it to disk.
+  process.env.CC_TEST_USER_DATA = userData
+  const recovery = settings.writeLocalSettings({ theme: 'dark' })
+  assert.deepEqual(await recovery.written, { ok: true })
+  assert.equal(readFile().density, 'compact', 'a failed write must be retried, not discarded')
+  assert.equal(readFile().theme, 'dark')
+})
+
+test('flushSettingsSync reports a write it could not land, and keeps it', async (t) => {
+  await settings.flushSettings()
+  t.after(() => { process.env.CC_TEST_USER_DATA = userData })
+  const blocker = path.join(userData, 'also-not-a-directory')
+  fs.writeFileSync(blocker, 'this is a file too\n')
+
+  settings.writeLocalSettings({ theme: 'light' })
+  process.env.CC_TEST_USER_DATA = path.join(blocker, 'ContextCake')
+  const landed = settings.flushSettingsSync()
+  assert.equal(
+    settings.readSettings().theme,
+    'light',
+    'an exit-path write that failed must not erase the value on its way out',
+  )
+  assert.equal(landed, false, 'flushSettingsSync must say whether it landed')
+
+  process.env.CC_TEST_USER_DATA = userData
+  assert.equal(settings.flushSettingsSync(), true)
+  assert.equal(readFile().theme, 'light')
+})
+
 test('reducedTransparency defaults to null — the OS setting decides', () => {
   assert.equal(Object.hasOwn(settings.readSettings(), 'reducedTransparency'), true)
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-settings-empty-'))

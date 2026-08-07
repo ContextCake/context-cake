@@ -38,6 +38,14 @@ let unflushed = null
 /** Resolves when every queued write has been attempted. Never rejects. */
 let queue = Promise.resolve()
 let lastWriteError = null
+/**
+ * Serial number of the newest patch, and of the newest patch known to have
+ * reached disk. A caller asks "did MY change land?", which a shared error flag
+ * cannot answer: the next successful write clears it, so a preference that
+ * never made it looks saved as soon as anything else is saved.
+ */
+let issuedSeq = 0
+let persistedSeq = 0
 /** Distinct temp names so an in-flight async write and a quit-time sync write
  *  can never write the same scratch file at once. */
 let tempCounter = 0
@@ -59,20 +67,31 @@ function serialize(value) {
 async function drain() {
   const value = unflushed
   if (!value) return
-  const file = settingsPath()
-  const temporary = `${file}.${(tempCounter += 1)}.tmp`
+  const seq = issuedSeq
+  let temporary = ''
   try {
+    const file = settingsPath()
+    temporary = `${file}.${(tempCounter += 1)}.tmp`
     await fsp.mkdir(path.dirname(file), { recursive: true })
     await fsp.writeFile(temporary, serialize(value), { mode: 0o600 })
     await fsp.rename(temporary, file)
     lastWriteError = null
-  } catch (err) {
-    lastWriteError = err
-    await fsp.rm(temporary, { force: true }).catch(() => {})
-  } finally {
+    persistedSeq = seq
     // Only the newest state clears the marker: a patch that landed while this
     // write was in flight owes its own pass, and reads must keep seeing it.
     if (unflushed === value) unflushed = null
+  } catch (err) {
+    lastWriteError = err
+    if (temporary) await fsp.rm(temporary, { force: true }).catch(() => {})
+    // `unflushed` deliberately survives a failed write. Clearing it here — as
+    // this used to, in a `finally` that could not tell success from failure —
+    // meant the very next readSettings() answered with the stale file: the
+    // user's change silently gone, nothing left to retry, and the caller told
+    // it had been saved. Holding it keeps reads honest, lets the next patch's
+    // pass carry it, and gives flushSettingsSync() a last attempt on the way
+    // out. There is no timer-driven retry on purpose: the failures that
+    // actually happen here are a full disk and a read-only config directory,
+    // and neither is fixed by trying again in a second.
   }
 }
 
@@ -81,6 +100,14 @@ function schedule() {
   return queue
 }
 
+/**
+ * Queue a patch and hand back both the settings it produces and the fate of
+ * the write. `written` resolves — never rejects, so a caller that ignores it
+ * can't reach the main process's unhandledRejection handler, which is the
+ * fatal-exit path.
+ *
+ * @returns {{settings: object, written: Promise<{ok: boolean, error?: Error}>}}
+ */
 function persistSettings(patch, changedFields) {
   const current = readSettings()
   // The manifest remains the one authoritative local copy of source configs.
@@ -91,13 +118,24 @@ function persistSettings(patch, changedFields) {
     ...diskCurrent,
     ...diskPatch,
   }
+  // Every write bumps the revision, sync-dirty or not. settings-sync compares
+  // it to notice a local change made while it was on the network; `dirty` and
+  // `localUpdatedAt` cannot serve, because a device-local write deliberately
+  // never touches them — so a uiState, window-geometry or transparency change
+  // made during a pull was written back over with nothing detecting it.
+  next._sync = { ...(current._sync ?? {}), revision: (current._sync?.revision ?? 0) + 1 }
   if (changedFields.length > 0) {
     const dirtyFields = [...new Set([...(current._sync?.dirtyFields ?? []), ...changedFields])]
-    next._sync = { ...(current._sync ?? {}), dirty: true, dirtyFields, localUpdatedAt: new Date().toISOString() }
+    next._sync = { ...next._sync, dirty: true, dirtyFields, localUpdatedAt: new Date().toISOString() }
   }
   unflushed = next
-  schedule()
-  return next
+  const seq = (issuedSeq += 1)
+  const written = schedule().then(() => (
+    persistedSeq >= seq
+      ? { ok: true }
+      : { ok: false, error: lastWriteError ?? new Error('The settings file could not be written.') }
+  ))
+  return { settings: next, written }
 }
 
 export function writeSettings(patch) {
@@ -114,36 +152,50 @@ export function markSettingsDirty(fields) {
 }
 
 /**
- * Wait for the disk to catch up. Resolves false if the last write failed, so a
- * caller that has to know (the metrics opt-in, which must not report without a
- * persisted choice) can still find out. Never rejects — a failed preference
- * write is not worth an unhandled rejection on the main process.
+ * Wait for the disk to catch up. Resolves false when anything issued before
+ * the call is still not on disk, so a caller that has to know can still find
+ * out — the metrics opt-in (which must not report without a persisted choice)
+ * and every sync path (which must not hand a stale file to a second writer).
+ * Never rejects: a failed preference write is not worth an unhandled rejection
+ * on the main process, which is the fatal handler.
  *
  * Anything that hands settings.json to another writer (`settings-sync` reads
  * and rewrites the same file) must await this first, or it will read a copy
  * that is one patch behind and write the older values back.
  */
 export function flushSettings() {
-  return queue.then(() => lastWriteError === null)
+  const seq = issuedSeq
+  return queue.then(() => persistedSeq >= seq)
 }
 
 /**
- * Land any pending write synchronously. For exit paths only: `app.exit()` does
- * not wait for the microtask queue, so without this a window position saved on
- * close would be lost on the way out.
+ * Land any pending write synchronously, and say whether it landed. For exit
+ * paths only: `app.exit()` does not wait for the microtask queue, so without
+ * this a window position saved on close would be lost on the way out.
+ *
+ * A failure keeps the value rather than dropping it — the process may not be
+ * as far gone as the caller thinks (before-quit runs long before exit), and a
+ * read in between must not answer with the file this was trying to replace.
  */
 export function flushSettingsSync() {
   const value = unflushed
-  if (!value) return
-  unflushed = null
-  const file = settingsPath()
-  const temporary = `${file}.${(tempCounter += 1)}.tmp`
+  if (!value) return true
+  const seq = issuedSeq
+  let temporary = ''
   try {
+    const file = settingsPath()
+    temporary = `${file}.${(tempCounter += 1)}.tmp`
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(temporary, serialize(value), { mode: 0o600 })
     fs.renameSync(temporary, file)
-  } catch {
+    lastWriteError = null
+    persistedSeq = seq
+    if (unflushed === value) unflushed = null
+    return true
+  } catch (err) {
+    lastWriteError = err
     // The app is on its way out; a lost preference beats a failed shutdown.
-    try { fs.rmSync(temporary, { force: true }) } catch { /* nothing to clean */ }
+    try { if (temporary) fs.rmSync(temporary, { force: true }) } catch { /* nothing to clean */ }
+    return false
   }
 }

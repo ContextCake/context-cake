@@ -728,3 +728,56 @@ test('a stalled database request becomes a non-blocking sync error', async (t) =
     message: 'Settings could not sync. Local settings are unchanged.',
   })
 })
+
+test('a device-local change made during a slow pull is not reverted by it', async (t) => {
+  // The mirror of the test above, for the half of settings.json that never
+  // enters sync bookkeeping: uiState, window geometry, reduced transparency,
+  // the metrics choice. `writeLocalSettings` deliberately leaves `dirty` and
+  // `localUpdatedAt` alone, so the pull's "did anything change while I was on
+  // the network?" check could not see those writes at all and wrote the
+  // pre-pull snapshot back over them — a silently discarded local change.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-local-race-'))
+  const file = path.join(dir, 'settings.json')
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const initial = {
+    theme: 'light',
+    uiState: { sidebar: { collapsed: false, width: 232 } },
+    _sync: { dirty: false, revision: 4, localUpdatedAt: '2026-07-14T20:00:00Z' },
+  }
+  fs.writeFileSync(file, JSON.stringify(initial))
+  let finishPull
+  const supabaseClient = {
+    from() {
+      return {
+        select() {
+          return { eq: () => ({ maybeSingle: () => new Promise((resolve) => { finishPull = resolve }) }) }
+        },
+        upsert() {
+          return { select: () => ({ single: async () => ({ data: { updated_at: 'x' }, error: null }) }) }
+        },
+      }
+    },
+  }
+  const sync = createSettingsSync({
+    authManager: { getSession: async () => ({ user: { id: 'user-1' } }) },
+    supabaseClient,
+    localSettingsPath: file,
+    getCurrentSettings: () => JSON.parse(fs.readFileSync(file, 'utf8')),
+  })
+
+  const pull = sync.pull(initial)
+  await new Promise((resolve) => setImmediate(resolve))
+  // Exactly what a sidebar drag produces: a device-local write with no sync
+  // bookkeeping beyond the revision counter.
+  fs.writeFileSync(file, JSON.stringify({
+    ...initial,
+    uiState: { sidebar: { collapsed: false, width: 300 } },
+    _sync: { ...initial._sync, revision: 5 },
+  }))
+  finishPull({ data: { blob: { theme: 'dark' }, updated_at: '2026-07-14T20:30:00Z' }, error: null })
+  await pull
+
+  const persisted = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.equal(persisted.uiState.sidebar.width, 300, 'the local change must survive the pull')
+  assert.equal(persisted.theme, 'dark', 'and the remote value must still be applied')
+})

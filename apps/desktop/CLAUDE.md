@@ -84,7 +84,30 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
 - **Every path that ends the app must stop the engine first** via
   `shutdownEngine()` in `main.mjs`. `app.exit()` does not fire `before-quit`,
   so skipping it makes a normal shutdown look like a crash and reports a
-  bogus fatal error.
+  bogus fatal error. `shutdownEngine()` also bumps an epoch, and
+  `startEngine()` refuses to adopt a handle forked before that bump — a quit
+  landing inside `relaunchEngine`'s `await` otherwise left an engine nobody
+  would ever `close()`, and `close()` is the only thing that tells the engine
+  to kill the MCP servers it spawned.
+- **`before-quit` fires BEFORE the window's `close`, and `close` again after.**
+  On ⌘Q the order is `before-quit → close → closed → will-quit → quit`; on the
+  red X it is `close → closed → window-all-closed → quit → before-quit`. So
+  anything that must be captured *from* a window at exit belongs in
+  `before-quit` (the frame is still alive there), and anything a `close`
+  handler queues is landed by `before-quit`'s `flushSettingsSync()`. Saving
+  window geometry only in `close` lost it on every ⌘Q, because the async write
+  queue outlived nothing. `test/quit-persistence.test.mjs` drives both paths
+  through the real binary.
+- **A settings write can fail, and the caller has to hear about it.**
+  `settings.mjs` writes asynchronously through a queue; a failed write KEEPS
+  `unflushed` (so reads stay honest and the next patch retries it) and reports
+  `{ok: false}` on the `written` promise that `writeSettings`/
+  `writeLocalSettings` hand back. `preferences:set` and `ui-state:set` await it
+  and reject the `invoke`, which is how the renderer learns. `written` never
+  rejects, on purpose: an ignored return must not reach the main process's
+  `unhandledRejection`, which is `handleFatal`. Never restore a `finally` that
+  clears `unflushed` regardless of outcome — that is what made a failed write
+  silently revert to the stale file while telling the console it was saved.
 - **The renderer is sandboxed** (`contextIsolation`, `sandbox: true`). The only
   bridge is `src/preload.cjs`: `window.__CC_DESKTOP` exposes static launch metadata,
   while `window.__CC_AUTH` exposes the narrow auth/settings IPC surface. Keep both

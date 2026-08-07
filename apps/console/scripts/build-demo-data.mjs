@@ -123,7 +123,10 @@ const sources = layers.map((l) => ({
 }))
 
 const graph = {
-  manifest: { path: manifestPath },
+  // Repo-relative for the same reason `layer.root` is below: this bundle is
+  // inlined into the public Web Demo's JS, and the absolute path is the build
+  // machine's — a developer's home directory and repo layout, shipped.
+  manifest: { path: relative(repoRoot, manifestPath) },
   tokenizer: 'demo',
   totals: { sourceTokens: 0, resolvedTokens: 0, concepts: concepts.length, sources: sources.length },
   sources,

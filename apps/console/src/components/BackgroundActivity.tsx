@@ -53,7 +53,31 @@ export function activityLabel(tasks: BackgroundTask[], failing: boolean): string
   return percent == null ? scope : `${scope} · ${percent}%`
 }
 
-/** The sentence a screen reader hears, which the visual label abbreviates. */
+/**
+ * The trigger's accessible name — stable by construction.
+ *
+ * It is built from the SHAPE of the work (how many sources, indexing or
+ * refreshing, failing or not) and never from loaded/total/percent/elapsed, so
+ * it changes on a transition and not on a tick. It used to be the full ticking
+ * description below, regenerated on every 900ms poll: several screen readers
+ * re-announce a focused button whose accessible name changes, so a keyboard
+ * user standing on this control was read a fresh sentence four times a minute
+ * for the length of an index.
+ */
+export function activityName(tasks: BackgroundTask[], failing: boolean): string {
+  const indexing = tasks.filter((t) => !t.refreshing).length
+  const refreshing = tasks.length - indexing
+  const parts: string[] = []
+  if (indexing > 0) parts.push(`indexing ${indexing} source${indexing === 1 ? '' : 's'}`)
+  if (refreshing > 0) parts.push(`refreshing ${refreshing} source${refreshing === 1 ? '' : 's'}`)
+  if (failing) parts.push('live refresh failing')
+  return parts.length ? `Background activity: ${parts.join(', ')}` : 'Background activity'
+}
+
+/**
+ * The detailed sentence, with the counts in it. This is the `title` — a sighted
+ * user's hover detail — never the accessible name, for the reason above.
+ */
 export function activityDescription(tasks: BackgroundTask[], failing: boolean): string {
   const parts = tasks.map((t) => {
     const counts = t.total != null && t.total > 0
@@ -100,6 +124,13 @@ function TaskRow({ task }: { task: BackgroundTask }) {
         <span style={css(`font-family:${MONO}; font-size:12px; font-weight:600; color:${C.ink}; overflow-wrap:anywhere;`)}>{task.name}</span>
         <span style={css(`flex:0 0 auto; font-size:11px; color:${C.faint};`)}>{formatElapsed(task.elapsedMs)}</span>
       </div>
+      {/*
+        A progressbar and deliberately NOT inside a live region: this row is
+        re-rendered every 900ms, and a polite region would read the counter out
+        on every tick for the whole of an index. The doctrine is App.tsx's —
+        announce transitions, not ticks — so a reader takes the number from here
+        on request, and the transitions are announced once, above.
+      */}
       <div
         role="progressbar"
         aria-label={`${task.name} ${label.toLowerCase()}`}
@@ -169,6 +200,31 @@ export function BackgroundActivity() {
     everMounted.current = false
   }, [idle, retired])
 
+  // What this control announces, and what it deliberately leaves alone.
+  //
+  // App.tsx already announces the aggregate transitions — indexing started,
+  // indexing complete, refresh failing, refresh recovered — so repeating any of
+  // them here would have a screen reader say each one twice. The gap is a
+  // background REFRESH: the engine reports a refreshing source as `ready`, so it
+  // never reaches load.indexingSources and nothing announces it at all. A
+  // sighted user watches this control appear and fill; a screen-reader user was
+  // told nothing whatsoever.
+  //
+  // Transitions only, never ticks. The counts live on the per-task progressbars,
+  // where a reader asks for them instead of being handed them every 900ms.
+  const [announcement, setAnnouncement] = useState('')
+  const refreshingCount = tasks.filter((t) => t.refreshing).length
+  const previousRefreshing = useRef(0)
+  useEffect(() => {
+    const previous = previousRefreshing.current
+    previousRefreshing.current = refreshingCount
+    if (refreshingCount > 0 && previous === 0) {
+      setAnnouncement(`Refreshing ${refreshingCount} source${refreshingCount === 1 ? '' : 's'} in the background.`)
+    } else if (refreshingCount === 0 && previous > 0) {
+      setAnnouncement('Background refresh finished.')
+    }
+  }, [refreshingCount])
+
   useLayoutEffect(() => {
     if (!open) return
     const place = () => {
@@ -201,65 +257,73 @@ export function BackgroundActivity() {
     }
   }, [close, open])
 
-  if (idle && retired) return null
-
   const percent = aggregatePercent(tasks.filter((t) => !t.refreshing)) ?? aggregatePercent(tasks)
   const label = activityLabel(tasks, failing)
   const description = activityDescription(tasks, failing)
+  const name = activityName(tasks, failing)
 
+  // The live region outlives the control on purpose. A polite region only
+  // announces content that changes while it is ALREADY in the document, so one
+  // that mounts with its text in place says nothing — and "the work finished"
+  // is exactly the transition where this control is on its way out.
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        className="cc-activity"
-        data-tone={failing ? 'attention' : 'work'}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={description || label}
-        title={description || label}
-        onClick={() => (open ? close() : setOpen(true))}
-      >
-        <Ring percent={failing && tasks.length === 0 ? null : percent} tone={failing ? 'attention' : 'work'} />
-        <span className="cc-activity-label">{label}</span>
-      </button>
-      {open && anchor && (
-        <div
-          ref={popoverRef}
-          role="dialog"
-          aria-label="Background activity"
-          className="cc-activity-popover"
-          style={{ top: anchor.top, right: anchor.right }}
-        >
-          <div style={css(`display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:2px;`)}>
-            <strong style={css(`font-size:12.5px; color:${C.ink};`)}>Background activity</strong>
-            {lastRefreshAt != null && (
-              <span style={css(`font-size:11px; color:${C.faint};`)}>
-                updated {new Date(lastRefreshAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            )}
-          </div>
-          {failing && (
-            <div role="status" style={css(`display:flex; flex-direction:column; gap:8px; padding:9px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.5; color:${C.amberText}; overflow-wrap:anywhere;`)}>
-              <span>Live refresh is failing — retrying. You are seeing the last good data. {refreshError?.message}</span>
-              <button type="button" className="cc-activity-action" onClick={() => { retryNow(); close() }}>Retry now</button>
+      <span className="sr-only" role="status">{announcement}</span>
+      {!(idle && retired) && (
+        <>
+          <button
+            ref={buttonRef}
+            type="button"
+            className="cc-activity"
+            data-tone={failing ? 'attention' : 'work'}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            aria-label={name}
+            title={description || label}
+            onClick={() => (open ? close() : setOpen(true))}
+          >
+            <Ring percent={failing && tasks.length === 0 ? null : percent} tone={failing ? 'attention' : 'work'} />
+            <span className="cc-activity-label">{label}</span>
+          </button>
+          {open && anchor && (
+            <div
+              ref={popoverRef}
+              role="dialog"
+              aria-label="Background activity"
+              className="cc-activity-popover"
+              style={{ top: anchor.top, right: anchor.right }}
+            >
+              <div style={css(`display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:2px;`)}>
+                <strong style={css(`font-size:12.5px; color:${C.ink};`)}>Background activity</strong>
+                {lastRefreshAt != null && (
+                  <span style={css(`font-size:11px; color:${C.faint};`)}>
+                    updated {new Date(lastRefreshAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
+              </div>
+              {failing && (
+                <div role="status" style={css(`display:flex; flex-direction:column; gap:8px; padding:9px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.5; color:${C.amberText}; overflow-wrap:anywhere;`)}>
+                  <span>Live refresh is failing — retrying. You are seeing the last good data. {refreshError?.message}</span>
+                  <button type="button" className="cc-activity-action" onClick={() => { retryNow(); close() }}>Retry now</button>
+                </div>
+              )}
+              {tasks.length > 0 ? (
+                <ul style={css('margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:14px;')}>
+                  {tasks.map((task) => <TaskRow key={task.name} task={task} />)}
+                </ul>
+              ) : (
+                <p style={css(`margin:0; font-size:12px; line-height:1.5; color:${C.caption};`)}>
+                  No indexing in flight. The page is still live — it just cannot reach the engine right now.
+                </p>
+              )}
+              <button
+                type="button"
+                className="cc-activity-action"
+                onClick={() => { setView('sources'); close() }}
+              >Open Sources</button>
             </div>
           )}
-          {tasks.length > 0 ? (
-            <ul style={css('margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:14px;')}>
-              {tasks.map((task) => <TaskRow key={task.name} task={task} />)}
-            </ul>
-          ) : (
-            <p style={css(`margin:0; font-size:12px; line-height:1.5; color:${C.caption};`)}>
-              No indexing in flight. The page is still live — it just cannot reach the engine right now.
-            </p>
-          )}
-          <button
-            type="button"
-            className="cc-activity-action"
-            onClick={() => { setView('sources'); close() }}
-          >Open Sources</button>
-        </div>
+        </>
       )}
     </>
   )

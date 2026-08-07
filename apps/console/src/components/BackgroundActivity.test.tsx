@@ -6,7 +6,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { activityDescription, activityLabel, aggregatePercent, BackgroundActivity, formatElapsed } from './BackgroundActivity'
+import { activityDescription, activityLabel, activityName, aggregatePercent, BackgroundActivity, formatElapsed } from './BackgroundActivity'
 import { LiveDataError } from '../api'
 import type { BackgroundTask, Store } from '../store'
 
@@ -61,6 +61,15 @@ describe('activity summaries', () => {
     expect(activityLabel([], true)).toBe('Reconnecting')
   })
 
+  it('names the shape of the work, never its counter', () => {
+    // Two tasks that differ only in progress must produce one name.
+    expect(activityName([task({ loaded: 1 })], false)).toBe(activityName([task({ loaded: 2_999 })], false))
+    expect(activityName([task(), task({ name: 'notes', refreshing: true })], false))
+      .toBe('Background activity: indexing 1 source, refreshing 1 source')
+    expect(activityName([], true)).toBe('Background activity: live refresh failing')
+    expect(activityName([], false)).toBe('Background activity')
+  })
+
   it('spells the numbers out for a screen reader', () => {
     expect(activityDescription([task()], false)).toBe('Background activity: vault reading, 1,240 of 3,000.')
     expect(activityDescription([], true)).toBe('Live refresh is failing and retrying.')
@@ -83,9 +92,57 @@ describe('BackgroundActivity', () => {
     setStore({ tasks: [task()] })
     await act(async () => root.render(<BackgroundActivity />))
     expect(control()?.textContent).toContain('Indexing · 41%')
-    expect(control()?.getAttribute('aria-label')).toContain('1,240 of 3,000')
+    expect(control()?.getAttribute('aria-label')).toBe('Background activity: indexing 1 source')
+    // The numbers are still one hover away; they are just not the thing a
+    // screen reader is handed again on every poll.
+    expect(control()?.getAttribute('title')).toContain('1,240 of 3,000')
     expect(control()?.getAttribute('aria-expanded')).toBe('false')
     expect(control()?.getAttribute('aria-haspopup')).toBe('dialog')
+  })
+
+  // A focused button whose accessible name changes gets re-announced by several
+  // screen readers, and this control re-renders every 900ms for the length of
+  // an index. The name must track the SHAPE of the work, not its counter.
+  it('keeps the accessible name stable while progress ticks', async () => {
+    setStore({ tasks: [task({ loaded: 100 })] })
+    await act(async () => root.render(<BackgroundActivity />))
+    const before = control()!.getAttribute('aria-label')
+
+    setStore({ tasks: [task({ loaded: 2_900, phase: 'loading' })] })
+    await act(async () => root.render(<BackgroundActivity />))
+    expect(control()!.getAttribute('aria-label')).toBe(before)
+
+    // A real transition — a second source joining — does move it.
+    setStore({ tasks: [task(), task({ name: 'notes' })] })
+    await act(async () => root.render(<BackgroundActivity />))
+    expect(control()!.getAttribute('aria-label')).toBe('Background activity: indexing 2 sources')
+  })
+
+  // The engine reports a refreshing source as `ready`, so it never reaches
+  // load.indexingSources and the shell's announcer never sees it. Without this,
+  // a sighted user watches the control appear and a screen-reader user is told
+  // nothing at all.
+  it('announces a background refresh starting and finishing, and nothing in between', async () => {
+    const region = () => container.querySelector('[role="status"].sr-only')
+    setStore({ tasks: [] })
+    await act(async () => root.render(<BackgroundActivity />))
+    expect(region()?.textContent).toBe('')
+
+    setStore({ tasks: [task({ refreshing: true, loaded: 10, total: 100 })] })
+    await act(async () => root.render(<BackgroundActivity />))
+    expect(region()?.textContent).toBe('Refreshing 1 source in the background.')
+
+    // A tick is not a transition: the region must not be rewritten.
+    setStore({ tasks: [task({ refreshing: true, loaded: 90, total: 100 })] })
+    await act(async () => root.render(<BackgroundActivity />))
+    expect(region()?.textContent).toBe('Refreshing 1 source in the background.')
+
+    setStore({ tasks: [] })
+    await act(async () => root.render(<BackgroundActivity />))
+    // The control retires here; the region has to outlive it or the one
+    // transition worth announcing would never be spoken.
+    expect(control()).toBeNull()
+    expect(region()?.textContent).toBe('Background refresh finished.')
   })
 
   it('opens a keyboard-reachable popover with a progressbar per task, and Escape returns focus', async () => {

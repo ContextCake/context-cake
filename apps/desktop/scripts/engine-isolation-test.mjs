@@ -147,6 +147,63 @@ fs.writeFileSync(
   `${JSON.stringify({ layers: [{ name: 'corpus', level: 3, source: 'files', path: corpus }] }, null, 2)}\n`,
 )
 
+// ---- calibrating the ceiling to THIS machine -------------------------------
+//
+// The latency ceilings below were measured on an M3 Pro, and the first version
+// of this file guessed that "a GitHub macos-14 runner is roughly half this
+// machine, which puts a healthy p95 there near 20ms". CI then measured p95 65ms
+// on a healthy engine and failed the gate. The runner is about six times slower
+// on this workload, not two — the guess was wrong in the direction that turns a
+// regression gate into a hardware detector.
+//
+// So measure instead of guessing, and measure the thing that actually varies.
+// The engine's per-document synchronous cost is dominated by `countTokens`, an
+// exact BPE encode; how fast this machine runs it over this corpus is a direct
+// proxy for how fast it can index. Time it on a sample of the fixture we just
+// wrote, and scale the ceilings by how far off the reference machine we are.
+//
+// The floor of 1 matters: a machine at least as fast as the reference is held
+// to the plan's actual SLO (p95 < 50ms), so the gate never gets looser than the
+// product promise where the promise applies. The cap of 8 matters for the
+// opposite reason: a badly contended runner must not be able to scale the
+// ceiling into meaninglessness — past that point, failing is the right answer.
+// Measured per-document over this fixture on the reference machine (M3 Pro):
+// 193 ms/MB on a quiet one, ~250 with other work running. The lower end is the
+// honest reference — using the loaded number would understate every other
+// machine's ratio and scale the ceilings too little.
+const REFERENCE_MS_PER_MB = 193
+const CALIBRATION_BYTES = 2 * 1024 * 1024
+
+async function machineScale() {
+  const repoRoot = path.resolve(appDir, '..', '..')
+  const tokenize = path.join(repoRoot, 'packages', 'core', 'src', 'tokenize.mjs')
+  const { countTokens, warmTokenizer } = await import(tokenize)
+  // Per DOCUMENT, not over one concatenated blob. `countTokens` encodes only the
+  // first 200,000 characters exactly and extrapolates the rest, so a 2MB string
+  // measures a tenth of the work and reads ten times too fast — which is exactly
+  // the mistake this calibration made on its first run. The engine calls it once
+  // per document, each 10-50KB, so that is the pattern worth timing.
+  const docs = []
+  for (let i = 0, bytes = 0; bytes < CALIBRATION_BYTES; i += 1) {
+    const text = fs.readFileSync(path.join(corpus, `doc-${i}.md`), 'utf8')
+    docs.push(text)
+    bytes += text.length
+  }
+  // Build the 2.3MB rank table first. It is a one-time ~800ms block that the
+  // engine pays at boot, so charging it to this measurement would make every
+  // machine look slow in proportion to nothing.
+  warmTokenizer()
+  const startedAt = performance.now()
+  for (const text of docs) countTokens(text)
+  const bytes = docs.reduce((total, text) => total + text.length, 0)
+  const msPerMB = (performance.now() - startedAt) / (bytes / 1048576)
+  return { msPerMB, scale: Math.min(8, Math.max(1, msPerMB / REFERENCE_MS_PER_MB)) }
+}
+
+const { msPerMB, scale } = await machineScale()
+const calibration = `this machine encodes ${msPerMB.toFixed(0)} ms/MB vs ${REFERENCE_MS_PER_MB} on the reference, `
+  + `so the ceilings are scaled ${scale.toFixed(2)}x`
+
 // A main process doing the indexing itself blocks for seconds at a stretch;
 // isolated, its timers should barely drift. Generous enough to survive a
 // loaded CI runner while still failing loudly if the work moves back onto the
@@ -166,8 +223,10 @@ const MAX_LAG_MS = 400
 // limits. The limits stay at the plan's API-responsiveness SLO (p95 < 50ms,
 // max < 250ms) on purpose — they are the product promise ("you can still
 // navigate while it indexes"), and Task 0.2 asks for generous thresholds
-// because CI machines vary. A GitHub macos-14 runner is roughly half this
-// machine, which puts a healthy p95 there near 20ms, still well under.
+// because CI machines vary — and rather than assume by how much, the ceilings
+// are scaled by the measured calibration above. A GitHub macos-14 runner
+// measured p95 65ms on a healthy engine, which is the number that taught this
+// file not to guess.
 //
 // What that ceiling costs in sensitivity, measured rather than assumed:
 //
@@ -184,8 +243,8 @@ const MAX_LAG_MS = 400
 // corpus the very same sync-I/O regression measured p95 8ms and the gate
 // printed ISOLATION OK, twice. The gate did not become stricter here; it became
 // able to see.
-const MAX_ENGINE_P95_MS = 50
-const MAX_ENGINE_MAX_MS = 250
+const MAX_ENGINE_P95_MS = Math.round(50 * scale)
+const MAX_ENGINE_MAX_MS = Math.round(250 * scale)
 // Guards "the probe loop ran for the window it claims to have run for", and
 // that is worth stating precisely, because an empty sample set makes every
 // latency assertion above pass vacuously (p50/p95/max all read 0).
@@ -198,8 +257,14 @@ const MAX_ENGINE_MAX_MS = 250
 // consumed window while staying far below that 17, which is what makes it
 // impossible for a merely SLOW engine to fail here: it fails the latency
 // assertion first, and this check runs after it, so the message is never the
-// wrong one. A healthy run lands at 42-43.
-const MIN_ENGINE_PROBES = 12
+// wrong one. A healthy run lands at 42-43 on the reference machine.
+//
+// It has to be derived from the SCALED ceiling, not the reference one. A slower
+// machine legitimately fits fewer probes into the same 1.2s window — a runner
+// held to p95 285ms can only manage ~4 — so a fixed floor of 12 would fail a
+// healthy slow machine with a message about the probe loop being broken, which
+// is both wrong and the most confusing kind of wrong.
+const MIN_ENGINE_PROBES = Math.max(3, Math.floor((1200 / (MAX_ENGINE_P95_MS + 20)) * 0.7))
 
 // Escape hatch for containers/CI images that need extra Chromium switches
 // (e.g. CC_ELECTRON_ARGS="--no-sandbox" when running as root). Unset on a
@@ -278,7 +343,7 @@ child.on('exit', (code) => {
     process.stdout.write(
       `ISOLATION FAIL: the engine answered GET /api/status in p95 ${engine.p95}ms / max ${engine.max}ms `
       + `over ${engine.probes} probes while indexing ${DOCS} documents `
-      + `(limits ${MAX_ENGINE_P95_MS}ms / ${MAX_ENGINE_MAX_MS}ms). `
+      + `(limits ${MAX_ENGINE_P95_MS}ms / ${MAX_ENGINE_MAX_MS}ms — ${calibration}). `
       + `Main-process lag was ${lag}ms, so the stall is inside the engine's request path, not the UI thread.\n`,
     )
     process.exitCode = 1
@@ -303,7 +368,7 @@ child.on('exit', (code) => {
   process.stdout.write(
     `ISOLATION OK: main process lag ${lag}ms while the engine indexed ${DOCS} documents `
     + `(limit ${MAX_LAG_MS}ms); engine GET /api/status p50 ${engine.p50}ms p95 ${engine.p95}ms `
-    + `max ${engine.max}ms over ${engine.probes} probes (limits ${MAX_ENGINE_P95_MS}ms / ${MAX_ENGINE_MAX_MS}ms)\n`,
+    + `max ${engine.max}ms over ${engine.probes} probes (limits ${MAX_ENGINE_P95_MS}ms / ${MAX_ENGINE_MAX_MS}ms — ${calibration})\n`,
   )
   process.exitCode = 0
 })

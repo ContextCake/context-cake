@@ -1,5 +1,8 @@
 # Conflict Resolution
 
+**Status:** Shipped predecessor. The additive professional workflow and governed
+learning contract lives in `specs/contextcake-discrepancy-center/spec.md`.
+
 ContextCake turns surfaced section conflicts into quick, reversible decisions. It resolves only meaning-preserving differences automatically, asks one clear question when judgment is required, and keeps an append-only local record of every applied choice.
 
 ## Problem Statement

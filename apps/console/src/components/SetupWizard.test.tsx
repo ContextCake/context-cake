@@ -306,6 +306,76 @@ describe('SetupWizard first run', () => {
     expect(button('Done').disabled).toBe(false)
   })
 
+  // A ticking counter inside a polite live region is read out on every tick.
+  // App.tsx states the doctrine — announce transitions, not ticks — and the
+  // activity popover already follows it; this line did not.
+  it('reports index progress as a progressbar, not something announced every tick', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/status') {
+        return new Response(JSON.stringify({
+          generation: 3, indexing: true, indexingSources: ['vault'],
+          sources: [{ name: 'vault', level: 3, kind: 'files', status: 'indexing', phase: 'loading', loaded: 1240, total: 3000, conceptCount: 0, refreshing: false, error: null }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify(url === '/api/graph' ? { concepts: [] } : {}), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    })
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    await enter('#wiz-add-path', '/tmp/vault')
+    await act(async () => button('Add source').click())
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+
+    const bar = container.querySelector('[role="progressbar"]')
+    expect(bar?.textContent).toContain('1,240 / 3,000')
+    expect(bar?.getAttribute('aria-valuetext')).toContain('1,240 / 3,000')
+    expect(bar?.getAttribute('aria-valuenow')).toBe('41')
+    // And it is not also a live region.
+    expect(Array.from(container.querySelectorAll('[role="status"]')).map((n) => n.textContent ?? '').join(' '))
+      .not.toContain('1,240 / 3,000')
+  })
+
+  // fetchStatus answers null for a 404, a 500, a socket error and a timeout
+  // alike. Treating all four as "this engine has no status route" meant one
+  // blip three seconds into a 3,000-note index retired these cards for good,
+  // while the source was still reading.
+  it('keeps watching a source through a failed status request', async () => {
+    let calls = 0
+    let blipped = false
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/status') {
+        calls += 1
+        // One 500, once the card has had a tick to show progress. Everything
+        // after it is the answer the watcher would have had all along.
+        if (calls === 3 && !blipped) {
+          blipped = true
+          return new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })
+        }
+        const answer = blipped
+          ? { status: 'ok', phase: 'ready', loaded: 3000, total: 3000, conceptCount: 3000 }
+          : { status: 'indexing', phase: 'loading', loaded: 1240, total: 3000, conceptCount: 0 }
+        return new Response(JSON.stringify({
+          generation: 3, indexing: answer.status === 'indexing', indexingSources: [],
+          sources: [{ name: 'vault', level: 3, kind: 'files', refreshing: false, error: null, ...answer }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify(url === '/api/graph' ? { concepts: [] } : {}), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    })
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    await enter('#wiz-add-path', '/tmp/vault')
+    await act(async () => button('Add source').click())
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+    expect(container.textContent).toContain('Reading — 1,240 / 3,000')
+
+    // Two more 900ms ticks: the blip, then the answer that was waiting behind it.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)) })
+    expect(container.textContent).toContain('Ready · 3000 concepts')
+  })
+
   it('surfaces server-side folder validation inline at the add step', async () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === '/api/sources' && init?.method === 'POST') {

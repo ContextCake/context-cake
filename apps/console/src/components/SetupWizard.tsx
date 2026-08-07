@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { useStore } from '../store'
-import { apiFetch, progressLabel } from '../api'
+import { apiFetch, progressLabel, progressPercent } from '../api'
 import type { GraphSummary, SourceStatus, StatusSummary } from '../types'
 
 type StepId = 'welcome' | 'personal' | 'team' | 'company' | 'source' | 'review' | 'success'
@@ -50,21 +50,43 @@ export class SourceApiError extends Error {
 }
 
 /**
- * GET /api/status, quietly. Null when the route is unavailable or unreachable —
- * "I could not tell" is a distinct answer from "it is not there", and the two
- * lead to different things being said to the user.
+ * GET /api/status, quietly, with the two failures kept apart.
+ *
+ * 'absent' is a property of the engine and will not change while this wizard is
+ * open; 'failed' is a property of one request and says nothing about the next
+ * one. Collapsing them meant a single blip mid-index retired the live status
+ * cards for good, on an engine that was answering fine a second later.
  */
-async function fetchStatus(timeoutMs = 4_000): Promise<StatusSummary | null> {
+type StatusProbe =
+  | { kind: 'ok'; status: StatusSummary }
+  | { kind: 'absent' }
+  | { kind: 'failed' }
+
+async function probeStatus(timeoutMs = 4_000): Promise<StatusProbe> {
   try {
     const res = await apiFetch('/api/status', { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) })
-    if (!res.ok) return null
+    // Only the engine saying "no such route" is evidence there isn't one. A
+    // 500, a 401, a proxy's 502 are all this request going wrong.
+    if (res.status === 404 || res.status === 405) return { kind: 'absent' }
+    if (!res.ok) return { kind: 'failed' }
     const payload = await res.json() as Partial<StatusSummary>
     // A payload without a source list tells us nothing; treat it as "could not
     // tell" rather than letting a shape surprise break the add flow.
-    return Array.isArray(payload?.sources) ? payload as StatusSummary : null
+    return Array.isArray(payload?.sources) ? { kind: 'ok', status: payload as StatusSummary } : { kind: 'failed' }
   } catch {
-    return null
+    return { kind: 'failed' }
   }
+}
+
+/**
+ * The same probe, flattened for the callers that only ever act on a usable
+ * answer. Null when the route is unavailable or unreachable — "I could not
+ * tell" is a distinct answer from "it is not there", and the two lead to
+ * different things being said to the user.
+ */
+async function fetchStatus(timeoutMs = 4_000): Promise<StatusSummary | null> {
+  const probe = await probeStatus(timeoutMs)
+  return probe.kind === 'ok' ? probe.status : null
 }
 
 /**
@@ -570,9 +592,12 @@ function LiveSourceStatus({
   name: string
   watched: Record<string, SourceStatus | null> | null | undefined
 }) {
-  const line = (tone: 'work' | 'ok' | 'warn', text: string) => (
+  // `aria` defaults to a polite live region because these lines are
+  // transitions — each one is said once, when it arrives. The indexing line is
+  // the exception and overrides it (see below).
+  const line = (tone: 'work' | 'ok' | 'warn', text: string, aria: Record<string, unknown> = { role: 'status' }) => (
     <span
-      role="status"
+      {...aria}
       style={css(`display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; color:${tone === 'warn' ? C.amberText : tone === 'ok' ? C.tealText : C.blueText};`)}
     >
       <span aria-hidden="true" style={css(`width:6px; height:6px; border-radius:999px; background:${tone === 'warn' ? C.amberStrokeE : tone === 'ok' ? C.tealStroke : C.blueStroke};${tone === 'work' ? ' animation:ccPulse 1.4s ease-in-out infinite;' : ''}`)} />
@@ -587,7 +612,19 @@ function LiveSourceStatus({
   if (status === undefined) return line('work', 'Checking with the engine…')
   if (status === null) return line('warn', 'Not in the cascade — the add did not stick.')
   if (status.status === 'error') return line('warn', status.error ?? 'This source failed to read.')
-  if (status.status === 'indexing') return line('work', progressLabel(status))
+  if (status.status === 'indexing') {
+    // A progressbar, not a live region: this text is re-rendered every 900ms,
+    // and a polite live region would read the counter out on every tick for the
+    // whole of an index. Same shape the activity popover's TaskRow uses — a
+    // screen reader takes the number on request instead of being handed it.
+    const percent = progressPercent(status)
+    return line('work', progressLabel(status), {
+      role: 'progressbar',
+      'aria-label': `${name} indexing`,
+      'aria-valuetext': progressLabel(status),
+      ...(percent == null ? {} : { 'aria-valuenow': percent, 'aria-valuemin': 0, 'aria-valuemax': 100 }),
+    })
+  }
   if (status.status === 'degraded') return line('warn', status.error ?? 'Serving, but its last request failed.')
   return line('ok', `Ready · ${status.conceptCount} concept${status.conceptCount === 1 ? '' : 's'}`)
 }
@@ -775,12 +812,26 @@ export function SetupWizard({
     if (step !== 'success' || added.length === 0) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let misses = 0
     const names = new Set(added.map((a) => a.name))
     const tick = async () => {
-      const status = await fetchStatus()
+      const probe = await probeStatus()
       if (cancelled) return
-      if (!status) { setWatched(null); return }
-      const rows = status.sources.filter((s) => names.has(s.name))
+      // Nothing to poll — this engine has no status route. Say nothing rather
+      // than inventing a state, and stop.
+      if (probe.kind === 'absent') { setWatched(null); return }
+      // One failed request is not an answer. Keep the last rows on screen and
+      // ask again — a blip three seconds into a 3,000-note index used to end
+      // the watch, freezing the card while the source was still reading. The
+      // cap is there so an engine that is genuinely gone stops being polled.
+      if (probe.kind === 'failed') {
+        misses += 1
+        if (misses >= 5) { setWatched(null); return }
+        timer = setTimeout(() => void tick(), 900)
+        return
+      }
+      misses = 0
+      const rows = probe.status.sources.filter((s) => names.has(s.name))
       setWatched(Object.fromEntries([...names].map((n) => [n, rows.find((s) => s.name === n) ?? null])))
       if (rows.some((s) => s.status === 'indexing' || s.refreshing)) {
         timer = setTimeout(() => void tick(), 900)

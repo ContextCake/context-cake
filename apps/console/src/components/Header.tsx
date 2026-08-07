@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useStore, type ViewId } from '../store'
 import { destinationForView, SEARCHABLE_VIEWS } from '../shell-navigation'
 import { AgentIcon, PlusIcon, SidebarIcon, SparkleIcon } from './icons'
+import { BackgroundActivity } from './BackgroundActivity'
 import { Button, IconButton, SearchField, SegmentedControl, StatusBadge } from './ui'
 
 const TITLES: Record<ViewId, string> = {
@@ -17,7 +18,7 @@ export function Header({
   onAddSource?: () => void
   onConnectAgent?: () => void
 }) {
-  const { view, setView, query, setQuery, load, loadErrors, mode, signals, conflicts } = useStore()
+  const { view, setView, query, setQuery, loadErrors, mode, signals, conflicts } = useStore()
   const search = useRef<HTMLInputElement>(null)
   const destination = destinationForView(view)
   const searchable = SEARCHABLE_VIEWS.has(view)
@@ -57,7 +58,9 @@ export function Header({
           label={`Search ${view === 'triage' ? 'queue' : view}`}
           placeholder={`Search ${view === 'triage' ? 'queue' : view}`}
         />}
-        {load.indexingSources.length > 0 && <StatusBadge tone="info">Indexing {load.indexingSources.length}</StatusBadge>}
+        {/* Background work and its health, from every destination — a count
+            with no progress and no detail was the badge this replaces. */}
+        <BackgroundActivity />
         {loadErrors.length > 0 && <StatusBadge tone="attention">{loadErrors.length} failed</StatusBadge>}
         {view === 'sources' && mode === 'live' && onAddSource && <Button variant="primary" onClick={onAddSource}><PlusIcon />Add Source</Button>}
         {view === 'sources' && onConnectAgent && <IconButton label="Connect Agent" onClick={onConnectAgent}><AgentIcon /></IconButton>}

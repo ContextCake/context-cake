@@ -1,6 +1,14 @@
 // Injected by the ContextCake desktop app's preload script
 // (apps/desktop/src/preload.cjs). Absent in every browser deployment — all
 // consumers must treat it as optional.
+//
+// Deadlines: every method here is an IPC round trip to the main process, and
+// none of them takes an AbortSignal — the deadline, where one is needed, has to
+// live on this side. `getApiToken` has one (api.ts), because apiFetch awaits it
+// on the critical path of every request and a stall there froze the whole app.
+// The rest are user-initiated actions behind a visible busy state on a surface
+// that is already gone if the main process has stopped answering, so they are
+// deliberately unbounded rather than accidentally so.
 export {}
 
 type DesktopAuthState = {

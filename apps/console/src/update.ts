@@ -44,12 +44,20 @@ function compareVersions(a: string, b: string): number {
  * Never throws — any network error, non-2xx status, or missing tag resolves
  * to null. Result is session-cached so repeated calls don't refetch.
  */
+export const UPDATE_CHECK_TIMEOUT_MS = 10_000
+
 export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo | null> {
   if (cached !== undefined) return cached
 
   let res: Response
   try {
-    res = await fetch(RELEASES_URL, { headers: { accept: 'application/vnd.github+json' } })
+    // Bounded like every other network call in the console: an update check
+    // that never settles would hold a promise (and its listener) for the life
+    // of the session. Failing quietly to null is already the contract here.
+    res = await fetch(RELEASES_URL, {
+      headers: { accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
+    })
   } catch {
     cached = null
     return null

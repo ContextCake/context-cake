@@ -163,6 +163,95 @@ describe('Sources remove', () => {
   })
 })
 
+describe('Sources with an invalid manifest entry', () => {
+  const broken = (over: Partial<Source> = {}) => src({
+    name: 'bad-kind', status: 'error', quarantined: true, conceptCount: 0, coverage: 0,
+    error: 'Layer bad-kind has unsupported source kind: notarealkind', ...over,
+  })
+
+  it('offers only Remove, and says the entry is not a working source', async () => {
+    await mount([broken()])
+
+    expect(container.textContent).toContain('This entry is not a working source')
+    // Rename writes through the strict manifest path and Sync has nothing to
+    // talk to, so offering either would only produce an error.
+    expect(container.querySelector('button[aria-label^="Rename"]')).toBeNull()
+    expect(container.querySelector('button[aria-label^="Sync"]')).toBeNull()
+    expect(container.textContent).not.toContain('The path, repository, or command is fixed')
+    expect(container.textContent).toContain('unsupported source kind: notarealkind')
+    buttonByAria('Remove bad-kind') // throws if absent
+  })
+
+  it('removes a lone invalid entry on its own', async () => {
+    await mount([src({}), broken()])
+
+    await act(async () => sourceButton('bad-kind').click())
+    await act(async () => buttonByAria('Remove bad-kind').click())
+    expect(container.textContent).toContain('nothing was being read from this entry')
+    await act(async () => button('Remove entry').click())
+
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources?name=bad-kind', expect.objectContaining({ method: 'DELETE' }))
+  })
+
+  it('names every other invalid entry and removes them in one request', async () => {
+    // Two invalid entries: the engine only persists a manifest that validates,
+    // so removing either alone would be refused. The panel has to say that
+    // before the click rather than removing rows the user never selected.
+    await mount([src({}), broken(), broken({ name: 'layer 4', error: 'Layer in legacy default must have a non-empty name.' })])
+
+    await act(async () => sourceButton('bad-kind').click())
+    await act(async () => buttonByAria('Remove bad-kind').click())
+    expect(container.textContent).toContain('One other entry is also invalid')
+    expect(container.textContent).toContain('layer 4')
+
+    await act(async () => button('Remove 2 entries').click())
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources?name=bad-kind&name=layer%204', expect.objectContaining({ method: 'DELETE' }))
+    expect(mocks.reload).toHaveBeenCalled()
+  })
+
+  it('carries the invalid entries along when a healthy source is removed', async () => {
+    // The write rewrites the whole manifest, so an invalid entry blocks
+    // removing a working source too. Refusing with an explanation the user
+    // cannot act on would leave them stuck on a row that has nothing wrong.
+    await mount([src({ name: 'notes' }), broken()])
+
+    await act(async () => sourceButton('notes').click())
+    await act(async () => buttonByAria('Remove notes').click())
+    expect(container.textContent).toContain('One other entry is also invalid')
+    expect(container.textContent).toContain('only the cascade entry is removed')
+
+    await act(async () => button('Remove 2 entries').click())
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources?name=notes&name=bad-kind', expect.objectContaining({ method: 'DELETE' }))
+  })
+
+  it('leaves an ordinary removal alone when nothing is invalid', async () => {
+    await mount([src({ name: 'notes' })])
+
+    await act(async () => buttonByAria('Remove notes').click())
+    await act(async () => button('Remove source').click())
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources?name=notes', expect.objectContaining({ method: 'DELETE' }))
+  })
+
+  it('renders the engine refusal verbatim when the manifest cannot be repaired', async () => {
+    mocks.apiFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        return new Response(
+          JSON.stringify({ error: 'Nothing was removed: the manifest is invalid in a way this app cannot repair. Edit /kb/manifest.json by hand — legacy default contains duplicate layer name: seed' }),
+          { status: 409, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return ok()
+    })
+    await mount([broken()])
+
+    await act(async () => buttonByAria('Remove bad-kind').click())
+    await act(async () => button('Remove entry').click())
+
+    expect(container.textContent).toContain('Edit /kb/manifest.json by hand')
+    expect(mocks.reload).not.toHaveBeenCalled()
+  })
+})
+
 describe('Sources rename + re-level', () => {
   it('PATCHes only name and level — and says a wrong path means remove + re-add', async () => {
     await mount([src({ name: 'notes', level: 3 })])

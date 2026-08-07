@@ -18,8 +18,10 @@ node apps/playground/server.mjs --manifest layers.json --port 8790
 Then open `http://127.0.0.1:8790`.
 
 The playground server is dependency-free, same as the rest of the engine — no
-npm install, no CDN. It's a thin shell over the real engine: `GET /api/graph`
-returns the source topology and concept index, `GET /api/resolve?concept=<id>`
+npm install, no CDN. It's a thin shell over the real engine: `GET /api/status`
+is the cheap poll (per-source index progress plus a `generation` counter, no
+resolve and no tokenizing), `GET /api/graph` returns the source topology and
+concept index, `GET /api/resolve?concept=<id>`
 returns exactly what the [CLI](/docs/reference/cli) and the
 [MCP server](/docs/reference/mcp-tools) would. The browser is just another
 reader of that output — nothing is reimplemented.

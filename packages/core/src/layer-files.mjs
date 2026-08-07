@@ -20,7 +20,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { assertInsideRoot, httpError, json, parseJson, MIME } from "./http-util.mjs";
-import { defaultWalkLimits } from "./sources/okf-local.mjs";
+import { defaultWalkLimits, MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 
 // Files the editor treats as editable text. SVG is text AND image: editable as
@@ -29,7 +29,10 @@ const TEXT_EXT = new Set([".md", ".markdown", ".mdx", ".txt", ".json", ".mjs", "
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".bmp", ".ico", ".svg"]);
 // Rendered as markdown by the console's Files view; everything else is raw text.
 const MARKDOWN_EXT = new Set([".md", ".markdown", ".mdx"]);
-const MAX_EDITABLE_BYTES = 2_000_000;
+// One number, deliberately: a document the indexer refuses to read is one the
+// cascade will never serve, so letting the editor open and save it would be a
+// lie about what saving accomplishes.
+const MAX_EDITABLE_BYTES = MAX_DOC_BYTES;
 const MAX_PREVIEW_BYTES = 25_000_000;
 
 export function fileKind(ext) {
@@ -234,6 +237,16 @@ export async function writeSectionApi(rawBody, roots) {
       }
     } catch (err) { skipped.push({ layer, reason: err.message }); continue; }
     if (!target || !stat?.isFile()) { skipped.push({ layer, reason: "no such concept file" }); continue; }
+    // Same cap the read and write routes enforce, checked BEFORE the read.
+    // Without it this route would happily pull a 30MB document into memory and
+    // write back the section-replaced result — a file the indexer refuses to
+    // read, and so a document the cascade never served, silently rewritten
+    // down to the few lines the merge editor thought it was editing. A skip
+    // would be worse than a refusal here: resolving a conflict into every
+    // layer except the big one just mints a new partial disagreement.
+    if (stat.size > MAX_EDITABLE_BYTES) {
+      throw httpError(413, `File is too large to save from the editor: ${layer}/${conceptId}${target.ext}`);
+    }
     const originalText = await fsp.readFile(target.abs, "utf8");
     const currentContent = readSectionBody(originalText, sectionKey, { plainText: target.ext === ".txt" });
     const { text, replaced } = target.ext === ".txt"

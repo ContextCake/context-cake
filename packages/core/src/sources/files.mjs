@@ -10,7 +10,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import {
   parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading,
-  walkDocs, withDocumentDate, localDate,
+  walkDocs, withDocumentDate, localDate, MAX_DOC_BYTES,
 } from "./okf-local.mjs";
 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
@@ -34,11 +34,22 @@ export function createFilesSource({ name, level, root, limits = null }) {
       }
       for (const ext of FILES_EXTENSIONS) {
         const filePath = path.join(root, `${safeId}${ext}`);
-        let content, stat;
+        let stat;
         try {
-          [content, stat] = await Promise.all([fsp.readFile(filePath, "utf8"), fsp.stat(filePath)]);
+          stat = await fsp.stat(filePath);
         } catch {
           continue; // missing under this extension — try the next one
+        }
+        // Stat first, then read: an oversized document must never be allocated.
+        // Falling through to the next extension rather than returning is what
+        // keeps this consistent with the walk, which drops only the one file
+        // over the cap and leaves any sibling under another extension listed.
+        if (stat.size > MAX_DOC_BYTES) continue;
+        let content;
+        try {
+          content = await fsp.readFile(filePath, "utf8");
+        } catch {
+          continue;
         }
         // localDate, not toISOString: dates are local-calendar days everywhere
         // else in the engine, and UTC slicing shifts them a day near midnight.
@@ -46,8 +57,8 @@ export function createFilesSource({ name, level, root, limits = null }) {
       }
       return null;
     },
-    async listConceptIds() {
-      const files = await walkDocs(root, FILES_EXTENSIONS, limits);
+    async listConceptIds({ signal = null, notes = null } = {}) {
+      const files = await walkDocs(root, FILES_EXTENSIONS, limits, { signal, notes });
       const ids = files.map((filePath) =>
         toPosix(path.relative(root, filePath)).replace(/\.(md|mdx|txt)$/, ""),
       );

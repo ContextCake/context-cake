@@ -1,0 +1,514 @@
+#!/usr/bin/env bash
+# Index-stability regression suite.
+#
+# THIS SUITE IS EXPECTED TO FAIL until the source-stability work lands. It is
+# the gate, written first: three field-reported failures of the shipped Mac app,
+# each reproduced here against the bare engine service.
+#
+#   1. CHURN NEVER SETTLES. syncWatchers puts an unfiltered recursive fs.watch
+#      on every layer root, and any event debounces 250ms into invalidateIndex,
+#      which CANCELS and RESTARTS the running index job. Obsidian rewrites
+#      .obsidian/workspace.json the whole time the vault is open, so the index
+#      sawtooths and never reaches "ready". Untouched, the same vault indexes in
+#      a couple of seconds — the control assertion below proves exactly that, so
+#      a failure here is the watcher and not a slow machine.
+#
+#   1b. THE SAME CHURN COSTS A FULL RE-WALK EVERY QUIET PERIOD. Two independent
+#      changes answer symptom 1 — the watcher stops forwarding events the walk
+#      would never read (isSkippedPath), and invalidateIndex coalesces instead
+#      of cancelling — and assertion 1 gates only the second of them. Measured,
+#      not assumed: with isSkippedPath deleted, assertion 1 stays green; with
+#      the coalescer ALSO reverted it goes red. So a cleanup that drops the
+#      filter ("the coalescer handles it") would ship green while an open vault
+#      re-read every file on a timer for as long as Obsidian was running.
+#      Assertion 1b gates the filter on its own terms: under churn confined to
+#      a dot-directory, a settled source must run ZERO further index passes.
+#
+#   2. RENAME THROWS THE INDEX AWAY. The index cache key is JSON.stringify(layer),
+#      which includes `name` and `level`. Renaming a source through
+#      PATCH /api/sources therefore mints a new key: pruneIndexes drops the
+#      finished entry and ensureIndexes starts a fresh job with previousSnap
+#      null, so the source blinks to 0 concepts and re-reads every file. Nothing
+#      about the source's content changed.
+#
+#   3. ONE BAD LAYER BRICKS EVERY ENDPOINT. Manifest validation runs inside
+#      openSources(), which every route calls, so a single malformed layer makes
+#      /api/settings, /api/graph and everything else answer 500 — including the
+#      Settings screen a user would need to fix the bad source.
+#
+# What "fixed" looks like: every assertion passes with no change to the
+# assertions themselves. Network-free. Run from the repo root.
+set -uo pipefail
+
+PORT="${INDEX_STABILITY_PORT:-8841}"   # churn + rename host
+PORT2=$((PORT + 1))                    # control host: same corpus, no churn
+PORT3=$((PORT + 2))                    # bad-layer quarantine host
+BASE="http://127.0.0.1:$PORT"
+BASE2="http://127.0.0.1:$PORT2"
+BASE3="http://127.0.0.1:$PORT3"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+TMP="$(mktemp -d)"
+PIDS=()
+CHURN_PID=""
+FAILED=0
+
+# Corpus size. Tuned so one undisturbed pass takes a second or two: long enough
+# that a 300ms churn cycle cannot let it finish (the restart period is several
+# times shorter than the work), small enough to stay cheap in CI. Absolute
+# indexing speed is not load-bearing — the observation window below is derived
+# from the control's own measurement, so a slow machine gets more time rather
+# than a false failure.
+NOTES="${INDEX_STABILITY_NOTES:-3000}"
+CHURN_MS=300           # Obsidian rewrites workspace.json at roughly this rate
+CHURN_SLEEP="$(awk "BEGIN{print $CHURN_MS/1000}")"
+POLL_MS=400            # /api/graph resolves every concept; polling harder starves the indexer
+READY_TIMEOUT_MS=30000 # recomputed from the control measurement below
+RENAME_OBSERVE_MS=5000
+DOT_CHURN_S=3          # assertion 1b's churn window: ~10 cycles, so several
+                       # watcher debounce periods elapse inside it
+DOT_SETTLE_S=2         # then long enough for a pass triggered by the LAST event
+                       # to have been started and counted (debounce is 250ms)
+
+# The floor a control pass must clear for assertion 1 to mean anything. The
+# watcher debounces WATCH_DEBOUNCE_MS (250ms in service.mjs) before restarting
+# the index, so a corpus that indexes in less than a few debounce periods can
+# slip through the gap between restarts and go green WITH THE BUG PRESENT —
+# measured, not theorised: at INDEX_STABILITY_NOTES=800 the control settles in
+# ~750ms and assertion 1 passes against an unfixed engine. Four debounce
+# periods is the smallest floor comfortably above that.
+CONTROL_FLOOR_MS=1000
+
+cleanup() {
+  [ -n "$CHURN_PID" ] && kill "$CHURN_PID" 2>/dev/null
+  for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null; done
+  rm -rf "$TMP"
+}
+trap cleanup EXIT INT TERM
+
+# A previous run killed with SIGKILL (harness timeout) cannot fire the EXIT trap,
+# so its hosts survive and the next run dies deep inside with an opaque EADDRINUSE.
+# Fail here instead, naming the remedy.
+for _p in "$PORT" "$PORT2" "$PORT3"; do
+  if lsof -nP -iTCP:"$_p" -sTCP:LISTEN >/dev/null 2>&1; then
+    printf 'PREFLIGHT FAIL port %s is already in use — a previous run leaked a host.\n' "$_p"
+    printf '  remedy: lsof -nP -iTCP:%s -sTCP:LISTEN   then kill the pid\n' "$_p"
+    exit 1
+  fi
+done
+
+pass() { printf '  ok   %s\n' "$1"; }
+fail() { printf '  FAIL %s\n' "$1"; FAILED=1; }
+code() { [ "$2" = "$1" ] && pass "$3 ($2)" || fail "$3 (got $2, want $1)"; }
+C() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+AUTH=(-H "Authorization: Bearer sekrit")
+JQ() { node -e '
+  let s = "";
+  process.stdin.on("data", (d) => (s += d)).on("end", () => {
+    let v;
+    try { v = JSON.parse(s); } catch { process.stdout.write("PARSE-ERROR"); return; }
+    const fn = new Function("d", `return ${process.argv[1]}`);
+    let out;
+    try { out = fn(v); } catch (e) { out = "EVAL-ERROR: " + e.message; }
+    process.stdout.write(typeof out === "string" ? out : JSON.stringify(out));
+  });' "$1"; }
+
+# ---- preflight: can this platform observe the bug at all? --------------------
+# service.mjs asks for fs.watch(root, {recursive:true}) and SILENTLY falls back
+# to a non-recursive watch if that throws — inotify exhaustion on a busy CI
+# runner is the realistic way in. In the fallback state no write under
+# .obsidian/ ever reaches the watcher, so nothing invalidates the index and
+# assertion 1 goes green with the bug fully present. That is the worst possible
+# outcome for a regression gate, so it is checked directly rather than assumed:
+# write into a SUBDIRECTORY of a watched temp dir and require an event.
+cat > "$TMP/watch-probe.mjs" <<'EOF'
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-watch-probe-"));
+const sub = path.join(root, ".obsidian");
+fs.mkdirSync(sub);
+const report = (ok, reason) => {
+  try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
+  console.log(JSON.stringify({ ok, reason }));
+  process.exit(0);
+};
+let seen = false;
+let watcher;
+try {
+  watcher = fs.watch(root, { recursive: true, persistent: false }, () => { seen = true; });
+} catch (err) {
+  report(false, `fs.watch({recursive:true}) threw: ${err.message}`);
+}
+watcher.on("error", () => {});
+// Bounded: a handful of writes, then wait out a short deadline for the first
+// event rather than sleeping a fixed amount.
+const deadline = Date.now() + 5000;
+for (let i = 0; !seen && Date.now() < deadline; i++) {
+  fs.writeFileSync(path.join(sub, "workspace.json"), String(i));
+  await new Promise((r) => setTimeout(r, 100));
+}
+try { watcher.close(); } catch { /* already gone */ }
+report(seen, seen ? "ok" : "no event delivered for a write in a watched subdirectory within 5000ms");
+EOF
+echo "preflight: the platform can see the churn this suite depends on"
+WATCH_PROBE="$(node "$TMP/watch-probe.mjs")"
+[ "$(JQ 'String(d.ok)' <<<"$WATCH_PROBE")" = "true" ] \
+  && pass "recursive fs.watch delivers subdirectory events here" \
+  || fail "this platform CANNOT gate the churn bug — assertion 1 below is meaningless and its result must not be trusted ($(JQ 'String(d.reason)' <<<"$WATCH_PROBE")); service.mjs falls back to a non-recursive watch, so writes under .obsidian/ never reach it"
+
+# ---- fixtures ----------------------------------------------------------------
+# Two copies of the same corpus: one gets churned, one never does, so the
+# control's timing is a real answer about this machine rather than a reading
+# taken through the bug under test.
+#
+# Written by a function rather than inline because the control below may decide
+# this machine is too fast for the default size and rebuild the fixture larger.
+VAULT_DIR="$TMP/vault"
+mkdir -p "$TMP/seed"
+printf '# Seed\n\n## Body\n\nA small layer that is never churned.\n' > "$TMP/seed/seed.md"
+gen_notes() { # <count> <dir>...
+  local count="$1"; shift
+  for _d in "$@"; do mkdir -p "$_d"; done
+  node -e '
+    const fs = require("node:fs");
+    const count = Number(process.argv[1]);
+    const dirs = process.argv.slice(2);
+    const words = "decision architecture retrieval cascade layer precedence conflict provenance manifest indexing rollout migration schema latency invariant".split(" ");
+    const para = (i) => Array.from({ length: 70 }, (_, k) => words[(i + k) % words.length]).join(" ");
+    for (let i = 0; i < count; i++) {
+      const body = Array.from({ length: 6 }, (_, p) => para(i + p)).join("\n\n");
+      const doc = `# Note ${i}\n\n## Body\n\n${body}\n\n## Links\n\n${body}\n`;
+      for (const dir of dirs) fs.writeFileSync(`${dir}/note-${i}.md`, doc);
+    }
+  ' "$count" "$@"
+}
+gen_notes "$NOTES" "$VAULT_DIR" "$TMP/vault-control"
+
+# A generous per-source budget so a slow machine reports the watcher behaviour
+# under test rather than the 30s default budget tripping first. The control host
+# starts with only the seed layer: each control measurement adds its corpus
+# through POST /api/sources, so a re-measurement at a larger size is a fresh
+# index of a fresh source rather than a reading taken through a warm one.
+cat > "$TMP/manifest.json" <<EOF
+{ "settings": { "sourceBudgetMs": 120000 },
+  "layers": [ { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seed" } ] }
+EOF
+cp "$TMP/manifest.json" "$TMP/manifest-control.json"
+
+# ---- a bare node:http host around createEngineService ------------------------
+# argv: <port> <manifest> <token|-> <allowMutations> <consoleDist|->
+cat > "$TMP/host.mjs" <<'EOF'
+import http from "node:http";
+import { pathToFileURL } from "node:url";
+const { createEngineService } = await import(pathToFileURL(process.env.SERVICE_MJS).href);
+const [port, manifestPath, token, allowMutations, consoleDist] = process.argv.slice(2);
+const svc = createEngineService({
+  manifestPath,
+  token: token === "-" ? null : token,
+  allowMutations: allowMutations !== "false",
+  consoleDist: consoleDist === "-" ? null : consoleDist,
+});
+http.createServer(async (req, res) => {
+  if (await svc.handleRequest(req, res)) return; // service owned it
+  res.writeHead(404, { "content-type": "application/json" });
+  res.end(JSON.stringify({ error: "host-fallthrough", path: req.url }));
+}).listen(Number(port), "127.0.0.1");
+EOF
+
+# ---- the observer ------------------------------------------------------------
+# Polls /api/graph and reports what one source's index actually DID over a
+# window, not just where it ended up: the phases it passed through, how far it
+# got, how often it went backwards (a cancel/restart), and the lowest concept
+# count anyone querying at that moment would have seen. Every failure message in
+# this suite is built from this summary, because "never ready" and "ready in
+# 1.9s" are the same single sample until you watch the whole window.
+#
+# argv: <base> <sourceName> <timeoutMs> <intervalMs> <stopOnReady> <token|->
+cat > "$TMP/observe.mjs" <<'EOF'
+const [base, name, timeoutMs, intervalMs, stopOnReady, token] = process.argv.slice(2);
+const headers = token && token !== "-" ? { authorization: `Bearer ${token}` } : {};
+const started = Date.now();
+const deadline = started + Number(timeoutMs);
+const out = {
+  samples: 0, httpErrors: 0, missingRows: 0,
+  reachedReady: false, leftReady: false, restarts: 0,
+  minConceptCount: null, maxConceptCount: null, maxLoaded: 0,
+  lastStatus: null, lastPhase: null, lastLoaded: null, lastTotal: null,
+  lastElapsedMs: null, lastError: null, observedMs: 0,
+};
+let prevLoaded = null;
+let prevElapsed = null;
+for (;;) {
+  out.samples += 1;
+  let graph = null;
+  try {
+    const res = await fetch(`${base}/api/graph`, { headers });
+    if (!res.ok) { out.httpErrors += 1; out.lastError = `HTTP ${res.status}`; }
+    else graph = await res.json();
+  } catch (err) { out.httpErrors += 1; out.lastError = String(err.message); }
+
+  if (graph) {
+    const row = (graph.sources ?? []).find((s) => s.name === name);
+    if (!row) {
+      // A vanished row contributes nothing, which is the same user-visible
+      // outcome as a zeroed one.
+      out.missingRows += 1;
+      out.leftReady = true;
+      out.minConceptCount = 0;
+    } else {
+      const count = row.conceptCount ?? 0;
+      const phase = row.indexing?.phase ?? null;
+      const loaded = row.indexing?.loaded ?? 0;
+      const elapsed = row.indexing?.elapsedMs ?? 0;
+      out.minConceptCount = out.minConceptCount === null ? count : Math.min(out.minConceptCount, count);
+      out.maxConceptCount = out.maxConceptCount === null ? count : Math.max(out.maxConceptCount, count);
+      out.maxLoaded = Math.max(out.maxLoaded, loaded);
+      // Progress running backwards, or the job clock resetting, means the
+      // previous job was cancelled and a new one started.
+      if (prevLoaded !== null && (loaded < prevLoaded || elapsed < prevElapsed)) out.restarts += 1;
+      prevLoaded = loaded;
+      prevElapsed = elapsed;
+      out.lastStatus = row.status;
+      out.lastPhase = phase;
+      out.lastLoaded = loaded;
+      out.lastTotal = row.indexing?.total ?? null;
+      out.lastElapsedMs = elapsed;
+      if (row.error) out.lastError = row.error;
+      if (phase === "ready") out.reachedReady = true; else out.leftReady = true;
+      if (phase === "ready" && stopOnReady === "true") break;
+    }
+  }
+  if (Date.now() >= deadline) break;
+  await new Promise((r) => setTimeout(r, Number(intervalMs)));
+}
+out.observedMs = Date.now() - started;
+console.log(JSON.stringify(out));
+EOF
+
+export SERVICE_MJS="$ROOT/packages/core/src/service.mjs"
+
+# ---- control: the harness works, and the corpus is sized for this machine -----
+# If this fails, nothing below is trustworthy: it would mean the poller, the
+# JSON shape, or the fixture size is wrong rather than the engine.
+node "$TMP/host.mjs" "$PORT2" "$TMP/manifest-control.json" sekrit true - >/dev/null 2>&1 &
+PIDS+=($!)
+for _ in $(seq 1 60); do curl -sf "${AUTH[@]}" "$BASE2/api/graph" >/dev/null 2>&1 && break; sleep 0.1; done
+
+# Add one corpus to the control host and time it to ready. Sets CTRL/CTRL_READY/
+# CTRL_MS/CTRL_COUNT. CTRL_MS is 0 when nothing usable came back — that is a
+# broken measurement, and must never read as a slow (and therefore acceptable)
+# one, which is what the old 30000ms fallback did to the floor guard below.
+measure_control() { # <sourceName> <dir>
+  local added
+  added="$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' \
+    -d "{\"kind\":\"files\",\"name\":\"$1\",\"level\":3,\"path\":\"$2\"}" "$BASE2/api/sources")"
+  if [ "$added" != "200" ]; then
+    CTRL="{\"addFailed\":$added}"; CTRL_READY=false; CTRL_MS=0; CTRL_COUNT=""
+    return
+  fi
+  CTRL="$(node "$TMP/observe.mjs" "$BASE2" "$1" "$READY_TIMEOUT_MS" "$POLL_MS" true sekrit)"
+  CTRL_READY="$(JQ 'String(d.reachedReady)' <<<"$CTRL")"
+  CTRL_MS="$(JQ 'String(d.observedMs)' <<<"$CTRL")"
+  CTRL_COUNT="$(JQ 'String(d.maxConceptCount)' <<<"$CTRL")"
+  case "$CTRL_MS" in ''|*[!0-9]*) CTRL_MS=0 ;; esac
+}
+
+run_control() { # <sourceName> <dir> <expectedCount>
+  measure_control "$1" "$2"
+  [ "$CTRL_READY" = "true" ] \
+    && pass "the corpus reaches phase=ready untouched in ${CTRL_MS}ms (poller and fixture are sound)" \
+    || fail "control never reached ready in ${CTRL_MS}ms — the fixture is too big for this machine or the poller is broken ($CTRL)"
+  [ "$CTRL_COUNT" = "$3" ] \
+    && pass "the control indexed all $3 notes" \
+    || fail "control concept count ($CTRL_COUNT, want $3) ($CTRL)"
+}
+
+echo "control: an unchurned vault of $NOTES notes indexes to ready"
+run_control vault "$TMP/vault-control" "$NOTES"
+
+# The other direction of the same problem. READY_TIMEOUT_MS below protects a
+# SLOW machine from a false failure; this protects a FAST one from a false pass.
+# A corpus that indexes in less than a few watcher debounce periods finishes
+# inside the gap between restarts, so assertion 1 goes green against an unfixed
+# engine — which is exactly what happens at INDEX_STABILITY_NOTES=800.
+#
+# A runner fast enough to trip that is a healthy runner, so the fixture is
+# rebuilt from the measurement and re-timed ONCE rather than turning the build
+# red and waiting for a human to re-run it with an env var. The loud failure
+# stays as the fallback: if even the scaled corpus indexes under the floor, a
+# green assertion 1 would still prove nothing and must not be reported as a
+# pass. Assertions 2 and 3 do not depend on corpus size and still run.
+scale_suggestion() { echo $(( (NOTES * CONTROL_FLOOR_MS * 3) / (CTRL_MS * 2) + 1 )); }
+if [ "$CTRL_MS" -ge "$CONTROL_FLOOR_MS" ]; then
+  pass "the control is slow enough for the churn to matter (${CTRL_MS}ms >= ${CONTROL_FLOOR_MS}ms floor)"
+elif [ "$CTRL_MS" -lt 1 ]; then
+  fail "the control produced no usable timing, so the fixture cannot be sized for this machine ($CTRL)"
+else
+  SCALED="$(scale_suggestion)"
+  echo "  control settled in ${CTRL_MS}ms, under the ${CONTROL_FLOOR_MS}ms floor — rebuilding at $SCALED notes and re-measuring"
+  gen_notes "$SCALED" "$VAULT_DIR" "$TMP/vault-control-2"
+  NOTES="$SCALED"
+  run_control vault-scaled "$TMP/vault-control-2" "$NOTES"
+  if [ "$CTRL_MS" -ge "$CONTROL_FLOOR_MS" ]; then
+    pass "the rebuilt $NOTES-note fixture is slow enough for the churn to matter (${CTRL_MS}ms >= ${CONTROL_FLOOR_MS}ms floor)"
+  else
+    fail "fixture still too small to gate the bug after scaling to $NOTES notes (control settled in ${CTRL_MS}ms, need >=${CONTROL_FLOOR_MS}ms) — a corpus this fast indexes between watcher restarts, so a green assertion 1 would prove nothing; re-run with INDEX_STABILITY_NOTES=$(scale_suggestion)"
+  fi
+fi
+
+# The churned vault gets a generous multiple of what the SAME corpus just took
+# untouched on THIS machine, so a loaded or slow runner buys time instead of a
+# false failure. The bug does not care how large the window is: the index
+# restarts every ~${CHURN_MS}ms, so it cannot finish inside any window.
+READY_TIMEOUT_MS=$((CTRL_MS * 8))
+[ "$READY_TIMEOUT_MS" -lt 30000 ] && READY_TIMEOUT_MS=30000
+[ "$READY_TIMEOUT_MS" -gt 90000 ] && READY_TIMEOUT_MS=90000
+
+# ---- host A: churn + rename ---------------------------------------------------
+# The vault's own app-state directory, present before anything watches it —
+# this is the file Obsidian rewrites while it is open. Created after the control
+# has settled the corpus size, so it always lands in the vault host A watches.
+mkdir -p "$VAULT_DIR/.obsidian"
+printf '{"main":{"id":"seed"}}' > "$VAULT_DIR/.obsidian/workspace.json"
+
+node "$TMP/host.mjs" "$PORT" "$TMP/manifest.json" sekrit true - >/dev/null 2>&1 &
+PIDS+=($!)
+for _ in $(seq 1 60); do curl -sf "${AUTH[@]}" "$BASE/api/graph" >/dev/null 2>&1 && break; sleep 0.1; done
+
+echo "1. an open Obsidian vault still finishes indexing"
+# The churn starts BEFORE the source is added, so the watcher is installed onto
+# an already-noisy tree — exactly the order a user hits when they add a vault
+# they currently have open.
+#
+# This fires on CI as well as on a Mac: fs.watch({recursive:true}) has delivered
+# subdirectory events on Linux since Node 20.13, verified against node:22 (the
+# version CI pins), so writes under .obsidian/ do reach the watcher there.
+(
+  while true; do
+    printf '{"main":{"id":"%s%s"}}' "$RANDOM" "$RANDOM" > "$VAULT_DIR/.obsidian/workspace.json"
+    sleep "$CHURN_SLEEP"
+  done
+) &
+CHURN_PID=$!
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"vault\",\"level\":3,\"path\":\"$VAULT_DIR\"}" "$BASE/api/sources")" "the vault is added while its app-state file churns"
+CHURNED="$(node "$TMP/observe.mjs" "$BASE" vault "$READY_TIMEOUT_MS" "$POLL_MS" true sekrit)"
+CH_READY="$(JQ 'String(d.reachedReady)' <<<"$CHURNED")"
+CH_MS="$(JQ 'String(d.observedMs)' <<<"$CHURNED")"
+CH_DESC="$(JQ '`phase=${d.lastPhase} loaded=${d.lastLoaded}/${d.lastTotal} maxLoaded=${d.maxLoaded} restarts=${d.restarts} samples=${d.samples}`' <<<"$CHURNED")"
+[ "$CH_READY" = "true" ] \
+  && pass "the vault reaches phase=ready while .obsidian churns (${CH_MS}ms)" \
+  || fail "the vault never reaches phase=ready while .obsidian churns ($CH_DESC after ${CH_MS}ms; the control settled in ${CTRL_MS}ms — every watcher event cancels and restarts the index job)"
+# A churning layer must not take the rest of the cascade down with it.
+SEED_STATUS="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ 'String(d.sources?.find((s) => s.name === "seed")?.status)')"
+[ "$SEED_STATUS" = "ok" ] \
+  && pass "an unrelated layer stays readable while the vault churns" \
+  || fail "the churning layer took another source with it (seed status=$SEED_STATUS)"
+
+# Stop the churn and let the vault settle: assertion 2 is about a rename of an
+# already-indexed source, so it must start from a genuinely settled one.
+kill "$CHURN_PID" 2>/dev/null
+wait "$CHURN_PID" 2>/dev/null
+CHURN_PID=""
+SETTLED="$(node "$TMP/observe.mjs" "$BASE" vault "$READY_TIMEOUT_MS" "$POLL_MS" true sekrit)"
+SETTLED_READY="$(JQ 'String(d.reachedReady)' <<<"$SETTLED")"
+[ "$SETTLED_READY" = "true" ] \
+  && pass "with the churn stopped the same vault settles in $(JQ 'String(d.observedMs)' <<<"$SETTLED")ms" \
+  || fail "the vault never settled even after the churn stopped ($SETTLED)"
+
+echo "1b. churn the walk would never read costs no index pass at all"
+# Assertion 1 asks whether the vault ever settles, and the coalescer alone is
+# enough to make it. This asks the separate question the filter exists to
+# answer: does that churn cost anything? indexing.passes counts index passes for
+# the life of the entry, so a settled source under churn it should be ignoring
+# has a delta of exactly zero. With the events forwarded, each quiet period buys
+# another full re-walk of every note in the vault, forever.
+#
+# The churn is shaped to isolate isSkippedPath from isIndexableFile, the other
+# half of onChange's filtering — otherwise this assertion would gate whichever
+# of the two happened to run first. workspace.json is rejected by BOTH (a .json
+# file is not indexable), so churning it alone gates neither. A DIRECTORY under
+# .obsidian — a plugin folder appearing and disappearing — is accepted by
+# isIndexableFile whatever the timing: present, it is a directory; gone, it is a
+# path that may have been in the index. isSkippedPath is the only thing between
+# it and a re-index, so this goes red the moment the filter is dropped.
+passes_of() { curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ "String(d.sources?.find((s) => s.name === \"$1\")?.indexing?.passes)"; }
+sleep "$DOT_SETTLE_S"   # anything armed by assertion 1's window has landed
+PASSES_BEFORE="$(passes_of vault)"
+(
+  while true; do
+    mkdir -p "$VAULT_DIR/.obsidian/plugins/dataview"
+    printf '{"main":{"id":"%s%s"}}' "$RANDOM" "$RANDOM" > "$VAULT_DIR/.obsidian/workspace.json"
+    rm -rf "$VAULT_DIR/.obsidian/plugins/dataview"
+    sleep "$CHURN_SLEEP"
+  done
+) &
+CHURN_PID=$!
+sleep "$DOT_CHURN_S"
+kill "$CHURN_PID" 2>/dev/null
+wait "$CHURN_PID" 2>/dev/null
+CHURN_PID=""
+sleep "$DOT_SETTLE_S"
+PASSES_AFTER="$(passes_of vault)"
+DOT_DESC="indexing.passes ${PASSES_BEFORE} -> ${PASSES_AFTER} across ${DOT_CHURN_S}s of .obsidian churn"
+case "${PASSES_BEFORE}${PASSES_AFTER}" in
+  ''|*[!0-9]*) fail "could not read indexing.passes for the vault ($DOT_DESC) — /api/graph no longer reports it, so this assertion gates nothing" ;;
+  *) [ "$PASSES_BEFORE" = "$PASSES_AFTER" ] \
+       && pass "a settled vault runs no further index passes while .obsidian churns ($DOT_DESC)" \
+       || fail "churn under a dot-directory re-indexed the vault ($DOT_DESC) — onChange forwarded an event for a path walkDocs skips, so an open vault pays a full re-walk every quiet period for as long as the editor is running" ;;
+esac
+
+echo "2. renaming a settled source does not re-read it"
+BEFORE_COUNT="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ 'String(d.sources?.find((s) => s.name === "vault")?.conceptCount)')"
+# Without this, a rename assertion comparing against an already-empty source
+# would pass for the wrong reason.
+[ "$BEFORE_COUNT" = "$NOTES" ] \
+  && pass "the source holds all $NOTES concepts going in" \
+  || fail "the source was not fully indexed before the rename (conceptCount=$BEFORE_COUNT, want $NOTES)"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"vault","newName":"vault-renamed","level":3}' "$BASE/api/sources")" "rename the settled source"
+# Watch the whole window, not the end of it: a re-index that starts and finishes
+# inside 5s still blanked the user's graph on the way through.
+RENAMED="$(node "$TMP/observe.mjs" "$BASE" vault-renamed "$RENAME_OBSERVE_MS" 100 false sekrit)"
+MIN_COUNT="$(JQ 'String(d.minConceptCount)' <<<"$RENAMED")"
+LEFT_READY="$(JQ 'String(d.leftReady)' <<<"$RENAMED")"
+RN_DESC="$(JQ '`minConceptCount=${d.minConceptCount} maxConceptCount=${d.maxConceptCount} lastPhase=${d.lastPhase} restarts=${d.restarts} missingRows=${d.missingRows} samples=${d.samples}`' <<<"$RENAMED")"
+[ "$MIN_COUNT" = "$BEFORE_COUNT" ] \
+  && pass "conceptCount held at $BEFORE_COUNT across the rename" \
+  || fail "the rename blanked the source: conceptCount fell to $MIN_COUNT (was $BEFORE_COUNT) within ${RENAME_OBSERVE_MS}ms — $RN_DESC; the index key includes the layer name, so a rename mints a new key and re-reads every file"
+[ "$LEFT_READY" = "false" ] \
+  && pass "indexing.phase stayed ready across the rename (no re-index)" \
+  || fail "the rename restarted indexing: phase left ready during the ${RENAME_OBSERVE_MS}ms window — $RN_DESC"
+
+# ---- host C: one bad layer must not brick the app -----------------------------
+echo "3. a malformed layer is quarantined, not fatal"
+# Two shapes, because the manifest rejects both the same way and a user can
+# produce either by hand: a source kind that does not exist, and an okf-local
+# layer missing its required path.
+cat > "$TMP/manifest-bad.json" <<EOF
+{ "layers": [
+    { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seed" },
+    { "name": "bad-kind", "level": 2, "source": "notarealkind", "path": "$TMP/seed" },
+    { "name": "bad-shape", "level": 0 }
+  ] }
+EOF
+node "$TMP/host.mjs" "$PORT3" "$TMP/manifest-bad.json" sekrit true - >/dev/null 2>&1 &
+PIDS+=($!)
+# Not `curl -sf`: every route may well be answering 500 right now, which is the
+# thing under test. Wait for the socket to answer at all.
+for _ in $(seq 1 60); do [ "$(C "${AUTH[@]}" "$BASE3/api/settings")" != "000" ] && break; sleep 0.1; done
+
+code 200 "$(C "${AUTH[@]}" "$BASE3/api/settings")" "GET /api/settings still answers with a bad layer in the manifest"
+code 200 "$(C "${AUTH[@]}" "$BASE3/api/graph")" "GET /api/graph still answers with a bad layer in the manifest"
+BAD="$(curl -s "${AUTH[@]}" "$BASE3/api/graph?wait=15000")"
+BAD_ROWS="$(JQ 'JSON.stringify(d.sources?.map((s) => [s.name, s.status]) ?? d)' <<<"$BAD")"
+[ "$(JQ 'String(d.sources?.find((s) => s.name === "bad-kind")?.status)' <<<"$BAD")" = "error" ] \
+  && pass "the unknown-kind layer shows as an error row" \
+  || fail "the unknown-kind layer is not an error row (graph says $BAD_ROWS)"
+[ "$(JQ 'String(d.sources?.find((s) => s.name === "bad-shape")?.status)' <<<"$BAD")" = "error" ] \
+  && pass "the shape-invalid layer shows as an error row" \
+  || fail "the shape-invalid layer is not an error row (graph says $BAD_ROWS)"
+[ "$(JQ 'String(d.sources?.find((s) => s.name === "seed")?.conceptCount)' <<<"$BAD")" = "1" ] \
+  && pass "the healthy layer beside them still indexes" \
+  || fail "a bad layer took the healthy one down with it (graph says $BAD_ROWS)"
+code 200 "$(C "${AUTH[@]}" "$BASE3/api/resolve?concept=seed")" "a concept from the healthy layer still resolves"
+
+[ "$FAILED" = 0 ] && echo "index stability test passed (churn settles + rename reuses the index + bad layers quarantined)" || { echo "index stability test FAILED"; exit 1; }

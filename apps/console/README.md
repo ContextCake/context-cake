@@ -4,9 +4,9 @@ The React front end for inspecting and resolving a ContextCake cascade. It runs 
 three environments from the same codebase:
 
 - **demo** — bundled sample data for the public site;
-- **live browser** — reads the local engine through `/api/graph`,
-  `/api/resolve*`, `/api/conflict-resolutions`, and the source-management
-  endpoints;
+- **live browser** — reads the local engine through `/api/status` (the cheap
+  poll), `/api/graph`, `/api/resolve*`, `/api/conflict-resolutions`, and the
+  source-management endpoints;
 - **ContextCake for Mac** — the live build inside Electron, with native folder
   selection, CLI actions, optional account sync, and a per-launch API token.
 

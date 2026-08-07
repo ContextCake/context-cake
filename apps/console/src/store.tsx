@@ -6,8 +6,10 @@ import {
   type Activity, type Concept, type Conflict, type Signal, type Source,
 } from './data'
 import {
-  adaptConcept, adaptConflicts, adaptSources, createDataSource, LiveDataError, type Mode,
+  adaptConcept, adaptConflicts, adaptSources, createDataSource, LiveDataError, mergeSourceStatus,
+  type Mode,
 } from './api'
+import type { GraphSummary, SourceStatus } from './types'
 import type { LayerId, RouteId } from './theme'
 import { dispatchNavigationGuard, isViewId, parseHash, type ViewId } from './shell-navigation'
 
@@ -75,6 +77,25 @@ function cannedAnswer(q: string): { text: string; cites: Cite[]; note?: string }
   return { text: 'I resolved that across all three layers but found nothing specific. Try asking about the database, auth tokens, deploys, or incident response.', cites: [] }
 }
 
+/** One piece of background work the engine is doing right now. */
+export interface BackgroundTask {
+  name: string
+  kind: string
+  /** 'queued' | 'scanning' | 'loading' | 'cloning' | 'ready' | 'error' */
+  phase: string
+  loaded: number
+  /** Null until the engine knows how much there is to read. */
+  total: number | null
+  /**
+   * Serving a good snapshot AND re-reading behind it. The distinction matters
+   * in the UI: a refreshing source has an answer, so it never gets a spinner
+   * held up in front of it — only a quiet note that fresher data is coming.
+   */
+  refreshing: boolean
+  /** Since this console first saw the task running — a clock, not engine state. */
+  elapsedMs: number
+}
+
 /** What the shell is waiting on. `shell` is the only state that blocks the UI. */
 export interface LoadState {
   /** True only until the source topology is known — milliseconds, not minutes. */
@@ -83,6 +104,56 @@ export interface LoadState {
   concepts: boolean
   /** Sources the engine is still reading. */
   indexingSources: string[]
+  /** Every source with work in flight, indexing or refreshing. */
+  tasks: BackgroundTask[]
+  /**
+   * A background refresh is failing. Non-fatal by construction: the page keeps
+   * whatever it already had, the poll keeps retrying, and this is what the UI
+   * shows so a stalled feed can never look like a live one.
+   */
+  refreshError: LiveDataError | null
+  /** When the last poll succeeded, so the header can say how old the page is. */
+  lastRefreshAt: number | null
+}
+
+/** Cheap-status cadence while the engine reports work in flight. */
+const ACTIVE_POLL_MS = 900
+/**
+ * Idle cadence. /api/status is O(sources) and answers in under a millisecond,
+ * so watching for a re-index started outside this window (a file edited on
+ * disk, a source synced from another surface) costs nothing.
+ */
+const IDLE_POLL_MS = 5_000
+/** Backoff ceiling. There is deliberately no failure count that stops the loop. */
+const MAX_BACKOFF_MS = 5_000
+
+/**
+ * The part of the engine's status that decides what /api/graph and
+ * /api/resolve-all would answer. Progress counters are deliberately excluded:
+ * the engine's `generation` moves for every document read, and pulling a
+ * 150MB resolve-all back for each tick of a counter is exactly what made the
+ * app feel laggy while a large vault indexed.
+ */
+function contentSignature(rows: {
+  name: string; level: number; conceptCount: number; status: string
+  refreshing?: boolean; error?: string | null
+}[]): string {
+  return rows
+    .map((r) => `${r.name}~${r.level}~${r.conceptCount}~${r.status}~${r.refreshing ? 1 : 0}~${r.error ?? ''}`)
+    .join('|')
+}
+
+/** Graph rows carry the same fields under a different shape. */
+function graphSignature(g: GraphSummary): string {
+  return contentSignature(g.sources.map((s) => ({
+    name: s.name, level: s.level, conceptCount: s.conceptCount, status: s.status,
+    refreshing: s.indexing?.refreshing === true, error: s.error,
+  })))
+}
+
+function asLiveDataError(e: unknown): LiveDataError {
+  if (e instanceof LiveDataError) return e
+  return new LiveDataError('bad-shape', e instanceof Error ? e.message : String(e))
 }
 
 export interface Store {
@@ -123,6 +194,8 @@ export interface Store {
   setChatInput: (v: string) => void
 
   filtered: (tab: TriageTab) => Signal[]
+  /** Poll again right now — the "Retry now" affordance on the refresh banner. */
+  retryNow: () => void
   route: (target: RouteId) => void
   resolveConflict: (conflictId: string, sourceLayer: string, method: 'automatic' | 'manual') => Promise<void>
   resolveSafeConflicts: () => Promise<void>
@@ -139,9 +212,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [conceptsLoading, setConceptsLoading] = useState(true)
   const [indexingSources, setIndexingSources] = useState<string[]>([])
+  const [tasks, setTasks] = useState<BackgroundTask[]>([])
+  const [refreshError, setRefreshError] = useState<LiveDataError | null>(null)
+  const [lastRefreshAt, setLastRefreshAt] = useState<number | null>(null)
   const [error, setError] = useState<LiveDataError | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const shellReadyRef = useRef(false)
+  // When this console first saw each running task, so the popover can show how
+  // long it has been going. The engine reports per-pass elapsed time, which
+  // resets across passes; what a waiting user wants is the wall clock.
+  const taskStartRef = useRef(new Map<string, number>())
+  const pollNowRef = useRef<(() => void) | null>(null)
 
   const [concepts, setConcepts] = useState<Concept[]>([])
   const [sources, setSources] = useState<Source[]>([])
@@ -176,7 +257,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(initialMessages)
 
-  // Load the cascade in two stages so the app is usable immediately.
+  /**
+   * Engine status rows → the tasks the UI renders, with a wall clock attached.
+   * A source that is `ready` but `refreshing` is a task too: work is happening,
+   * and a UI that only counted `indexing` would go blank mid-refresh and look
+   * idle while the engine was busy.
+   */
+  const trackTasks = useCallback((rows: {
+    name: string; kind: string; status: string; phase: string
+    loaded: number; total: number | null; refreshing: boolean
+  }[]): BackgroundTask[] => {
+    const now = Date.now()
+    const starts = taskStartRef.current
+    const active = rows.filter((r) => r.status === 'indexing' || r.refreshing)
+    const names = new Set(active.map((r) => r.name))
+    for (const key of [...starts.keys()]) if (!names.has(key)) starts.delete(key)
+    return active.map((r) => {
+      const started = starts.get(r.name) ?? now
+      starts.set(r.name, started)
+      return {
+        name: r.name, kind: r.kind, phase: r.phase, loaded: r.loaded, total: r.total,
+        refreshing: r.refreshing, elapsedMs: now - started,
+      }
+    })
+  }, [])
+
+  // Load the cascade in two stages so the app is usable immediately, then keep
+  // the page honest about what the engine is still doing.
   //
   // Stage 1 (the graph) only needs the source topology, which the engine
   // answers from its background index in milliseconds — that unblocks the
@@ -184,77 +291,215 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // arrive. While the engine is still reading sources it says so, and we poll
   // rather than making the user stare at a blocked screen: that full-page
   // "Resolving the cascade…" wait was the hang people hit on first run.
+  //
+  // The loop itself polls /api/status — O(sources), sub-millisecond — and pulls
+  // the heavy payloads back only when the engine says they would differ. The
+  // old loop re-fetched /api/graph *and* /api/resolve-all every 900ms, which on
+  // a real vault meant a 620ms, 150MB response for every tick of a counter.
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let failures = 0
-    const MAX_POLL_FAILURES = 3
+    let running = false
+    let generation: number | undefined
+    let signature: string | undefined
+    // A heavy refetch was attempted and has not landed. The gate below is only
+    // ever committed by a readAll that finished, but a signature that flapped
+    // back to its previous value would still close it, so the owed refetch is
+    // remembered explicitly rather than inferred.
+    let refetchOwed = false
+    // Flipped off permanently when the engine 404s /api/status — an engine
+    // older than this console. Progress then comes off the graph, as before.
+    let hasStatusRoute = typeof source.status === 'function'
+    // Until the cheap route has actually answered once, the graph is the only
+    // thing that knows what is in flight — and the shell needs to say so from
+    // the first paint, not from the first poll a second later.
+    let statusAnswered = false
 
-    const pass = async (first: boolean) => {
+    const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
+    const clearTimer = () => { if (timer !== undefined) { clearTimeout(timer); timer = undefined } }
+    const schedule = (ms: number) => {
+      clearTimer()
+      // A hidden window has nobody to tell; visibilitychange resumes the loop.
+      // Demo mode has no engine behind it and nothing that can change.
+      if (cancelled || hidden() || source.mode === 'demo') return
+      // Re-checked on fire, not only on schedule: a tick queued a moment before
+      // the window was hidden would otherwise still land.
+      timer = setTimeout(() => { if (!hidden()) void poll() }, ms)
+    }
+
+    const applyIndexing = (next: string[]) => {
+      setIndexingSources((prev) => (prev.length === next.length && prev.every((v, i) => v === next[i]) ? prev : next))
+    }
+    const applyTasks = (next: BackgroundTask[]) => {
+      setTasks((prev) => (prev.length === 0 && next.length === 0 ? prev : next))
+    }
+
+    /**
+     * The heavy pass: graph + resolve-all + resolution history. Throws.
+     *
+     * `fallbackGeneration` is the number the status poll that triggered this
+     * read just saw. It is only used when the graph payload carries none of its
+     * own — see the gate at the end.
+     */
+    const readAll = async (fallbackGeneration?: number): Promise<boolean> => {
+      const g = await source.graph()
+      if (cancelled) return false
+      setSources(adaptSources(g))
+      applyIndexing(g.indexingSources ?? [])
+      if (!statusAnswered) {
+        applyTasks(trackTasks(g.sources.map((s) => ({
+          name: s.name, kind: s.kind, status: s.status, phase: s.indexing?.phase ?? 'loading',
+          loaded: s.indexing?.loaded ?? 0, total: s.indexing?.total ?? null,
+          refreshing: s.indexing?.refreshing === true,
+        }))))
+      }
+      setError(null)
+      shellReadyRef.current = true
+      setLoading(false) // the shell can render now — everything else streams in
+
+      const [{ concepts: raw, errors, indexing, indexingSources: resolvingSources }, resolutionHistory] = await Promise.all([
+        source.resolveAll(),
+        source.conflictResolutions(),
+      ])
+      if (cancelled) return false
+      // Only fail the whole page when nothing resolved AND nothing is still
+      // being read; a partial pass mid-index is expected, not an error.
+      if (raw.length === 0 && errors.length > 0 && !indexing) {
+        throw new LiveDataError('bad-shape', `No concept resolved (first error: ${errors[0].concept}: ${errors[0].error})`)
+      }
+      setLoadErrors(errors)
+      // The graph and resolve-all requests are separate snapshots. Indexing
+      // can finish between them; use the later answer so a stale graph never
+      // leaves the banner running after the work has landed.
+      applyIndexing(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
+      setConcepts(raw.map(adaptConcept))
+      const derivedConflicts = adaptConflicts(raw, resolutionHistory)
+      setConflicts(derivedConflicts)
+      // Honor a deep-linked concept from the URL hash; else default to the
+      // first. Only claim the deep link once it actually resolved.
+      const pendingId = pendingConceptRef.current
+      if (pendingId && raw.some((c) => c.id === pendingId)) {
+        setView('concepts')
+        setConceptRouteMode('deep')
+        setSelConcept(pendingId)
+        pendingConceptRef.current = undefined
+      } else if (!indexing) {
+        setSelConceptState((prev) => prev || raw[0]?.id || '')
+        pendingConceptRef.current = undefined
+      }
+      setSelConflict((prev) => prev || derivedConflicts[0]?.id || '')
+      setConceptsLoading(Boolean(indexing))
+      // Seed the gate from the payload we just took, so the next poll does not
+      // immediately pull the same thing back for a generation it already has.
+      // This is the ONLY place the gate advances, and it is past every await:
+      // a read that threw leaves the gate where it was, so the next poll owes
+      // the same refetch instead of inheriting a success it never had.
+      //
+      // `graph.generation` is optional on the wire, and an engine that omits it
+      // used to leave this at undefined on every pass — `moved` stayed
+      // permanently true and a settled app re-read the whole corpus every idle
+      // poll. The status route's number is the authority in that case: both
+      // routes report the same counter, and it is the one the gate compares
+      // against.
+      generation = g.generation ?? fallbackGeneration ?? generation
+      signature = graphSignature(g)
+      refetchOwed = false
+      return Boolean(indexing)
+    }
+
+    /** One cheap poll. Refetches the heavy payloads only when they moved. */
+    const poll = async () => {
+      if (cancelled || running) return
+      running = true
       try {
-        const g = await source.graph()
-        if (cancelled) return
-        setSources(adaptSources(g))
-        setIndexingSources(g.indexingSources ?? [])
-        setError(null)
-        shellReadyRef.current = true
-        setLoading(false) // the shell can render now — everything else streams in
-
-        const [{ concepts: raw, errors, indexing, indexingSources: resolvingSources }, resolutionHistory] = await Promise.all([
-          source.resolveAll(),
-          source.conflictResolutions(),
-        ])
-        if (cancelled) return
-        // Only fail the whole page when nothing resolved AND nothing is still
-        // being read; a partial pass mid-index is expected, not an error.
-        if (raw.length === 0 && errors.length > 0 && !indexing) {
-          throw new LiveDataError('bad-shape', `No concept resolved (first error: ${errors[0].concept}: ${errors[0].error})`)
+        let active = false
+        if (hasStatusRoute) {
+          const status = await source.status()
+          if (cancelled) return
+          if (status === null) hasStatusRoute = false
+          else {
+            statusAnswered = true
+            const rows: SourceStatus[] = status.sources ?? []
+            applyIndexing(status.indexingSources ?? [])
+            applyTasks(trackTasks(rows))
+            // Keep the per-source rows as current as the toolbar. Without this
+            // the Sources list holds whatever the last heavy refetch said —
+            // which, mid-index, is the phase the source started in.
+            setSources((prev) => mergeSourceStatus(prev, rows))
+            active = Boolean(status.indexing) || rows.some((r) => r.refreshing)
+            const nextSignature = contentSignature(rows)
+            // `generation` also moves for a progress counter. Refetch when the
+            // part that decides the payload moved — a snapshot landing, a
+            // source erroring, a refresh finishing — or, while the engine is
+            // quiet, on any generation change at all (the file-edit case).
+            const moved = status.generation !== generation
+            const worthRefetching = refetchOwed || (moved && (nextSignature !== signature || !active))
+            if (worthRefetching) {
+              // Committing the gate here — before the heavy read — is how a
+              // failed refetch used to hide: the next poll saw nothing moved,
+              // skipped the retry, and then took the success path below,
+              // clearing the banner over pre-edit concepts. Nothing recovers
+              // from that on its own, because contentSignature deliberately
+              // excludes document content, so a pure edit never reopens the
+              // gate. readAll commits it, once it has actually landed.
+              refetchOwed = true
+              active = (await readAll(status.generation)) || active
+            } else {
+              generation = status.generation
+              signature = nextSignature
+            }
+          }
         }
-        setLoadErrors(errors)
-        // The graph and resolve-all requests are separate snapshots. Indexing
-        // can finish between them; use the later answer so a stale graph never
-        // leaves the banner running after polling has stopped.
-        setIndexingSources(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
-        setConcepts(raw.map(adaptConcept))
-        const derivedConflicts = adaptConflicts(raw, resolutionHistory)
-        setConflicts(derivedConflicts)
-        // Honor a deep-linked concept from the URL hash; else default to the
-        // first. Only claim the deep link once it actually resolved.
-        const pendingId = pendingConceptRef.current
-        if (pendingId && raw.some((c) => c.id === pendingId)) {
-          setView('concepts')
-          setConceptRouteMode('deep')
-          setSelConcept(pendingId)
-          pendingConceptRef.current = undefined
-        } else if (!indexing) {
-          setSelConceptState((prev) => prev || raw[0]?.id || '')
-          pendingConceptRef.current = undefined
-        }
-        setSelConflict((prev) => prev || derivedConflicts[0]?.id || '')
-        setConceptsLoading(Boolean(indexing))
+        if (!hasStatusRoute) active = await readAll()
+        if (cancelled) return
         failures = 0
-        if (indexing) timer = setTimeout(() => void pass(false), 900)
+        setRefreshError(null)
+        setLastRefreshAt(Date.now())
+        schedule(active ? ACTIVE_POLL_MS : IDLE_POLL_MS)
       } catch (e) {
         if (cancelled) return
-        // A failure on a background refresh must not blow away a working page.
-        if (first && !shellReadyRef.current) {
-          setError(e instanceof LiveDataError ? e : new LiveDataError('bad-shape', e instanceof Error ? e.message : String(e)))
+        // Never give up, and never quietly retract what the page is saying.
+        // This used to stop after three failures and clear `indexingSources`,
+        // which left a page that had silently stopped updating and no way for
+        // anyone to know — the exact impression this whole pass exists to fix.
+        failures += 1
+        setRefreshError(asLiveDataError(e))
+        schedule(Math.min(MAX_BACKOFF_MS, ACTIVE_POLL_MS * failures))
+      } finally {
+        running = false
+      }
+    }
+
+    const bootstrap = async () => {
+      running = true
+      try {
+        const active = await readAll()
+        if (cancelled) return
+        setRefreshError(null)
+        setLastRefreshAt(Date.now())
+        schedule(active ? ACTIVE_POLL_MS : IDLE_POLL_MS)
+      } catch (e) {
+        if (cancelled) return
+        // A failure on a background refresh must not blow away a working page;
+        // only a failed first bootstrap owns the full-page error state.
+        if (!shellReadyRef.current) {
+          setError(asLiveDataError(e))
           setLoading(false)
           setConceptsLoading(false)
           return
         }
-        // Retry a stumble mid-index with backoff. Giving up silently here would
-        // leave the "Indexing…" banner running forever with nothing refreshing
-        // it, which reads as a hang — the exact impression to avoid.
         failures += 1
-        if (failures <= MAX_POLL_FAILURES) {
-          timer = setTimeout(() => void pass(false), 900 * failures)
-          return
-        }
-        setConceptsLoading(false)
-        setIndexingSources([]) // stop claiming work is still in flight
+        setRefreshError(asLiveDataError(e))
+        schedule(Math.min(MAX_BACKOFF_MS, ACTIVE_POLL_MS * failures))
+      } finally {
+        running = false
       }
     }
+
+    const onVisibility = () => { if (hidden()) clearTimer(); else schedule(0) }
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
+    pollNowRef.current = () => { failures = 0; schedule(0) }
 
     // A refresh must not replace an already-usable shell with a full-page
     // loader. Besides the visual regression, doing so unmounts the Files editor
@@ -263,9 +508,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!shellReadyRef.current) setLoading(true)
     setConceptsLoading(true)
     setError(null)
-    void pass(true)
-    return () => { cancelled = true; if (timer) clearTimeout(timer) }
-  }, [source, reloadKey])
+    void bootstrap()
+    return () => {
+      cancelled = true
+      clearTimer()
+      pollNowRef.current = null
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [source, reloadKey, trackTasks])
 
   // Refs so callbacks read the freshest values without re-subscribing.
   const queryRef = useRef(query); queryRef.current = query
@@ -476,10 +726,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
   const openChat = useCallback(() => setChatOpen(true), [])
   const closeChat = useCallback(() => setChatOpen(false), [])
+  // Kicks the live poll rather than remounting the effect: a reload() here
+  // would drop back through the shell-loading path and unmount open editors.
+  const retryNow = useCallback(() => {
+    if (pollNowRef.current) pollNowRef.current()
+    else setReloadKey((k) => k + 1)
+  }, [])
 
   const load = useMemo<LoadState>(
-    () => ({ shell: loading, concepts: conceptsLoading, indexingSources }),
-    [loading, conceptsLoading, indexingSources],
+    () => ({ shell: loading, concepts: conceptsLoading, indexingSources, tasks, refreshError, lastRefreshAt }),
+    [loading, conceptsLoading, indexingSources, tasks, refreshError, lastRefreshAt],
   )
 
   const value = useMemo<Store>(() => ({
@@ -489,8 +745,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
     openChat, closeChat, setChatInput,
-    filtered, route, resolveConflict, resolveSafeConflicts, send, reload,
-  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, route, resolveConflict, resolveSafeConflicts, send, reload, setView, setQuery, openChat, closeChat])
+    filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload,
+  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, setView, setQuery, openChat, closeChat])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

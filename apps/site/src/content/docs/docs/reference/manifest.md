@@ -228,12 +228,39 @@ before the commit date is used.
 
 `paths` accepts `*` (within one path segment), `?`, and `**` (spanning segments).
 Setting it replaces the defaults rather than adding to them. Only `.md`, `.mdx`,
-and `.txt` files are indexed.
+and `.txt` files are indexed, and only up to **2 MB per document** — a larger
+file is skipped and reported as a source warning rather than read into memory.
+Subfolders ContextCake is not permitted to open are skipped and reported the
+same way, so a source can be healthy and still be telling you it did not read
+everything it was pointed at.
 
 Reads are read-only and degrade rather than fail: if GitHub is unreachable, rate
 limited, or the token lacks access, the layer warns on stderr and the remaining
 layers still resolve. Add a `cache` block — a search sweeps every concept in
 every layer, and the cache is what keeps that inside your API rate limit.
+
+## When a layer is invalid
+
+A layer that fails validation is lifted out of the read path rather than failing
+the whole manifest: the app keeps answering, and the bad layer appears as a
+broken row carrying its error, so the screen you would use to fix it still
+loads. Nothing about the layer is relaxed or coerced — it contributes nothing,
+is never spawned, and its root is never watched.
+
+Whole-manifest problems are still fatal, because those manifests are ambiguous
+rather than broken: a duplicated layer name, or a second `live` layer, stops the
+read outright rather than guessing which one you meant. Writes always validate
+strictly, so an invalid layer can never be saved through a tolerated read.
+
+You can remove a broken row from the app — the Remove action on that row edits
+the manifest for you, and it is the only action offered there, since renaming or
+syncing something that was never built could only fail. Because a manifest is
+only ever saved once the whole file validates, any removal that would leave a
+broken row behind is refused — including removing a source that is perfectly
+healthy, since the same write rewrites the whole file. The app therefore removes
+the broken rows alongside whatever you asked to remove, and names them before
+you confirm. Settings stay blocked until the manifest is valid again, and say
+so.
 
 GitHub may truncate very large recursive tree responses. ContextCake refuses to
 index that partial response as if it were complete; it serves the last complete

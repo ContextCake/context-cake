@@ -103,6 +103,251 @@ export function readContextManifest(manifestPath, { allowMissing = true, validat
   return manifest;
 }
 
+/**
+ * The manifest as the READ path may use it. Whole-manifest rules stay fatal,
+ * but a layer that fails validation is lifted out instead of taking every
+ * route down with it: one hand-edited layer used to make /api/settings and
+ * /api/graph answer 500, including the screen a user would need to fix it.
+ *
+ * Quarantine only ever REMOVES capability. A layer that fails validation is
+ * deleted from the manifest this returns, so nothing downstream can build it,
+ * spawn it, watch its root, or hand its path to the file APIs — it survives
+ * only as a {name, level, error} record for the UI to show as a broken row.
+ * No validation rule is relaxed and nothing is coerced into working. And this
+ * is a read-path tolerance alone: writeContextManifest/mutateContextManifest
+ * still validate the whole manifest strictly, so an invalid layer can never be
+ * persisted through a quarantined read.
+ *
+ * Returns { manifest, quarantined }, where each quarantined record carries the
+ * `profileId` of the layers array it came from — "default" is always the array
+ * getManifestProfileLayers(manifest) itself would return — and the `index` it
+ * sat at in that array, which is the only handle a repair can remove it by.
+ */
+export function readContextManifestQuarantined(manifestPath, { allowMissing = true, validatePacks = true } = {}) {
+  const { cleaned, quarantined } = readTolerantManifest(manifestPath, { allowMissing, validatePacks });
+  return { manifest: cleaned, quarantined };
+}
+
+// The one tolerance rule, written once. Both tolerant entry points read through
+// this, so the door a repair comes in by can never accept a manifest the read
+// path would have rejected.
+//
+// Returns { raw, cleaned, quarantined }: `cleaned` is the manifest with the
+// invalid layers deleted (what may be BUILT), `raw` is the parsed file with
+// them still in place (what may be REPAIRED). They are the same object when
+// nothing was quarantined.
+function readTolerantManifest(manifestPath, { allowMissing, validatePacks }) {
+  const resolved = path.resolve(manifestPath);
+  if (!fs.existsSync(resolved)) {
+    if (allowMissing) {
+      const empty = { layers: [] };
+      return { raw: empty, cleaned: empty, quarantined: [] };
+    }
+    throw new Error(`ContextCake manifest does not exist: ${resolved}`);
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(resolved, "utf8"));
+  } catch (error) {
+    throw new Error(`ContextCake manifest is not valid JSON: ${error.message}`);
+  }
+  // The strict pass runs first and unchanged, so a valid manifest takes exactly
+  // the path it always did and returns the very object readContextManifest
+  // would have. Partitioning is reached only once something has already failed.
+  let firstError;
+  try {
+    validateContextManifest(manifest, { validatePacks });
+    return { raw: manifest, cleaned: manifest, quarantined: [] };
+  } catch (error) {
+    firstError = error;
+  }
+  let cleaned;
+  let quarantined;
+  try {
+    ({ manifest: cleaned, quarantined } = quarantineInvalidLayers(manifest));
+  } catch {
+    // Partitioning is a recovery attempt, so when it cannot even run — a
+    // manifest that is not an object, a `layers` that is not an array — the
+    // caller gets the authoritative validation error, not a second-hand one.
+    throw firstError;
+  }
+  if (quarantined.length === 0) throw firstError;
+  // If dropping the bad layers did not make the rest valid, the failure was
+  // never per-layer (a broken profiles block, a dangling pack). Fail closed
+  // exactly as before rather than serving a manifest nobody has validated.
+  validateContextManifest(cleaned, { validatePacks });
+  return { raw: manifest, cleaned, quarantined };
+}
+
+/**
+ * mutateContextManifest's repair door: the one mutation allowed to READ a
+ * manifest that still holds an invalid layer, because it is the mutation that
+ * takes one out. Without it, quarantine left a user able to see the broken
+ * layer and unable to do anything about it — every write route reads strictly
+ * first, so the removal that would make the manifest valid again was itself
+ * blocked by the manifest being invalid.
+ *
+ * What is tolerated is the way IN, and only as far as the read path already
+ * tolerates it (same readTolerantManifest rule: per-layer breakage only, a
+ * whole-manifest failure still throws). Two things keep the door narrow:
+ *
+ *   1. The manifest that gets WRITTEN goes through the unchanged
+ *      writeContextManifest, so it must pass validateContextManifest in full.
+ *      A repair that does not leave the manifest valid is refused and the file
+ *      on disk is untouched.
+ *   2. A repair may only REMOVE. No layers array may come out of the callback
+ *      longer than it went in, so this cannot become a back way to add or
+ *      re-point a source from an unvalidated read.
+ *
+ * The callback receives the RAW manifest — invalid layers included — because
+ * removing exactly the layer that was asked for is the point: handing it the
+ * cleaned manifest would silently drop every OTHER broken layer from the user's
+ * file as a side effect of removing one.
+ *
+ * mutate({ manifest, layers, quarantined }) where `layers` is the live default
+ * layers array (the one getManifestProfileLayers would return) and each
+ * quarantined record's `index` addresses that array directly.
+ */
+export function repairContextManifest(manifestPath, mutate, { allowLegacy = true, allowTransitional = false } = {}) {
+  const resolved = path.resolve(manifestPath);
+  return withManifestLock(resolved, () => {
+    // allowMissing is deliberately not an option: there is nothing to repair in
+    // a manifest that does not exist.
+    const { raw, quarantined } = readTolerantManifest(resolved, { allowMissing: false, validatePacks: true });
+    const before = layerCountsByContainer(raw);
+    const result = mutate({ manifest: raw, layers: defaultLayersInPlace(raw), quarantined });
+    for (const [container, count] of layerCountsByContainer(raw)) {
+      if (count > (before.get(container) ?? 0)) throw new Error("A manifest repair may only remove layers.");
+    }
+    writeContextManifest(resolved, raw, { allowLegacy, allowTransitional });
+    return result;
+  });
+}
+
+// The default container's layers array, in place and without validating — the
+// array a repair removes from. Mirrors getManifestProfileLayers(manifest) for
+// profile=null, including its habit of creating the array when it is absent so
+// the caller mutates the manifest rather than a copy.
+function defaultLayersInPlace(manifest) {
+  if (classifyManifest(manifest) === "v2") {
+    assertObject(manifest.profiles.default, "Profile default");
+    manifest.profiles.default.layers ??= [];
+    return manifest.profiles.default.layers;
+  }
+  manifest.layers ??= [];
+  return manifest.layers;
+}
+
+function layerCountsByContainer(manifest) {
+  const counts = new Map();
+  if (Array.isArray(manifest.layers)) counts.set("", manifest.layers.length);
+  for (const [id, profile] of Object.entries(manifest.profiles ?? {})) {
+    if (Array.isArray(profile?.layers)) counts.set(id, profile.layers.length);
+  }
+  return counts;
+}
+
+// Splits every layers array in the manifest into the layers that validate and
+// the ones that do not, returning a copy that holds only the former. Pure: the
+// caller's manifest object is never mutated.
+function quarantineInvalidLayers(manifest) {
+  // Reserved keys are checked here, before anything is copied, so the two read
+  // paths cannot disagree about them. Rebuilding profiles with plain assignment
+  // meant a profile literally named __proto__ set the prototype of the new
+  // container instead of becoming an own key: Object.entries no longer saw it,
+  // the re-validation below passed, and the quarantined read accepted a
+  // manifest the strict read rejects. Throwing lands the caller on `firstError`
+  // — the authoritative strict message — which is exactly what parity means.
+  assertSafeKeys(manifest);
+  const mode = classifyManifest(manifest); // throws on a non-object manifest, as before
+  const cleaned = { ...manifest };
+  const quarantined = [];
+
+  const partition = (profileId, layers, owner, transitional) => {
+    if (!Array.isArray(layers)) throw new Error(`${owner} does not have a layers array.`);
+    const { kept, dropped } = partitionLayers(layers, owner, transitional);
+    for (const record of dropped) quarantined.push({ profileId, ...record });
+    return kept;
+  };
+
+  // The container profile=null resolves to is the one keyed "default": the
+  // top-level array in legacy and transitional manifests, profiles.default in
+  // v2. Mirrors getManifestProfileLayers so a caller can line the two up.
+  if (mode === "legacy" || mode === "transitional") {
+    cleaned.layers = partition("default", manifest.layers ?? [], "legacy default", false);
+  }
+  if (mode === "v2" || mode === "transitional") {
+    assertObject(manifest.profiles, "ContextCake manifest profiles");
+    // defineProperty rather than assignment: a reserved id can never reach here
+    // (assertSafeKeys above), and this is what keeps that true if it ever does
+    // — every id lands as an own key, so nothing can be smuggled past the
+    // Object.entries re-validation by way of the prototype.
+    const profiles = {};
+    for (const [id, profile] of Object.entries(manifest.profiles)) {
+      assertObject(profile, `Profile ${id}`);
+      const profileId = mode === "v2" ? id : `profiles.${id}`;
+      Object.defineProperty(profiles, id, {
+        value: { ...profile, layers: partition(profileId, profile.layers, `profile ${id}`, mode === "transitional") },
+        writable: true, enumerable: true, configurable: true,
+      });
+    }
+    cleaned.profiles = profiles;
+  }
+  return { manifest: cleaned, quarantined };
+}
+
+// Only a layer that is malformed ON ITS OWN is quarantined. The rules about how
+// layers relate — a duplicated name, a second live layer — deliberately stay
+// fatal: those manifests are ambiguous rather than broken, and quarantining one
+// of the pair would mean silently picking which of two well-formed layers wins.
+// Failing closed on ambiguity is the safer half of that choice, and it is what
+// today already does. The caller re-validates what survives, so those errors
+// still reach it.
+function partitionLayers(layers, owner, transitional) {
+  const kept = [];
+  const dropped = [];
+  const names = new Set();
+  layers.forEach((layer, index) => {
+    try {
+      if (transitional) validateTransitionalLayer(layer, owner);
+      else validateLayer(layer, owner);
+    } catch (error) {
+      dropped.push({ layer, index, error: error.message });
+      return;
+    }
+    names.add(layer.name);
+    kept.push(layer);
+  });
+  // Named after the fact, against the names that survived, so a layer too
+  // malformed to have a usable name still gets a row of its own and can never
+  // shadow a healthy source's row in the graph.
+  const taken = new Set(names);
+  return {
+    kept,
+    dropped: dropped.map(({ layer, index, error }) => {
+      const base = typeof layer?.name === "string" && layer.name.trim() ? layer.name.trim() : `layer ${index + 1}`;
+      let name = base;
+      for (let n = 2; taken.has(name); n += 1) name = `${base} (${n})`;
+      taken.add(name);
+      return {
+        name,
+        // Where this layer sits in its own layers array. A repair removes by
+        // index, never by name: the name above may have been synthesized, and
+        // a broken layer that also reuses a valid layer's name would otherwise
+        // take that healthy layer down with it.
+        index,
+        level: Number.isInteger(Number(layer?.level)) ? Number(layer.level) : 0,
+        // The declared kind, as a scalar. The layer OBJECT deliberately never
+        // leaves this module — that is what makes it structurally impossible to
+        // build or persist — but a row that reports the kind the user actually
+        // typed beats one silently labelled with the default.
+        kind: typeof layer?.source === "string" ? layer.source : "okf-local",
+        error,
+      };
+    }),
+  };
+}
+
 export function getManifestProfileLayers(manifest, profile = null) {
   const { mode } = validateContextManifest(manifest);
   if (mode === "legacy") {
@@ -407,15 +652,19 @@ function validateLayers(layers, owner) {
 function validateTransitionalProfileLayers(layers, owner) {
   const names = new Set();
   for (const layer of layers) {
-    assertObject(layer, `Layer in ${owner}`);
-    rejectCredentialFields(layer, `Layer in ${owner}`);
-    rejectCredentialValues(layer, `Layer in ${owner}`, { allowScrubbed: true });
-    if (typeof layer.name !== "string" || !layer.name.trim()) throw new Error(`Layer in ${owner} must have a non-empty name.`);
+    validateTransitionalLayer(layer, owner);
     if (names.has(layer.name)) throw new Error(`${owner} contains duplicate layer name: ${layer.name}`);
     names.add(layer.name);
-    if (isRunnableLayer(layer)) validateLayer(layer, owner);
-    else validateAuthReference(layer.auth, `Pending source ${layer.name}`, { allowScrubbed: true });
   }
+}
+
+function validateTransitionalLayer(layer, owner) {
+  assertObject(layer, `Layer in ${owner}`);
+  rejectCredentialFields(layer, `Layer in ${owner}`);
+  rejectCredentialValues(layer, `Layer in ${owner}`, { allowScrubbed: true });
+  if (typeof layer.name !== "string" || !layer.name.trim()) throw new Error(`Layer in ${owner} must have a non-empty name.`);
+  if (isRunnableLayer(layer)) validateLayer(layer, owner);
+  else validateAuthReference(layer.auth, `Pending source ${layer.name}`, { allowScrubbed: true });
 }
 
 function validateLayer(layer, owner) {
@@ -911,7 +1160,11 @@ function formatUtcTimestamp(value) {
   return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
-function stableJson(value) {
+// Key-order-independent JSON. Exported because the service keys its background
+// indexes on layer configuration, and JSON.stringify would mint a new key —
+// re-reading the whole source — for a manifest rewrite that only reordered a
+// layer's fields.
+export function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (!value || typeof value !== "object") return JSON.stringify(value);
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;

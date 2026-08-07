@@ -25,52 +25,104 @@ export function buildSources(manifest, manifestDir, { tokens = {}, profileId = n
   // Indexing limits are user settings, so they must reach the adapters that
   // enforce them — changing the limit in the app and reloading has to matter.
   const limits = walkLimitsFrom(resolveSettings(manifest));
+  return (manifest.layers ?? []).map((layer) => buildSource(layer, manifestDir, { tokens, profileId, limits }));
+}
+
+/**
+ * buildSources, but one layer's failure costs only that layer. A layer whose
+ * adapter throws is replaced by an inert error source — it never becomes a
+ * half-built adapter — so the rest of the cascade stays readable and the broken
+ * layer surfaces as an error row instead of a 500 on every route.
+ *
+ * The long-lived engine service uses this; callers that should refuse to run at
+ * all against a bad manifest (mcp-server, the CLIs) keep using buildSources.
+ */
+export function buildSourcesQuarantined(manifest, manifestDir, { tokens = {}, profileId = null } = {}) {
+  const limits = walkLimitsFrom(resolveSettings(manifest));
   return (manifest.layers ?? []).map((layer) => {
-    const kind = layer.source ?? "okf-local";
-    const base = { name: layer.name, level: Number(layer.level) };
-    // Existing flat-manifest callers omit profileId and retain their exact
-    // cache layout. Profile-aware callers opt into the isolated fingerprint
-    // namespace after selecting one stack.
-    const fingerprint = profileId === null ? null : sourceConfigFingerprint(profileId, layer, manifestDir);
-    let source;
-    if (kind === "okf-local") {
-      source = createOkfLocalSource({ ...base, root: path.resolve(manifestDir, layer.path), limits });
-    } else if (kind === "files") {
-      source = createFilesSource({ ...base, root: path.resolve(manifestDir, layer.path), limits });
-    } else if (kind === "github") {
-      source = createGithubSource({
-        ...base,
-        repo: layer.repo,
-        ref: layer.ref ?? null,
-        ...(Array.isArray(layer.paths) && layer.paths.length ? { paths: layer.paths } : {}),
-        ...(layer.apiBase ? { apiBase: layer.apiBase } : {}),
-        token: resolveToken(layer, tokens),
-      });
-    } else if (kind === "mcp") {
-      source = createMcpSource({
-        ...base,
-        command: layer.command,
-        args: (layer.args ?? []).map((a) => (a.startsWith("./") || a.startsWith("../") ? path.resolve(manifestDir, a) : a)),
-      });
-    } else {
-      throw new Error(`Unknown source kind "${kind}" for layer "${layer.name}"`);
+    try {
+      return buildSource(layer, manifestDir, { tokens, profileId, limits });
+    } catch (error) {
+      return createErrorSource({ name: layer?.name, level: layer?.level, error: error.message });
     }
-    if (layer.cache) {
-      source = withCache(source, {
-        ...(layer.cache.ttlSeconds != null ? { ttlMs: Number(layer.cache.ttlSeconds) * 1000 } : {}),
-        cacheDir: layer.cache.dir ? path.resolve(manifestDir, layer.cache.dir) : null,
-        namespace: fingerprint,
-      });
-    }
-    if (layer.git) {
-      source = withGitSync(source, {
-        root: path.resolve(manifestDir, layer.path),
-        pullTtlMs: (Number(layer.git.pullTtlSeconds ?? 90)) * 1000,
-        retentionDays: Number(layer.git.retentionDays ?? 14),
-      });
-    }
-    return source;
   });
+}
+
+/**
+ * The stand-in for a layer that could not be built or did not validate.
+ *
+ * Deliberately not a working source: it lists nothing and resolves nothing, so
+ * quarantining a layer can only ever subtract. Listing throws because the
+ * background index is what reads it — that throw is how the layer reaches the
+ * user as an error row — while loadConcept answers null so one broken layer
+ * cannot fail a resolve the healthy layers can still answer.
+ *
+ * `quarantined` separates the two cases, because the app can only act on one of
+ * them: a layer lifted out by the manifest reader is a config defect the user
+ * fixes by removing the entry, while a layer that validated and then failed to
+ * construct is a real source having a bad day — renaming, syncing and removing
+ * all still work on it as usual.
+ */
+export function createErrorSource({ name, level, kind = null, error, quarantined = false }) {
+  return {
+    name: typeof name === "string" && name.trim() ? name : "unnamed source",
+    level: Number.isFinite(Number(level)) ? Number(level) : 0,
+    // Reported instead of the manifest's kind, which a quarantined layer has no
+    // entry in. Null for a layer that validated and then failed to construct —
+    // there the manifest still knows what it was.
+    quarantinedKind: kind,
+    quarantined,
+    async loadConcept() { return null; },
+    async listConceptIds() { throw new Error(error); },
+    close() {},
+  };
+}
+
+function buildSource(layer, manifestDir, { tokens, profileId, limits }) {
+  const kind = layer.source ?? "okf-local";
+  const base = { name: layer.name, level: Number(layer.level) };
+  // Existing flat-manifest callers omit profileId and retain their exact
+  // cache layout. Profile-aware callers opt into the isolated fingerprint
+  // namespace after selecting one stack.
+  const fingerprint = profileId === null ? null : sourceConfigFingerprint(profileId, layer, manifestDir);
+  let source;
+  if (kind === "okf-local") {
+    source = createOkfLocalSource({ ...base, root: path.resolve(manifestDir, layer.path), limits });
+  } else if (kind === "files") {
+    source = createFilesSource({ ...base, root: path.resolve(manifestDir, layer.path), limits });
+  } else if (kind === "github") {
+    source = createGithubSource({
+      ...base,
+      repo: layer.repo,
+      ref: layer.ref ?? null,
+      ...(Array.isArray(layer.paths) && layer.paths.length ? { paths: layer.paths } : {}),
+      ...(layer.apiBase ? { apiBase: layer.apiBase } : {}),
+      token: resolveToken(layer, tokens),
+    });
+  } else if (kind === "mcp") {
+    source = createMcpSource({
+      ...base,
+      command: layer.command,
+      args: (layer.args ?? []).map((a) => (a.startsWith("./") || a.startsWith("../") ? path.resolve(manifestDir, a) : a)),
+    });
+  } else {
+    throw new Error(`Unknown source kind "${kind}" for layer "${layer.name}"`);
+  }
+  if (layer.cache) {
+    source = withCache(source, {
+      ...(layer.cache.ttlSeconds != null ? { ttlMs: Number(layer.cache.ttlSeconds) * 1000 } : {}),
+      cacheDir: layer.cache.dir ? path.resolve(manifestDir, layer.cache.dir) : null,
+      namespace: fingerprint,
+    });
+  }
+  if (layer.git) {
+    source = withGitSync(source, {
+      root: path.resolve(manifestDir, layer.path),
+      pullTtlMs: (Number(layer.git.pullTtlSeconds ?? 90)) * 1000,
+      retentionDays: Number(layer.git.retentionDays ?? 14),
+    });
+  }
+  return source;
 }
 
 // Where a layer's credential would actually be sent. Only a remote kind has a

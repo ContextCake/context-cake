@@ -9,7 +9,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StoreProvider, useStore } from './store'
 
-const mocks = vi.hoisted(() => ({ graph: vi.fn(), resolveAll: vi.fn(), conflictResolutions: vi.fn() }))
+const mocks = vi.hoisted(() => ({ graph: vi.fn(), resolveAll: vi.fn(), conflictResolutions: vi.fn(), status: vi.fn() }))
 
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api')
@@ -21,6 +21,7 @@ vi.mock('./api', async () => {
       resolveAll: mocks.resolveAll,
       resolve: vi.fn(),
       listConcepts: vi.fn(),
+      status: mocks.status,
       conflictResolutions: mocks.conflictResolutions,
       resolveConflict: vi.fn(),
     }),
@@ -32,7 +33,7 @@ let root: Root
 
 /** Renders the store's load state so assertions read it from the DOM. */
 function Probe() {
-  const { load, concepts, sources, reload, view, selConcept } = useStore()
+  const { load, concepts, sources, reload, retryNow, view, selConcept } = useStore()
   return (
     <div
       data-shell={String(load.shell)}
@@ -42,22 +43,44 @@ function Probe() {
       data-sources={String(sources.length)}
       data-view={view}
       data-selection={selConcept}
-    ><button type="button" onClick={reload}>reload</button></div>
+      data-refresh-error={load.refreshError?.message ?? ''}
+      data-tasks={load.tasks.map((t) => `${t.name}:${t.phase}:${t.loaded}/${t.total ?? '?'}${t.refreshing ? ':refreshing' : ''}`).join(',')}
+    >
+      <button type="button" onClick={reload}>reload</button>
+      <button type="button" onClick={retryNow}>retry</button>
+    </div>
   )
 }
 
 const probe = () => container.firstElementChild as HTMLElement
 
-function graphPayload(indexingSources: string[]) {
+function graphPayload(indexingSources: string[], generation = 1, conceptCount = 0) {
   return {
     totals: { sourceTokens: 0, resolvedTokens: 0, concepts: 0, sources: 1 },
     indexing: indexingSources.length > 0,
     indexingSources,
+    generation,
     sources: [{
-      name: 'personal', level: 3, kind: 'files', conceptCount: 0, tokens: 0,
+      name: 'personal', level: 3, kind: 'files', conceptCount, tokens: 0,
       latestUpdated: null, status: indexingSources.length ? 'indexing' : 'ok', error: null,
     }],
     concepts: [],
+  }
+}
+
+/** A /api/status payload: the cheap route the loop actually polls. */
+function statusPayload({
+  generation, indexing, loaded = 0, total = null as number | null, conceptCount = 0, refreshing = false,
+}: { generation: number; indexing: boolean; loaded?: number; total?: number | null; conceptCount?: number; refreshing?: boolean }) {
+  return {
+    generation,
+    indexing,
+    indexingSources: indexing ? ['personal'] : [],
+    sources: [{
+      name: 'personal', level: 3, kind: 'files',
+      status: indexing ? 'indexing' : 'ok', phase: indexing ? 'loading' : 'ready',
+      loaded, total, conceptCount, refreshing, error: null,
+    }],
   }
 }
 
@@ -78,6 +101,8 @@ beforeEach(() => {
   mocks.graph.mockReset()
   mocks.resolveAll.mockReset()
   mocks.conflictResolutions.mockReset()
+  mocks.status.mockReset()
+  mocks.status.mockResolvedValue(null) // most cases exercise the legacy graph path
   mocks.conflictResolutions.mockResolvedValue([])
   window.history.replaceState(null, '', '/#/overview')
   window.localStorage.clear()
@@ -169,22 +194,181 @@ describe('store load state', () => {
     expect(probe().dataset.concepts).toBe('false')
   })
 
-  it('stops claiming to index after repeated failures rather than spinning', async () => {
+  // The regression this replaces: the loop gave up after three failures, cleared
+  // `indexingSources`, and said nothing. The page then looked settled while it
+  // had in fact stopped updating — a lie with no way for anyone to notice.
+  it('never gives up silently — a failing refresh surfaces and keeps retrying', async () => {
     mocks.graph
       .mockResolvedValueOnce(graphPayload(['personal']))
       .mockRejectedValue(new Error('server went away'))
-    mocks.resolveAll.mockResolvedValueOnce({
+    mocks.resolveAll.mockResolvedValue({
       concepts: [], errors: [], indexing: true, indexingSources: ['personal'],
     })
 
     await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
     expect(probe().dataset.indexing).toBe('personal')
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
 
-    // The banner must not outlive the polling that would clear it.
+    // Five-plus failures later: still saying what it knows, still retrying.
+    expect(mocks.graph.mock.calls.length).toBeGreaterThan(5)
+    expect(probe().dataset.refreshError).toBe('server went away')
+    expect(probe().dataset.indexing).toBe('personal')
+
+    mocks.graph.mockResolvedValue(graphPayload([]))
+    mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000) })
+
+    expect(probe().dataset.refreshError).toBe('')
     expect(probe().dataset.indexing).toBe('')
-    expect(probe().dataset.concepts).toBe('false')
+    expect(probe().dataset.count).toBe('1')
+  })
+
+  it('retryNow polls immediately instead of waiting out the backoff', async () => {
+    mocks.graph
+      .mockResolvedValueOnce(graphPayload(['personal']))
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValue(graphPayload([]))
+    mocks.resolveAll
+      .mockResolvedValueOnce({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+      .mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(probe().dataset.refreshError).toBe('transient')
+
+    const before = mocks.graph.mock.calls.length
+    await act(async () => {
+      container.querySelectorAll('button')[1]?.click()
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    expect(mocks.graph.mock.calls.length).toBeGreaterThan(before)
+    expect(probe().dataset.refreshError).toBe('')
+  })
+
+  describe('cheap polling', () => {
+    it('polls /api/status and leaves the heavy payloads alone while only progress moves', async () => {
+      mocks.graph.mockResolvedValue(graphPayload(['personal']))
+      mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+      // Generation moves every tick (the engine counts documents into it), but
+      // nothing that decides the payload changes until the snapshot lands.
+      mocks.status
+        .mockResolvedValueOnce(statusPayload({ generation: 2, indexing: true, loaded: 400, total: 3000 }))
+        .mockResolvedValueOnce(statusPayload({ generation: 3, indexing: true, loaded: 900, total: 3000 }))
+        .mockResolvedValueOnce(statusPayload({ generation: 4, indexing: true, loaded: 1800, total: 3000 }))
+        .mockResolvedValue(statusPayload({ generation: 9, indexing: false, loaded: 3000, total: 3000, conceptCount: 12 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      const afterBootstrap = mocks.resolveAll.mock.calls.length
+      expect(afterBootstrap).toBe(1)
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_800) })
+      // Three progress-only ticks: three status calls, zero resolve-alls.
+      expect(mocks.status.mock.calls.length).toBeGreaterThanOrEqual(3)
+      expect(mocks.resolveAll.mock.calls.length).toBe(afterBootstrap)
+      expect(probe().dataset.tasks).toContain('personal:loading:1800/3000')
+
+      mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      // The snapshot landed (conceptCount moved): exactly one heavy refetch.
+      expect(mocks.resolveAll.mock.calls.length).toBe(afterBootstrap + 1)
+      expect(probe().dataset.count).toBe('1')
+    })
+
+    // A rejected heavy refetch used to advance the poll gate anyway. The next
+    // tick then saw nothing moved, skipped the retry, and took the success
+    // path — clearing the banner while the page showed pre-edit concepts, for
+    // the rest of the session. A failure that erases its own evidence.
+    it('never reports success for a refetch that failed, and owes it to the next poll', async () => {
+      mocks.graph
+        .mockResolvedValueOnce(graphPayload([]))
+        .mockResolvedValue(graphPayload([], 5, 3))
+      mocks.resolveAll
+        .mockResolvedValueOnce({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+        .mockRejectedValue(new Error('resolve-all timed out'))
+      // The engine's answer moved once and then sat still — which is the whole
+      // problem: no later poll reopens the gate by itself.
+      mocks.status.mockResolvedValue(statusPayload({ generation: 5, indexing: false, conceptCount: 3 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      expect(probe().dataset.count).toBe('1')
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_100) })
+      const afterFirstFailure = mocks.resolveAll.mock.calls.length
+      expect(probe().dataset.refreshError).toBe('resolve-all timed out')
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+      // Still retrying the heavy read, and still saying it is failing.
+      expect(mocks.resolveAll.mock.calls.length).toBeGreaterThan(afterFirstFailure)
+      expect(probe().dataset.refreshError).toBe('resolve-all timed out')
+
+      mocks.resolveAll.mockResolvedValue({
+        concepts: [conceptPayload('a'), conceptPayload('b')], errors: [], indexing: false,
+      })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(probe().dataset.refreshError).toBe('')
+      expect(probe().dataset.count).toBe('2')
+    })
+
+    // `graph.generation` is optional on the wire. An engine that serves
+    // /api/status without it left the gate un-advanced on every pass, so
+    // `moved` was permanently true and a settled, idle app pulled the whole
+    // corpus back every five seconds, forever.
+    it('does not re-read the corpus every idle poll when the graph carries no generation', async () => {
+      const bare = graphPayload([], 1, 3) as Partial<ReturnType<typeof graphPayload>>
+      delete bare.generation
+      mocks.graph.mockResolvedValue(bare)
+      mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 7, indexing: false, conceptCount: 3 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      const afterBootstrap = mocks.resolveAll.mock.calls.length
+
+      // Four idle cadences with nothing moving on the engine at all.
+      await act(async () => { await vi.advanceTimersByTimeAsync(21_000) })
+      expect(mocks.status.mock.calls.length).toBeGreaterThanOrEqual(4)
+      expect(mocks.resolveAll.mock.calls.length).toBeLessThanOrEqual(afterBootstrap + 1)
+      expect(probe().dataset.count).toBe('1')
+    })
+
+    it('reports a refreshing source as work in flight without holding up its data', async () => {
+      mocks.graph.mockResolvedValue(graphPayload([]))
+      mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+      mocks.status.mockResolvedValue(statusPayload({
+        generation: 5, indexing: false, loaded: 120, total: 400, conceptCount: 12, refreshing: true,
+      }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      // Nothing was indexing at bootstrap, so the loop is on its idle cadence.
+      await act(async () => { await vi.advanceTimersByTimeAsync(6_000) })
+
+      expect(probe().dataset.tasks).toContain(':refreshing')
+      // Refreshing is not indexing: nothing is waiting on it.
+      expect(probe().dataset.indexing).toBe('')
+      expect(probe().dataset.count).toBe('1')
+    })
+
+    it('stops polling while the window is hidden and resumes when it comes back', async () => {
+      mocks.graph.mockResolvedValue(graphPayload(['personal']))
+      mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: true, loaded: 10, total: 3000 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      const whileVisible = mocks.status.mock.calls.length
+      expect(whileVisible).toBeGreaterThan(0)
+
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(mocks.status.mock.calls.length).toBe(whileVisible)
+
+      visibility.mockReturnValue('visible')
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+      expect(mocks.status.mock.calls.length).toBeGreaterThan(whileVisible)
+      visibility.mockRestore()
+    })
   })
 
   it('does not treat an empty mid-index pass as a fatal error', async () => {

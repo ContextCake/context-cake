@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  adaptConcept, adaptConflicts, adaptSources, apiFetch, LiveDataError, selectMode, trivialConflictReason,
+  adaptConcept, adaptConflicts, adaptSources, apiFetch, LiveDataError, mergeSourceStatus, selectMode,
+  trivialConflictReason,
 } from './api'
 import type { GraphSummary, ResolvedConcept } from './types'
 
@@ -129,6 +130,68 @@ describe('desktop API credential transport', () => {
     const [, init] = vi.mocked(fetch).mock.calls[0]
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer launch-secret')
   })
+
+  // apiFetch used to `await desktopToken()` with no bound, and the promise is
+  // memoized — so one stalled IPC reply hung every /api call for the life of
+  // the session, with no error and no way back.
+  it('gives up on a stalled token IPC and lets the next call ask again', async () => {
+    // A fresh module: the token promise is memoized at module scope, and this
+    // test is about what that memo does when the first request never settles.
+    vi.resetModules()
+    const fresh = await import('./api')
+    vi.useFakeTimers()
+    try {
+      const getApiToken = vi.fn()
+        .mockImplementationOnce(() => new Promise<string>(() => {})) // never settles
+        .mockResolvedValue('second-try')
+      window.__CC_DESKTOP = {
+        getApiToken,
+        version: '0.2.0',
+        authState: { signedIn: false },
+        cli: { getStatus: vi.fn(), install: vi.fn() },
+      }
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}')))
+
+      const settled = expect(fresh.apiFetch('/api/graph')).rejects.toThrow(/API token/)
+      await vi.advanceTimersByTimeAsync(fresh.TOKEN_TIMEOUT_MS + 10)
+      await settled
+
+      // The memo was dropped, so the session is not poisoned.
+      await fresh.apiFetch('/api/graph')
+      expect(getApiToken).toHaveBeenCalledTimes(2)
+      const [, init] = vi.mocked(fetch).mock.calls[0]
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer second-try')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // The main process answers `service?.token ?? ''`, so a service that is not
+  // up yet resolves the IPC with an empty string. Memoizing that as a token
+  // sent the rest of the session out unauthenticated against a service that
+  // requires one — every call 401s, and nothing asks again.
+  it('treats an empty token as a failed handover rather than memoizing it', async () => {
+    vi.resetModules()
+    const fresh = await import('./api')
+    const getApiToken = vi.fn()
+      .mockResolvedValueOnce('')
+      .mockResolvedValue('real-token')
+    window.__CC_DESKTOP = {
+      getApiToken,
+      version: '0.2.0',
+      authState: { signedIn: false },
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}')))
+
+    await expect(fresh.apiFetch('/api/graph')).rejects.toThrow(/empty API token/)
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+
+    await fresh.apiFetch('/api/graph')
+    expect(getApiToken).toHaveBeenCalledTimes(2)
+    const [, init] = vi.mocked(fetch).mock.calls[0]
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer real-token')
+  })
 })
 
 // ---- Adapters: raw engine types -> console view model -------------------
@@ -238,7 +301,173 @@ describe('adaptConcept', () => {
   })
 })
 
+describe('mergeSourceStatus', () => {
+  const base = (): Parameters<typeof mergeSourceStatus>[0] => adaptSources({
+    totals: { sourceTokens: 0, resolvedTokens: 0, concepts: 0, sources: 1 },
+    sources: [{
+      name: 'vault', level: 3, kind: 'files', conceptCount: 0, tokens: 0, latestUpdated: null,
+      status: 'indexing', error: null,
+      indexing: { status: 'indexing', phase: 'scanning', loaded: 0, total: null, elapsedMs: 100 },
+    }],
+    concepts: [],
+  })
+
+  const row = (patch: Record<string, unknown> = {}) => ([{
+    name: 'vault', level: 3, kind: 'files', status: 'indexing', phase: 'loading',
+    loaded: 1240, total: 3000, conceptCount: 0, refreshing: false, error: null, ...patch,
+  }] as Parameters<typeof mergeSourceStatus>[1])
+
+  // The row used to hold whatever the last heavy refetch said, so a Sources
+  // list sat on the phase the source started in while the toolbar counted up.
+  it('advances a source row from the cheap route alone', () => {
+    const [before] = base()
+    expect(before.focus).toContain('Scanning')
+    const [after] = mergeSourceStatus(base(), row())
+    expect(after.focus).toContain('1,240 / 3,000')
+    expect(after.status).toBe('indexing')
+    expect(after.coverage).toBe(41)
+  })
+
+  it('lands the row on a real count when the snapshot arrives', () => {
+    const [done] = mergeSourceStatus(base(), row({ status: 'ok', phase: 'ready', loaded: 3000, conceptCount: 3000 }))
+    expect(done.status).toBe('synced')
+    expect(done.conceptCount).toBe(3000)
+    expect(done.focus).toBe('3000 concepts · files')
+  })
+
+  it('returns the same array when nothing moved, so an idle poll costs no render', () => {
+    const merged = mergeSourceStatus(base(), row())
+    expect(mergeSourceStatus(merged, row())).toBe(merged)
+  })
+
+  it('leaves rows the status pass does not mention alone', () => {
+    const sources = base()
+    expect(mergeSourceStatus(sources, row({ name: 'somewhere-else' }))).toBe(sources)
+  })
+
+  // The detail block that says WHY a source failed is gated on `error`. This
+  // pass moved `status` and left `error` behind, so a source that flipped to
+  // error between heavy refetches rendered the word "error" and nothing else.
+  it('carries the error text along with the status that needs explaining', () => {
+    const [failed] = mergeSourceStatus(base(), row({ status: 'error', phase: 'error', error: 'ENOENT: /tmp/vault' }))
+    expect(failed.status).toBe('error')
+    expect(failed.error).toBe('ENOENT: /tmp/vault')
+  })
+
+  it('clears an error once the source reads cleanly again', () => {
+    const failed = mergeSourceStatus(base(), row({ status: 'error', phase: 'error', error: 'ENOENT: /tmp/vault' }))
+    const [ok] = mergeSourceStatus(failed, row({ status: 'ok', phase: 'ready', loaded: 3000, conceptCount: 3000 }))
+    expect(ok.error).toBeNull()
+  })
+
+  // Warnings describe a snapshot. A failed read has none, so the "indexed with
+  // N things left out" note must not hang over from the last good one.
+  it('drops warnings from a row that no longer has a snapshot behind it', () => {
+    const withWarnings = base().map((s) => ({ ...s, warnings: 2, warningMessages: ['too big: a.md', 'too big: b.md'] }))
+    const [failed] = mergeSourceStatus(withWarnings, row({ status: 'error', phase: 'error', error: 'ENOENT' }))
+    expect(failed.warnings).toBe(0)
+    expect(failed.warningMessages).toBeUndefined()
+  })
+
+  // adaptSources normalizes a missing flag with `=== true`; this pass wrote it
+  // raw. The two disagreeing on `undefined` vs `false` broke the identity
+  // contract above, which is what makes an idle poll free.
+  it('normalizes a missing refreshing flag the same way the graph adapter does', () => {
+    const bare = row()
+    delete (bare[0] as Partial<(typeof bare)[0]>).refreshing
+    const merged = mergeSourceStatus(base(), bare)
+    expect(merged[0].indexing?.refreshing).toBe(false)
+    expect(mergeSourceStatus(merged, bare)).toBe(merged)
+  })
+})
+
+describe('adaptConcept with headingless documents', () => {
+  // A plain note in a `files` layer — an Obsidian daily note with no `#` line —
+  // resolves to one section with `heading: null`. The adapter called .replace on
+  // that and took the whole page down; before this pass the store swallowed the
+  // TypeError after three silent retries, so the app simply stopped updating.
+  const headless: ResolvedConcept = {
+    id: 'Daily Notes/2026-02-11',
+    contributors: [{ layer: 'vault', level: 3, updated: '2026-02-11' }],
+    frontmatter: { title: '2026-02-11', type: 'document' },
+    sections: [{ key: 'body', heading: null, content: 'Talked to Priya.', sourceLayer: 'vault', sourceUpdated: '2026-02-11' }],
+  }
+
+  it('names a headingless section by its key instead of throwing', () => {
+    const concept = adaptConcept(headless)
+    expect(concept.sections[0].name).toBe('body')
+  })
+
+  it('derives a conflict title from a headingless section too', () => {
+    const contested: ResolvedConcept = {
+      ...headless,
+      contributors: [...headless.contributors, { layer: 'team', level: 2, updated: '2026-02-10' }],
+      sections: [{ ...headless.sections[0], conflicts: [{ layer: 'team', updated: '2026-02-10', content: 'Talked to Priya on Tuesday.' }] }],
+    }
+    const [conflict] = adaptConflicts([contested])
+    expect(conflict.section).toBe('body')
+    expect(conflict.title).toBe('body — 2026-02-11')
+  })
+})
+
 describe('adaptSources', () => {
+  // The field report, in one assertion: a 3,000-note vault fifteen seconds into
+  // its first read rendered as "synced · 0 concepts". The app claimed to be
+  // finished with work it had barely started, and there was nowhere to look.
+  it('never renders an indexing source as synced, and never quotes its empty count', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 0, resolvedTokens: 0, concepts: 0, sources: 1 },
+      indexing: true,
+      indexingSources: ['vault'],
+      sources: [{
+        name: 'vault', level: 3, kind: 'files', conceptCount: 0, tokens: 0, latestUpdated: null,
+        status: 'indexing', error: null,
+        indexing: { status: 'indexing', phase: 'loading', loaded: 1240, total: 3000, elapsedMs: 8200 },
+      }],
+      concepts: [],
+    }
+    const [vault] = adaptSources(graph)
+    expect(vault.status).toBe('indexing')
+    expect(vault.status).not.toBe('synced')
+    expect(vault.focus).toContain('1,240 / 3,000')
+    expect(vault.focus).not.toContain('0 concepts')
+    expect(vault.coverage).toBe(41)
+    expect(vault.indexing).toEqual({ phase: 'loading', loaded: 1240, total: 3000, refreshing: false })
+  })
+
+  it('keeps a ready-but-refreshing source ready — it has an answer to serve', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 0, resolvedTokens: 0, concepts: 12, sources: 1 },
+      sources: [{
+        name: 'notes', level: 3, kind: 'files', conceptCount: 12, tokens: 0, latestUpdated: null,
+        status: 'ok', error: null,
+        indexing: { status: 'ready', phase: 'ready', loaded: 12, total: 12, elapsedMs: 40, refreshing: true },
+      }],
+      concepts: [],
+    }
+    const [notes] = adaptSources(graph)
+    expect(notes.status).toBe('synced')
+    expect(notes.coverage).toBe(100)
+    expect(notes.focus).toContain('refreshing')
+    expect(notes.indexing?.refreshing).toBe(true)
+  })
+
+  it('carries the true warning count, not the capped message list', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 0, resolvedTokens: 0, concepts: 3, sources: 1 },
+      sources: [{
+        name: 'vault', level: 3, kind: 'files', conceptCount: 3, tokens: 0, latestUpdated: null,
+        status: 'ok', error: null,
+        warnings: 43,
+        warningMessages: Array.from({ length: 10 }, (_, i) => `skipped file-${i}.md`),
+      }],
+      concepts: [],
+    }
+    const [vault] = adaptSources(graph)
+    expect(vault.warnings).toBe(43)
+    expect(vault.warningMessages).toHaveLength(10)
+  })
+
   it('maps a healthy source to synced/serving status by kind, with full coverage', () => {
     const graph: GraphSummary = {
       totals: { sourceTokens: 100, resolvedTokens: 100, concepts: 1, sources: 2 },

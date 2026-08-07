@@ -36,6 +36,7 @@
   --cc-scrim: rgba(21,25,23,0.24);
   --cc-header-bg: rgba(255,253,246,0.74);
   /* z-index scale (drawer sits below the chat panel + setup wizard at 60) */
+  --cc-z-popover: 30;
   --cc-z-drawer-scrim: 42;
   --cc-z-drawer: 44;
   --cc-shadow: rgba(47,44,35,0.10);
@@ -1063,6 +1064,19 @@ button { font-family: inherit; }
 .cc-ui-status--success { border-color: var(--cc-teal-badge-bd); background: var(--cc-teal-fill); color: var(--cc-teal-text); }
 .cc-ui-status--attention { border-color: var(--cc-amber-stroke); background: var(--cc-amber-fill); color: var(--cc-amber-text); }
 .cc-ui-status--info { border-color: var(--cc-blue-stroke); background: var(--cc-blue-fill); color: var(--cc-blue-text); }
+/* Background activity: the shell's one always-visible progress affordance.
+   Sized and weighted like a toolbar status control, not a call to action —
+   it reports, it does not ask for anything. */
+.cc-activity { display: inline-flex; align-items: center; gap: 7px; height: var(--cc-control-height); padding: 0 10px; border: 1px solid var(--cc-line); border-radius: 999px; background: transparent; color: var(--cc-caption); cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 600; white-space: nowrap; transition: background-color 140ms var(--cc-ease-out), border-color 140ms var(--cc-ease-out); }
+.cc-activity:hover { background: var(--cc-neutral-fill); border-color: var(--cc-line-strong); }
+.cc-activity[aria-expanded='true'] { background: var(--cc-neutral-fill); border-color: var(--cc-line-strong); }
+.cc-activity[data-tone='attention'] { border-color: var(--cc-amber-stroke); background: var(--cc-amber-fill); color: var(--cc-amber-text); }
+.cc-activity-ring--sweep { animation: ccSpin 1.15s linear infinite; }
+.cc-activity-popover { -webkit-app-region: no-drag; position: fixed; z-index: var(--cc-z-popover); display: flex; flex-direction: column; gap: 12px; width: min(320px, calc(100vw - 24px)); max-height: min(60vh, 440px); overflow-y: auto; padding: 14px; border: 1px solid var(--cc-line-strong); border-radius: var(--cc-radius-xl); background: var(--cc-raised); box-shadow: 0 18px 44px var(--cc-shadow); }
+.cc-activity-action { align-self: flex-start; padding: 5px 10px; border: 1px solid var(--cc-line); border-radius: var(--cc-radius-md); background: transparent; color: var(--cc-caption); cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 600; }
+.cc-activity-action:hover { background: var(--cc-neutral-fill); border-color: var(--cc-line-strong); color: var(--cc-ink); }
+@keyframes ccSpin { to { transform: rotate(360deg); } }
+
 .cc-ui-notice { padding: 10px 12px; border: 1px solid var(--cc-blue-stroke); border-radius: var(--cc-radius-md); background: var(--cc-blue-fill); color: var(--cc-blue-text); }
 .cc-ui-notice--warning, .cc-ui-notice--error { border-color: var(--cc-amber-stroke); background: var(--cc-amber-fill); color: var(--cc-amber-text); }
 .cc-ui-shortcut { padding: 1px 5px; border: 1px solid var(--cc-line-strong); border-radius: 5px; background: var(--cc-neutral-fill); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; }
@@ -1166,6 +1180,9 @@ button { font-family: inherit; }
 .cc-health-indicator--serving, .cc-health-indicator--synced { background: var(--cc-teal-stroke-e); }
 .cc-health-indicator--degraded, .cc-health-indicator--error { background: var(--cc-amber-stroke-e); }
 .cc-health-indicator--empty { border: 1px solid var(--cc-line-strong); background: transparent; }
+/* Still being read: the blue of work-in-flight, pulsing so it never reads as a
+   settled state. Color is never the only signal — the row spells out the phase. */
+.cc-health-indicator--indexing { background: var(--cc-blue-stroke); animation: ccPulse 1.4s ease-in-out infinite; }
 .cc-activity-list > div { min-height: 38px; display: grid; grid-template-columns: 82px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--cc-line); color: var(--cc-body); font-size: 12px; }
 .cc-activity-list > div:last-child { border-bottom: 0; }
 .cc-activity-list time { color: var(--cc-faint); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10.5px; }
@@ -2307,6 +2324,9 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 @media (max-width: 720px) {
   .cc-toolbar { grid-template-columns: minmax(100px, 1fr) auto auto; gap: 6px; }
   .cc-toolbar-actions .cc-ui-search, .cc-toolbar-actions .cc-ui-status { display: none; }
+  /* The activity control stays — background work must be legible at every width. */
+  .cc-toolbar-actions .cc-activity { padding: 0 8px; }
+  .cc-toolbar-actions .cc-activity-label { display: none; }
   .cc-toolbar-ask { width: var(--cc-control-height); padding: 0; justify-content: center; font-size: 0; }
   .cc-toolbar-ask svg { width: 16px; height: 16px; }
 }

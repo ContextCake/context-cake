@@ -11,15 +11,23 @@ BASE="http://127.0.0.1:$PORT"
 BASE2="http://127.0.0.1:$PORT2"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 TMP="$(mktemp -d)"
+PORT4=$((PORT + 3))            # graph-cache host: freshness of the memoized /api/graph
+BASE4="http://127.0.0.1:$PORT4"
+PORT5=$((PORT + 4))            # quarantine-repair host: a manifest with invalid layers
+BASE5="http://127.0.0.1:$PORT5"
 PID1=""
 PID2=""
 PID3=""
+PID4=""
+PID5=""
 FAILED=0
 
 cleanup() {
   [ -n "$PID1" ] && kill "$PID1" 2>/dev/null
   [ -n "$PID2" ] && kill "$PID2" 2>/dev/null
   [ -n "$PID3" ] && kill "$PID3" 2>/dev/null
+  [ -n "$PID4" ] && kill "$PID4" 2>/dev/null
+  [ -n "$PID5" ] && kill "$PID5" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -226,6 +234,16 @@ code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=m3")" "cleanup plai
 MTN="$(curl -s "${AUTH[@]}" "$BASE/api/file?path=t/note.md" | JQ 'd.modified')"
 code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"note\",\"sectionKey\":\"body\",\"layers\":[\"t\"],\"content\":\"still hello.\",\"modified\":{\"t\":\"$MTN\"}}" "$BASE/api/section")" "write to a heading without updated="
 grep -q '## Body {#body}$' "$TMP/bundle/note.md" && pass "no updated= attr invented on an undated heading" || fail "heading changed ($(grep '## Body' "$TMP/bundle/note.md"))"
+# The section route reads the whole file before it rewrites it, so the cap the
+# other file routes enforce has to hold here too: a 30MB note came back
+# {"ok":true} and 64 bytes on disk — a document the indexer refuses to read,
+# destroyed by an editor that was never able to show it.
+node -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[1], "# Too big\n\n## Pick {#pick}\n\n" + "x".repeat(2_100_000) + "\n")' "$TMP/bundle/too-big.md"
+BIG_BEFORE="$(wc -c < "$TMP/bundle/too-big.md" | tr -d ' ')"
+code 413 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"too-big","sectionKey":"pick","layers":["t"],"content":"TRUNCATED"}' "$BASE/api/section")" "a document past the indexing cap is refused by /api/section"
+BIG_AFTER="$(wc -c < "$TMP/bundle/too-big.md" | tr -d ' ')"
+[ "$BIG_BEFORE" = "$BIG_AFTER" ] && pass "the oversized document was left byte-for-byte alone" || fail "oversized document was rewritten ($BIG_BEFORE -> $BIG_AFTER bytes)"
+rm -f "$TMP/bundle/too-big.md"
 code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=m2")" "cleanup second layer"
 
 echo "github-rest source kind (C-a)"
@@ -378,6 +396,196 @@ grep -q '"t"' "$TMP/manifest2.json" && pass "manifest untouched by blocked mutat
 FT="$(curl -s "$BASE2/nope")"
 grep -q host-fallthrough <<<"$FT" && pass "fall-through works on this host too" || fail "fall-through host2 ($FT)"
 
+# ---- the memoized /api/graph, and the cheap route that replaces polling it ----
+#
+# /api/graph answers the expensive half of its payload from a memo, and counts
+# most concepts from numbers the index already computed. Both are keyed by
+# snapshot identity read live at request time rather than cleared by an
+# invalidation event — so the thing worth testing is not that the cache is fast
+# but that it CANNOT go stale. Every way the answer can change gets its own
+# assertion: a file edited through the API, a file edited behind the app's back,
+# a source added, removed, renamed, and an indexing setting changed.
+#
+# Its own host on its own manifest: by this point the shared host carries a
+# deliberately unreachable github layer, whose health flaps and would make
+# "nothing changed" untestable.
+echo "cached /api/graph: cheap to repeat, impossible to serve stale"
+mkdir -p "$TMP/gc/a" "$TMP/gc/b"
+# `solo` exists in one layer (answered from the index's own per-concept count);
+# `shared` is defined by both (a real merge, answered from the resolved cache).
+printf -- '---\ntype: note\ntitle: Solo\nupdated: 2026-07-01\n---\n\n# Solo\n\n## Body {#body}\n\nalpha.\n' > "$TMP/gc/a/solo.md"
+printf -- '---\ntype: note\ntitle: Shared\nupdated: 2026-07-01\n---\n\n# Shared\n\n## Body {#body}\n\nfrom a.\n' > "$TMP/gc/a/shared.md"
+printf -- '---\ntype: note\ntitle: Shared\nupdated: 2026-07-02\n---\n\n# Shared\n\n## Body {#body}\n\nfrom b.\n' > "$TMP/gc/b/shared.md"
+cat > "$TMP/manifest4.json" <<EOF
+{ "layers": [
+    { "name": "a", "level": 1, "source": "files", "path": "$TMP/gc/a" },
+    { "name": "b", "level": 2, "source": "files", "path": "$TMP/gc/b" }
+  ] }
+EOF
+node "$TMP/host.mjs" "$PORT4" "$TMP/manifest4.json" sekrit true - >/dev/null 2>&1 &
+PID4=$!
+for _ in $(seq 1 60); do curl -sf "${AUTH[@]}" "$BASE4/api/graph" >/dev/null 2>&1 && break; sleep 0.1; done
+
+G4() { curl -s "${AUTH[@]}" "$BASE4/api/graph?wait=15000"; }
+TOK4() { G4 | JQ "String((d.concepts.find((c) => c.id === '$1') ?? {}).tokens)"; }
+GEN4() { curl -s "${AUTH[@]}" "$BASE4/api/status" | JQ 'String(d.generation)'; }
+# What the cascade would answer with no cache at all: resolve every concept from
+# live sources and encode it from scratch. Every token assertion below is against
+# THIS, not against a previous cached answer — a cache that agreed only with
+# itself would pass a self-comparison forever.
+EXPECT4() { node --input-type=module -e "
+import fs from 'node:fs';
+import { buildSources } from '$ROOT/packages/core/src/sources/index.mjs';
+import { resolveConcept } from '$ROOT/packages/core/src/resolver.mjs';
+import { conceptText, countTokens } from '$ROOT/packages/core/src/tokenize.mjs';
+const manifest = JSON.parse(fs.readFileSync('$TMP/manifest4.json', 'utf8'));
+const sources = buildSources(manifest, '$TMP');
+const ids = [...new Set((await Promise.all(sources.map((s) => s.listConceptIds()))).flat())].sort();
+const rows = [];
+for (const id of ids) rows.push([id, countTokens(conceptText(await resolveConcept(id, sources)))]);
+for (const s of sources) s.close?.();
+console.log(JSON.stringify(rows));
+"; }
+GRAPHTOK4() { G4 | JQ 'JSON.stringify(d.concepts.map((c) => [c.id, c.tokens]).sort((x, y) => x[0] < y[0] ? -1 : 1))'; }
+
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] \
+  && pass "every concept's token count matches a from-scratch encode (single-layer and merged)" \
+  || fail "cached token counts diverge from a live resolve (graph=$(GRAPHTOK4) live=$(EXPECT4))"
+SUM4="$(G4 | JQ 'String(d.totals.resolvedTokens === d.concepts.reduce((n, c) => n + c.tokens, 0))')"
+[ "$SUM4" = "true" ] && pass "totals.resolvedTokens is the sum of the rows it reports" || fail "resolvedTokens does not sum its own rows"
+
+# A settled index has nothing left to move, so two calls must be byte-identical
+# — including elapsedMs, which stops at the moment the job finished.
+A1="$(G4)"; A2="$(G4)"
+[ "$A1" = "$A2" ] && pass "two /api/graph calls at a settled index are byte-identical" || fail "the graph payload drifts between identical calls"
+[ "$(GEN4)" = "$(GEN4)" ] && pass "generation holds still while nothing changes" || fail "generation moves with no state change"
+
+S4="$(curl -s "${AUTH[@]}" "$BASE4/api/status")"
+[ "$(JQ 'JSON.stringify([typeof d.generation, d.indexing, d.indexingSources.length, d.sources.map((s) => [s.name, s.status, s.phase, s.loaded, s.total, s.conceptCount])])' <<<"$S4")" \
+  = '["number",false,0,[["a","ok","ready",2,2,2],["b","ok","ready",1,1,1]]]' ] \
+  && pass "/api/status reports index progress per source without touching a concept" || fail "/api/status shape ($S4)"
+[ "$(JQ 'String("concepts" in d || d.sources.some((s) => "tokens" in s))' <<<"$S4")" = "false" ] \
+  && pass "/api/status carries no corpus-sized payload" || fail "/api/status leaked corpus data ($S4)"
+code 200 "$(C "$BASE2/api/status")" "/api/status is a read route (answers with mutations disabled)"
+code 401 "$(C "$BASE4/api/status")" "/api/status is behind the same bearer gate"
+
+echo "  invalidation: a write through the API"
+GEN_BEFORE="$(GEN4)"
+SOLO_BEFORE="$(TOK4 solo)"
+MT4="$(curl -s "${AUTH[@]}" "$BASE4/api/file?path=a/solo.md" | JQ 'd.modified')"
+code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"path\":\"a/solo.md\",\"text\":\"---\\ntype: note\\ntitle: Solo\\nupdated: 2026-07-01\\n---\\n\\n# Solo\\n\\n## Body {#body}\\n\\nalpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi.\\n\",\"modified\":\"$MT4\"}" "$BASE4/api/file")" "edit a file in an indexed layer"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "the graph reflects the edit (token counts match a fresh encode)" || fail "the graph served a stale token count after an edit (graph=$(GRAPHTOK4) live=$(EXPECT4))"
+[ "$(TOK4 solo)" != "$SOLO_BEFORE" ] && pass "the edited concept's count actually moved ($SOLO_BEFORE -> $(TOK4 solo))" || fail "the edited concept's count did not change"
+[ "$(GEN4)" != "$GEN_BEFORE" ] && pass "generation moved on the edit" || fail "generation did not move on an edit"
+
+echo "  invalidation: a write behind the app's back (watcher)"
+printf -- '---\ntype: note\ntitle: Outside\nupdated: 2026-07-03\n---\n\n# Outside\n\n## Body {#body}\n\nwritten by another program entirely.\n' > "$TMP/gc/a/outside.md"
+for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.concepts.some((c) => c.id === "outside"))')" = "true" ] && break; sleep 0.25; done
+[ "$(G4 | JQ 'String(d.concepts.some((c) => c.id === "outside"))')" = "true" ] \
+  && pass "a file written outside the app reaches the graph" || fail "an externally written file never reached the cached graph"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts still match a fresh encode after the external write" || fail "stale counts after an external write"
+
+echo "  invalidation: sources added, removed, renamed"
+mkdir -p "$TMP/gc/c"
+printf -- '---\ntype: note\ntitle: Shared\nupdated: 2026-07-04\n---\n\n# Shared\n\n## Body {#body}\n\nfrom c, which is longer than either of the other two answers.\n' > "$TMP/gc/c/shared.md"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"c\",\"level\":3,\"path\":\"$TMP/gc/c\"}" "$BASE4/api/sources")" "add a third layer over the merged concept"
+[ "$(G4 | JQ 'd.concepts.find((c) => c.id === "shared").winner')" = "c" ] && pass "the new layer wins the merged concept" || fail "the added layer did not take the merge"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts match a fresh encode after an add" || fail "stale counts after a source add (graph=$(GRAPHTOK4) live=$(EXPECT4))"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"c","newName":"c2","level":3}' "$BASE4/api/sources")" "rename the new layer"
+[ "$(G4 | JQ 'd.concepts.find((c) => c.id === "shared").winner')" = "c2" ] && pass "the rename reaches the concept rows" || fail "the cached rows kept the old layer name"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts survive a rename (names are not part of merged text)" || fail "stale counts after a rename"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE4/api/sources?name=c2")" "remove the third layer"
+[ "$(G4 | JQ 'd.concepts.find((c) => c.id === "shared").winner')" = "b" ] && pass "the removal hands the merge back" || fail "the cached rows kept a removed layer"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts match a fresh encode after a remove" || fail "stale counts after a source remove"
+
+echo "  invalidation: an indexing setting change"
+# A layer big enough to be refused by a lowered document cap, so the re-index a
+# settings change forces is observable rather than inferred: the cap is a
+# setting, not layer config, so nothing in the manifest's layer JSON moves.
+mkdir -p "$TMP/gc/d"
+node -e 'const fs=require("node:fs");for(let i=0;i<120;i++)fs.writeFileSync(`${process.argv[1]}/n${i}.md`,`# N${i}\n\n## Body\n\nbulk ${i}.\n`)' "$TMP/gc/d"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"d\",\"level\":0,\"path\":\"$TMP/gc/d\"}" "$BASE4/api/sources")" "add a 120-document layer"
+for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").conceptCount)')" = "120" ] && break; sleep 0.25; done
+GEN_BEFORE="$(GEN4)"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":100}' "$BASE4/api/settings")" "lower maxDocFiles below that layer's size"
+for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "error" ] && break; sleep 0.25; done
+[ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "error" ] \
+  && pass "the settings change re-indexed rather than serving the old snapshot" || fail "a settings change left the previous index in place"
+[ "$(GEN4)" != "$GEN_BEFORE" ] && pass "generation moved on the settings change" || fail "generation did not move on a settings change"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":10000}' "$BASE4/api/settings")" "restore the limit"
+for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "ok" ] && break; sleep 0.25; done
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts match a fresh encode once the limit is restored" || fail "stale counts after settings were restored"
+
+echo "repairing a manifest from the app: an invalid layer can be removed"
+# Quarantine made a bad layer visible. This is the other half: it has to be
+# fixable from the same app that shows it. The write stays strict — what these
+# assertions pin is that the way IN tolerates a bad layer while the way OUT
+# still refuses to persist one.
+mkdir -p "$TMP/seedq"
+printf '# Seed\n\n## Body\n\nquarantine fixture.\n' > "$TMP/seedq/seed.md"
+cat > "$TMP/manifest-bad.json" <<EOF
+{ "layers": [
+    { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seedq" },
+    { "name": "bad-kind", "level": 2, "source": "notarealkind" },
+    { "name": "seed", "level": 9, "source": "alsonotreal" },
+    { "level": 4 }
+  ] }
+EOF
+node "$TMP/host.mjs" "$PORT5" "$TMP/manifest-bad.json" sekrit true - >/dev/null 2>&1 &
+PID5=$!
+for _ in $(seq 1 60); do [ "$(C "${AUTH[@]}" "$BASE5/api/graph")" != "000" ] && break; sleep 0.1; done
+BADG="$(curl -s "${AUTH[@]}" "$BASE5/api/graph?wait=15000")"
+[ "$(JQ 'JSON.stringify(d.sources.map((s) => [s.name, s.status, s.quarantined === true]))' <<<"$BADG")" \
+  = '[["seed","ok",false],["bad-kind","error",true],["seed (2)","error",true],["layer 4","error",true]]' ] \
+  && pass "invalid entries are rows of their own, flagged quarantined, and never shadow the healthy layer" \
+  || fail "quarantined rows wrong ($(JQ 'JSON.stringify(d.sources.map((s) => [s.name, s.status, s.quarantined]))' <<<"$BADG"))"
+
+# One of three cannot be removed: the remaining two still fail validation, and
+# a manifest that does not validate is never written. The refusal has to name
+# what is blocking it, or the user is stuck with no way forward.
+ONE="$(curl -s -o "$TMP/one.json" -w '%{http_code}' -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=bad-kind")"
+code 409 "$ONE" "removing one of three invalid entries is refused"
+grep -q '2 other sources are also invalid' "$TMP/one.json" && pass "the refusal names how many others block it" || fail "refusal message unhelpful ($(cat "$TMP/one.json"))"
+grep -q 'notarealkind' "$TMP/manifest-bad.json" && pass "the refused removal left the manifest untouched" || fail "a refused removal edited the manifest"
+
+# Settings are a strict write and stay one — but the answer has to point at the
+# repair rather than dropping a layer validation error on the Settings screen.
+SET="$(curl -s -o "$TMP/set.json" -w '%{http_code}' -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":222}' "$BASE5/api/settings")"
+code 409 "$SET" "settings cannot be saved while a source is invalid"
+grep -q 'Remove it in Sources first' "$TMP/set.json" && pass "the settings refusal points at the screen that fixes it" || fail "settings refusal unhelpful ($(cat "$TMP/set.json"))"
+
+# All three together is a repair, so it lands.
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=bad-kind&name=seed%20(2)&name=layer%204")" "removing every invalid entry at once succeeds"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":222}' "$BASE5/api/settings")" "settings save once the manifest is valid"
+node -e '
+  const m = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const names = m.layers.map((l) => l.name);
+  process.stdout.write(JSON.stringify([names, m.layers.length, m.settings?.maxDocFiles]));
+' "$TMP/manifest-bad.json" > "$TMP/after.json"
+[ "$(cat "$TMP/after.json")" = '[["seed"],1,222]' ] \
+  && pass "only the invalid entries were removed — the healthy same-named layer survived" \
+  || fail "manifest after repair is wrong ($(cat "$TMP/after.json"))"
+[ "$(curl -s "${AUTH[@]}" "$BASE5/api/graph?wait=15000" | JQ 'String(d.sources.find((s) => s.name === "seed")?.conceptCount)')" = "1" ] \
+  && pass "the surviving layer still resolves after the repair" || fail "the repair damaged the healthy layer"
+code 404 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=ghost")" "a name that is neither a layer nor a quarantined row is still 404"
+code 400 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources")" "DELETE with no name is still 400"
+
+# An invalid entry blocks removing a HEALTHY source too — the write rewrites the
+# whole manifest either way. So the same one-request repair has to accept a mix,
+# or a user with a bad layer cannot remove anything at all.
+cat > "$TMP/manifest-bad.json" <<EOF
+{ "settings": { "maxDocFiles": 222 },
+  "layers": [
+    { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seedq" },
+    { "name": "extra", "level": 2, "source": "files", "path": "$TMP/seedq" },
+    { "name": "late-bad", "level": 3, "source": "notarealkind" }
+  ] }
+EOF
+code 409 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=extra")" "removing a healthy source is refused while an entry is invalid"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=extra&name=late-bad")" "a healthy source and an invalid entry come out together"
+[ "$(node -e 'process.stdout.write(JSON.stringify(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).layers.map((l) => l.name)))' "$TMP/manifest-bad.json")" = '["seed"]' ] \
+  && pass "the mixed removal left exactly the untouched layer" || fail "mixed removal wrong ($(cat "$TMP/manifest-bad.json"))"
+
 echo "injected credentials: reported, never echoed"
 # The engine receives secrets by value from whoever owns the keychain. Two
 # things have to hold at once: the credential must actually reach the adapter,
@@ -461,4 +669,135 @@ grep -q '"boundAlias":"github.com/octo"' <<<"$CRED" && pass "the alias (a name, 
 grep -q '"boundIndexed":true' <<<"$CRED" && pass "the credentialed layer actually indexed" || fail "credentialed layer did not index ($CRED)"
 grep -q '"unboundState":"missing-token"' <<<"$CRED" && pass "setTokens re-indexes and reports the now-missing credential" || fail "setTokens did not invalidate ($CRED)"
 
-[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection)" || { echo "service test FAILED"; exit 1; }
+echo "a /api/graph payload and its generation describe the same instant"
+# The field report this gates: "a source I added shows 0 concepts forever."
+# buildGraph read its source rows before awaiting the resolve and computed
+# `generation` after it, so a source whose index landed during that await
+# arrived in the number while its rows still said "indexing, 0 concepts". The
+# console stored that generation, the next /api/status computed the identical
+# one, `moved` stayed false, and the refetch that would have shown the landed
+# source was never issued. The payload latched.
+#
+# Driven in-process because the window has to be entered on purpose. A remote
+# layer is held at its very first API call until the /api/graph request lands,
+# which puts every one of its remaining round trips inside the resolve — that
+# loop yields to the event loop every 25 concepts, and the local layer is sized
+# to give it far more turns than the remote layer needs to finish.
+cat > "$TMP/pinned-generation.mjs" <<'EOF'
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const { createEngineService } = await import(pathToFileURL(process.env.SERVICE_MJS).href);
+
+const dir = process.argv[2];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// One attempt: a local layer of `concepts` documents plus a gated remote one.
+async function attempt(concepts) {
+  const fastRoot = path.join(dir, `pin-fast-${concepts}`);
+  fs.mkdirSync(fastRoot, { recursive: true });
+  for (let i = 0; i < concepts; i++) {
+    fs.writeFileSync(
+      path.join(fastRoot, `n${i}.md`),
+      `---\ntype: note\ntitle: N${i}\nupdated: 2026-07-01\n---\n\n# N${i}\n\n## Body {#body}\n\nbody ${i}\n`,
+    );
+  }
+
+  // Stands in for api.github.com. The repo-metadata call — the adapter's first
+  // — blocks until this test releases it.
+  let release = () => {};
+  const gate = new Promise((r) => { release = r; });
+  const api = http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    const json = (body) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    if (url.pathname === "/repos/o/r") { await gate; return json({ default_branch: "main", pushed_at: "2026-07-20T12:00:00Z" }); }
+    if (url.pathname === "/repos/o/r/git/trees/main") return json({ truncated: false, tree: [{ path: "README.md", type: "blob", size: 40 }] });
+    if (url.pathname === "/repos/o/r/commits") return json([{ commit: { committer: { date: "2026-06-01T00:00:00Z" } } }]);
+    if (url.pathname === "/repos/o/r/contents/README.md") {
+      const body = "# Remote\n\n## Body\n\nremote body.\n";
+      res.writeHead(200, { "content-type": "text/plain", "content-length": Buffer.byteLength(body) });
+      return res.end(body);
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ message: "Not Found" }));
+  });
+  await new Promise((r) => api.listen(0, "127.0.0.1", r));
+
+  const manifestPath = path.join(dir, `pin-manifest-${concepts}.json`);
+  fs.writeFileSync(manifestPath, JSON.stringify({ layers: [
+    { name: "fast", level: 1, path: fastRoot },
+    { name: "remote", level: 2, source: "github", repo: "o/r", apiBase: `http://127.0.0.1:${api.address().port}`, paths: ["README.md"] },
+  ] }));
+
+  const svc = createEngineService({ manifestPath, allowMutations: false });
+  let armed = false;
+  const server = http.createServer(async (req, res) => {
+    // Released before the request is handled, so the pin cannot see it: a
+    // socket read needs a poll-phase turn, and buildGraph reaches its await
+    // inside this one.
+    if (armed && req.url.startsWith("/api/graph")) { armed = false; release(); }
+    if (await svc.handleRequest(req, res)) return;
+    res.writeHead(404); res.end();
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const get = async (p) => (await fetch(base + p)).json();
+
+  // /api/status only — asking /api/graph here would warm the resolve memo and
+  // there would be no await left to land inside.
+  let staged = false;
+  for (let i = 0; i < 200 && !staged; i++) {
+    const s = await get("/api/status");
+    const fast = s.sources.find((x) => x.name === "fast");
+    const remote = s.sources.find((x) => x.name === "remote");
+    staged = fast?.status === "ok" && remote?.status === "indexing";
+    if (!staged) await sleep(50);
+  }
+
+  armed = true;
+  const g = await get("/api/graph");
+  const s = await get("/api/status");
+  const gr = g.sources.find((x) => x.name === "remote");
+  const sr = s.sources.find((x) => x.name === "remote");
+  svc.close(); server.close(); api.close();
+  release();
+  return {
+    concepts, staged,
+    // The remote layer was still unread when the rows were built, and had
+    // landed by the time the response was read: the response spans the window.
+    windowHit: staged && gr.status === "indexing" && gr.conceptCount === 0 && sr.status === "ok" && sr.conceptCount > 0,
+    moved: g.generation !== s.generation,
+    rowProgressStatus: gr.indexing.status,
+    rowProgressPhase: gr.indexing.phase,
+    topLevelIndexing: g.indexing === true && g.indexingSources.includes("remote"),
+    observed: { graph: [gr.status, gr.conceptCount], status: [sr.status, sr.conceptCount] },
+  };
+}
+
+let out = null;
+// A second, larger attempt only if the first could not enter the window — a
+// bigger local corpus buys the resolve more event-loop turns to land in.
+for (const concepts of [1500, 4500]) {
+  out = await attempt(concepts);
+  if (out.windowHit) break;
+}
+console.log(JSON.stringify(out));
+EOF
+PIN="$(node "$TMP/pinned-generation.mjs" "$TMP" 2>&1 | tail -1)"
+if grep -q '"windowHit":true' <<<"$PIN"; then
+  pass "the window was entered: the remote layer landed during the graph build"
+  grep -q '"moved":true' <<<"$PIN" \
+    && pass "the generation names the payload returned, not the state that landed during it" \
+    || fail "LATCHED: /api/graph returned a stale payload under a generation /api/status already agrees with, so a client would never refetch ($PIN)"
+  grep -q '"rowProgressStatus":"indexing"' <<<"$PIN" \
+    && pass "a source row's progress agrees with its own status" \
+    || fail "a single source row reports status indexing and progress ready at once ($PIN)"
+  grep -q '"topLevelIndexing":true' <<<"$PIN" \
+    && pass "the top-level indexing flag agrees with the rows below it" \
+    || fail "the payload names a source as indexing while claiming nothing is ($PIN)"
+else
+  fail "could not enter the window this assertion needs — the remote layer did not land during the graph build, so nothing below was actually gated ($PIN)"
+fi
+
+[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection + graph-cache freshness + /api/status + pinned generation + quarantine repair)" || { echo "service test FAILED"; exit 1; }

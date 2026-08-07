@@ -14,7 +14,7 @@
 import demoBundleRaw from './generated/demo-cascade.json'
 import type {
   ConflictResolutionRecord, DemoBundle, GraphSummary, GraphSource, ResolveConflictRequest,
-  ResolvedConcept, ResolvedSection,
+  ResolvedConcept, ResolvedSection, SourceStatus, StatusSummary,
 } from './types'
 import type { Concept, ConceptSection, Conflict, Dissent, Source } from './data'
 import type { LayerId } from './theme'
@@ -52,6 +52,12 @@ export interface DataSource {
   /** Resolve every concept in one pass (one request / one sources-open in live mode). */
   resolveAll(): Promise<ResolveAllResult>
   listConcepts(): Promise<string[]>
+  /**
+   * The cheap progress/health poll. `null` means this backend has no
+   * `/api/status` route (an engine older than the console) — callers fall back
+   * to reading progress off the graph.
+   */
+  status(): Promise<StatusSummary | null>
   conflictResolutions(): Promise<ConflictResolutionRecord[]>
   resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord>
 }
@@ -73,15 +79,47 @@ export const API_TIMEOUT_MS = 60_000
  */
 let desktopTokenPromise: Promise<string> | null = null
 
+/**
+ * Deadline for the token IPC itself. This is not the same wait as the request:
+ * `apiFetch` used to `await desktopToken()` with no bound at all, so a stalled
+ * main-process reply hung every /api call forever — and because the promise is
+ * memoized, one stall poisoned the whole session with no error and no retry.
+ */
+export const TOKEN_TIMEOUT_MS = 5_000
+
 async function desktopToken(): Promise<string | undefined> {
   if (typeof window === 'undefined' || !window.__CC_DESKTOP) return undefined
   if (!desktopTokenPromise) {
-    desktopTokenPromise = window.__CC_DESKTOP.getApiToken().catch((error) => {
-      desktopTokenPromise = null
-      throw error
-    })
+    const request = window.__CC_DESKTOP.getApiToken()
+    // Surfaced through the await below, never as an unhandled rejection when a
+    // racing caller has already timed out and walked away from this promise.
+    request.catch(() => {})
+    desktopTokenPromise = request
   }
-  return desktopTokenPromise
+  const pending = desktopTokenPromise
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const token = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new DOMException(`The app did not hand over its API token within ${TOKEN_TIMEOUT_MS / 1000}s.`, 'TimeoutError')),
+          TOKEN_TIMEOUT_MS,
+        )
+      }),
+    ])
+    // An empty token is a failed handover, not a token. Memoizing it would
+    // send every remaining call of the session out unauthenticated — the
+    // service 401s each one, and nothing ever asks the main process again.
+    if (!token) throw new Error('The app handed over an empty API token.')
+    return token
+  } catch (error) {
+    // Drop the memo so the next call asks again rather than inheriting the stall.
+    if (desktopTokenPromise === pending) desktopTokenPromise = null
+    throw error
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -132,6 +170,23 @@ class DemoSource implements DataSource {
     return { concepts: this.bundle.concepts, errors: [] }
   }
   async listConcepts(): Promise<string[]> { return this.bundle.concepts.map((c) => c.id) }
+  /**
+   * The demo bundle is a finished snapshot: nothing indexes, and the generation
+   * never moves. Answering honestly (rather than `null`) keeps the console's
+   * generation-gated polling on one code path in both modes.
+   */
+  async status(): Promise<StatusSummary> {
+    return {
+      generation: 1,
+      indexing: false,
+      indexingSources: [],
+      sources: this.bundle.graph.sources.map((s) => ({
+        name: s.name, level: s.level, kind: s.kind, status: s.status === 'ok' ? 'ok' : s.status,
+        phase: 'ready', loaded: s.conceptCount, total: s.conceptCount,
+        conceptCount: s.conceptCount, refreshing: false, error: s.error ?? null,
+      })),
+    }
+  }
   async conflictResolutions(): Promise<ConflictResolutionRecord[]> { return this.resolutions }
   async resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord> {
     const prior = request.resolutionId
@@ -158,7 +213,8 @@ class DemoSource implements DataSource {
       conceptId: request.conceptId,
       title: String(prior?.title ?? concept?.frontmatter?.title ?? request.conceptId),
       sectionKey: request.sectionKey,
-      sectionHeading: prior?.sectionHeading ?? section!.heading,
+      // A headingless section still needs a durable label in the decision record.
+      sectionHeading: prior?.sectionHeading ?? section!.heading ?? section!.key,
       contributions,
       chosen,
       method: request.method,
@@ -215,6 +271,17 @@ class LiveSource implements DataSource {
   async listConcepts(): Promise<string[]> {
     const g = await this.graph()
     return g.concepts.map((c) => c.id)
+  }
+  async status(): Promise<StatusSummary | null> {
+    try {
+      return await this.get<StatusSummary>('/api/status')
+    } catch (error) {
+      // An engine older than this console has no cheap status route. Say so
+      // (null) rather than throwing, so the store falls back to reading
+      // progress off the graph instead of showing a permanent failure banner.
+      if (error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404) return null
+      throw error
+    }
   }
   async conflictResolutions(): Promise<ConflictResolutionRecord[]> {
     try {
@@ -282,9 +349,20 @@ function layerOf(name: string, level: number): LayerId {
   return 'company'
 }
 
-/** `## Choice {#choice}` → `Choice`. */
-function headingText(heading: string): string {
-  return heading.replace(/^#+\s*/, '').replace(/\s*\{#.*\}\s*$/, '').trim()
+/**
+ * `## Choice {#choice}` → `Choice`.
+ *
+ * Nullable on purpose: a plain note in a `files` layer — an Obsidian daily note
+ * with no `#` line — resolves to a single section with `heading: null`. This
+ * used to call `.replace` on it and take the whole page down with a TypeError.
+ */
+function headingText(heading: string | null | undefined): string {
+  return (heading ?? '').replace(/^#+\s*/, '').replace(/\s*\{#.*\}\s*$/, '').trim()
+}
+
+/** A section always needs *some* name; the engine's key is the honest fallback. */
+function sectionName(section: { heading: string | null; key: string }): string {
+  return headingText(section.heading) || section.key
 }
 
 /** Order layers by precedence (personal → team → company) for chip display. */
@@ -329,7 +407,7 @@ function adaptSection(s: ResolvedSection, levels: Map<string, number>): ConceptS
     updated: c.updated,
   }))
   return {
-    name: headingText(s.heading),
+    name: sectionName(s),
     key: s.key,
     winner,
     value: s.content,
@@ -359,6 +437,38 @@ export function adaptConcept(r: ResolvedConcept): Concept {
   }
 }
 
+/** Phase names the engine reports, in the words a person would use for them. */
+const PHASE_LABELS: Record<string, string> = {
+  queued: 'Queued', scanning: 'Scanning', loading: 'Reading', cloning: 'Cloning',
+  ready: 'Ready', error: 'Failed',
+}
+export function phaseLabel(phase: string | undefined): string {
+  return PHASE_LABELS[phase ?? ''] ?? 'Indexing'
+}
+
+const NUM = new Intl.NumberFormat()
+
+/**
+ * "Reading — 1,240 / 3,000". The counts are the honest thing to show while a
+ * source has no concepts yet; a total the engine hasn't established yet reads
+ * as a bare count rather than an invented denominator.
+ */
+export function progressLabel(p: { phase?: string; loaded?: number; total?: number | null } | undefined): string {
+  if (!p) return 'Indexing'
+  const noTotal = p.total == null || p.total <= 0
+  // Walking the tree, nothing counted yet. "Scanning — 0" reads as a stalled
+  // count rather than as the phase before counting begins.
+  if (noTotal && !p.loaded) return phaseLabel(p.phase)
+  const loaded = NUM.format(p.loaded ?? 0)
+  return `${phaseLabel(p.phase)} — ${noTotal ? loaded : `${loaded} / ${NUM.format(p.total as number)}`}`
+}
+
+/** 0–100, or null when the engine has no denominator to divide by yet. */
+export function progressPercent(p: { loaded?: number; total?: number | null } | undefined): number | null {
+  if (!p || p.total == null || p.total <= 0) return null
+  return Math.max(0, Math.min(100, Math.round(((p.loaded ?? 0) / p.total) * 100)))
+}
+
 /** Graph sources → the console's Source[] (coverage/focus/status derived honestly). */
 export function adaptSources(g: GraphSummary): Source[] {
   return g.sources.map((s: GraphSource) => {
@@ -367,6 +477,18 @@ export function adaptSources(g: GraphSummary): Source[] {
     // nothing. The engine marks that 'degraded'; surfacing it as healthy would
     // put a green dot over an outage, which is the one thing this row is for.
     const degraded = s.status === 'degraded'
+    // Still being read. This used to fall through to 'synced', so a vault
+    // 15 seconds into its first index rendered as "synced · 0 concepts" — the
+    // app claiming to be finished with work it had barely started.
+    const indexing = s.status === 'indexing'
+    const progress = s.indexing
+      ? {
+          phase: s.indexing.phase,
+          loaded: s.indexing.loaded,
+          total: s.indexing.total,
+          refreshing: s.indexing.refreshing === true,
+        }
+      : undefined
     const count = `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'}`
     // An MCP child that died after startup used to keep its green "serving"
     // dot: the adapter answers [] instead of throwing, so a dead server and an
@@ -376,24 +498,32 @@ export function adaptSources(g: GraphSummary): Source[] {
       ? 'error' as const
       : degraded
         ? 'degraded' as const
-        : s.kind === 'mcp'
-          ? (s.conceptCount > 0 && !s.error ? 'serving' as const : s.error ? 'degraded' as const : 'empty' as const)
-          : 'synced' as const
+        : indexing
+          ? 'indexing' as const
+          : s.kind === 'mcp'
+            ? (s.conceptCount > 0 && !s.error ? 'serving' as const : s.error ? 'degraded' as const : 'empty' as const)
+            : 'synced' as const
     return {
       name: s.name,
       kind: s.kind === 'mcp' ? 'mcp' : 'okf-local',
       layer: layerOf(s.name, s.level),
       // A source contributing nothing shouldn't show a full bar, however it
-      // got there — errored, degraded to empty, or genuinely empty.
-      coverage: errored || s.conceptCount === 0 ? 0 : 100,
+      // got there — errored, degraded to empty, or genuinely empty. While it
+      // indexes the bar tracks real progress instead of standing in for it.
+      coverage: indexing
+        ? (progressPercent(progress) ?? 0)
+        : errored || s.conceptCount === 0 ? 0 : 100,
       focus: errored
         ? (s.error ?? 'unreachable')
-        : degraded
-          ? `${count} · ${s.lastSuccessAt ? `as of ${s.lastSuccessAt} · ` : ''}${s.error ?? 'source unreachable'}`
-          : status === 'empty'
-            ? `${count} · ${s.kind} — nothing served yet`
-            : `${count} · ${s.kind}`,
+        : indexing
+          ? `${progressLabel(progress)} · ${s.kind}`
+          : degraded
+            ? `${count} · ${s.lastSuccessAt ? `as of ${s.lastSuccessAt} · ` : ''}${s.error ?? 'source unreachable'}`
+            : status === 'empty'
+              ? `${count} · ${s.kind} — nothing served yet`
+              : `${count} · ${s.kind}${progress?.refreshing ? ' · refreshing' : ''}`,
       status,
+      ...(progress ? { indexing: progress } : {}),
       // Management fields (Sources view): the raw engine kind plus health
       // timestamps ride along so remove/rename/sync can render honestly.
       sourceKind: s.kind,
@@ -403,11 +533,90 @@ export function adaptSources(g: GraphSummary): Source[] {
       conceptCount: s.conceptCount,
       origin: s.origin ?? null,
       error: s.error ?? null,
+      ...(s.quarantined === true ? { quarantined: true } : {}),
+      // The true count, which the capped message list is not: a source with 40
+      // unreadable files sends 40 here and 10 messages.
+      warnings: s.warnings ?? (s.warningMessages?.length ?? 0),
+      warningMessages: s.warningMessages ?? [],
       lastSuccessAt: s.lastSuccessAt ?? null,
       lastErrorAt: s.lastErrorAt ?? null,
       ...(s.live === true ? { live: true } : {}),
     }
   })
+}
+
+/**
+ * Fold a cheap /api/status pass into the source rows the views already hold.
+ *
+ * Progress rides on /api/graph too, but that route is only refetched when the
+ * *content* moves — so without this a Sources row would sit on "Scanning" for
+ * the whole of a fifteen-second index while the toolbar counted up beside it.
+ * Same numbers, same rules, no extra request.
+ *
+ * Returns the original array when nothing moved, so an idle poll costs no
+ * re-render.
+ */
+export function mergeSourceStatus(sources: Source[], rows: SourceStatus[]): Source[] {
+  if (rows.length === 0) return sources
+  const byName = new Map(rows.map((r) => [r.name, r]))
+  let changed = false
+  const next = sources.map((s) => {
+    const row = byName.get(s.name)
+    if (!row) return s
+    // `=== true` to match adaptSources: the two paths write the same field on
+    // the same row, and the identity check below only holds if they normalize
+    // a missing flag the same way.
+    const progress = { phase: row.phase, loaded: row.loaded, total: row.total, refreshing: row.refreshing === true }
+    const indexing = row.status === 'indexing'
+    const count = `${row.conceptCount} concept${row.conceptCount === 1 ? '' : 's'}`
+    const status: Source['status'] = row.status === 'error'
+      ? 'error'
+      : row.status === 'degraded'
+        ? 'degraded'
+        : indexing
+          ? 'indexing'
+          : s.kind === 'mcp'
+            ? (row.conceptCount > 0 && !row.error ? 'serving' : row.error ? 'degraded' : 'empty')
+            : 'synced'
+    const coverage = indexing
+      ? (progressPercent(progress) ?? 0)
+      : status === 'error' || row.conceptCount === 0 ? 0 : 100
+    // A degraded row's focus carries health detail this route does not have;
+    // leave that sentence to the graph rather than flattening it.
+    const focus = status === 'error'
+      ? (row.error ?? s.focus)
+      : indexing
+        ? `${progressLabel(progress)} · ${s.sourceKind}`
+        : status === 'degraded'
+          ? s.focus
+          : status === 'empty'
+            ? `${count} · ${s.sourceKind} — nothing served yet`
+            : `${count} · ${s.sourceKind}${progress.refreshing ? ' · refreshing' : ''}`
+    // The error text has to travel with the status it explains. Leaving it
+    // behind rendered a row headed "error" with the detail block still hidden,
+    // because that block is gated on `error` and this pass only moved `status`.
+    const error = row.error ?? null
+    // Warnings describe a snapshot. A row with none — first index, or a failed
+    // one — has nothing they could be about, so they go rather than hang over
+    // from the last good read.
+    const hasSnapshot = row.status !== 'indexing' && row.status !== 'error'
+    const warnings = hasSnapshot ? s.warnings : 0
+    const warningMessages = hasSnapshot ? s.warningMessages : undefined
+    const same = s.status === status && s.conceptCount === row.conceptCount
+      && s.coverage === coverage && s.focus === focus
+      && (s.error ?? null) === error
+      && s.warnings === warnings && s.warningMessages === warningMessages
+      && s.indexing?.phase === progress.phase && s.indexing?.loaded === progress.loaded
+      && s.indexing?.total === progress.total && s.indexing?.refreshing === progress.refreshing
+    if (same) return s
+    changed = true
+    // lastErrorAt/lastSuccessAt are deliberately untouched: /api/status carries
+    // no health timestamps, and inventing one here would be a worse lie than a
+    // stale one. A status flip moves the engine's generation, so the next
+    // /api/graph fills them in.
+    return { ...s, status, conceptCount: row.conceptCount, coverage, focus, error, warnings, warningMessages, indexing: progress }
+  })
+  return changed ? next : sources
 }
 
 /** Same conservative classifier the service enforces for the magic wand. */
@@ -456,8 +665,8 @@ export function adaptConflicts(concepts: ResolvedConcept[], resolutions: Conflic
         id,
         concept: c.id,
         sectionKey: s.key,
-        section: headingText(s.heading),
-        title: `${headingText(s.heading)} — ${title}`,
+        section: sectionName(s),
+        title: `${sectionName(s)} — ${title}`,
         // A conflict present in current resolver output is open even if an
         // older decision exists: a source changed after that decision.
         status: 'open',

@@ -23,7 +23,8 @@ export interface SectionConflict {
 /** One resolved section: the winning value plus provenance and any dissent. */
 export interface ResolvedSection {
   key: string
-  heading: string
+  /** Null for a document with no heading at all — a plain note in a files layer. */
+  heading: string | null
   content: string
   sourceLayer: string
   sourceUpdated: string | null
@@ -56,6 +57,42 @@ export interface IndexProgress {
   loaded: number
   total: number | null
   elapsedMs: number
+  /** Serving a good snapshot AND re-reading behind it — never a blocking wait. */
+  refreshing?: boolean
+  /** Passes this entry has run, carried across refreshes — a re-index storm is visible here. */
+  passes?: number
+}
+
+/** One source row from GET /api/status — progress and health, no concepts. */
+export interface SourceStatus {
+  name: string
+  level: number
+  kind: string
+  /** 'ok' | 'indexing' | 'degraded' | 'error' — the same four /api/graph reports. */
+  status: string
+  /** 'queued' | 'scanning' | 'loading' | 'ready' | 'error' */
+  phase: string
+  loaded: number
+  total: number | null
+  conceptCount: number
+  /** Ready and re-reading behind a good snapshot. Distinct from `status: indexing`. */
+  refreshing: boolean
+  error: string | null
+  /** An invalid manifest entry rather than a source — same meaning as GraphSource's. */
+  quarantined?: boolean
+}
+
+/**
+ * GET /api/status — the cheap route (O(sources), sub-millisecond even on a
+ * large vault). `generation` moves whenever the /api/graph payload would
+ * differ, which is what lets a client poll here and refetch the heavy payloads
+ * only when they actually changed.
+ */
+export interface StatusSummary {
+  generation: number
+  indexing: boolean
+  indexingSources: string[]
+  sources: SourceStatus[]
 }
 
 /** A source (layer) row in the graph summary. */
@@ -80,6 +117,20 @@ export interface GraphSource {
    */
   status: string
   error: string | null
+  /**
+   * This row is a manifest entry that failed validation, not a source that
+   * failed to read: nothing was built for it, so there is nothing to retry,
+   * rename or sync. Removing the entry is the only action that helps.
+   */
+  quarantined?: boolean
+  /**
+   * Things this source could not read even though it indexed successfully — a
+   * document over the per-file size cap, a subfolder it lacks permission to
+   * open. Orthogonal to `status`: the source is serving, just not everything it
+   * was pointed at. `warnings` is the true count; `warningMessages` is capped.
+   */
+  warnings?: number
+  warningMessages?: string[]
   /** Background-index progress; absent on sources that never index. */
   indexing?: IndexProgress
   /** ISO timestamps from adapters that track health (remote sources); else null. */
@@ -107,6 +158,8 @@ export interface GraphSummary {
   /** True while any source is still being read; the payload is partial. */
   indexing?: boolean
   indexingSources?: string[]
+  /** The same counter GET /api/status reports — absent on an older engine. */
+  generation?: number
   totals: { sourceTokens: number; resolvedTokens: number; concepts: number; sources: number }
   sources: GraphSource[]
   concepts: GraphConcept[]

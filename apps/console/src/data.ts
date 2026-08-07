@@ -5,11 +5,23 @@ export interface Layer {
   id: LayerId; name: string; level: number; sub: string; members: string
 }
 
+/** Background-index progress for one source, as the views render it. */
+export interface SourceProgress {
+  /** 'queued' | 'scanning' | 'loading' | 'cloning' | 'ready' | 'error' */
+  phase: string
+  loaded: number
+  /** Null until the engine knows how much there is to read. */
+  total: number | null
+  /** Serving a good snapshot AND re-reading behind it — subtle, never blocking. */
+  refreshing: boolean
+}
+
 export interface Source {
   name: string; kind: 'mcp' | 'okf-local'; layer: LayerId
-  /** 'degraded': answering, but its last request failed — stale or partial.
+  /** 'indexing': still being read, so any count shown is a floor, not a total.
+   *  'degraded': answering, but its last request failed — stale or partial.
    *  'empty': listed cleanly yet serves zero concepts — never painted green. */
-  coverage: number; focus: string; status: 'serving' | 'synced' | 'degraded' | 'error' | 'empty'
+  coverage: number; focus: string; status: 'serving' | 'synced' | 'indexing' | 'degraded' | 'error' | 'empty'
   /** Raw engine kind ('okf-local' | 'files' | 'github' | 'mcp') for management UI. */
   sourceKind: string
   /** Credential state reported by the engine; aliases are names, never secrets. */
@@ -20,6 +32,17 @@ export interface Source {
   /** Git remote a clone-backed layer came from; enables Sync alongside kind 'github'. */
   origin?: string | null
   error?: string | null
+  /**
+   * Not a source at all: a manifest entry the engine could not validate, so
+   * nothing was built for it. Rename and Sync have nothing to act on; removing
+   * the entry is the repair.
+   */
+  quarantined?: boolean
+  /** Progress while the background index is reading this source. */
+  indexing?: SourceProgress
+  /** Content this source indexed around: too big to read, or not readable. */
+  warnings?: number
+  warningMessages?: string[]
   lastSuccessAt?: string | null
   lastErrorAt?: string | null
   /** The manifest's team-capture layer (`live: true`) — removal disables capture. */

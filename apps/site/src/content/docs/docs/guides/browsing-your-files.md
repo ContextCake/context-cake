@@ -44,7 +44,9 @@ It is a keyboard tree:
 | `Enter` | Open a file, or toggle a folder |
 
 The top-bar search box filters by file name and path, and opens every folder
-that still holds a match — a filtered tree is no use closed. If a source holds
+that still holds a match — a filtered tree is no use closed. That is a starting
+point, not a lock: `←` and a click still close a folder while the filter is on,
+and it stays closed when you clear the search. If a source holds
 more files than the scan limit allows, the navigator says so at the top of the
 tree and tells you where to raise it (Settings → Indexing).
 

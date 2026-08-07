@@ -8,15 +8,20 @@
 //    around subtrees the way a static tree nests them. Every row instead
 //    carries `aria-level`/`aria-setsize`/`aria-posinset` — the flattened form
 //    the ARIA tree pattern defines for exactly this case. Directories carry
-//    `aria-expanded`; the selected file carries `aria-selected`.
+//    `aria-expanded`; the selected file carries `aria-selected`. And rows are
+//    emitted in VISUAL order even though they are absolutely positioned: browse
+//    mode reads a flattened tree in DOM order, so the two must not diverge.
 //
 // 2. **Focus survives the window.** A focused row that scrolls out of the
 //    rendered slice would be unmounted, and focus would fall to <body> — the
 //    keyboard would go dead mid-navigation. Two rules prevent that: keyboard
 //    movement scrolls the target into view *before* focusing it, and the active
 //    row is rendered unconditionally even when it lies outside the slice. So
-//    however the row went out of view (wheel, trackpad, a filter shrinking the
-//    list), it is still in the DOM and still has focus.
+//    however the row went out of *view* (wheel, trackpad), it is still in the
+//    DOM and still has focus. A row that leaves the tree ENTIRELY — its folder
+//    collapsed, a filter dropped it, the listing refetched without it — cannot
+//    be kept, so focus follows the tab stop to the row that inherits it, but
+//    only when focus was already inside the tree.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { lc, type LayerId } from '../theme'
 import type { LayerFile, LayerFiles } from '../types'

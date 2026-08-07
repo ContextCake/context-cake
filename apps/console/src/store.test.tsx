@@ -33,7 +33,7 @@ let root: Root
 
 /** Renders the store's load state so assertions read it from the DOM. */
 function Probe() {
-  const { load, concepts, sources, reload, retryNow, view, selConcept, filesScope, filesPath, openFilesScope, setFilesScope, setFilesPath } = useStore()
+  const { load, concepts, sources, reload, retryNow, view, selConcept, filesScope, filesPath, openFilesScope, setView, setFilesScope, setFilesPath } = useStore()
   return (
     <div
       data-shell={String(load.shell)}
@@ -50,6 +50,7 @@ function Probe() {
     >
       <button type="button" onClick={reload}>reload</button>
       <button type="button" onClick={retryNow}>retry</button>
+      <button type="button" onClick={() => setView('sources')}>to sources</button>
       <button type="button" onClick={() => openFilesScope('team-docs')}>browse team-docs</button>
       <button type="button" onClick={() => setFilesPath('team-docs/notes/a.md')}>open a.md</button>
       <button type="button" onClick={() => setFilesScope(null)}>clear scope</button>
@@ -440,5 +441,100 @@ describe('store load state', () => {
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
     expect(probe().dataset.filesScope).toBe('')
     expect(probe().dataset.filesPath).toBe('')
+  })
+})
+
+// ---- Back/Forward vs. an unsaved file --------------------------------------
+//
+// Real session-history traversal, not a synthesized PopStateEvent: what these
+// cover is *which entry* a refused navigation writes to, and a hand-fired event
+// leaves the history stack untouched, so it cannot see the difference.
+
+const FILE_HASH = '#/files/team-docs/notes%2Fa.md'
+
+function click(label: string) {
+  const match = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === label)
+  if (!match) throw new Error(`Button not found: ${label}`)
+  return act(async () => (match as HTMLButtonElement).click())
+}
+
+/** A real Back, awaited: jsdom traverses the stack on a task, like a browser. */
+async function goBack() {
+  window.history.back()
+  await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+}
+
+describe('navigating away from an unsaved file', () => {
+  /** Stands in for the editor: it only listens while there is a draft to lose. */
+  let prompts: string[]
+  let guard: (event: Event) => void
+
+  beforeEach(() => {
+    prompts = []
+    guard = (event: Event) => { prompts.push(window.location.hash); event.preventDefault() }
+    mocks.graph.mockResolvedValue(graphPayload([]))
+    mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+  })
+
+  afterEach(() => window.removeEventListener('contextcake:before-navigate', guard))
+
+  it('asks before Back moves between two Files URLs, not only between views', async () => {
+    // Two adjacent Files entries. Same view, different document — the shape the
+    // view-only guard walked straight through, taking the draft with it.
+    window.history.replaceState(null, '', '/#/files')
+    window.history.pushState(null, '', FILE_HASH)
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    expect(probe().dataset.filesPath).toBe('team-docs/notes/a.md')
+
+    window.addEventListener('contextcake:before-navigate', guard)
+    await goBack()
+
+    // Asked once, and the answer was honoured: the document is still open and
+    // the URL still names it.
+    expect(prompts).toHaveLength(1)
+    expect(probe().dataset.filesPath).toBe('team-docs/notes/a.md')
+    expect(window.location.hash).toBe(FILE_HASH)
+
+    // Saved (nothing left to lose) — the same Back now goes through.
+    window.removeEventListener('contextcake:before-navigate', guard)
+    await goBack()
+    expect(probe().dataset.filesPath).toBe('')
+    expect(window.location.hash).toBe('#/files')
+  })
+
+  it('restores the whole Files URL on cancel, and leaves the entry behind it alone', async () => {
+    // The 3-step path: Sources → a file → Back (cancelled) → Back again. The
+    // first refusal used to rewrite the *Sources* entry to a bare `#/files`,
+    // which both mis-described the screen and turned the next Back into a
+    // same-view move the guard did not cover.
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    await click('to sources')
+    await click('browse team-docs')
+    await click('open a.md')
+    expect(window.location.hash).toBe(FILE_HASH)
+
+    window.addEventListener('contextcake:before-navigate', guard)
+    await goBack()
+
+    expect(prompts).toHaveLength(1)
+    expect(probe().dataset.view).toBe('files')
+    expect(probe().dataset.filesScope).toBe('team-docs')
+    expect(probe().dataset.filesPath).toBe('team-docs/notes/a.md')
+    // The whole URL, scope and file included — not `#/files`.
+    expect(window.location.hash).toBe(FILE_HASH)
+
+    // Step 3: the entry behind this one is still the Sources view the user
+    // actually visited, so it still asks, and still keeps the draft.
+    await goBack()
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toBe('#/sources')
+    expect(probe().dataset.filesPath).toBe('team-docs/notes/a.md')
+    expect(window.location.hash).toBe(FILE_HASH)
+
+    // And once there is nothing to lose, Back lands where it always should have.
+    window.removeEventListener('contextcake:before-navigate', guard)
+    await goBack()
+    expect(probe().dataset.view).toBe('sources')
+    expect(window.location.hash).toBe('#/sources')
   })
 })

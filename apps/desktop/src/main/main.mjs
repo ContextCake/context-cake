@@ -8,7 +8,7 @@ import { createGithubConnections, verifyGithubToken } from './github-connections
 import { buildMenu } from './menu.mjs'
 import { configDir, enginePaths, manifestPath, settingsPath } from './paths.mjs'
 import { resolveRevealTarget } from './reveal.mjs'
-import { markSettingsDirty, readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
+import { flushSettings, flushSettingsSync, markSettingsDirty, readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
 import { createAuthManager } from './auth.mjs'
 import {
   combineManifestSources,
@@ -47,8 +47,10 @@ function handleFatal(err) {
   const detail = (err && err.stack) || String(err)
   // Stop the engine child first. app.exit() below skips before-quit, so
   // without this its teardown would look like an unexpected exit and report a
-  // second, misleading failure.
+  // second, misleading failure. Settings writes are queued and asynchronous;
+  // app.exit() does not drain that queue, so land it synchronously here too.
   shutdownEngine()
+  flushSettingsSync()
   // Synchronous write: app.exit() below is abrupt and would race an async
   // console.error, so the diagnostic (and CI's grep for it) could be lost.
   try { fs.writeSync(2, `[contextcake] fatal: ${detail}\n`) } catch { /* stderr gone */ }
@@ -211,7 +213,9 @@ function scheduleSettingsPush() {
   clearTimeout(settingsPushTimer)
   settingsPushTimer = setTimeout(() => {
     settingsPushTimer = null
-    settingsSync.push(settingsSnapshot()).catch(() => {})
+    // settings-sync reads and rewrites settings.json itself. Let our own queued
+    // write land first or it reads a copy one patch behind and writes it back.
+    flushSettings().then(() => settingsSync.push(settingsSnapshot())).catch(() => {})
   }, 750)
   settingsPushTimer.unref?.()
 }
@@ -327,13 +331,11 @@ async function ensureAnonymousMetricsPreference() {
     cancelId: 1,
   })
   const enabled = response === 0
-  try {
-    writeLocalSettings({ anonymousMetrics: enabled })
-  } catch {
-    // A metrics-only preference must never turn a writable-settings problem
-    // into a fatal app startup. Without a persisted opt-in, do not report.
-    return false
-  }
+  writeLocalSettings({ anonymousMetrics: enabled })
+  // A metrics-only preference must never turn a writable-settings problem into
+  // a fatal app startup. Without a persisted opt-in, do not report — which is
+  // why this one caller waits for the queued write instead of assuming it.
+  if (!(await flushSettings())) return false
   return enabled
 }
 
@@ -374,6 +376,7 @@ function startManifestSync() {
 async function syncAfterSignIn() {
   if (!settingsSync) return
   try {
+    await flushSettings()
     const pulled = await settingsSync.pull(settingsSnapshot())
     if (pulled) publishPulledSettings(pulled)
     else await settingsSync.push(settingsSnapshot())
@@ -487,6 +490,7 @@ function registerAccountIpc() {
   })
   handle('settings:sync-state', currentSyncState)
   handle('settings:pull', async () => {
+    await flushSettings()
     const pulled = await settingsSync?.pull(settingsSnapshot())
     publishPulledSettings(pulled)
     return pulled ? { overwritten: pulled.overwritten, settings: selectSyncSettings(pulled.settings) } : null
@@ -919,15 +923,18 @@ async function smokeCheck() {
         + ` lag=${lag}ms indexing=${graph?.indexing === true}`,
       )
       shutdownEngine()
+      flushSettingsSync()
       app.exit(0)
     } else {
       console.error(`SMOKE FAIL api=${res.status} unauth=${unauth.status} userData=${userDataName}`)
       shutdownEngine()
+      flushSettingsSync()
       app.exit(1)
     }
   } catch (err) {
     console.error('SMOKE FAIL', err?.message ?? err)
     shutdownEngine()
+    flushSettingsSync()
     app.exit(1)
   }
 }
@@ -985,6 +992,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   clearTimeout(settingsPushTimer)
   clearTimeout(windowStateTimer)
+  flushSettingsSync()
   if (manifestWatchStarted) fs.unwatchFile(manifestPath())
   authManager?.close()
   shutdownEngine()

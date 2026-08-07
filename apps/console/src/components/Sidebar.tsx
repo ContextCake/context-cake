@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { useStore } from '../store'
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useStoreData, useStoreNav } from '../store'
 import { destinationForView, readBrowserGroupedViews, viewForDestination, type ShellDestination } from '../shell-navigation'
 import { CascadeIcon, HomeIcon, KnowledgeIcon, ReviewIcon, SettingsIcon, SourcesIcon } from './icons'
 
@@ -9,6 +9,14 @@ const COLLAPSED_WIDTH = 64
 const MIN_WIDTH = 208
 const DEFAULT_WIDTH = 232
 const MAX_WIDTH = 300
+/**
+ * Quiet period before the width is persisted. The resizer updates `sidebar` on
+ * every `pointermove`, and each write is an IPC round trip that the desktop
+ * main process answers with a settings read-write-rename — 60–120 of them a
+ * second, on the thread that draws. Nobody needs an intermediate width on disk;
+ * only where the drag ends. A pointer-up flush makes sure that one lands.
+ */
+const PERSIST_DEBOUNCE_MS = 250
 
 type SidebarPreference = { collapsed: boolean; width: number }
 const clampWidth = (width: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width))
@@ -30,8 +38,9 @@ const NAV: Array<{ id: ShellDestination; label: string; icon: ReactNode }> = [
   { id: 'review', label: 'Review', icon: <ReviewIcon /> },
 ]
 
-export function Sidebar({ onOpenSettings, onNavigate }: { onOpenSettings?: () => void; onNavigate?: () => void }) {
-  const { view, setView, signals, conflicts, sources } = useStore()
+function SidebarInner({ onOpenSettings, onNavigate }: { onOpenSettings?: () => void; onNavigate?: () => void }) {
+  const { setView, signals, conflicts, sources } = useStoreData()
+  const { view } = useStoreNav()
   const [sidebar, setSidebar] = useState(readPreference)
   const [resizing, setResizing] = useState(false)
   const resizeCleanup = useRef<(() => void) | null>(null)
@@ -50,12 +59,39 @@ export function Sidebar({ onOpenSettings, onNavigate }: { onOpenSettings?: () =>
     onNavigate?.()
   }
 
-  useEffect(() => {
-    window.__CC_DESKTOP?.uiState?.set({ sidebar }).catch(() => {})
+  const persist = useRef<{ timer: ReturnType<typeof setTimeout> | null; pending: SidebarPreference | null }>({ timer: null, pending: null })
+
+  const flushPreference = useCallback(() => {
+    const state = persist.current
+    if (state.timer !== null) { clearTimeout(state.timer); state.timer = null }
+    const value = state.pending
+    if (!value) return
+    state.pending = null
+    window.__CC_DESKTOP?.uiState?.set({ sidebar: value }).catch(() => {})
     if (!window.__CC_DESKTOP) {
-      try { localStorage.setItem(BROWSER_KEY, JSON.stringify(sidebar)) } catch { /* optional */ }
+      try { localStorage.setItem(BROWSER_KEY, JSON.stringify(value)) } catch { /* optional */ }
     }
-  }, [sidebar])
+  }, [])
+
+  // Nothing is written for the value we just read back — the store already
+  // holds it. Every later change is written once the drag (or the arrow-key
+  // run) goes quiet, and immediately on unmount so a closing window still
+  // records where the user left the divider.
+  const hydrated = useRef(false)
+  useEffect(() => {
+    if (!hydrated.current) { hydrated.current = true; return }
+    const state = persist.current
+    state.pending = sidebar
+    if (state.timer !== null) clearTimeout(state.timer)
+    state.timer = setTimeout(() => { state.timer = null; flushPreference() }, PERSIST_DEBOUNCE_MS)
+  }, [flushPreference, sidebar])
+
+  // The drag is over: write where it ended now rather than 250ms from now.
+  // Declared after the effect above so that, in the commit where both fire,
+  // the final width is already the pending value.
+  useEffect(() => { if (!resizing) flushPreference() }, [flushPreference, resizing])
+
+  useEffect(() => () => flushPreference(), [flushPreference])
 
   useEffect(() => {
     const toggle = () => setSidebar((current) => ({ ...current, collapsed: !current.collapsed }))
@@ -157,3 +193,11 @@ export function Sidebar({ onOpenSettings, onNavigate }: { onOpenSettings?: () =>
     </aside>
   )
 }
+
+/**
+ * Memoized, and subscribed to the data and navigation halves of the store only.
+ * The shell re-renders on every keystroke in the toolbar search; the sidebar has
+ * nothing to say about a query, and its resizer state is local, so it should sit
+ * that render out entirely.
+ */
+export const Sidebar = memo(SidebarInner)

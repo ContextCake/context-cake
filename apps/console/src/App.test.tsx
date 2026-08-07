@@ -166,6 +166,10 @@ describe('Mac-first application shell', () => {
     })
     expect(sidebar?.dataset.collapsed).toBe('false')
     expect(sidebar?.style.width).toBe('232px')
+    // Persistence is debounced — a drag would otherwise write on every
+    // pointermove. The value still has to land, so wait out the quiet period
+    // rather than dropping the assertion.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 320)) })
     expect(JSON.parse(window.localStorage.getItem('contextcake.sidebar') ?? '{}')).toEqual({ collapsed: false, width: 232 })
 
     await act(async () => {

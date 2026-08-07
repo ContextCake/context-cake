@@ -270,15 +270,31 @@ function isSkippedPath(filename) {
   return String(filename).split(/[\\/]/).some((segment) => segment.startsWith(".") || segment === "node_modules");
 }
 
-// The same argument for extensions, but only where the answer is certain. An
-// entry with no extension may well be a directory — a folder rename delivers
-// the folder, never the documents inside it — so it counts as a change. An
-// image dropped into attachments/ does not.
-function isIndexableFile(filename, kind) {
+// The same argument for extensions, but only where the answer is certain — and
+// a dot in a name is NOT that.
+//
+// A directory routinely has one ("Archive 2024.10", "notes.old", "Project.v2"),
+// and dragging a folder of notes into a vault delivers exactly one event, for
+// the folder, never for the documents inside it. Inferring file-ness from
+// path.extname therefore filtered that event out and every document in the
+// folder stayed invisible until something else happened to invalidate the
+// layer: silent data loss, where the failure mode in the other direction is a
+// re-index nobody notices.
+//
+// So ask the filesystem instead of the string, and only for the events an
+// extension check cannot already accept. A path that is GONE by the time we
+// look (deleted, renamed away, moved out) counts as a change: whatever it was,
+// the index may hold it.
+function isIndexableFile(root, filename, kind) {
   if (filename == null) return true;
+  const extensions = kind === "files" ? FILES_EXTENSIONS : [".md"];
   const ext = path.extname(String(filename).split(/[\\/]/).pop()).toLowerCase();
-  if (!ext) return true;
-  return (kind === "files" ? FILES_EXTENSIONS : [".md"]).includes(ext);
+  if (extensions.includes(ext)) return true;
+  try {
+    return fs.statSync(path.join(root, String(filename))).isDirectory();
+  } catch {
+    return true;
+  }
 }
 
 const sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
@@ -736,7 +752,7 @@ export function createEngineService({
     if (isSkippedPath(filename)) return;
     const layer = layerAtRoot(root);
     if (!layer) return; // no source reads this root any more; syncWatchers drops the watcher
-    if (!isIndexableFile(filename, layer.kind)) return;
+    if (!isIndexableFile(root, filename, layer.kind)) return;
     clearTimeout(state.timer);
     state.timer = setTimeout(() => {
       const current = layerAtRoot(root);

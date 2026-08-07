@@ -26,6 +26,15 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
 
 ## Gotchas
 
+- **CI runs Node 22; a green local run on Node 24 is not proof.** The two differ
+  on when the test runner gives up on a pending promise, and this package is
+  full of deliberately `unref()`ed timers (ack deadlines, the watchdog), so a
+  test whose only pending work is one of them passes on 24 and fails on 22 with
+  "Promise resolution is still pending but the event loop has already resolved".
+  The fix belongs in the test — a ref'd keepalive while it awaits the deadline —
+  never in the source: dropping an `unref()` to green a test puts a multi-second
+  stall into every quit. Reproduce with
+  `/opt/homebrew/opt/node@22/bin/node --test test/*.test.mjs` before blaming CI.
 - **Never add dependencies to the engine.** This package may hold Electron
   deps; `packages/core` stays dependency-free. The app imports the engine by
   path (dev: repo-relative; packaged: `process.resourcesPath/engine`) — see

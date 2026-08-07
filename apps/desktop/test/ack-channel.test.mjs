@@ -8,6 +8,22 @@ function channel(timeoutMs = 20) {
   return { ack, posted }
 }
 
+/**
+ * Await something whose only pending work is the channel's deadline timer.
+ *
+ * That timer is `unref()`ed on purpose — an ack deadline must never be the
+ * reason the app stays open — which means that in a test with nothing else
+ * running, the loop empties and the timer never fires. Node 24 happened to
+ * survive this; Node 22 (which CI runs) reports "Promise resolution is still
+ * pending but the event loop has already resolved" and cancels the rest of the
+ * file. A ref'd keepalive is the test's job, not the channel's: dropping the
+ * `unref()` to make a test pass would put a 15-second stall into every quit.
+ */
+async function awaitingADeadline(promise) {
+  const keepalive = setInterval(() => {}, 1_000)
+  try { return await promise } finally { clearInterval(keepalive) }
+}
+
 test('a real acknowledgement is distinguishable from a missed one', async () => {
   const { ack, posted } = channel()
   const pending = ack.send({ type: 'reload' })
@@ -18,12 +34,12 @@ test('a real acknowledgement is distinguishable from a missed one', async () => 
 
 test('a missed acknowledgement resolves as a timeout, never as success', async () => {
   const { ack } = channel(10)
-  assert.deepEqual(await ack.send({ type: 'reload' }), { acked: false, reason: 'timeout' })
+  assert.deepEqual(await awaitingADeadline(ack.send({ type: 'reload' })), { acked: false, reason: 'timeout' })
 })
 
 test('a late acknowledgement after a timeout is ignored, not a double settle', async () => {
   const { ack, posted } = channel(10)
-  const result = await ack.send({ type: 'reload' })
+  const result = await awaitingADeadline(ack.send({ type: 'reload' }))
   assert.equal(result.acked, false)
   // The engine finally answers. Nothing is waiting; this must not throw.
   ack.settle(posted[0].id)

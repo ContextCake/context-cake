@@ -99,7 +99,7 @@ async function desktopToken(): Promise<string | undefined> {
   const pending = desktopTokenPromise
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    return await Promise.race([
+    const token = await Promise.race([
       pending,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
@@ -108,6 +108,11 @@ async function desktopToken(): Promise<string | undefined> {
         )
       }),
     ])
+    // An empty token is a failed handover, not a token. Memoizing it would
+    // send every remaining call of the session out unauthenticated — the
+    // service 401s each one, and nothing ever asks the main process again.
+    if (!token) throw new Error('The app handed over an empty API token.')
+    return token
   } catch (error) {
     // Drop the memo so the next call asks again rather than inheriting the stall.
     if (desktopTokenPromise === pending) desktopTokenPromise = null

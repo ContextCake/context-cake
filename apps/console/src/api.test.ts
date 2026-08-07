@@ -165,6 +165,33 @@ describe('desktop API credential transport', () => {
       vi.useRealTimers()
     }
   })
+
+  // The main process answers `service?.token ?? ''`, so a service that is not
+  // up yet resolves the IPC with an empty string. Memoizing that as a token
+  // sent the rest of the session out unauthenticated against a service that
+  // requires one — every call 401s, and nothing asks again.
+  it('treats an empty token as a failed handover rather than memoizing it', async () => {
+    vi.resetModules()
+    const fresh = await import('./api')
+    const getApiToken = vi.fn()
+      .mockResolvedValueOnce('')
+      .mockResolvedValue('real-token')
+    window.__CC_DESKTOP = {
+      getApiToken,
+      version: '0.2.0',
+      authState: { signedIn: false },
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}')))
+
+    await expect(fresh.apiFetch('/api/graph')).rejects.toThrow(/empty API token/)
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+
+    await fresh.apiFetch('/api/graph')
+    expect(getApiToken).toHaveBeenCalledTimes(2)
+    const [, init] = vi.mocked(fetch).mock.calls[0]
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer real-token')
+  })
 })
 
 // ---- Adapters: raw engine types -> console view model -------------------

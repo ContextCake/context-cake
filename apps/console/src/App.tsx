@@ -233,6 +233,15 @@ export function App() {
       : 'Live refresh recovered.')
   }, [load.refreshError])
 
+  // Recovery ends the dismissal. Holding it past a recovery made it a
+  // session-long mute rather than a per-message one: the next outage, if it
+  // read the same way ("socket hang up" usually does), never reached the user
+  // again — a page silently frozen behind a banner it had been told to hide.
+  useEffect(() => {
+    if (!load.refreshError) setDismissedRefreshError(null)
+  }, [load.refreshError])
+
+
   // Mobile off-canvas nav drawer (inert on desktop, where the sidebar is static).
   useEffect(() => {
     if (!drawerOpen || settingsOpen) return

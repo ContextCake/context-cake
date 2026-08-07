@@ -233,4 +233,31 @@ describe('background work in the shell', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
     expect(bannerText()).toContain('connection refused')
   })
+
+  // Dismissal is per message, and a recovery ends it. Keeping it meant one
+  // click muted that wording for the whole session, so an outage that came
+  // back later — same socket, same message — was never reported again.
+  it('re-surfaces the same failure when it returns after a recovery', async () => {
+    mocks.graph
+      .mockResolvedValueOnce(indexingGraph())
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockResolvedValueOnce(indexingGraph())
+      .mockRejectedValue(new Error('socket hang up'))
+    mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: true, indexingSources: ['field-vault'] })
+
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(bannerText()).toContain('socket hang up')
+
+    const dismiss = Array.from(container.querySelectorAll('button'))
+      .find((b) => b.getAttribute('aria-label') === 'Dismiss the live refresh warning')!
+    await act(async () => dismiss.click())
+    expect(bannerText()).not.toContain('socket hang up')
+
+    // The refresh recovers — nothing to say — and then fails the same way again.
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(bannerText()).not.toContain('socket hang up')
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+    expect(bannerText()).toContain('socket hang up')
+  })
 })

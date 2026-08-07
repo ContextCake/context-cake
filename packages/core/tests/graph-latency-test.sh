@@ -210,9 +210,11 @@ GATED_NOTE=""
 [ "$FIXTURE_GATED" = 1 ] && GATED_NOTE=" [UNGATED: the fixture guard failed, so this result proves nothing]"
 
 # A budget the corpus cannot trip, and a document ceiling above the knob, so a
-# failure here is always about latency and never about a limit firing.
+# failure here is always about latency and never about a limit firing. The
+# ceiling has room for the rescaled corpus assertion 1 may build below — a doc
+# cap firing there would look like a short window rather than a raised limit.
 cat > "$TMP/manifest.json" <<EOF
-{ "settings": { "sourceBudgetMs": 300000, "maxDocFiles": $(( NOTES * 2 > 1000 ? NOTES * 2 : 1000 )) },
+{ "settings": { "sourceBudgetMs": 300000, "maxDocFiles": $(( NOTES * 8 > 1000 ? NOTES * 8 : 1000 )) },
   "layers": [ { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seed" } ] }
 EOF
 
@@ -371,29 +373,63 @@ CTRL_OK="$(JQ "String(d.errors === 0 && d.p95 < $PROBE_P95_MS && d.max < $PROBE_
 
 # ---- 1. responsiveness while a source indexes --------------------------------
 echo "1. a cheap request stays responsive while $NOTES documents index"
-code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' \
-  -d "{\"kind\":\"files\",\"name\":\"corpus\",\"level\":3,\"path\":\"$TMP/corpus\"}" "$BASE/api/sources")" \
-  "the corpus is added"
-# Indexing is lazy: it starts on the first request that calls ensureIndexes(),
-# which /api/settings never does. One graph call kicks it off — cheap here,
-# because the corpus has no snapshot yet and only the seed layer resolves.
-curl -s -o /dev/null "${AUTH[@]}" "$BASE/api/graph"
-WIN="$(node "$TMP/probe.mjs" "$BASE" /api/settings indexed corpus "$PROBE_INTERVAL_MS" 0 \
-  "$READY_POLL_MS" "$READY_ABORT_MS" "$WINDOW_CEILING_MS" sekrit)"
-WIN_DIST="$(JQ '`p50=${d.p50}ms p95=${d.p95}ms max=${d.max}ms min=${d.min}ms n=${d.samples} window=${d.windowMs}ms endedBy=${d.endedBy} lastProgress=${d.progress} errors=${d.errors} droppedAtCompletion=[${d.dropped.join("ms, ")}${d.dropped.length ? "ms" : ""}]`' <<<"$WIN")"
-WIN_MS="$(num "$(JQ 'String(d.windowMs)' <<<"$WIN")" 0)"
-WIN_N="$(num "$(JQ 'String(d.samples)' <<<"$WIN")" 0)"
-READY_COST="$(JQ 'd.readyPollMs.length ? `${d.readyPolls} readiness polls, max ${Math.max(...d.readyPollMs)}ms` : "no readiness polls"' <<<"$WIN")"
+# Add one corpus and probe /api/settings for the whole of its index. Sets
+# WIN/WIN_DIST/WIN_MS/WIN_N/READY_COST.
+measure_window() { # <sourceName> <dir>
+  code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' \
+    -d "{\"kind\":\"files\",\"name\":\"$1\",\"level\":3,\"path\":\"$2\"}" "$BASE/api/sources")" \
+    "the corpus is added"
+  # Indexing is lazy: it starts on the first request that calls ensureIndexes(),
+  # which /api/settings never does. One graph call kicks it off — cheap here,
+  # because the corpus has no snapshot yet and only the seed layer resolves.
+  curl -s -o /dev/null "${AUTH[@]}" "$BASE/api/graph"
+  WIN="$(node "$TMP/probe.mjs" "$BASE" /api/settings indexed "$1" "$PROBE_INTERVAL_MS" 0 \
+    "$READY_POLL_MS" "$READY_ABORT_MS" "$WINDOW_CEILING_MS" sekrit)"
+  WIN_DIST="$(JQ '`p50=${d.p50}ms p95=${d.p95}ms max=${d.max}ms min=${d.min}ms n=${d.samples} window=${d.windowMs}ms endedBy=${d.endedBy} lastProgress=${d.progress} errors=${d.errors} droppedAtCompletion=[${d.dropped.join("ms, ")}${d.dropped.length ? "ms" : ""}]`' <<<"$WIN")"
+  WIN_MS="$(num "$(JQ 'String(d.windowMs)' <<<"$WIN")" 0)"
+  WIN_N="$(num "$(JQ 'String(d.samples)' <<<"$WIN")" 0)"
+  READY_COST="$(JQ 'd.readyPollMs.length ? `${d.readyPolls} readiness polls, max ${Math.max(...d.readyPollMs)}ms` : "no readiness polls"' <<<"$WIN")"
+}
+window_too_short() { [ "$WIN_N" -lt "$MIN_SAMPLES" ] || [ "$WIN_MS" -lt "$MIN_WINDOW_MS" ]; }
+window_suggestion() { echo $(( WIN_MS > 0 ? (NOTES * MIN_WINDOW_MS * 3) / (WIN_MS * 2) + 1 : NOTES * 3 )); }
+
+CORPUS_NAME=corpus
+measure_window "$CORPUS_NAME" "$TMP/corpus"
 
 # Guard two of three: a window too short to hold a percentile. If indexing
 # finishes in a few hundred milliseconds you get a handful of probes and "p95"
 # is whatever the slowest of five happened to be — a number that would go green
 # against any engine at all.
+#
+# A runner fast enough to trip that is a healthy runner, so the corpus is
+# rebuilt from the measurement and the window re-taken ONCE instead of turning
+# the build red until a human re-runs it with an env var. Lowering MIN_WINDOW_MS
+# is not the fix: the floor is what closes the false-pass hole, so it stays
+# where it is and the fixture moves. If even the scaled corpus indexes too
+# fast, the loud failure below still fires and the assertions that follow are
+# still marked ungated.
 WINDOW_GATED=0
-if [ "$WIN_N" -lt "$MIN_SAMPLES" ] || [ "$WIN_MS" -lt "$MIN_WINDOW_MS" ]; then
-  SUGGEST=$(( WIN_MS > 0 ? (NOTES * MIN_WINDOW_MS * 3) / (WIN_MS * 2) + 1 : NOTES * 3 ))
+if window_too_short; then
+  SCALED_DOCS="$(window_suggestion)"
+  echo "  the window was ${WIN_MS}ms over ${WIN_N} samples, under the ${MIN_WINDOW_MS}ms floor — rebuilding at $SCALED_DOCS documents and re-measuring"
+  mkdir -p "$TMP/corpus-scaled"
+  GEN2="$(node "$TMP/gen.mjs" "$TMP/corpus-scaled" "$SCALED_DOCS" "$DOC_MIN_KB" "$DOC_MAX_KB")"
+  if [ -n "$(JQ 'd.error ? String(d.error) : ""' <<<"$GEN2")" ]; then
+    fail "could not write the scaled corpus: $(JQ 'String(d.error)' <<<"$GEN2")"
+  else
+    echo "  $(JQ 'String(d.mb)' <<<"$GEN2")MB, avg $(JQ 'String(d.avgKB)' <<<"$GEN2")KB/doc"
+    # The undersized corpus goes away rather than sitting alongside: assertion 2
+    # below is a budget over the whole graph, and leaving both in would measure
+    # a corpus no assertion describes.
+    code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=corpus")" "the undersized corpus is removed"
+    CORPUS_NAME=corpus-scaled
+    NOTES="$SCALED_DOCS"
+    measure_window "$CORPUS_NAME" "$TMP/corpus-scaled"
+  fi
+fi
+if window_too_short; then
   WINDOW_GATED=1
-  fail "the indexing window was too short to judge (${WIN_N} samples over ${WIN_MS}ms, need >=${MIN_SAMPLES} over >=${MIN_WINDOW_MS}ms) — a p95 over a handful of probes goes green against any engine; re-run with GRAPH_LATENCY_NOTES=$SUGGEST"
+  fail "the indexing window was too short to judge (${WIN_N} samples over ${WIN_MS}ms, need >=${MIN_SAMPLES} over >=${MIN_WINDOW_MS}ms) — a p95 over a handful of probes goes green against any engine; re-run with GRAPH_LATENCY_NOTES=$(window_suggestion)"
 else
   pass "the window held a real distribution (${WIN_N} samples over ${WIN_MS}ms; $READY_COST)"
 fi
@@ -417,7 +453,7 @@ WIN_MAX_OK="$(JQ "String(d.max !== null && d.max < $PROBE_MAX_MS)" <<<"$WIN")"
 # ---- 2. /api/graph after the index settles -----------------------------------
 echo "2. /api/graph answers inside a ${GRAPH_P50_MS}ms budget once the index has settled"
 code 200 "$(C "${AUTH[@]}" "$BASE/api/graph?wait=300000")" "the corpus finishes indexing"
-COUNT="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ 'String(d.sources?.find((s) => s.name === "corpus")?.conceptCount)')"
+COUNT="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ "String(d.sources?.find((s) => s.name === \"$CORPUS_NAME\")?.conceptCount)")"
 # Without this, a truncated or failed index would make the calls below cheap and
 # assertion 2 would pass by measuring a corpus that isn't there.
 [ "$COUNT" = "$NOTES" ] \

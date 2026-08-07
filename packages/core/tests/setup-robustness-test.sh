@@ -394,21 +394,45 @@ for _ in $(seq 1 40); do curl -sf "$BASE4/api/graph" >/dev/null 2>&1 && break; s
 
 echo "a partly-readable folder indexes anyway, and says what it left out"
 chmod 000 "$TMP/partial/locked"
+# Root reads through chmod 000, so the unreadable half of this fixture does not
+# exist for it — and containerized CI images routinely run as root. That is a
+# fixture this environment cannot build, not an engine that regressed, so the
+# permission-specific assertions are SKIPPED rather than failed: a healthy
+# engine going red on root CI is a landmine that gets the whole suite muted.
+#
+# The rest still runs, against the counts root actually produces: every document
+# is readable, so the locked subtree contributes its note and stops being a
+# warning. Only the two assertions that are literally about a permission error
+# have nothing left to check. This has to be decided BEFORE the count assertion
+# below, which the old ordering failed first with "readable documents missing"
+# and only then explained why.
+AS_ROOT=0
+[ "$(id -u)" = 0 ] && AS_ROOT=1
+if [ "$AS_ROOT" = 1 ]; then
+  printf '  skip running as root: chmod 000 does not block reads, so the unreadable-subtree assertions cannot be gated here\n'
+  WANT_CONCEPTS=3   # locked/hidden.md is readable too
+  WANT_WARNINGS=1   # only the oversized document is left out
+else
+  WANT_CONCEPTS=2
+  WANT_WARNINGS=2
+fi
 code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"partial\",\"level\":2,\"path\":\"$TMP/partial\"}" "$BASE4/api/sources")" "a folder with an oversized doc and a locked subfolder still adds"
 G="$(curl -s "$BASE4/api/graph?wait=30000")"
 S="$(JQ 'JSON.stringify(d.sources.find((s) => s.name === "partial"))' <<<"$G")"
 [ "$(JQ 'd.sources.find((s) => s.name === "partial").status' <<<"$G")" = "ok" ] && pass "the source indexes rather than failing" || fail "partial source status ($S)"
-[ "$(JQ 'String(d.sources.find((s) => s.name === "partial").conceptCount)' <<<"$G")" = "2" ] && pass "the documents it CAN read are indexed" || fail "readable documents missing ($S)"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "partial").conceptCount)' <<<"$G")" = "$WANT_CONCEPTS" ] && pass "the documents it CAN read are indexed" || fail "readable documents missing (got $(JQ 'String(d.sources.find((s) => s.name === "partial").conceptCount)' <<<"$G"), want $WANT_CONCEPTS) ($S)"
 
-if [ "$(id -u)" = 0 ]; then
-  fail "running as root: chmod 000 does not block reads, so the unreadable-subtree assertions below cannot be trusted"
-fi
 W="$(JQ 'String(d.sources.find((s) => s.name === "partial").warnings)' <<<"$G")"
-[ "$W" = "2" ] && pass "the row reports both things it could not read (warnings=$W)" || fail "warning count (got $W, want 2) ($S)"
+[ "$W" = "$WANT_WARNINGS" ] && pass "the row reports everything it could not read (warnings=$W)" || fail "warning count (got $W, want $WANT_WARNINGS) ($S)"
 M="$(JQ 'JSON.stringify(d.sources.find((s) => s.name === "partial").warningMessages ?? [])' <<<"$G")"
 grep -q 'huge.md' <<<"$M" && pass "a warning names the oversized document" || fail "no warning names huge.md ($M)"
-grep -q 'locked' <<<"$M" && pass "a warning names the unreadable subtree" || fail "no warning names the locked subfolder ($M)"
-grep -qi 'permission' <<<"$M" && pass "the permission warning is worded for a person" || fail "permission warning wording ($M)"
+if [ "$AS_ROOT" = 1 ]; then
+  printf '  skip a warning names the unreadable subtree (root can read it)\n'
+  printf '  skip the permission warning is worded for a person (root can read it)\n'
+else
+  grep -q 'locked' <<<"$M" && pass "a warning names the unreadable subtree" || fail "no warning names the locked subfolder ($M)"
+  grep -qi 'permission' <<<"$M" && pass "the permission warning is worded for a person" || fail "permission warning wording ($M)"
+fi
 chmod 755 "$TMP/partial/locked"
 
 [ "$FAILED" = 0 ] && echo "setup robustness test passed (bounded walks + settings + background indexing + usable-while-indexing + partial reads + layer file editing)" || { echo "setup robustness test FAILED"; exit 1; }

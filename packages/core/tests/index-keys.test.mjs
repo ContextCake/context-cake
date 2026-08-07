@@ -102,10 +102,12 @@ test("name and level stay out of the identity but the key is still per row", () 
   const { keys, validities } = keysFor(layers);
   assert.equal(validities[0], validities[1], "identical config should share a validity");
   assert.notEqual(keys[0], keys[1], "two rows shared one index entry");
-  // A rename must not re-key: that is what keeps a settled 3,000-note vault
-  // from re-reading every file when the user edits its label.
-  const renamed = keysFor([{ ...layers[0], name: "one", level: 4 }]);
-  assert.equal(renamed.keys[0], keys[0], "changing level re-keyed the entry");
+  // Re-levelling must not re-key. A RENAME does re-key, by design — the name is
+  // in the key so two rows over one folder never share an entry — and what
+  // keeps a settled 3,000-note vault from re-reading every file is adoptIndexes
+  // moving the entry to the new key, because the validity is unchanged.
+  const releveled = keysFor([{ ...layers[0], name: "one", level: 4 }]);
+  assert.equal(releveled.keys[0], keys[0], "changing level re-keyed the entry");
 });
 
 test("byte-identical rows still get one entry each", () => {

@@ -162,6 +162,58 @@ grep -q '"widget"' <<<"$ids" || fail ".mdx files should be listed" "$ids"
 if grep -q 'secret' <<<"$ids"; then fail "dot-directories should be excluded" "$ids"; fi
 if grep -q 'readme' <<<"$ids"; then fail "node_modules should be excluded" "$ids"; fi
 
+# --- 3b. Per-file size cap ----------------------------------------------------
+# A single oversized document used to be read whole into a JS string: point a
+# layer at a folder holding one 500MB .md and the walk hands it to loadConcept,
+# which allocates all of it. The github adapter has capped reads at 1MB from the
+# start; the local adapters were the gap. The cap must skip that ONE file and
+# say so — a huge file in a vault is a normal thing to have, not a reason for
+# the layer to fail.
+sized="$tmpdir/sized"; mkdir -p "$sized"
+printf '# Small\n\n## Body\n\nReadable.\n' > "$sized/small.md"
+node -e '
+  const fs = require("node:fs");
+  // Just over the 2,000,000-byte cap, written as one buffer so the fixture
+  // costs a moment rather than a stream.
+  fs.writeFileSync(process.argv[1], "# Huge\n\n## Body\n\n" + "x".repeat(2_100_000));
+' "$sized/huge.md"
+
+# Reports only booleans and sizes, never the document itself: a 2MB body in a
+# shell variable is what "Argument list too long" looks like.
+cat > "$tmpdir/sized.mjs" <<EOF
+import { createFilesSource } from "${sources_dir}/files.mjs";
+import { createOkfLocalSource } from "${sources_dir}/okf-local.mjs";
+const root = process.argv[2];
+const out = {};
+for (const [kind, make] of [["files", createFilesSource], ["okf-local", createOkfLocalSource]]) {
+  const source = make({ name: kind, level: 2, root });
+  const notes = { skipped: [], unreadable: [] };
+  const ids = await source.listConceptIds({ notes });
+  out[kind] = {
+    listedHuge: ids.includes("huge"),
+    listedSmall: ids.includes("small"),
+    loadedHuge: (await source.loadConcept("huge")) !== null,
+    loadedSmall: (await source.loadConcept("small")) !== null,
+    skipped: notes.skipped,
+  };
+}
+console.log(JSON.stringify(out));
+EOF
+sized_out="$(node "$tmpdir/sized.mjs" "$sized")"
+for kind in files okf-local; do
+  node -e '
+    const d = JSON.parse(process.argv[1])[process.argv[2]];
+    const say = (ok, why) => { if (!ok) { console.error(why); process.exit(1); } };
+    say(d.listedHuge === false, "the oversized document should not be listed");
+    say(d.listedSmall === true, "a normal document beside it should still be listed");
+    say(d.loadedHuge === false, "loading the oversized document should be a miss, not a 2MB+ string");
+    say(d.loadedSmall === true, "the normal document should still load");
+    say(d.skipped.length === 1, "the walk should record exactly one skipped file");
+    say(d.skipped[0].rel === "huge.md", "the skip record should name the file");
+    say(d.skipped[0].bytes > 2000000, "the skip record should carry the size that tripped the cap");
+  ' "$sized_out" "$kind" || fail "per-file size cap ($kind)" "$sized_out"
+done
+
 # --- 4. Cascade: files layer over an okf-local layer via the resolver CLI -----
 
 company="$tmpdir/company"; mkdir -p "$company/decisions" "$docs/decisions"

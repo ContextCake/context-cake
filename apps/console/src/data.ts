@@ -20,6 +20,8 @@ export interface Source {
   /** Git remote a clone-backed layer came from; enables Sync alongside kind 'github'. */
   origin?: string | null
   error?: string | null
+  /** Content this source indexed around: too big to read, or not readable. */
+  warningMessages?: string[]
   lastSuccessAt?: string | null
   lastErrorAt?: string | null
   /** The manifest's team-capture layer (`live: true`) — removal disables capture. */

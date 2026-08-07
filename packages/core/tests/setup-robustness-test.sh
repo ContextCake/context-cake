@@ -7,6 +7,8 @@
 #     report what is still running — no request ever waits for a slow source
 #   - a folder too big for the configured limits becomes a visible source
 #     error, not a rejected form and not a hang
+#   - a folder the walk can only read PART of still indexes, and says what it
+#     left out — an oversized document, a permission-blocked subtree
 #   - the limits are settings (manifest-backed, /api/settings), not env-only
 #   - the layer file explorer/editor is engine surface, so the desktop app has
 #     it, and it covers markdown-folder layers too
@@ -17,9 +19,11 @@ set -uo pipefail
 PORT="${SETUP_PORT:-8821}"   # tight caps via env: add-validation, over-cap, files, MCP
 PORT2=$((PORT + 1))          # default caps: responsiveness + wait= + equivalence
 PORT3=$((PORT + 2))          # default caps: settings API and its effect on indexing
+PORT4=$((PORT + 3))          # partial reads: oversized document + unreadable subtree
 BASE="http://127.0.0.1:$PORT"
 BASE2="http://127.0.0.1:$PORT2"
 BASE3="http://127.0.0.1:$PORT3"
+BASE4="http://127.0.0.1:$PORT4"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/packages/core/src"
 TMP="$(mktemp -d)"
@@ -28,6 +32,9 @@ FAILED=0
 
 cleanup() {
   for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null; done
+  # The unreadable-subtree fixture below is chmod 000; rm -rf cannot remove it
+  # (or the temp dir around it) until it is readable again.
+  chmod -R u+rwX "$TMP" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -362,4 +369,46 @@ R="$(curl -s -X PATCH -H 'content-type: application/json' -d '{"maxDocFiles":nul
 [ "$(JQ 'String(d.settings.maxDocFiles)' <<<"$R")" = "10000" ] && pass "null resets a setting to its default" || fail "settings reset ($R)"
 grep -q 'maxDocFiles' "$TMP/manifest-settings.json" && fail "reset left the value in the manifest" || pass "reset removes the stored value"
 
-[ "$FAILED" = 0 ] && echo "setup robustness test passed (bounded walks + settings + background indexing + usable-while-indexing + layer file editing)" || { echo "setup robustness test FAILED"; exit 1; }
+# ---- host D: a folder the walk can only read part of --------------------------
+# Both failures are silent today and that silence IS the bug. An oversized
+# document is read whole into a JS string; a permission-blocked subfolder is
+# skipped by the walk with no trace, so the source reports "ok" while quietly
+# missing every document underneath it. Neither may fail the layer — a huge
+# attachment or a locked folder is a normal thing to have in a vault — but both
+# have to be visible in the row the user is looking at.
+mkdir -p "$TMP/partial/locked" "$TMP/partial/open"
+printf '# Readable\n\n## Body\n\nIndexed normally.\n' > "$TMP/partial/readable.md"
+printf '# Nested\n\n## Body\n\nAlso indexed.\n' > "$TMP/partial/open/nested.md"
+printf '# Hidden\n\n## Body\n\nBehind a closed door.\n' > "$TMP/partial/locked/hidden.md"
+node -e '
+  const fs = require("node:fs");
+  fs.writeFileSync(process.argv[1], "# Huge\n\n## Body\n\n" + "x".repeat(2_100_000));
+' "$TMP/partial/huge.md"
+
+cat > "$TMP/manifest-partial.json" <<EOF
+{ "layers": [ { "name": "vault", "level": 3, "path": "$TMP/vault" } ] }
+EOF
+node "$TMP/host.mjs" "$PORT4" "$TMP/manifest-partial.json" >/dev/null 2>&1 &
+PIDS+=($!)
+for _ in $(seq 1 40); do curl -sf "$BASE4/api/graph" >/dev/null 2>&1 && break; sleep 0.1; done
+
+echo "a partly-readable folder indexes anyway, and says what it left out"
+chmod 000 "$TMP/partial/locked"
+code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"partial\",\"level\":2,\"path\":\"$TMP/partial\"}" "$BASE4/api/sources")" "a folder with an oversized doc and a locked subfolder still adds"
+G="$(curl -s "$BASE4/api/graph?wait=30000")"
+S="$(JQ 'JSON.stringify(d.sources.find((s) => s.name === "partial"))' <<<"$G")"
+[ "$(JQ 'd.sources.find((s) => s.name === "partial").status' <<<"$G")" = "ok" ] && pass "the source indexes rather than failing" || fail "partial source status ($S)"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "partial").conceptCount)' <<<"$G")" = "2" ] && pass "the documents it CAN read are indexed" || fail "readable documents missing ($S)"
+
+if [ "$(id -u)" = 0 ]; then
+  fail "running as root: chmod 000 does not block reads, so the unreadable-subtree assertions below cannot be trusted"
+fi
+W="$(JQ 'String(d.sources.find((s) => s.name === "partial").warnings)' <<<"$G")"
+[ "$W" = "2" ] && pass "the row reports both things it could not read (warnings=$W)" || fail "warning count (got $W, want 2) ($S)"
+M="$(JQ 'JSON.stringify(d.sources.find((s) => s.name === "partial").warningMessages ?? [])' <<<"$G")"
+grep -q 'huge.md' <<<"$M" && pass "a warning names the oversized document" || fail "no warning names huge.md ($M)"
+grep -q 'locked' <<<"$M" && pass "a warning names the unreadable subtree" || fail "no warning names the locked subfolder ($M)"
+grep -qi 'permission' <<<"$M" && pass "the permission warning is worded for a person" || fail "permission warning wording ($M)"
+chmod 755 "$TMP/partial/locked"
+
+[ "$FAILED" = 0 ] && echo "setup robustness test passed (bounded walks + settings + background indexing + usable-while-indexing + partial reads + layer file editing)" || { echo "setup robustness test FAILED"; exit 1; }

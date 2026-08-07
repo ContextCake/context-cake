@@ -80,6 +80,14 @@ export interface GraphSource {
    */
   status: string
   error: string | null
+  /**
+   * Things this source could not read even though it indexed successfully — a
+   * document over the per-file size cap, a subfolder it lacks permission to
+   * open. Orthogonal to `status`: the source is serving, just not everything it
+   * was pointed at. `warnings` is the true count; `warningMessages` is capped.
+   */
+  warnings?: number
+  warningMessages?: string[]
   /** Background-index progress; absent on sources that never index. */
   indexing?: IndexProgress
   /** ISO timestamps from adapters that track health (remote sources); else null. */

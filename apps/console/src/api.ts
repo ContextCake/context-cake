@@ -403,6 +403,7 @@ export function adaptSources(g: GraphSummary): Source[] {
       conceptCount: s.conceptCount,
       origin: s.origin ?? null,
       error: s.error ?? null,
+      warningMessages: s.warningMessages ?? [],
       lastSuccessAt: s.lastSuccessAt ?? null,
       lastErrorAt: s.lastErrorAt ?? null,
       ...(s.live === true ? { live: true } : {}),

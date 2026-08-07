@@ -266,6 +266,19 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
               </div>
             )}
 
+            {/* A source that read successfully but not completely. Its own block
+                rather than the error one: nothing is broken, and the row stays
+                green — but a folder quietly missing from the cascade is the kind
+                of thing you only find out about if it is written down. */}
+            {(s.warningMessages?.length ?? 0) > 0 && (
+              <div role="status" style={css(`padding:8px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.55; color:${C.amberText}; overflow-wrap:anywhere;`)}>
+                <strong style={css('display:block; margin-bottom:4px;')}>Indexed with {s.warningMessages!.length} thing{s.warningMessages!.length === 1 ? '' : 's'} left out</strong>
+                <ul style={css('margin:0; padding-left:16px;')}>
+                  {s.warningMessages!.map((message) => <li key={message}>{message}</li>)}
+                </ul>
+              </div>
+            )}
+
             <CredentialWarning source={s} />
 
             {notice?.name === s.name && (

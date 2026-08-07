@@ -103,6 +103,145 @@ export function readContextManifest(manifestPath, { allowMissing = true, validat
   return manifest;
 }
 
+/**
+ * The manifest as the READ path may use it. Whole-manifest rules stay fatal,
+ * but a layer that fails validation is lifted out instead of taking every
+ * route down with it: one hand-edited layer used to make /api/settings and
+ * /api/graph answer 500, including the screen a user would need to fix it.
+ *
+ * Quarantine only ever REMOVES capability. A layer that fails validation is
+ * deleted from the manifest this returns, so nothing downstream can build it,
+ * spawn it, watch its root, or hand its path to the file APIs — it survives
+ * only as a {name, level, error} record for the UI to show as a broken row.
+ * No validation rule is relaxed and nothing is coerced into working. And this
+ * is a read-path tolerance alone: writeContextManifest/mutateContextManifest
+ * still validate the whole manifest strictly, so an invalid layer can never be
+ * persisted through a quarantined read.
+ *
+ * Returns { manifest, quarantined }, where each quarantined record carries the
+ * `profileId` of the layers array it came from — "default" is always the array
+ * getManifestProfileLayers(manifest) itself would return.
+ */
+export function readContextManifestQuarantined(manifestPath, { allowMissing = true, validatePacks = true } = {}) {
+  const resolved = path.resolve(manifestPath);
+  if (!fs.existsSync(resolved)) {
+    if (allowMissing) return { manifest: { layers: [] }, quarantined: [] };
+    throw new Error(`ContextCake manifest does not exist: ${resolved}`);
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(resolved, "utf8"));
+  } catch (error) {
+    throw new Error(`ContextCake manifest is not valid JSON: ${error.message}`);
+  }
+  // The strict pass runs first and unchanged, so a valid manifest takes exactly
+  // the path it always did and returns the very object readContextManifest
+  // would have. Partitioning is reached only once something has already failed.
+  let firstError;
+  try {
+    validateContextManifest(manifest, { validatePacks });
+    return { manifest, quarantined: [] };
+  } catch (error) {
+    firstError = error;
+  }
+  let cleaned;
+  let quarantined;
+  try {
+    ({ manifest: cleaned, quarantined } = quarantineInvalidLayers(manifest));
+  } catch {
+    // Partitioning is a recovery attempt, so when it cannot even run — a
+    // manifest that is not an object, a `layers` that is not an array — the
+    // caller gets the authoritative validation error, not a second-hand one.
+    throw firstError;
+  }
+  if (quarantined.length === 0) throw firstError;
+  // If dropping the bad layers did not make the rest valid, the failure was
+  // never per-layer (a broken profiles block, a dangling pack). Fail closed
+  // exactly as before rather than serving a manifest nobody has validated.
+  validateContextManifest(cleaned, { validatePacks });
+  return { manifest: cleaned, quarantined };
+}
+
+// Splits every layers array in the manifest into the layers that validate and
+// the ones that do not, returning a copy that holds only the former. Pure: the
+// caller's manifest object is never mutated.
+function quarantineInvalidLayers(manifest) {
+  const mode = classifyManifest(manifest); // throws on a non-object manifest, as before
+  const cleaned = { ...manifest };
+  const quarantined = [];
+
+  const partition = (profileId, layers, owner, transitional) => {
+    if (!Array.isArray(layers)) throw new Error(`${owner} does not have a layers array.`);
+    const { kept, dropped } = partitionLayers(layers, owner, transitional);
+    for (const record of dropped) quarantined.push({ profileId, ...record });
+    return kept;
+  };
+
+  // The container profile=null resolves to is the one keyed "default": the
+  // top-level array in legacy and transitional manifests, profiles.default in
+  // v2. Mirrors getManifestProfileLayers so a caller can line the two up.
+  if (mode === "legacy" || mode === "transitional") {
+    cleaned.layers = partition("default", manifest.layers ?? [], "legacy default", false);
+  }
+  if (mode === "v2" || mode === "transitional") {
+    assertObject(manifest.profiles, "ContextCake manifest profiles");
+    cleaned.profiles = {};
+    for (const [id, profile] of Object.entries(manifest.profiles)) {
+      assertObject(profile, `Profile ${id}`);
+      const profileId = mode === "v2" ? id : `profiles.${id}`;
+      cleaned.profiles[id] = { ...profile, layers: partition(profileId, profile.layers, `profile ${id}`, mode === "transitional") };
+    }
+  }
+  return { manifest: cleaned, quarantined };
+}
+
+// Only a layer that is malformed ON ITS OWN is quarantined. The rules about how
+// layers relate — a duplicated name, a second live layer — deliberately stay
+// fatal: those manifests are ambiguous rather than broken, and quarantining one
+// of the pair would mean silently picking which of two well-formed layers wins.
+// Failing closed on ambiguity is the safer half of that choice, and it is what
+// today already does. The caller re-validates what survives, so those errors
+// still reach it.
+function partitionLayers(layers, owner, transitional) {
+  const kept = [];
+  const dropped = [];
+  const names = new Set();
+  layers.forEach((layer, index) => {
+    try {
+      if (transitional) validateTransitionalLayer(layer, owner);
+      else validateLayer(layer, owner);
+    } catch (error) {
+      dropped.push({ layer, index, error: error.message });
+      return;
+    }
+    names.add(layer.name);
+    kept.push(layer);
+  });
+  // Named after the fact, against the names that survived, so a layer too
+  // malformed to have a usable name still gets a row of its own and can never
+  // shadow a healthy source's row in the graph.
+  const taken = new Set(names);
+  return {
+    kept,
+    dropped: dropped.map(({ layer, index, error }) => {
+      const base = typeof layer?.name === "string" && layer.name.trim() ? layer.name.trim() : `layer ${index + 1}`;
+      let name = base;
+      for (let n = 2; taken.has(name); n += 1) name = `${base} (${n})`;
+      taken.add(name);
+      return {
+        name,
+        level: Number.isInteger(Number(layer?.level)) ? Number(layer.level) : 0,
+        // The declared kind, as a scalar. The layer OBJECT deliberately never
+        // leaves this module — that is what makes it structurally impossible to
+        // build or persist — but a row that reports the kind the user actually
+        // typed beats one silently labelled with the default.
+        kind: typeof layer?.source === "string" ? layer.source : "okf-local",
+        error,
+      };
+    }),
+  };
+}
+
 export function getManifestProfileLayers(manifest, profile = null) {
   const { mode } = validateContextManifest(manifest);
   if (mode === "legacy") {
@@ -407,15 +546,19 @@ function validateLayers(layers, owner) {
 function validateTransitionalProfileLayers(layers, owner) {
   const names = new Set();
   for (const layer of layers) {
-    assertObject(layer, `Layer in ${owner}`);
-    rejectCredentialFields(layer, `Layer in ${owner}`);
-    rejectCredentialValues(layer, `Layer in ${owner}`, { allowScrubbed: true });
-    if (typeof layer.name !== "string" || !layer.name.trim()) throw new Error(`Layer in ${owner} must have a non-empty name.`);
+    validateTransitionalLayer(layer, owner);
     if (names.has(layer.name)) throw new Error(`${owner} contains duplicate layer name: ${layer.name}`);
     names.add(layer.name);
-    if (isRunnableLayer(layer)) validateLayer(layer, owner);
-    else validateAuthReference(layer.auth, `Pending source ${layer.name}`, { allowScrubbed: true });
   }
+}
+
+function validateTransitionalLayer(layer, owner) {
+  assertObject(layer, `Layer in ${owner}`);
+  rejectCredentialFields(layer, `Layer in ${owner}`);
+  rejectCredentialValues(layer, `Layer in ${owner}`, { allowScrubbed: true });
+  if (typeof layer.name !== "string" || !layer.name.trim()) throw new Error(`Layer in ${owner} must have a non-empty name.`);
+  if (isRunnableLayer(layer)) validateLayer(layer, owner);
+  else validateAuthReference(layer.auth, `Pending source ${layer.name}`, { allowScrubbed: true });
 }
 
 function validateLayer(layer, owner) {

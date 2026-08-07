@@ -16,6 +16,15 @@ import { runGit } from "./git-core.mjs";
 // that a search sweep is one `git log`, not one per concept.
 const HISTORY_TTL_MS = 30000;
 
+// The most one document may weigh before a local layer stops reading it. There
+// was no ceiling at all: a 500MB .md dropped into a vault was read whole into a
+// JS string, on a read path the desktop app runs inside its own process. The
+// github adapter has capped at 1MB since it was written; local layers were the
+// gap. Shared with the file editor's MAX_EDITABLE_BYTES on purpose — a document
+// too big to index is one the cascade will never read, so offering to edit it
+// would misrepresent what saving it accomplishes.
+export const MAX_DOC_BYTES = 2_000_000;
+
 export function createOkfLocalSource({ name, level, root, limits = null }) {
   let history = null; // { at, promise } — see commitHistory
   let warned = false;
@@ -131,16 +140,22 @@ export function createOkfLocalSource({ name, level, root, limits = null }) {
     async loadConcept(id) {
       const safeId = normalizeConceptId(id);
       const filePath = path.join(root, `${safeId}.md`);
+      // Stat before read, not alongside it: the point of the cap is to never
+      // allocate the file, so its size has to be known first. The walk applies
+      // the same ceiling, so this only fires for a live single-concept read.
+      const bytes = await fileSize(filePath);
+      if (bytes === null) return null; // missing or unreadable — a miss, not a crash
+      if (bytes > MAX_DOC_BYTES) return null;
       let content;
       try {
         content = await fsp.readFile(filePath, "utf8");
       } catch {
-        return null; // missing or unreadable — a miss, not a crash
+        return null;
       }
       return withDocumentDate(parseConcept(content), await documentDate(filePath));
     },
-    async listConceptIds({ signal = null } = {}) {
-      const files = await walkDocs(root, [".md"], limits, { signal });
+    async listConceptIds({ signal = null, notes = null } = {}) {
+      const files = await walkDocs(root, [".md"], limits, { signal, notes });
       return files.map((filePath) =>
         toPosix(path.relative(root, filePath)).replace(/\.md$/i, ""),
       );
@@ -341,7 +356,18 @@ export async function probeDocs(root, extensions, maxEntries = 4_000, { signal =
   return { found: false, scanned, complete: true };
 }
 
-export async function walkDocs(root, extensions, limits = null, { signal = null } = {}) {
+/**
+ * Every indexable document under `root`, bounded by the walk limits.
+ *
+ * `notes` is an optional collector — { skipped: [], unreadable: [] } — that the
+ * walk appends to. It is passed in rather than returned because the wrappers a
+ * layer may be built with (withGitSync) forward their options argument but
+ * return their own object, so a collector reaches the walk where an extra
+ * return value or an adapter method would not. Both lists describe documents
+ * the caller is NOT getting, and both used to be silent: an unreadable subtree
+ * produced a source that reported "ok" with quietly missing content.
+ */
+export async function walkDocs(root, extensions, limits = null, { signal = null, notes = null } = {}) {
   if (!root) return [];
   const { maxFiles, maxEntries } = { ...defaultWalkLimits(), ...(limits ?? {}) };
   const files = [];
@@ -353,9 +379,17 @@ export async function walkDocs(root, extensions, limits = null, { signal = null 
     let dirents;
     try {
       dirents = await fsp.readdir(current, { withFileTypes: true });
-    } catch {
-      continue; // missing root or an unreadable subfolder — skip, don't crash the layer
+    } catch (err) {
+      // Skipping is still right — one locked folder must not fail the whole
+      // layer — but a folder we are not ALLOWED to read is a different fact
+      // from a folder with nothing in it, and only one of them is worth saying.
+      // A missing root is already reported as an empty source.
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        notes?.unreadable.push({ rel: relTo(root, current), code: err.code });
+      }
+      continue;
     }
+    const candidates = [];
     for (const dirent of dirents) {
       if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
       scanned += 1;
@@ -367,18 +401,39 @@ export async function walkDocs(root, extensions, limits = null, { signal = null 
       }
       const fullPath = path.join(current, dirent.name);
       if (dirent.isDirectory()) stack.push(fullPath);
-      else if (dirent.isFile() && extensions.some((ext) => dirent.name.endsWith(ext))) {
-        files.push(fullPath);
-        if (files.length > maxFiles) {
-          throw new Error(
-            `This folder has too many documents to index (over ${maxFiles.toLocaleString("en-US")}). ` +
-              `Choose a more specific folder, such as your notes or docs directory.`,
-          );
-        }
+      else if (dirent.isFile() && extensions.some((ext) => dirent.name.endsWith(ext))) candidates.push(fullPath);
+    }
+    // One stat per candidate, batched per directory rather than awaited one at
+    // a time, so the cap costs a round of parallel syscalls instead of a serial
+    // chain across a large vault.
+    const sizes = await Promise.all(candidates.map(fileSize));
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (sizes[i] !== null && sizes[i] > MAX_DOC_BYTES) {
+        notes?.skipped.push({ rel: relTo(root, candidates[i]), bytes: sizes[i] });
+        continue;
+      }
+      files.push(candidates[i]);
+      if (files.length > maxFiles) {
+        throw new Error(
+          `This folder has too many documents to index (over ${maxFiles.toLocaleString("en-US")}). ` +
+            `Choose a more specific folder, such as your notes or docs directory.`,
+        );
       }
     }
   }
   return files.sort();
+}
+
+async function fileSize(filePath) {
+  try {
+    return (await fsp.stat(filePath)).size;
+  } catch {
+    return null; // vanished or unreadable between readdir and stat — let the read path decide
+  }
+}
+
+function relTo(root, target) {
+  return toPosix(path.relative(root, target)) || ".";
 }
 
 function toPosix(value) {

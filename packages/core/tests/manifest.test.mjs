@@ -17,6 +17,7 @@ import {
   mutateContextManifest,
   normalizeProfileLabel,
   readContextManifest,
+  readContextManifestQuarantined,
   selectManifestProfile,
   sourceConfigFingerprint,
   validateContextManifest,
@@ -174,6 +175,66 @@ test("manifest validation rejects unsafe keys, duplicate layers, invalid labels,
       },
     },
   }), /duplicate assignment/);
+});
+
+test("quarantined reads drop only the malformed layer, and only when one layer explains the failure", (t) => {
+  const directory = temporaryDirectory(t);
+  const write = (manifest) => {
+    const file = path.join(directory, `${crypto.randomUUID()}.json`);
+    fs.writeFileSync(file, JSON.stringify(manifest));
+    return file;
+  };
+  const good = { name: "seed", level: 1, source: "files", path: "seed" };
+
+  // A valid manifest must take the untouched path: same object, nothing dropped.
+  const valid = { layers: [good] };
+  const validFile = write(valid);
+  const clean = readContextManifestQuarantined(validFile);
+  assert.deepEqual(clean.quarantined, []);
+  assert.deepEqual(clean.manifest, readContextManifest(validFile));
+
+  const mixed = readContextManifestQuarantined(write({
+    layers: [good, { name: "bad-kind", level: 2, source: "notarealkind" }, { name: "bad-shape", level: 0 }],
+  }));
+  assert.deepEqual(mixed.manifest.layers, [good], "a quarantined layer must not survive into the manifest that gets built");
+  assert.deepEqual(mixed.quarantined.map((entry) => [entry.profileId, entry.name, entry.kind]), [
+    ["default", "bad-kind", "notarealkind"],
+    ["default", "bad-shape", "okf-local"],
+  ]);
+  assert.match(mixed.quarantined[0].error, /unsupported source kind/);
+  // The layer object itself must never come back out: it is what a caller would
+  // otherwise be able to hand to buildSources or write back to disk.
+  assert.equal(mixed.quarantined.some((entry) => "layer" in entry || "path" in entry), false);
+
+  // Ambiguity between two well-formed layers is NOT quarantinable — picking a
+  // winner would be more permissive than today, not less. These stay fatal.
+  assert.throws(() => readContextManifestQuarantined(write({
+    layers: [good, { name: "seed", level: 2, source: "files", path: "other" }],
+  })), /duplicate layer name/);
+  assert.throws(() => readContextManifestQuarantined(write({
+    layers: [
+      { name: "a", level: 1, path: "a", live: true, git: {} },
+      { name: "b", level: 2, path: "b", live: true, git: {} },
+    ],
+  })), /more than one live layer/);
+
+  // Nor is a failure no single layer explains: dropping the bad layer here
+  // still leaves a manifest nobody has validated, so it fails closed.
+  assert.throws(() => readContextManifestQuarantined(write({
+    layers: [good, { name: "bad-shape", level: 0 }],
+    projects: { "relative/path": "default" },
+  })), /absolute path/);
+
+  // v2 keeps the container labelling that lets a caller line quarantined rows
+  // up with the profile it is actually reading.
+  const v2 = readContextManifestQuarantined(write({
+    profiles: {
+      default: profile("Default", [good, { name: "bad", level: 1, source: "mcp" }]),
+      other: profile("Other", [{ name: "also-bad", level: 1, source: "github" }]),
+    },
+  }));
+  assert.deepEqual(v2.quarantined.map((entry) => [entry.profileId, entry.name]), [["default", "bad"], ["other", "also-bad"]]);
+  assert.deepEqual(getManifestProfileLayers(v2.manifest), [good]);
 });
 
 test("inactive Pack drift warns while selecting the affected profile fails closed", () => {

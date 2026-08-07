@@ -25,8 +25,8 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { buildSources, resolveTokenState } from "./sources/index.mjs";
-import { probeDocs } from "./sources/okf-local.mjs";
+import { buildSourcesQuarantined, createErrorSource, resolveTokenState } from "./sources/index.mjs";
+import { probeDocs, MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createMcpSource } from "./sources/mcp.mjs";
 import { resolveConcept } from "./resolver.mjs";
@@ -44,6 +44,7 @@ import {
   getManifestProfileLayers,
   mutateContextManifest,
   readContextManifest,
+  readContextManifestQuarantined,
   stableJson,
   withManifestLockAsync,
 } from "./manifest.mjs";
@@ -131,7 +132,12 @@ async function snapshotSource(source, entry, signal = null) {
   // is one long await, so a cancel that only fires between phases leaves the
   // walk running to completion — and a churning layer would stack one live walk
   // per cancelled job. Adapters that ignore the argument are unaffected.
-  const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds({ signal }) : [];
+  //
+  // `notes` rides along the same way: what a walk had to leave out — a document
+  // over the size cap, a subtree it lacks permission to read — belongs on the
+  // snapshot, because the row the user sees is built from the snapshot.
+  const notes = { skipped: [], unreadable: [] };
+  const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds({ signal, notes }) : [];
   throwIfAborted();
   entry.phase = "loading";
   entry.total = ids.length;
@@ -150,7 +156,24 @@ async function snapshotSource(source, entry, signal = null) {
     }
   }
   entry.loaded = n;
-  return { ids, concepts, tokens };
+  return { ids, concepts, tokens, skipped: notes.skipped, unreadable: notes.unreadable };
+}
+
+// What a source could not read, said in the words a person would use. The
+// counts alone would not do: "1 warning" on a vault tells you nothing, and the
+// whole failure being fixed here is that a permission-blocked subfolder indexed
+// silently partial — the user needs the name of the folder to go unlock it.
+function sourceWarnings(snap) {
+  if (!snap) return [];
+  const mb = (bytes) => `${(bytes / 1_000_000).toFixed(1)} MB`;
+  return [
+    ...(snap.skipped ?? []).map(
+      (item) => `Skipped ${item.rel} — ${mb(item.bytes)} is over the ${mb(MAX_DOC_BYTES)} per-file limit`,
+    ),
+    ...(snap.unreadable ?? []).map(
+      (item) => `Could not read ${item.rel} — permission denied. Documents inside it are missing from this source.`,
+    ),
+  ];
 }
 
 // A source view resolveConcept can consume that serves from the snapshot —
@@ -288,6 +311,17 @@ export function createEngineService({
     return readContextManifest(MANIFEST, { allowMissing: false });
   }
 
+  // The read path's manifest, where a single malformed layer is quarantined
+  // rather than fatal: validation used to throw inside every route's
+  // openSources(), so one bad layer answered 500 on /api/settings and
+  // /api/graph — the two screens a user needs to see the problem and fix it.
+  // The quarantined layers are NOT in the manifest this returns: they cannot be
+  // built, watched, or reached by the file APIs, only shown as broken rows.
+  // Mutations keep using readManifest(), so nothing invalid is ever written.
+  function readManifestForRead() {
+    return readContextManifestQuarantined(MANIFEST, { allowMissing: false });
+  }
+
   // A rebuild (manifest edit, or a CRUD/sync route) must not close the adapter
   // set an in-flight read is still iterating — closing an MCP adapter kills its
   // child and rejects that read's pending calls, silently dropping the source
@@ -305,7 +339,10 @@ export function createEngineService({
     if (closed) throw httpError(503, "Engine service is closed");
     const stamp = manifestStamp();
     if (cache && cache.stamp === stamp) return cache;
-    const stored = readManifest(); // throws while the manifest is missing/invalid
+    // Throws while the manifest is missing, unparseable, or broken in a way no
+    // single layer explains; a layer that merely fails validation comes back in
+    // `quarantined` instead.
+    const { manifest: stored, quarantined } = readManifestForRead();
     // ONE profile view of the manifest, built here and nowhere else. Every read
     // this service does — the layers list, buildSources' own internal
     // `manifest.layers` read, the index keys, the index↔layer correlation in
@@ -318,22 +355,38 @@ export function createEngineService({
     const manifest = { ...stored, layers: getManifestProfileLayers(stored) };
     const settings = resolveSettings(manifest);
     const layers = manifest.layers;
+    // Only the profile this service actually reads. A layer quarantined out of
+    // some other profile's stack has no row here because it has no source here.
+    const broken = quarantined.filter((entry) => entry.profileId === "default");
     // What a layer *reads*, with the two fields that only decide how it is
     // presented left out. See layerIdentity().
-    const identities = layers.map(layerIdentity);
+    const identities = [
+      ...layers.map(layerIdentity),
+      // A quarantined layer reads nothing, so its "identity" is the complaint
+      // itself: stable across rebuilds (no needless restart) and distinct per
+      // row (two broken layers never share one index entry).
+      ...broken.map((entry) => stableJson({ quarantined: entry.name, error: entry.error })),
+    ];
     const next = {
       stamp,
       manifest,
       settings,
       identities,
-      sources: buildSources(manifest, MANIFEST_DIR, { tokens: tokenState.tokens }),
+      // Appended, never interleaved: `manifest.layers` holds the valid layers
+      // alone — it is what feeds the watchers and the file APIs' sandbox roots —
+      // so a broken layer's path must not reach it. The stubs ride alongside in
+      // the source list purely so the index gives each one an error row.
+      sources: [
+        ...buildSourcesQuarantined(manifest, MANIFEST_DIR, { tokens: tokenState.tokens }),
+        ...broken.map((entry) => createErrorSource(entry)),
+      ],
       // Identity of a source's *configuration* (plus the settings that govern
       // indexing, plus the credential epoch for layers that actually name a
       // credential). A token that arrives after an anonymous GitHub index must
       // invalidate that index, but connecting an account must not rescan every
       // local folder and MCP graph in the cascade.
       keys: identities.map((identity, i) => {
-        const l = layers[i];
+        const l = layers[i] ?? {};
         return `${identity}::${stableJson(settings)}::t${l.source === "github" && l.auth ? tokenState.epoch : 0}`;
       }),
     };
@@ -797,7 +850,7 @@ export function createEngineService({
 
     const sourcesOut = perSource.map(({ source: s, entry, snap, status, error }) => {
       const meta = layerMeta.get(s.name) ?? {};
-      const kind = meta.source ?? "okf-local";
+      const kind = s.quarantinedKind ?? meta.source ?? "okf-local";
       // Whether the listing threw is not evidence a remote source is healthy:
       // remote adapters answer [] instead of throwing precisely so one down
       // repo can't fail a resolve. So an unreachable GitHub layer lists cleanly
@@ -828,6 +881,7 @@ export function createEngineService({
         const { alias, state } = resolveTokenState(meta, tokenState.tokens);
         auth = { alias, state };
       } catch { /* a malformed auth already failed manifest validation */ }
+      const warningMessages = sourceWarnings(snap);
       return {
         name: s.name,
         level: s.level,
@@ -846,6 +900,12 @@ export function createEngineService({
         // contributed nothing.
         status: degraded ? "degraded" : status,
         error: degraded ? health.lastError : error ?? null,
+        // Orthogonal to status, on purpose: this source read successfully and
+        // is serving what it read — it just isn't serving everything it was
+        // pointed at. The count drives a badge; the messages are capped so one
+        // pathological folder cannot turn a graph response into a log file.
+        warnings: warningMessages.length,
+        warningMessages: warningMessages.slice(0, 10),
         indexing: indexProgress(entry),
         // Enough for "last synced X, failed Y ago" without a second request.
         // Null on sources that keep no health (local bundles, MCP children).

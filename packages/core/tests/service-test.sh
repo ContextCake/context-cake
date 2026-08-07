@@ -11,15 +11,19 @@ BASE="http://127.0.0.1:$PORT"
 BASE2="http://127.0.0.1:$PORT2"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 TMP="$(mktemp -d)"
+PORT4=$((PORT + 3))            # graph-cache host: freshness of the memoized /api/graph
+BASE4="http://127.0.0.1:$PORT4"
 PID1=""
 PID2=""
 PID3=""
+PID4=""
 FAILED=0
 
 cleanup() {
   [ -n "$PID1" ] && kill "$PID1" 2>/dev/null
   [ -n "$PID2" ] && kill "$PID2" 2>/dev/null
   [ -n "$PID3" ] && kill "$PID3" 2>/dev/null
+  [ -n "$PID4" ] && kill "$PID4" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -378,6 +382,126 @@ grep -q '"t"' "$TMP/manifest2.json" && pass "manifest untouched by blocked mutat
 FT="$(curl -s "$BASE2/nope")"
 grep -q host-fallthrough <<<"$FT" && pass "fall-through works on this host too" || fail "fall-through host2 ($FT)"
 
+# ---- the memoized /api/graph, and the cheap route that replaces polling it ----
+#
+# /api/graph answers the expensive half of its payload from a memo, and counts
+# most concepts from numbers the index already computed. Both are keyed by
+# snapshot identity read live at request time rather than cleared by an
+# invalidation event — so the thing worth testing is not that the cache is fast
+# but that it CANNOT go stale. Every way the answer can change gets its own
+# assertion: a file edited through the API, a file edited behind the app's back,
+# a source added, removed, renamed, and an indexing setting changed.
+#
+# Its own host on its own manifest: by this point the shared host carries a
+# deliberately unreachable github layer, whose health flaps and would make
+# "nothing changed" untestable.
+echo "cached /api/graph: cheap to repeat, impossible to serve stale"
+mkdir -p "$TMP/gc/a" "$TMP/gc/b"
+# `solo` exists in one layer (answered from the index's own per-concept count);
+# `shared` is defined by both (a real merge, answered from the resolved cache).
+printf -- '---\ntype: note\ntitle: Solo\nupdated: 2026-07-01\n---\n\n# Solo\n\n## Body {#body}\n\nalpha.\n' > "$TMP/gc/a/solo.md"
+printf -- '---\ntype: note\ntitle: Shared\nupdated: 2026-07-01\n---\n\n# Shared\n\n## Body {#body}\n\nfrom a.\n' > "$TMP/gc/a/shared.md"
+printf -- '---\ntype: note\ntitle: Shared\nupdated: 2026-07-02\n---\n\n# Shared\n\n## Body {#body}\n\nfrom b.\n' > "$TMP/gc/b/shared.md"
+cat > "$TMP/manifest4.json" <<EOF
+{ "layers": [
+    { "name": "a", "level": 1, "source": "files", "path": "$TMP/gc/a" },
+    { "name": "b", "level": 2, "source": "files", "path": "$TMP/gc/b" }
+  ] }
+EOF
+node "$TMP/host.mjs" "$PORT4" "$TMP/manifest4.json" sekrit true - >/dev/null 2>&1 &
+PID4=$!
+for _ in $(seq 1 60); do curl -sf "${AUTH[@]}" "$BASE4/api/graph" >/dev/null 2>&1 && break; sleep 0.1; done
+
+G4() { curl -s "${AUTH[@]}" "$BASE4/api/graph?wait=15000"; }
+TOK4() { G4 | JQ "String((d.concepts.find((c) => c.id === '$1') ?? {}).tokens)"; }
+GEN4() { curl -s "${AUTH[@]}" "$BASE4/api/status" | JQ 'String(d.generation)'; }
+# What the cascade would answer with no cache at all: resolve every concept from
+# live sources and encode it from scratch. Every token assertion below is against
+# THIS, not against a previous cached answer — a cache that agreed only with
+# itself would pass a self-comparison forever.
+EXPECT4() { node --input-type=module -e "
+import fs from 'node:fs';
+import { buildSources } from '$ROOT/packages/core/src/sources/index.mjs';
+import { resolveConcept } from '$ROOT/packages/core/src/resolver.mjs';
+import { conceptText, countTokens } from '$ROOT/packages/core/src/tokenize.mjs';
+const manifest = JSON.parse(fs.readFileSync('$TMP/manifest4.json', 'utf8'));
+const sources = buildSources(manifest, '$TMP');
+const ids = [...new Set((await Promise.all(sources.map((s) => s.listConceptIds()))).flat())].sort();
+const rows = [];
+for (const id of ids) rows.push([id, countTokens(conceptText(await resolveConcept(id, sources)))]);
+for (const s of sources) s.close?.();
+console.log(JSON.stringify(rows));
+"; }
+GRAPHTOK4() { G4 | JQ 'JSON.stringify(d.concepts.map((c) => [c.id, c.tokens]).sort((x, y) => x[0] < y[0] ? -1 : 1))'; }
+
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] \
+  && pass "every concept's token count matches a from-scratch encode (single-layer and merged)" \
+  || fail "cached token counts diverge from a live resolve (graph=$(GRAPHTOK4) live=$(EXPECT4))"
+SUM4="$(G4 | JQ 'String(d.totals.resolvedTokens === d.concepts.reduce((n, c) => n + c.tokens, 0))')"
+[ "$SUM4" = "true" ] && pass "totals.resolvedTokens is the sum of the rows it reports" || fail "resolvedTokens does not sum its own rows"
+
+# A settled index has nothing left to move, so two calls must be byte-identical
+# — including elapsedMs, which stops at the moment the job finished.
+A1="$(G4)"; A2="$(G4)"
+[ "$A1" = "$A2" ] && pass "two /api/graph calls at a settled index are byte-identical" || fail "the graph payload drifts between identical calls"
+[ "$(GEN4)" = "$(GEN4)" ] && pass "generation holds still while nothing changes" || fail "generation moves with no state change"
+
+S4="$(curl -s "${AUTH[@]}" "$BASE4/api/status")"
+[ "$(JQ 'JSON.stringify([typeof d.generation, d.indexing, d.indexingSources.length, d.sources.map((s) => [s.name, s.status, s.phase, s.loaded, s.total, s.conceptCount])])' <<<"$S4")" \
+  = '["number",false,0,[["a","ok","ready",2,2,2],["b","ok","ready",1,1,1]]]' ] \
+  && pass "/api/status reports index progress per source without touching a concept" || fail "/api/status shape ($S4)"
+[ "$(JQ 'String("concepts" in d || d.sources.some((s) => "tokens" in s))' <<<"$S4")" = "false" ] \
+  && pass "/api/status carries no corpus-sized payload" || fail "/api/status leaked corpus data ($S4)"
+code 200 "$(C "$BASE2/api/status")" "/api/status is a read route (answers with mutations disabled)"
+code 401 "$(C "$BASE4/api/status")" "/api/status is behind the same bearer gate"
+
+echo "  invalidation: a write through the API"
+GEN_BEFORE="$(GEN4)"
+SOLO_BEFORE="$(TOK4 solo)"
+MT4="$(curl -s "${AUTH[@]}" "$BASE4/api/file?path=a/solo.md" | JQ 'd.modified')"
+code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"path\":\"a/solo.md\",\"text\":\"---\\ntype: note\\ntitle: Solo\\nupdated: 2026-07-01\\n---\\n\\n# Solo\\n\\n## Body {#body}\\n\\nalpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi.\\n\",\"modified\":\"$MT4\"}" "$BASE4/api/file")" "edit a file in an indexed layer"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "the graph reflects the edit (token counts match a fresh encode)" || fail "the graph served a stale token count after an edit (graph=$(GRAPHTOK4) live=$(EXPECT4))"
+[ "$(TOK4 solo)" != "$SOLO_BEFORE" ] && pass "the edited concept's count actually moved ($SOLO_BEFORE -> $(TOK4 solo))" || fail "the edited concept's count did not change"
+[ "$(GEN4)" != "$GEN_BEFORE" ] && pass "generation moved on the edit" || fail "generation did not move on an edit"
+
+echo "  invalidation: a write behind the app's back (watcher)"
+printf -- '---\ntype: note\ntitle: Outside\nupdated: 2026-07-03\n---\n\n# Outside\n\n## Body {#body}\n\nwritten by another program entirely.\n' > "$TMP/gc/a/outside.md"
+for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.concepts.some((c) => c.id === "outside"))')" = "true" ] && break; sleep 0.25; done
+[ "$(G4 | JQ 'String(d.concepts.some((c) => c.id === "outside"))')" = "true" ] \
+  && pass "a file written outside the app reaches the graph" || fail "an externally written file never reached the cached graph"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts still match a fresh encode after the external write" || fail "stale counts after an external write"
+
+echo "  invalidation: sources added, removed, renamed"
+mkdir -p "$TMP/gc/c"
+printf -- '---\ntype: note\ntitle: Shared\nupdated: 2026-07-04\n---\n\n# Shared\n\n## Body {#body}\n\nfrom c, which is longer than either of the other two answers.\n' > "$TMP/gc/c/shared.md"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"c\",\"level\":3,\"path\":\"$TMP/gc/c\"}" "$BASE4/api/sources")" "add a third layer over the merged concept"
+[ "$(G4 | JQ 'd.concepts.find((c) => c.id === "shared").winner')" = "c" ] && pass "the new layer wins the merged concept" || fail "the added layer did not take the merge"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts match a fresh encode after an add" || fail "stale counts after a source add (graph=$(GRAPHTOK4) live=$(EXPECT4))"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"c","newName":"c2","level":3}' "$BASE4/api/sources")" "rename the new layer"
+[ "$(G4 | JQ 'd.concepts.find((c) => c.id === "shared").winner')" = "c2" ] && pass "the rename reaches the concept rows" || fail "the cached rows kept the old layer name"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts survive a rename (names are not part of merged text)" || fail "stale counts after a rename"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE4/api/sources?name=c2")" "remove the third layer"
+[ "$(G4 | JQ 'd.concepts.find((c) => c.id === "shared").winner')" = "b" ] && pass "the removal hands the merge back" || fail "the cached rows kept a removed layer"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts match a fresh encode after a remove" || fail "stale counts after a source remove"
+
+echo "  invalidation: an indexing setting change"
+# A layer big enough to be refused by a lowered document cap, so the re-index a
+# settings change forces is observable rather than inferred: the cap is a
+# setting, not layer config, so nothing in the manifest's layer JSON moves.
+mkdir -p "$TMP/gc/d"
+node -e 'const fs=require("node:fs");for(let i=0;i<120;i++)fs.writeFileSync(`${process.argv[1]}/n${i}.md`,`# N${i}\n\n## Body\n\nbulk ${i}.\n`)' "$TMP/gc/d"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"d\",\"level\":0,\"path\":\"$TMP/gc/d\"}" "$BASE4/api/sources")" "add a 120-document layer"
+for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").conceptCount)')" = "120" ] && break; sleep 0.25; done
+GEN_BEFORE="$(GEN4)"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":100}' "$BASE4/api/settings")" "lower maxDocFiles below that layer's size"
+for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "error" ] && break; sleep 0.25; done
+[ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "error" ] \
+  && pass "the settings change re-indexed rather than serving the old snapshot" || fail "a settings change left the previous index in place"
+[ "$(GEN4)" != "$GEN_BEFORE" ] && pass "generation moved on the settings change" || fail "generation did not move on a settings change"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":10000}' "$BASE4/api/settings")" "restore the limit"
+for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "ok" ] && break; sleep 0.25; done
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts match a fresh encode once the limit is restored" || fail "stale counts after settings were restored"
+
 echo "injected credentials: reported, never echoed"
 # The engine receives secrets by value from whoever owns the keychain. Two
 # things have to hold at once: the credential must actually reach the adapter,
@@ -461,4 +585,4 @@ grep -q '"boundAlias":"github.com/octo"' <<<"$CRED" && pass "the alias (a name, 
 grep -q '"boundIndexed":true' <<<"$CRED" && pass "the credentialed layer actually indexed" || fail "credentialed layer did not index ($CRED)"
 grep -q '"unboundState":"missing-token"' <<<"$CRED" && pass "setTokens re-indexes and reports the now-missing credential" || fail "setTokens did not invalidate ($CRED)"
 
-[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection)" || { echo "service test FAILED"; exit 1; }
+[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection + graph-cache freshness + /api/status)" || { echo "service test FAILED"; exit 1; }

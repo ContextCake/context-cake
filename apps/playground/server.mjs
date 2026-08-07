@@ -29,8 +29,9 @@ const PORT = Number(args.port ?? 8790);
 // console can run in live mode against this server's same-origin /api/* surface.
 const CONSOLE_DIR = args.console ? path.resolve(args.console) : null;
 
-// The engine service owns /api/graph, /api/resolve, /api/resolve-all, the
-// sources CRUD, and the /console/ mount. token: null — the workbench is a
+// The engine service owns /api/status, /api/graph, /api/resolve,
+// /api/resolve-all, the sources CRUD, and the /console/ mount. token: null —
+// the workbench is a
 // local same-origin UI; the loopback-Host + CSRF guards are its protection.
 const service = createEngineService({
   manifestPath: MANIFEST,

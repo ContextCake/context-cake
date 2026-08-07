@@ -1,10 +1,10 @@
 // ContextCake engine HTTP service — the embeddable half of the playground
 // server. createEngineService() wraps the cascade engine (sources + resolver)
 // in a framework-free request handler a host mounts inside its own node:http
-// server: the read API (/api/graph, /api/resolve, /api/resolve-all), the
-// sources CRUD (/api/sources, /api/sources/sync), and an optional static mount
-// for a built console app under /console/. Dependency-free — plain Node
-// built-ins, like the rest of packages/core.
+// server: the read API (/api/status, /api/graph, /api/resolve,
+// /api/resolve-all), the sources CRUD (/api/sources, /api/sources/sync), and an
+// optional static mount for a built console app under /console/.
+// Dependency-free — plain Node built-ins, like the rest of packages/core.
 //
 //   const svc = createEngineService({ manifestPath, consoleDist, token, allowMutations });
 //   http.createServer(async (req, res) => {
@@ -29,7 +29,7 @@ import { buildSourcesQuarantined, createErrorSource, resolveTokenState } from ".
 import { probeDocs, MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createMcpSource } from "./sources/mcp.mjs";
-import { resolveConcept } from "./resolver.mjs";
+import { mergeConcepts, resolveConcept } from "./resolver.mjs";
 import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
 import { resolveSettings, walkLimitsFrom, validateSettingsPatch, settingsCatalog } from "./settings.mjs";
 import {
@@ -142,6 +142,11 @@ async function snapshotSource(source, entry, signal = null) {
   entry.phase = "loading";
   entry.total = ids.length;
   const concepts = new Map();
+  // Per-concept token counts, kept rather than only summed. The index already
+  // pays one BPE encode per document, and buildGraph used to pay a second one
+  // over the whole merged corpus on every request — 14 seconds on a 139MB
+  // vault. Keeping the number here is what makes that rebuild cheap.
+  const tokensById = new Map();
   let tokens = 0;
   let n = 0;
   for (const id of ids) {
@@ -149,14 +154,54 @@ async function snapshotSource(source, entry, signal = null) {
     const concept = await source.loadConcept(id);
     throwIfAborted();
     concepts.set(id, concept);
-    tokens += countTokens(conceptText(concept));
+    tokens += tokenizeConcept(source, id, concept, tokensById);
     if (++n % YIELD_EVERY === 0) {
       entry.loaded = n;
       await yieldNow();
     }
   }
   entry.loaded = n;
-  return { ids, concepts, tokens, skipped: notes.skipped, unreadable: notes.unreadable };
+  // A generation, assigned once, never reused. Snapshots are immutable after
+  // this returns, so "same generation" is the same content — which is what lets
+  // buildGraph key a memo on live state instead of on invalidation events.
+  return {
+    ids, concepts, tokens, tokensById, gen: ++SNAPSHOT_SEQ,
+    skipped: notes.skipped, unreadable: notes.unreadable,
+  };
+}
+
+let SNAPSHOT_SEQ = 0;
+
+// Count a concept the way the cascade will read it back: through the same
+// mergeConcepts the resolver runs, over this source alone. For any concept only
+// this source contributes, resolveConcept(id, [thisSource]) reduces to exactly
+// this call, so buildGraph can reuse the number verbatim rather than re-encoding
+// the text. Exact by construction — not an estimate — because it is the same
+// function applied to the same contributor.
+//
+// This also makes a source's own `tokens` total the count of what it CONTRIBUTES
+// rather than of its raw file text: a tombstoned section, a blank-line-padded
+// body, two sections sharing an anchor. `sourceTokens` and `resolvedTokens` are
+// shown side by side in the UI, and they were previously measured differently.
+//
+// The raw-text fallback keeps an adapter that returns an unmergeable shape from
+// failing the whole index; that concept simply stays out of tokensById and
+// buildGraph counts it itself, rather than inheriting a number derived
+// differently from every other row.
+function tokenizeConcept(source, id, concept, tokensById) {
+  try {
+    const contributor = {
+      layer: source.name,
+      level: source.level,
+      updated: concept.frontmatter.updated ?? null,
+      ...concept,
+    };
+    const count = countTokens(conceptText(mergeConcepts([contributor])));
+    tokensById.set(id, count);
+    return count;
+  } catch {
+    return countTokens(conceptText(concept));
+  }
 }
 
 // What a source could not read, said in the words a person would use. The
@@ -294,6 +339,22 @@ export function createEngineService({
   // adding a second source does NOT re-index the first — the common setup flow.
   let indexes = new Map();
 
+  // ---- derived-read caches ---------------------------------------------------
+  //
+  // Both are keyed by state read live at request time, never invalidated by an
+  // event. That is deliberate: an event-driven cache is stale exactly when
+  // someone forgets a trigger, and a stale graph is worse than a slow one. A
+  // snapshot is immutable once assigned and carries a unique generation, so a
+  // key built from the current (name, level, generation) triple cannot outlive
+  // what it describes.
+  let graphMemo = null;      // { key, promise } — the O(corpus) half of /api/graph
+  let conceptTokens = new Map(); // concept id -> { sig, tokens } for merged concepts
+  // Monotonic counter behind /api/status. Bumped whenever the signature of what
+  // the heavy routes would return changes, so a client can poll cheaply and
+  // refetch only on a real move.
+  let generation = 0;
+  let generationSig = null;
+
   // Pay the tokenizer's one-time init at boot, right after creation, instead
   // of blocking the first /api/graph for ~800ms mid-setup.
   setImmediate(warmTokenizer).unref?.();
@@ -430,6 +491,8 @@ export function createEngineService({
     cache = null;
     for (const entry of indexes.values()) entry.cancel?.();
     indexes = new Map();
+    graphMemo = null;
+    conceptTokens = new Map();
     if (prev) for (const s of prev.sources) s.close?.();
   }
 
@@ -732,6 +795,7 @@ export function createEngineService({
       }
 
       if (p === "/api/graph") { json(res, 200, await buildGraph(waitParam(url))); return true; }
+      if (p === "/api/status") { json(res, 200, statusApi()); return true; }
       if (p === "/api/resolve") { json(res, 200, await resolveOne(url.searchParams.get("concept"))); return true; }
       if (p === "/api/resolve-all") { json(res, 200, await resolveAllApi(waitParam(url))); return true; }
       if (p === "/api/conflict-resolutions") {
@@ -818,35 +882,8 @@ export function createEngineService({
     // still has a snapshot and stays in: it is serving cached or partial
     // content, which is the whole point of warn-and-continue. Only a source
     // that couldn't be read at all — or hasn't been read yet — drops out.
-    const healthy = perSource.filter((p) => p.snap).map((p) => snapshotView(p.source, p.snap));
-    const allIds = [...new Set(perSource.flatMap((p) => p.snap?.ids ?? []))].sort();
-
-    const concepts = [];
-    const latestPerSource = new Map(); // source name -> latest `updated`
-    let resolvedTokens = 0;
-    let sinceYield = 0;
-    for (const id of allIds) {
-      if (++sinceYield % YIELD_EVERY === 0) await yieldNow();
-      let resolved = null;
-      try { resolved = await resolveConcept(id, healthy); } catch { continue; }
-      if (!resolved) continue;
-      const conflictCount = resolved.sections.reduce((n, sec) => n + (sec.conflicts?.length ? 1 : 0), 0);
-      const tokens = countTokens(conceptText(resolved));
-      resolvedTokens += tokens;
-      for (const c of resolved.contributors) {
-        const prev = latestPerSource.get(c.layer);
-        if (c.updated && (!prev || c.updated > prev)) latestPerSource.set(c.layer, c.updated);
-      }
-      concepts.push({
-        id,
-        type: resolved.frontmatter.type ?? "concept",
-        title: resolved.frontmatter.title ?? id,
-        contributors: resolved.contributors.map((c) => c.layer),
-        winner: resolved.contributors[0]?.layer ?? null,
-        conflictCount,
-        tokens,
-      });
-    }
+    const contributing = perSource.filter((p) => p.snap);
+    const { concepts, resolvedTokens, latestPerSource } = await resolvedIndex(contributing);
 
     const sourcesOut = perSource.map(({ source: s, entry, snap, status, error }) => {
       const meta = layerMeta.get(s.name) ?? {};
@@ -914,6 +951,8 @@ export function createEngineService({
       };
     });
 
+    // Summed off the snapshots, which already counted every document they read.
+    // Nothing here recomputes a token.
     const sourceTokens = sourcesOut.reduce((n, s) => n + s.tokens, 0);
     const pending = perSource.filter((p) => p.entry.status === "indexing").map((p) => p.source.name);
     return {
@@ -923,9 +962,179 @@ export function createEngineService({
       // have and poll — this is never a reason to show a blocking spinner.
       indexing: pending.length > 0,
       indexingSources: pending,
+      // The same counter GET /api/status reports, so a client that polls the
+      // cheap route can tell whether the payload it already holds is current.
+      generation: bumpGeneration(entries),
       totals: { sourceTokens, resolvedTokens, concepts: concepts.length, sources: sourcesOut.length },
       sources: sourcesOut,
       concepts,
+    };
+  }
+
+  /**
+   * The O(corpus) half of /api/graph: the per-concept rows, the resolved token
+   * total, and each source's most recent `updated`. Memoized on the identity of
+   * the snapshots it reads.
+   *
+   * The key is recomputed from live state on every call rather than being
+   * cleared by an invalidation event. That is the safety property: there is no
+   * trigger to forget. A snapshot object is immutable once assigned and carries
+   * a unique generation, so every way the answer can change — an index landing,
+   * a re-index after a file edit or a settings change, a source added, removed,
+   * renamed or re-levelled — produces a different key here on the very next
+   * request.
+   *
+   * The cheap half of the payload (progress, health, warnings, token totals) is
+   * rebuilt per request, so a `loaded` counter ticking through an index does not
+   * throw this away.
+   */
+  async function resolvedIndex(contributing) {
+    const key = JSON.stringify(contributing.map((p) => [p.source.name, p.source.level, p.snap.gen]));
+    if (!graphMemo || graphMemo.key !== key) {
+      // Shared by every caller that arrives during a cold build: the console
+      // polls this route while indexing, and a second request must join the
+      // build in flight rather than start a duplicate of it. Cleared on
+      // rejection so one failure cannot pin a poisoned entry.
+      let promise;
+      promise = buildResolvedIndex(contributing).catch((err) => {
+        if (graphMemo?.promise === promise) graphMemo = null;
+        throw err;
+      });
+      graphMemo = { key, promise };
+    }
+    return graphMemo.promise;
+  }
+
+  async function buildResolvedIndex(contributing) {
+    const healthy = contributing.map((p) => snapshotView(p.source, p.snap));
+    const allIds = [...new Set(contributing.flatMap((p) => p.snap.ids))].sort();
+    const snapByLayer = new Map(contributing.map((p) => [p.source.name, p.snap]));
+
+    const concepts = [];
+    const latestPerSource = new Map(); // source name -> latest `updated`
+    // Rebuilt rather than mutated, so concepts that no longer exist age out
+    // instead of accumulating for the life of the process.
+    const nextTokens = new Map();
+    let resolvedTokens = 0;
+    let sinceYield = 0;
+    for (const id of allIds) {
+      if (++sinceYield % YIELD_EVERY === 0) await yieldNow();
+      let resolved = null;
+      try { resolved = await resolveConcept(id, healthy); } catch { continue; }
+      if (!resolved) continue;
+      const conflictCount = resolved.sections.reduce((n, sec) => n + (sec.conflicts?.length ? 1 : 0), 0);
+      const tokens = conceptTokenCount(id, resolved, snapByLayer, nextTokens);
+      resolvedTokens += tokens;
+      for (const c of resolved.contributors) {
+        const prev = latestPerSource.get(c.layer);
+        if (c.updated && (!prev || c.updated > prev)) latestPerSource.set(c.layer, c.updated);
+      }
+      concepts.push({
+        id,
+        type: resolved.frontmatter.type ?? "concept",
+        title: resolved.frontmatter.title ?? id,
+        contributors: resolved.contributors.map((c) => c.layer),
+        winner: resolved.contributors[0]?.layer ?? null,
+        conflictCount,
+        tokens,
+      });
+    }
+    conceptTokens = nextTokens;
+    return { concepts, resolvedTokens, latestPerSource };
+  }
+
+  // Exact token count for one resolved concept, without re-encoding text the
+  // engine has already encoded.
+  //
+  // The single-contributor case — the overwhelming majority in any real vault —
+  // is answered straight from the index: snapshotSource counted that concept
+  // through the same merge, so the number is identical, not an approximation.
+  // Anything genuinely merged across layers falls back to a cache keyed by the
+  // precedence and generation of its contributors, so a re-index of ONE layer
+  // only re-encodes the concepts that layer actually touches. Layer names are
+  // deliberately absent from the key: a rename changes the graph rows but not a
+  // single token of merged text.
+  function conceptTokenCount(id, resolved, snapByLayer, nextTokens) {
+    if (resolved.contributors.length === 1) {
+      const only = snapByLayer.get(resolved.contributors[0].layer)?.tokensById?.get(id);
+      if (only !== undefined) return only;
+    }
+    const sig = resolved.contributors
+      .map((c) => `${c.level}#${snapByLayer.get(c.layer)?.gen ?? "?"}`)
+      .join("|");
+    const hit = conceptTokens.get(id);
+    const tokens = hit && hit.sig === sig ? hit.tokens : countTokens(conceptText(resolved));
+    nextTokens.set(id, { sig, tokens });
+    return tokens;
+  }
+
+  /**
+   * Everything a /api/graph payload would show, reduced to one string, behind a
+   * counter that only moves when that string does.
+   *
+   * Deliberately excluded: `indexing.elapsedMs`, which is a clock rather than
+   * state — a generation that changed every millisecond through an index would
+   * defeat the purpose of a cheap poll. Deliberately included: the manifest
+   * stamp, which covers every presentation field a layer contributes (location,
+   * origin, live, auth alias) without enumerating them, and the credential
+   * epoch, which changes no layer JSON at all.
+   */
+  function bumpGeneration(entries) {
+    const parts = [manifestStamp(), `t${tokenState.epoch}`];
+    for (const { source, entry } of entries) {
+      const health = typeof source.health === "function" ? source.health() : null;
+      parts.push([
+        source.name, source.level, entry.snap?.gen ?? 0,
+        entry.status, entry.phase, entry.loaded, entry.total ?? "",
+        entry.error ?? "",
+        health ? `${health.ok}:${health.lastErrorAt ?? ""}:${health.lastSuccessAt ?? ""}` : "",
+      ].join("~"));
+    }
+    const sig = parts.join("|");
+    if (sig !== generationSig) {
+      generationSig = sig;
+      generation += 1;
+    }
+    return generation;
+  }
+
+  /**
+   * The cheap status route. O(sources) by construction: it reads index progress
+   * and adapter health, and never touches a concept, a resolve, or a tokenizer.
+   *
+   * It exists because index progress used to live on /api/graph alone, which is
+   * why the console ended up polling the most expensive route in the engine
+   * every 900ms. `generation` is the contract that replaces that: poll here,
+   * refetch the heavy payloads only when the number moves.
+   */
+  function statusApi() {
+    const { manifest, entries } = ensureIndexes();
+    const layerMeta = new Map((manifest.layers ?? []).map((l) => [l.name, l]));
+    const sources = entries.map(({ source, entry }) => {
+      const health = typeof source.health === "function" ? source.health() : null;
+      const status = entry.status === "ready" ? "ok" : entry.status;
+      // Same four states, and the same degraded rule, as /api/graph — a client
+      // that renders from this route must not disagree with one that renders
+      // from that one.
+      const degraded = status === "ok" && health?.ok === false && health.lastErrorScope === "index";
+      return {
+        name: source.name,
+        level: source.level,
+        kind: source.quarantinedKind ?? layerMeta.get(source.name)?.source ?? "okf-local",
+        status: degraded ? "degraded" : status,
+        phase: entry.phase,
+        loaded: entry.loaded,
+        total: entry.total,
+        conceptCount: entry.snap?.ids.length ?? 0,
+        error: degraded ? health.lastError : entry.error ?? null,
+      };
+    });
+    const pending = entries.filter((e) => e.entry.status === "indexing").map((e) => e.source.name);
+    return {
+      generation: bumpGeneration(entries),
+      indexing: pending.length > 0,
+      indexingSources: pending,
+      sources,
     };
   }
 

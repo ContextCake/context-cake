@@ -70,8 +70,34 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
     async loadConcept(id) {
       return cached(`concept:${id}`, () => source.loadConcept(id));
     },
-    async listConceptIds() {
-      return cached("list", () => source.listConceptIds());
+    /**
+     * Every argument goes through, and what the walk could not read comes back
+     * out even on a cache hit.
+     *
+     * Taking no arguments cost the wrapped source both of them, and withCache
+     * wraps ANY kind — a local folder with a `cache` block included. So a
+     * cached local layer's walk was unabortable (a cancelled index kept reading
+     * to the end, and a churning layer stacked one live walk per cancelled
+     * job), and its `notes` never arrived, which meant an oversized document or
+     * a permission-blocked subtree indexed silently partial: zero warnings on a
+     * source that is missing documents.
+     *
+     * The notes are cached WITH the ids for the same reason. They describe the
+     * listing, so serving the listing from a memo while dropping them would
+     * make the warnings flicker off on the second read.
+     */
+    async listConceptIds(options = {}) {
+      const notes = options?.notes ?? null;
+      const entry = await cached("list.v2", async () => {
+        const collected = { skipped: [], unreadable: [] };
+        const ids = await source.listConceptIds({ ...options, notes: collected });
+        return { ids, notes: collected };
+      });
+      if (notes) {
+        for (const item of entry.notes?.skipped ?? []) notes.skipped?.push(item);
+        for (const item of entry.notes?.unreadable ?? []) notes.unreadable?.push(item);
+      }
+      return entry.ids;
     },
     // Deliberately NOT cached: health() reports whether the last real request
     // failed, so answering it from a memo taken before the outage would defeat

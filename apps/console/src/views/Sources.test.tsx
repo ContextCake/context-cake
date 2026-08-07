@@ -42,6 +42,12 @@ function buttonByAria(label: string): HTMLButtonElement {
   return match
 }
 
+/** The edit control names what its panel can change, so its label varies by kind. */
+function editLabel(source: Source): string {
+  const folder = !source.origin && (source.sourceKind === 'okf-local' || source.sourceKind === 'files')
+  return folder ? `Rename, re-level or repoint ${source.name}` : `Rename or re-level ${source.name}`
+}
+
 function sourceButton(name: string): HTMLButtonElement {
   const match = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="option"]'))
     .find((item) => item.querySelector('strong')?.textContent === name)
@@ -254,11 +260,10 @@ describe('Sources with an invalid manifest entry', () => {
 })
 
 describe('Sources rename + re-level', () => {
-  it('PATCHes only name and level — and says a wrong path means remove + re-add', async () => {
+  it('PATCHes name and level, and leaves an untouched folder out of the body', async () => {
     await mount([src({ name: 'notes', level: 3 })])
 
-    await act(async () => buttonByAria('Rename or re-level notes').click())
-    expect(container.textContent).toContain('remove this source and add it again')
+    await act(async () => buttonByAria('Rename, re-level or repoint notes').click())
 
     await enter('#src-edit-name', 'Field notes')
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Raise level"]')?.click())
@@ -266,6 +271,8 @@ describe('Sources rename + re-level', () => {
 
     const call = mocks.apiFetch.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')
     expect(call?.[0]).toBe('/api/sources')
+    // No `path`: an unchanged folder must never re-key the index entry and put
+    // a settled source through a full re-read for nothing.
     expect(JSON.parse(String((call?.[1] as RequestInit).body))).toEqual({ name: 'notes', newName: 'Field notes', level: 4 })
     expect(mocks.reload).toHaveBeenCalled()
   })
@@ -273,7 +280,7 @@ describe('Sources rename + re-level', () => {
   it('warns before renaming the live layer — staged captures fail closed', async () => {
     await mount([src({ name: 'team', level: 2, layer: 'team', live: true })])
 
-    await act(async () => buttonByAria('Rename or re-level team').click())
+    await act(async () => buttonByAria('Rename, re-level or repoint team').click())
     expect(container.textContent).toContain('disables team capture for this machine')
     expect(container.textContent).toContain('staged captures fail closed')
   })
@@ -290,7 +297,7 @@ describe('Sources rename + re-level', () => {
     })
     await mount([src({ name: 'team', level: 2, layer: 'team' })])
 
-    await act(async () => buttonByAria('Rename or re-level team').click())
+    await act(async () => buttonByAria('Rename, re-level or repoint team').click())
     await enter('#src-edit-name', 'platform')
     await act(async () => button('Save').click())
 
@@ -336,6 +343,101 @@ describe('Sources → Files', () => {
     await mount([src({ name: 'notes' })])
 
     expect(container.textContent).toContain('10000+ files')
+  })
+
+  it('hides Reveal in Finder outside the desktop app and reveals the layer root inside it', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => (url === '/api/files'
+      ? listing([{ layer: 'notes', kind: 'files', root: '/Users/me/vault', fileCount: 3, truncated: false, files: [] }])
+      : ok()))
+    await mount([src({ name: 'notes' })])
+    expect(container.querySelector('button[aria-label^="Reveal"]')).toBeNull()
+
+    const revealFile = vi.fn().mockResolvedValue({ ok: true })
+    ;(window as unknown as { __CC_DESKTOP?: unknown }).__CC_DESKTOP = { revealFile }
+    await mount([src({ name: 'notes' })])
+    await act(async () => buttonByAria('Reveal the folder for notes in Finder').click())
+    // The source's own name and an empty relative path — the main process
+    // resolves the root; the renderer never names an absolute path.
+    expect(revealFile).toHaveBeenCalledWith('notes', '')
+    delete (window as unknown as { __CC_DESKTOP?: unknown }).__CC_DESKTOP
+  })
+})
+
+describe('Sources: repointing a folder', () => {
+  const listing = (root: string) => ok({
+    layers: [{ layer: 'notes', kind: 'files', root, fileCount: 3, truncated: false, files: [] }],
+  })
+
+  async function openEditor(source: Source, root = '/Users/me/vault') {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/files') return listing(root)
+      if (init?.method === 'PATCH') return ok({ ok: true, reindexing: true, hasDocuments: true })
+      return ok()
+    })
+    await mount([source])
+    await act(async () => buttonByAria(editLabel(source)).click())
+  }
+
+  it('offers a labelled folder field prefilled with the source root, and PATCHes the move', async () => {
+    await openEditor(src({ name: 'notes', level: 3 }))
+
+    const field = container.querySelector<HTMLInputElement>('#src-edit-path')!
+    expect(field.value).toBe('/Users/me/vault')
+    // A form control with no accessible name is the Critical failure this
+    // panel must not reintroduce.
+    expect(container.querySelector('label[for="src-edit-path"]')?.textContent).toBe('Folder')
+    expect(container.textContent).not.toContain('remove this source and add it again')
+
+    await enter('#src-edit-path', '/Users/me/vault-2')
+    await act(async () => button('Save').click())
+
+    const call = mocks.apiFetch.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')
+    expect(JSON.parse(String((call?.[1] as RequestInit).body))).toEqual({ name: 'notes', path: '/Users/me/vault-2' })
+    // The row is about to say "indexing"; naming the cause first is the
+    // difference between progress and a source that looks broken.
+    expect(container.textContent).toContain('reading it now')
+  })
+
+  it('fills the folder field from the native picker', async () => {
+    const chooseFolder = vi.fn().mockResolvedValue('/Volumes/Work/notes')
+    ;(window as unknown as { __CC_DESKTOP?: unknown }).__CC_DESKTOP = { chooseFolder }
+    await openEditor(src({ name: 'notes' }))
+
+    await act(async () => button('Choose…').click())
+    expect(container.querySelector<HTMLInputElement>('#src-edit-path')!.value).toBe('/Volumes/Work/notes')
+    delete (window as unknown as { __CC_DESKTOP?: unknown }).__CC_DESKTOP
+  })
+
+  it('offers no folder field for a repo read over the API, and keeps the honest advice', async () => {
+    await openEditor(src({ name: 'notes', sourceKind: 'github', kind: 'okf-local' }))
+    expect(container.querySelector('#src-edit-path')).toBeNull()
+    expect(container.textContent).toContain('read from its repository over the GitHub API')
+  })
+
+  it('offers no folder field for a clone, whose folder belongs to Sync', async () => {
+    await openEditor(src({ name: 'notes', sourceKind: 'okf-local', origin: 'https://github.com/o/r.git' }))
+    expect(container.querySelector('#src-edit-path')).toBeNull()
+    expect(container.textContent).toContain('its folder is managed by Sync')
+  })
+
+  it('renders the engine refusal verbatim rather than paraphrasing it', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/files') return listing('/Users/me/vault')
+      if (init?.method === 'PATCH') {
+        return new Response(
+          JSON.stringify({ error: 'Folder not found: /Users/me/typo' }),
+          { status: 400, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return ok()
+    })
+    await mount([src({ name: 'notes' })])
+    await act(async () => buttonByAria('Rename, re-level or repoint notes').click())
+    await enter('#src-edit-path', '/Users/me/typo')
+    await act(async () => button('Save').click())
+
+    expect(container.textContent).toContain('Folder not found: /Users/me/typo')
+    expect(mocks.reload).not.toHaveBeenCalled()
   })
 })
 

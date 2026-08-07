@@ -1,9 +1,10 @@
 // Sources view: manage the layers feeding the cascade — rename, re-level,
-// sync, and remove ride the engine's source API (PATCH/DELETE /api/sources,
-// POST /api/sources/sync). Name and level are the only mutable fields; a
-// wrong path, repo, or command is fixed by remove + re-add, and the UI says
-// so instead of pretending otherwise. Errors render verbatim — including the
-// engine's pack-invariant messages — never paraphrased into vagueness.
+// repoint, sync, and remove ride the engine's source API (PATCH/DELETE
+// /api/sources, POST /api/sources/sync). A folder-backed source can be pointed
+// at a different folder in place; a repo or an MCP command genuinely can't be,
+// and the UI says which case you are in rather than telling everyone to remove
+// and re-add. Errors render verbatim — including the engine's pack-invariant
+// messages — never paraphrased into vagueness.
 // Demo mode shows the same rows read-only.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
@@ -12,6 +13,7 @@ import { LayerChip } from '../components/LayerChip'
 import { LevelStepper } from '../components/SetupWizard'
 import { useDetailSurface } from '../components/useDetailSurface'
 import { useLayerFiles } from '../layer-files'
+import { useReveal } from '../reveal'
 import { useStore } from '../store'
 import type { Source } from '../data'
 import type { LayerFiles } from '../types'
@@ -96,6 +98,31 @@ function canSync(s: Source): boolean {
   return !s.quarantined && (s.sourceKind === 'github' || Boolean(s.origin))
 }
 
+/**
+ * Whether this source's folder can be repointed in place. Mirrors the engine's
+ * own refusal (service.mjs `pathPatchRefusal`) so the form never offers a field
+ * the PATCH would reject: a remote source has no folder, and a clone-backed
+ * layer's folder belongs to Sync.
+ */
+function canEditPath(s: Source): boolean {
+  if (s.quarantined || s.origin) return false
+  return s.sourceKind === 'okf-local' || s.sourceKind === 'files'
+}
+
+/**
+ * The honest version of the old "remove the source and add it again" line, kept
+ * only for the sources where it is still true. A folder-backed source returns
+ * null — it has a path field now, and repeating the sentence there was the
+ * whole field complaint.
+ */
+function immutableNote(s: Source): string | null {
+  if (canEditPath(s)) return null
+  if (s.sourceKind === 'mcp') return 'This source is reached by running a command. To point it at a different MCP server, remove it and add it again.'
+  if (s.sourceKind === 'github') return 'This source is read from its repository over the GitHub API. To follow a different repo, remove it and add it again.'
+  if (s.origin) return 'This source is a clone, and its folder is managed by Sync. To follow a different repository, remove it and add it again.'
+  return 'The location of this source is fixed. To change it, remove the source and add it again.'
+}
+
 function btnSmallGhost(): React.CSSProperties {
   return css(`padding:6px 11px; background:transparent; border:1px solid ${C.line}; border-radius:8px; cursor:pointer; font:inherit; font-weight:600; font-size:11.5px; color:${C.caption};`)
 }
@@ -174,8 +201,10 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     return map
   }, [fileLayers])
 
+  const finder = useReveal()
   const [panel, setPanel] = useState<Panel>(null)
   const [editName, setEditName] = useState('')
+  const [editPath, setEditPath] = useState('')
   const [editLevel, setEditLevel] = useState(0)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -232,6 +261,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   const openEdit = (s: Source) => {
     setPanel({ name: s.name, kind: 'edit' })
     setEditName(s.name)
+    setEditPath(filesByLayer.get(s.name)?.root ?? '')
     setEditLevel(s.level)
     setErr(null)
   }
@@ -241,19 +271,35 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   const saveEdit = async (s: Source) => {
     const newName = editName.trim()
     if (!newName) { setErr('Give this source a short name.'); return }
+    const currentRoot = filesByLayer.get(s.name)?.root ?? ''
+    const newPath = editPath.trim()
     const body: Record<string, unknown> = { name: s.name }
     if (newName !== s.name) body.newName = newName
     if (editLevel !== s.level) body.level = editLevel
-    if (body.newName === undefined && body.level === undefined) { closePanel(); return }
+    // Only a real move is sent. An untouched field must not re-key the index
+    // entry and put a settled source back through a full read for nothing.
+    if (canEditPath(s) && newPath && newPath !== currentRoot) body.path = newPath
+    if (body.newName === undefined && body.level === undefined && body.path === undefined) { closePanel(); return }
     setBusy(true)
     setErr(null)
     try {
-      await callApi('/api/sources', {
+      const out = await callApi('/api/sources', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       })
       closePanel()
+      // A move means a re-index, and the row is about to say "indexing" on its
+      // own. Naming the cause first is the difference between progress and a
+      // source that looks like it broke when you saved it.
+      if (out.reindexing === true) {
+        setNotice({
+          name: newName,
+          text: out.hasDocuments === false
+            ? 'Pointed at the new folder — no documents spotted there yet, so it may come back empty.'
+            : 'Pointed at the new folder — reading it now.',
+        })
+      }
       reload()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -342,6 +388,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
           const isOpen = panel?.name === s.name
           const editing = isOpen && panel?.kind === 'edit'
           const removing = isOpen && panel?.kind === 'remove'
+          const immutable = immutableNote(s)
           return <section ref={detail.panelRef} {...detail.panelProps} className="cc-source-detail" data-open={detailOpen || undefined} aria-label={`Source ${s.name} detail`}>
             <button type="button" className="cc-detail-close" onClick={closeDetail}>Close</button>
             <div className="cc-source-detail-head"><div><div className="cc-source-title"><span aria-hidden="true" style={{ background: statusColor(s.status) }} /><h2>{s.name}</h2>{s.live && <LiveMarker />}</div><div className="cc-source-chips"><LayerChip id={s.layer} /><span>level {s.level}</span><span>{s.sourceKind}</span><span>{s.status === 'indexing' ? progressLabel(s.indexing) : `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'}`}</span>{(s.warnings ?? 0) > 0 && <span title={`${s.warnings} thing${s.warnings === 1 ? '' : 's'} this source could not read`}>{s.warnings} warning{s.warnings === 1 ? '' : 's'}</span>}</div></div><strong>{s.status}</strong></div>
@@ -358,10 +405,11 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
               {filesByLayer.get(s.name)?.root && <div><dt>Location</dt><dd style={css(`font-family:${MONO};`)}>{filesByLayer.get(s.name)!.root}</dd></div>}
               {s.origin && <div><dt>Repository</dt><dd>{s.origin}</dd></div>}
             </dl>
-            {/* An invalid entry has no path, repo or command to speak of — the
-                sentence below is about a working source, and printing it here
-                would describe a source that was never built. */}
-            {!s.quarantined && <p className="cc-source-immutable">The path, repository, or command is fixed for this source. To change it, remove the source and add it again.</p>}
+            {/* Only where it is still true. A folder-backed source can now be
+                repointed from the panel below, so telling its owner to remove
+                and re-add would be plain wrong — and an invalid entry has no
+                path, repo or command to speak of in the first place. */}
+            {!s.quarantined && immutable && <p className="cc-source-immutable">{immutable}</p>}
             {s.quarantined && (
               <div role="alert" style={css(`padding:9px 11px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.55; color:${C.amberText};`)}>
                 <strong style={css('display:block; margin-bottom:4px;')}>This entry is not a working source</strong>
@@ -402,6 +450,11 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                 {notice.text}
               </div>
             )}
+            {finder.error && (
+              <div role="alert" style={css(`padding:8px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.5; color:${C.amberText}; overflow-wrap:anywhere;`)}>
+                {finder.error}
+              </div>
+            )}
             {syncErr?.name === s.name && (
               <div role="alert" style={css(`padding:8px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStrokeE}; font-family:${MONO}; font-size:11px; line-height:1.5; color:${C.amberText}; overflow-wrap:anywhere;`)}>
                 {syncErr.text}
@@ -423,6 +476,16 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                     onClick={() => openFilesScope(s.name)}
                   >Browse files</button>
                 )}
+                {/* Desktop only — hidden, not disabled, in the browser build. */}
+                {finder.available && filesByLayer.has(s.name) && (
+                  <button
+                    type="button"
+                    className="cc-h-bd-strong"
+                    aria-label={`Reveal the folder for ${s.name} in Finder`}
+                    style={btnSmallGhost()}
+                    onClick={() => void finder.reveal(s.name, '')}
+                  >Reveal in Finder</button>
+                )}
                 {canSync(s) && (
                   <button
                     type="button"
@@ -436,7 +499,19 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                 {/* Rename/level writes through the strict manifest path, so on
                     an invalid entry it could only fail. Remove is the one
                     action that goes anywhere from here. */}
-                {!s.quarantined && <button type="button" className="cc-h-bd-strong" aria-label={`Rename or re-level ${s.name}`} style={btnSmallGhost()} onClick={() => openEdit(s)}>Rename / level</button>}
+                {/* The label names the whole panel, folder included. A control
+                    called "Rename / level" over a form that also repoints the
+                    source would hide the very thing this pass added — and the
+                    visible words have to be inside the accessible name. */}
+                {!s.quarantined && (
+                  <button
+                    type="button"
+                    className="cc-h-bd-strong"
+                    aria-label={canEditPath(s) ? `Rename, re-level or repoint ${s.name}` : `Rename or re-level ${s.name}`}
+                    style={btnSmallGhost()}
+                    onClick={() => openEdit(s)}
+                  >{canEditPath(s) ? 'Rename / level / folder' : 'Rename / level'}</button>
+                )}
                 <button type="button" className="cc-h-bd-amber2" aria-label={`Remove ${s.name}`} style={btnSmallGhost()} onClick={() => openRemove(s)}>{s.quarantined ? 'Remove entry' : 'Remove'}</button>
               </div>
             )}
@@ -456,8 +531,37 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                   </div>
                   <LevelStepper id="src-edit-level" value={editLevel} onChange={setEditLevel} />
                 </div>
+
+                {canEditPath(s) && (
+                  <div>
+                    <label htmlFor="src-edit-path" style={css(`display:block; font-size:12px; font-weight:600; color:${C.body}; margin-bottom:5px;`)}>Folder</label>
+                    <div style={css('display:flex; gap:8px; align-items:center;')}>
+                      <input
+                        id="src-edit-path"
+                        style={css(`flex:1; min-width:0; box-sizing:border-box; padding:9px 11px; border-radius:8px; border:1px solid ${C.line}; background:${C.surface}; color:${C.ink}; font-family:${MONO}; font-size:12px;`)}
+                        value={editPath}
+                        onChange={(e) => { setEditPath(e.target.value); setErr(null) }}
+                        spellCheck={false}
+                        autoComplete="off"
+                      />
+                      {window.__CC_DESKTOP?.chooseFolder && (
+                        <button
+                          type="button"
+                          className="cc-h-bd-strong"
+                          style={{ ...btnSmallGhost(), flex: '0 0 auto' }}
+                          onClick={() => void window.__CC_DESKTOP?.chooseFolder?.().then((chosen) => {
+                            if (chosen) { setEditPath(chosen); setErr(null) }
+                          })}
+                        >Choose…</button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <p style={css(`margin:0; font-size:11.5px; line-height:1.5; color:${C.caption};`)}>
-                  Name and level are all that can change here. To point at a different path, repo, or command, remove this source and add it again.
+                  {canEditPath(s)
+                    ? 'Pointing this source at a different folder re-reads it from scratch. Your files are never moved or copied.'
+                    : immutableNote(s)}
                 </p>
                 {s.live && <LiveWarning verb="Renaming" />}
                 {err && <p role="alert" style={css(`margin:0; font-size:12px; color:${C.amberText}; overflow-wrap:anywhere;`)}>{err}</p>}

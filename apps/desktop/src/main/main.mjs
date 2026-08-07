@@ -6,7 +6,8 @@ import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, sc
 import { startEngineService } from './service-host.mjs'
 import { createGithubConnections, verifyGithubToken } from './github-connections.mjs'
 import { buildMenu } from './menu.mjs'
-import { configDir, manifestPath, settingsPath } from './paths.mjs'
+import { configDir, enginePaths, manifestPath, settingsPath } from './paths.mjs'
+import { resolveRevealTarget } from './reveal.mjs'
 import { markSettingsDirty, readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
 import { createAuthManager } from './auth.mjs'
 import {
@@ -578,6 +579,27 @@ handleTrustedIpc('contextcake:choose-folder', async ({ window }) => {
     properties: ['openDirectory', 'createDirectory'],
   })
   return result.canceled ? null : (result.filePaths[0] ?? null)
+})
+
+// Reveal in Finder. The renderer names a source and a path INSIDE it; the
+// absolute path is resolved here, against the manifest on disk, with the
+// engine's own containment guard. A path that escapes its source folder is
+// refused rather than clamped — see src/main/reveal.mjs.
+handleTrustedIpc('contextcake:reveal-file', async ({ layer, rel } = {}) => {
+  try {
+    const target = await resolveRevealTarget({
+      layer,
+      rel,
+      manifestFile: manifestPath(),
+      engineSrc: enginePaths().engineSrc,
+    })
+    shell.showItemInFolder(target)
+    return { ok: true }
+  } catch (err) {
+    // The reason travels as data rather than as a rejected invoke, so the
+    // console can render it verbatim instead of Electron's wrapper text.
+    return { ok: false, error: err?.message ?? 'That file could not be revealed.' }
+  }
 })
 
 handleTrustedIpc('windows:open-settings', (pane) => openSettingsWindow(pane))

@@ -13,6 +13,10 @@ export function enginePaths() {
     const res = process.resourcesPath
     return {
       serviceModule: path.join(res, 'engine', 'src', 'service.mjs'),
+      // The engine's module directory. The main process loads a couple of
+      // pure helpers from here (path containment for Reveal in Finder); the
+      // engine ITSELF still only ever runs in the utility process.
+      engineSrc: path.join(res, 'engine', 'src'),
       consoleDist: path.join(res, 'console'),
       cliShim: path.join(res, 'bin', 'contextcake'),
     }
@@ -20,6 +24,7 @@ export function enginePaths() {
   const repoRoot = path.resolve(here, '..', '..', '..', '..')
   return {
     serviceModule: path.join(repoRoot, 'packages', 'core', 'src', 'service.mjs'),
+    engineSrc: path.join(repoRoot, 'packages', 'core', 'src'),
     consoleDist: path.join(repoRoot, 'apps', 'console', 'dist'),
     cliShim: path.resolve(here, '..', '..', 'resources', 'bin', 'contextcake'),
   }

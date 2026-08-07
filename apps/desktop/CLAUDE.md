@@ -67,6 +67,16 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   bridge is `src/preload.cjs`: `window.__CC_DESKTOP` exposes static launch metadata,
   while `window.__CC_AUTH` exposes the narrow auth/settings IPC surface. Keep both
   minimal; the console must keep working in plain browsers.
+- **Reveal in Finder never takes a path from the renderer.**
+  `contextcake:reveal-file` accepts a source NAME and a path relative to it;
+  `src/main/reveal.mjs` resolves the root from the manifest on disk and runs the
+  engine's own guards (`layerRootMap` + `assertInsideRoot`, imported by path, not
+  copied) before `shell.showItemInFolder`. A path that escapes its source folder
+  is refused, never clamped — clamping would answer a request nobody made, and
+  quietly. Keep the payload shape: a channel that accepted an absolute path would
+  let a compromised renderer point Finder anywhere on the machine.
+  `scripts/navigation-test.mjs` covers traversal, an absolute rel, an out-of-root
+  symlink, a layer with no folder, and the trusted-window policy.
 - **Every `/api` call needs the bearer token** — the console's `apiFetch`
   (apps/console/src/api.ts) injects it automatically. Raw `fetch('/api/…')`
   in renderer code will 401 inside the app.

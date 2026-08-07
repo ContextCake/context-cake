@@ -562,7 +562,10 @@ export function mergeSourceStatus(sources: Source[], rows: SourceStatus[]): Sour
   const next = sources.map((s) => {
     const row = byName.get(s.name)
     if (!row) return s
-    const progress = { phase: row.phase, loaded: row.loaded, total: row.total, refreshing: row.refreshing }
+    // `=== true` to match adaptSources: the two paths write the same field on
+    // the same row, and the identity check below only holds if they normalize
+    // a missing flag the same way.
+    const progress = { phase: row.phase, loaded: row.loaded, total: row.total, refreshing: row.refreshing === true }
     const indexing = row.status === 'indexing'
     const count = `${row.conceptCount} concept${row.conceptCount === 1 ? '' : 's'}`
     const status: Source['status'] = row.status === 'error'
@@ -588,13 +591,29 @@ export function mergeSourceStatus(sources: Source[], rows: SourceStatus[]): Sour
           : status === 'empty'
             ? `${count} · ${s.sourceKind} — nothing served yet`
             : `${count} · ${s.sourceKind}${progress.refreshing ? ' · refreshing' : ''}`
+    // The error text has to travel with the status it explains. Leaving it
+    // behind rendered a row headed "error" with the detail block still hidden,
+    // because that block is gated on `error` and this pass only moved `status`.
+    const error = row.error ?? null
+    // Warnings describe a snapshot. A row with none — first index, or a failed
+    // one — has nothing they could be about, so they go rather than hang over
+    // from the last good read.
+    const hasSnapshot = row.status !== 'indexing' && row.status !== 'error'
+    const warnings = hasSnapshot ? s.warnings : 0
+    const warningMessages = hasSnapshot ? s.warningMessages : undefined
     const same = s.status === status && s.conceptCount === row.conceptCount
       && s.coverage === coverage && s.focus === focus
+      && (s.error ?? null) === error
+      && s.warnings === warnings && s.warningMessages === warningMessages
       && s.indexing?.phase === progress.phase && s.indexing?.loaded === progress.loaded
       && s.indexing?.total === progress.total && s.indexing?.refreshing === progress.refreshing
     if (same) return s
     changed = true
-    return { ...s, status, conceptCount: row.conceptCount, coverage, focus, indexing: progress }
+    // lastErrorAt/lastSuccessAt are deliberately untouched: /api/status carries
+    // no health timestamps, and inventing one here would be a worse lie than a
+    // stale one. A status flip moves the engine's generation, so the next
+    // /api/graph fills them in.
+    return { ...s, status, conceptCount: row.conceptCount, coverage, focus, error, warnings, warningMessages, indexing: progress }
   })
   return changed ? next : sources
 }

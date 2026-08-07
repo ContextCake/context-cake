@@ -344,6 +344,41 @@ describe('mergeSourceStatus', () => {
     const sources = base()
     expect(mergeSourceStatus(sources, row({ name: 'somewhere-else' }))).toBe(sources)
   })
+
+  // The detail block that says WHY a source failed is gated on `error`. This
+  // pass moved `status` and left `error` behind, so a source that flipped to
+  // error between heavy refetches rendered the word "error" and nothing else.
+  it('carries the error text along with the status that needs explaining', () => {
+    const [failed] = mergeSourceStatus(base(), row({ status: 'error', phase: 'error', error: 'ENOENT: /tmp/vault' }))
+    expect(failed.status).toBe('error')
+    expect(failed.error).toBe('ENOENT: /tmp/vault')
+  })
+
+  it('clears an error once the source reads cleanly again', () => {
+    const failed = mergeSourceStatus(base(), row({ status: 'error', phase: 'error', error: 'ENOENT: /tmp/vault' }))
+    const [ok] = mergeSourceStatus(failed, row({ status: 'ok', phase: 'ready', loaded: 3000, conceptCount: 3000 }))
+    expect(ok.error).toBeNull()
+  })
+
+  // Warnings describe a snapshot. A failed read has none, so the "indexed with
+  // N things left out" note must not hang over from the last good one.
+  it('drops warnings from a row that no longer has a snapshot behind it', () => {
+    const withWarnings = base().map((s) => ({ ...s, warnings: 2, warningMessages: ['too big: a.md', 'too big: b.md'] }))
+    const [failed] = mergeSourceStatus(withWarnings, row({ status: 'error', phase: 'error', error: 'ENOENT' }))
+    expect(failed.warnings).toBe(0)
+    expect(failed.warningMessages).toBeUndefined()
+  })
+
+  // adaptSources normalizes a missing flag with `=== true`; this pass wrote it
+  // raw. The two disagreeing on `undefined` vs `false` broke the identity
+  // contract above, which is what makes an idle poll free.
+  it('normalizes a missing refreshing flag the same way the graph adapter does', () => {
+    const bare = row()
+    delete (bare[0] as Partial<(typeof bare)[0]>).refreshing
+    const merged = mergeSourceStatus(base(), bare)
+    expect(merged[0].indexing?.refreshing).toBe(false)
+    expect(mergeSourceStatus(merged, bare)).toBe(merged)
+  })
 })
 
 describe('adaptConcept with headingless documents', () => {

@@ -100,7 +100,18 @@ cleanup() {
   for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null; done
   rm -rf "$TMP"
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
+
+# A previous run killed with SIGKILL (harness timeout) cannot fire the EXIT trap,
+# so its hosts survive and the next run dies deep inside with an opaque EADDRINUSE.
+# Fail here instead, naming the remedy.
+for _p in "$PORT"; do
+  if lsof -nP -iTCP:"$_p" -sTCP:LISTEN >/dev/null 2>&1; then
+    printf 'PREFLIGHT FAIL port %s is already in use — a previous run leaked a host.\n' "$_p"
+    printf '  remedy: lsof -nP -iTCP:%s -sTCP:LISTEN   then kill the pid\n' "$_p"
+    exit 1
+  fi
+done
 
 pass() { printf '  ok   %s\n' "$1"; }
 fail() { printf '  FAIL %s\n' "$1"; FAILED=1; }

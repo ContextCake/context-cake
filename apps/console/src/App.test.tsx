@@ -45,7 +45,9 @@ describe('Mac-first application shell', () => {
     await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: '5', metaKey: true, bubbles: true })))
     expect(container.querySelector('[data-destination="review"]')?.getAttribute('aria-current')).toBe('page')
     expect(button('Queue 3')).toBeTruthy()
-    expect(button('Conflicts 3')).toBeTruthy()
+    expect(button('Discrepancies 3')).toBeTruthy()
+    expect(container.textContent).toContain('Simulation—no files will change.')
+    expect(container.textContent).toContain('Automatic rules never run.')
     expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('')
   })
 

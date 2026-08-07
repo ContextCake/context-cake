@@ -32,7 +32,7 @@ it('prioritizes actionable work and never renders fixture activity in live mode'
   expect(container.textContent).toContain('Needs Attention')
   expect(container.textContent).toContain('Source failed exactly')
   expect(container.textContent).not.toContain('fixture should not render')
-  const conflict = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('open conflict'))
+  const conflict = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('actionable discrepancy'))
   await act(async () => conflict?.click())
   expect(mocks.setView).toHaveBeenCalledWith('conflicts')
 })

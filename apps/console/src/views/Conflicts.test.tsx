@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
-// The "dissent is newer" badge (contract C-b) renders in the Conflicts view
-// only, on the dissenting card whose date beats the effective value. Fixture
-// driven — no engine required.
+// Professional discrepancy presentation and governed decision affordances.
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,6 +17,7 @@ let root: Root
 
 function storeWith(conflicts: Conflict[], selConflict: string) {
   return {
+    mode: 'demo', query: '',
     conflicts,
     selConflict,
     setSelConflict: vi.fn(),
@@ -26,6 +25,10 @@ function storeWith(conflicts: Conflict[], selConflict: string) {
     resolveSafeConflicts: vi.fn(),
     resolvingConflict: null,
     resolutionError: null,
+    discrepancyRules: [], discrepancyRuleSuggestions: [],
+    decideDiscrepancy: vi.fn(), setDiscrepancyPriority: vi.fn(),
+    approveRuleSuggestion: vi.fn(), updateDiscrepancyRule: vi.fn(), promoteDiscrepancyRule: vi.fn(),
+    openFilesScope: vi.fn(),
   }
 }
 
@@ -39,6 +42,10 @@ const freshConflict: Conflict = {
   winner: 'personal',
   safe: false,
   history: [],
+  kind: 'section_content', discrepancyStatus: 'needs_review', revision: 'rev-1',
+  effectiveSource: 'personal', winnerReason: 'personal wins by configured layer precedence.',
+  owner: 'Platform', priority: 'unassigned', coverageComplete: true,
+  sourceHealth: [{ source: 'personal', status: 'ok', error: null }, { source: 'team', status: 'ok', error: null }],
   contributions: [
     { layer: 'personal', sourceLayer: 'personal', value: 'SingleStore.', updated: '2026-05-12' },
     { layer: 'team', sourceLayer: 'team', value: 'Postgres.', updated: '2026-06-01', fresherDissent: true },
@@ -83,41 +90,42 @@ afterEach(async () => {
   container.remove()
 })
 
-describe('Conflicts fresherDissent badge', () => {
+describe('Discrepancy Center', () => {
   it('badges the flagged dissent card as newer than the effective value', async () => {
     mocks.useStore.mockReturnValue(storeWith([freshConflict, staleConflict], freshConflict.id))
     await act(async () => root.render(<Conflicts />))
 
-    expect(container.textContent).toContain('Newer')
-    expect(container.textContent).toContain('Used now')
-    expect(container.textContent).toContain('Which answer should ContextCake use?')
+    expect(container.textContent).toContain('Newer dissent')
+    expect(container.textContent).toContain('Effective now')
+    expect(container.textContent).toContain('Choose a safe disposition')
   })
 
   it('shows no freshness badge when no dissent is flagged', async () => {
     mocks.useStore.mockReturnValue(storeWith([staleConflict], staleConflict.id))
     await act(async () => root.render(<Conflicts />))
 
-    expect(container.textContent).not.toContain('Newer')
+    expect(Array.from(container.querySelectorAll('.cc-discrepancy-answer')).some((answer) => answer.textContent?.includes('Newer dissent'))).toBe(false)
   })
 
-  it('offers one batch wand action for safe conflicts', async () => {
+  it('labels every demo action as a simulation and never offers automatic execution', async () => {
     const store = storeWith([safeConflict], safeConflict.id)
     mocks.useStore.mockReturnValue(store)
     await act(async () => root.render(<Conflicts />))
 
-    const wand = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Resolve 1 safe conflict'))
-    expect(wand).toBeTruthy()
-    await act(async () => wand?.click())
-    expect(store.resolveSafeConflicts).toHaveBeenCalledOnce()
-    expect(container.textContent).toContain('Which answer should ContextCake use?')
+    expect(container.textContent).toContain('Simulate using')
+    expect(container.textContent).toContain('Simulation history resets on reload.')
   })
 
-  it('does not claim nothing changed when a batch stopped after earlier resolutions', async () => {
-    const store = { ...storeWith([safeConflict], safeConflict.id), resolutionError: { message: 'The last source changed.', partial: true } }
+  it('requires a reason before an acknowledgement can be submitted', async () => {
+    const store = storeWith([safeConflict], safeConflict.id)
     mocks.useStore.mockReturnValue(store)
     await act(async () => root.render(<Conflicts />))
-
-    expect(container.textContent).toContain('Some safe conflicts were resolved.')
-    expect(container.textContent).not.toContain('Nothing was changed.')
+    const radio = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find((input) => input.parentElement?.textContent?.includes('Keep the scoped difference'))!
+    await act(async () => radio.click())
+    const submit = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('Simulate acknowledgement'))!
+    expect(submit.disabled).toBe(true)
+    const reason = container.querySelector<HTMLSelectElement>('[aria-label="Acknowledgement reason"]')!
+    await act(async () => { reason.value = 'different_scopes'; reason.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(submit.disabled).toBe(false)
   })
 })

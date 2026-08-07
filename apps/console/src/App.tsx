@@ -182,7 +182,7 @@ export function App() {
     { id: 'files', label: 'Go to Knowledge: Files', keywords: 'markdown documents', shortcut: '⇧⌘F', run: () => setView('files') },
     { id: 'sources', label: 'Go to Sources', shortcut: '⌘4', run: () => setView('sources') },
     { id: 'queue', label: 'Go to Review: Queue', keywords: 'triage', run: () => setView('triage') },
-    { id: 'conflicts', label: 'Go to Review: Conflicts', keywords: 'resolve', run: () => setView('conflicts') },
+    { id: 'conflicts', label: 'Go to Review: Discrepancies', keywords: 'resolve align', run: () => setView('conflicts') },
     // One per source: the palette is the keyboard route into the navigator,
     // matching the Sources panel's "Browse files" button — including in the
     // demo, where that button is offered too. Browsing is a read.
@@ -378,6 +378,12 @@ export function App() {
               onAddSource={mode === 'live' ? reopenWizard : undefined}
               onConnectAgent={isDesktop && !needsSetup ? openConnect : undefined}
             />
+            {mode === 'demo' && (
+              <div className="cc-global-simulation" role="status">
+                <strong>Simulation—no files will change.</strong>
+                <span>Actions and history reset on reload. Automatic rules never run.</span>
+              </div>
+            )}
             <div className="sr-only" aria-live="polite">
               {backgroundAnnouncement}
             </div>

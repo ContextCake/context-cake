@@ -25,7 +25,7 @@ function HeaderInner({
   const destination = destinationForView(view)
   const searchable = SEARCHABLE_VIEWS.has(view)
   const queueCount = signals.filter((signal) => signal.route === 'review_required').length
-  const conflictCount = conflicts.filter((conflict) => conflict.status === 'open').length
+  const conflictCount = conflicts.filter((conflict) => ['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'].includes(conflict.discrepancyStatus ?? (conflict.status === 'open' ? 'needs_review' : 'resolved'))).length
 
   useEffect(() => {
     const focus = () => search.current?.focus()
@@ -44,7 +44,7 @@ function HeaderInner({
           { value: 'concepts', label: 'Concepts' }, { value: 'files', label: 'Files' },
         ]} />}
         {destination === 'review' && <SegmentedControl label="Review view" value={view as 'triage' | 'conflicts'} onChange={setView} options={[
-          { value: 'triage', label: `Queue ${queueCount}` }, { value: 'conflicts', label: `Conflicts ${conflictCount}` },
+          { value: 'triage', label: `Queue ${queueCount}` }, { value: 'conflicts', label: `Discrepancies ${conflictCount}` },
         ]} />}
       </div>
       <div className="cc-toolbar-actions">
@@ -57,8 +57,8 @@ function HeaderInner({
               setQuery('')
             }
           }}
-          label={`Search ${view === 'triage' ? 'queue' : view}`}
-          placeholder={`Search ${view === 'triage' ? 'queue' : view}`}
+          label={`Search ${view === 'triage' ? 'queue' : view === 'conflicts' ? 'discrepancies' : view}`}
+          placeholder={`Search ${view === 'triage' ? 'queue' : view === 'conflicts' ? 'discrepancies' : view}`}
         />}
         {/* Background work and its health, from every destination — a count
             with no progress and no detail was the badge this replaces. */}

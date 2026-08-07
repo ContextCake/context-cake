@@ -139,8 +139,8 @@ export function createOkfLocalSource({ name, level, root, limits = null }) {
       }
       return withDocumentDate(parseConcept(content), await documentDate(filePath));
     },
-    async listConceptIds() {
-      const files = await walkDocs(root, [".md"], limits);
+    async listConceptIds({ signal = null } = {}) {
+      const files = await walkDocs(root, [".md"], limits, { signal });
       return files.map((filePath) =>
         toPosix(path.relative(root, filePath)).replace(/\.md$/i, ""),
       );
@@ -306,16 +306,26 @@ export function defaultWalkLimits() {
   return walkLimitsFrom(resolveSettings({}));
 }
 
+// Both walks below are one long await from a caller's point of view, so a
+// cancelled index would otherwise keep scanning to the end — and a layer that
+// churns would accumulate one abandoned walk per cancelled job. Checked per
+// directory rather than per entry: a readdir is the unit of work, and the
+// signal's own reason carries why (superseded, timed out) to whoever awaits.
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw signal.reason ?? new Error("Walk cancelled");
+}
+
 /**
  * Cheap "does this folder hold any documents?" check for the add-source form.
  * Stops at the first hit and at a small scan ceiling, so it answers in
  * milliseconds on a normal folder and stays bounded on a huge one. Never
  * throws on size — being too big is an indexing outcome, not a form error.
  */
-export async function probeDocs(root, extensions, maxEntries = 4_000) {
+export async function probeDocs(root, extensions, maxEntries = 4_000, { signal = null } = {}) {
   let scanned = 0;
   const stack = [root];
   while (stack.length > 0) {
+    throwIfAborted(signal);
     const current = stack.pop();
     let dirents;
     try { dirents = await fsp.readdir(current, { withFileTypes: true }); } catch { continue; }
@@ -331,13 +341,14 @@ export async function probeDocs(root, extensions, maxEntries = 4_000) {
   return { found: false, scanned, complete: true };
 }
 
-export async function walkDocs(root, extensions, limits = null) {
+export async function walkDocs(root, extensions, limits = null, { signal = null } = {}) {
   if (!root) return [];
   const { maxFiles, maxEntries } = { ...defaultWalkLimits(), ...(limits ?? {}) };
   const files = [];
   let scanned = 0;
   const stack = [root];
   while (stack.length > 0) {
+    throwIfAborted(signal);
     const current = stack.pop();
     let dirents;
     try {

@@ -46,8 +46,8 @@ export function createFilesSource({ name, level, root, limits = null }) {
       }
       return null;
     },
-    async listConceptIds() {
-      const files = await walkDocs(root, FILES_EXTENSIONS, limits);
+    async listConceptIds({ signal = null } = {}) {
+      const files = await walkDocs(root, FILES_EXTENSIONS, limits, { signal });
       const ids = files.map((filePath) =>
         toPosix(path.relative(root, filePath)).replace(/\.(md|mdx|txt)$/, ""),
       );

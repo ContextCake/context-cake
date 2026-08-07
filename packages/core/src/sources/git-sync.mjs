@@ -43,9 +43,9 @@ export function withGitSync(source, { root, pullTtlMs = 90000, retentionDays = 1
       // Archived (decayed) captures stay readable by direct id.
       return source.loadConcept(id);
     },
-    async listConceptIds() {
+    async listConceptIds(options = {}) {
       await maybePull();
-      const ids = await source.listConceptIds();
+      const ids = await source.listConceptIds(options); // pass the index job's abort signal through to the walk
       const kept = [];
       for (const id of ids) {
         if (!id.startsWith(CAPTURE_PREFIX)) {

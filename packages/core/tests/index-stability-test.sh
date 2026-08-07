@@ -54,6 +54,15 @@ POLL_MS=400            # /api/graph resolves every concept; polling harder starv
 READY_TIMEOUT_MS=30000 # recomputed from the control measurement below
 RENAME_OBSERVE_MS=5000
 
+# The floor a control pass must clear for assertion 1 to mean anything. The
+# watcher debounces WATCH_DEBOUNCE_MS (250ms in service.mjs) before restarting
+# the index, so a corpus that indexes in less than a few debounce periods can
+# slip through the gap between restarts and go green WITH THE BUG PRESENT —
+# measured, not theorised: at INDEX_STABILITY_NOTES=800 the control settles in
+# ~750ms and assertion 1 passes against an unfixed engine. Four debounce
+# periods is the smallest floor comfortably above that.
+CONTROL_FLOOR_MS=1000
+
 cleanup() {
   [ -n "$CHURN_PID" ] && kill "$CHURN_PID" 2>/dev/null
   for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null; done
@@ -76,6 +85,50 @@ JQ() { node -e '
     try { out = fn(v); } catch (e) { out = "EVAL-ERROR: " + e.message; }
     process.stdout.write(typeof out === "string" ? out : JSON.stringify(out));
   });' "$1"; }
+
+# ---- preflight: can this platform observe the bug at all? --------------------
+# service.mjs asks for fs.watch(root, {recursive:true}) and SILENTLY falls back
+# to a non-recursive watch if that throws — inotify exhaustion on a busy CI
+# runner is the realistic way in. In the fallback state no write under
+# .obsidian/ ever reaches the watcher, so nothing invalidates the index and
+# assertion 1 goes green with the bug fully present. That is the worst possible
+# outcome for a regression gate, so it is checked directly rather than assumed:
+# write into a SUBDIRECTORY of a watched temp dir and require an event.
+cat > "$TMP/watch-probe.mjs" <<'EOF'
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-watch-probe-"));
+const sub = path.join(root, ".obsidian");
+fs.mkdirSync(sub);
+const report = (ok, reason) => {
+  try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
+  console.log(JSON.stringify({ ok, reason }));
+  process.exit(0);
+};
+let seen = false;
+let watcher;
+try {
+  watcher = fs.watch(root, { recursive: true, persistent: false }, () => { seen = true; });
+} catch (err) {
+  report(false, `fs.watch({recursive:true}) threw: ${err.message}`);
+}
+watcher.on("error", () => {});
+// Bounded: a handful of writes, then wait out a short deadline for the first
+// event rather than sleeping a fixed amount.
+const deadline = Date.now() + 5000;
+for (let i = 0; !seen && Date.now() < deadline; i++) {
+  fs.writeFileSync(path.join(sub, "workspace.json"), String(i));
+  await new Promise((r) => setTimeout(r, 100));
+}
+try { watcher.close(); } catch { /* already gone */ }
+report(seen, seen ? "ok" : "no event delivered for a write in a watched subdirectory within 5000ms");
+EOF
+echo "preflight: the platform can see the churn this suite depends on"
+WATCH_PROBE="$(node "$TMP/watch-probe.mjs")"
+[ "$(JQ 'String(d.ok)' <<<"$WATCH_PROBE")" = "true" ] \
+  && pass "recursive fs.watch delivers subdirectory events here" \
+  || fail "this platform CANNOT gate the churn bug — assertion 1 below is meaningless and its result must not be trusted ($(JQ 'String(d.reason)' <<<"$WATCH_PROBE")); service.mjs falls back to a non-recursive watch, so writes under .obsidian/ never reach it"
 
 # ---- fixtures ----------------------------------------------------------------
 # Two copies of the same corpus: one gets churned, one never does, so the
@@ -225,11 +278,29 @@ CTRL_COUNT="$(JQ 'String(d.maxConceptCount)' <<<"$CTRL")"
   && pass "the control indexed all $NOTES notes" \
   || fail "control concept count ($CTRL_COUNT, want $NOTES) ($CTRL)"
 
+case "$CTRL_MS" in ''|*[!0-9]*) CTRL_MS=30000 ;; esac
+[ "$CTRL_MS" -lt 1 ] && CTRL_MS=1
+
+# The other direction of the same problem. READY_TIMEOUT_MS below protects a
+# SLOW machine from a false failure; this protects a FAST one from a false pass.
+# A corpus that indexes in less than a few watcher debounce periods finishes
+# inside the gap between restarts, so assertion 1 goes green against an unfixed
+# engine — which is exactly what happens at INDEX_STABILITY_NOTES=800. Fail
+# loudly with a concrete remedy rather than reporting a green that means
+# nothing. Assertions 2 and 3 do not depend on corpus size and still run.
+if [ "$CTRL_MS" -lt "$CONTROL_FLOOR_MS" ]; then
+  # Scale the note count by the shortfall, plus half again so a re-run lands
+  # clear of the floor instead of on it.
+  SUGGEST=$(( (NOTES * CONTROL_FLOOR_MS * 3) / (CTRL_MS * 2) + 1 ))
+  fail "fixture too small to gate the bug on this machine (control settled in ${CTRL_MS}ms, need >=${CONTROL_FLOOR_MS}ms) — a corpus this fast indexes between watcher restarts, so a green assertion 1 would prove nothing; re-run with INDEX_STABILITY_NOTES=$SUGGEST"
+else
+  pass "the control is slow enough for the churn to matter (${CTRL_MS}ms >= ${CONTROL_FLOOR_MS}ms floor)"
+fi
+
 # The churned vault gets a generous multiple of what the SAME corpus just took
 # untouched on THIS machine, so a loaded or slow runner buys time instead of a
 # false failure. The bug does not care how large the window is: the index
 # restarts every ~${CHURN_MS}ms, so it cannot finish inside any window.
-case "$CTRL_MS" in ''|*[!0-9]*) CTRL_MS=30000 ;; esac
 READY_TIMEOUT_MS=$((CTRL_MS * 8))
 [ "$READY_TIMEOUT_MS" -lt 30000 ] && READY_TIMEOUT_MS=30000
 [ "$READY_TIMEOUT_MS" -gt 90000 ] && READY_TIMEOUT_MS=90000

@@ -36,11 +36,112 @@ const corpus = path.join(tmp, 'corpus')
 fs.mkdirSync(userData, { recursive: true })
 fs.mkdirSync(corpus, { recursive: true })
 
-const DOCS = 2500
-const body = `## Section\n\n${'Enough prose per document that reading the corpus takes real time. '.repeat(40)}`
-for (let i = 0; i < DOCS; i += 1) {
-  fs.writeFileSync(path.join(corpus, `doc-${i}.md`), `# Doc ${i}\n\n${body}`)
+// ---- the corpus, which is the experiment -----------------------------------
+//
+// What this replaced was 2,500 documents of ~2.6KB — 6.6MB against a field
+// vault of 139MB across ~3,000 notes averaging 47.6KB. Task 0.2 asks for 3,000
+// documents at 10–50KB and says why in one line: "small docs hide the CPU-per-
+// chunk cost that produces stutter". Size alone turned out to be the smaller
+// half of the story.
+//
+// The engine's per-document synchronous work is parse + `countTokens`, and
+// `countTokens` is an exact o200k BPE encode (tokenize.mjs) with no per-piece
+// cache. Its cost therefore tracks how many merge steps the text needs, not how
+// many bytes it has — and the old fixture was one sentence repeated, whose
+// handful of common words are single tokens. Measured directly (ms to encode
+// 8MB, on this machine):
+//
+//   real knowledge-base notes (159 files, the shape a user actually has)  ~220 ms/MB
+//   old fixture, one sentence repeated                                      93 ms/MB
+//   invented compound words ("extrahyperretrievational")                  ~900 ms/MB
+//
+// So the old corpus was ~2.3x cheaper per byte than real notes AND 21x smaller,
+// and inventing vocabulary to compensate overshoots by 4x. What makes real
+// notes expensive is the material real notes are full of: dates, file paths,
+// identifiers, hex ids, URLs, code fences, tables. This generator mixes that
+// into ordinary Zipf-distributed English at a rate calibrated against the
+// measurement above (246 ms/MB here vs ~280 for the real notes in the same
+// run) — realistic, and deliberately not harder than reality.
+const DOCS = 3_000
+const MIN_DOC_BYTES = 10 * 1024
+const MAX_DOC_BYTES = 50 * 1024
+// Share of words drawn from the expensive pool. Calibrated, not chosen.
+const DENSE_WORD_RATE = 0.12
+
+// Deterministic, so two runs on the same machine are comparable and a CI number
+// can be argued with rather than shrugged at.
+let seed = 20260807
+const nextRandom = () => {
+  seed = (seed * 1103515245 + 12345) % 2147483648
+  return seed / 2147483648
 }
+const pick = (list) => list[Math.floor(nextRandom() * list.length)]
+const WORDS = ('the of and to in a is that for it as was with be by on not this are or from at which but have an they one '
+  + 'you had has her all were their we can there so if would about when who will more no other into over than its two '
+  + 'time only some could them these may then now such first any our out most also after before between under while '
+  + 'retrieval cascade resolver manifest section conflict provenance layer concept index token snapshot adapter walker '
+  + 'digest harness budget fixture probe anchor corpus schema policy embedding cursor ledger release migration rollback '
+  + 'query ranking recall precision latency throughput cache invalidation watcher directory frontmatter heading document '
+  + 'vault repository commit branch review merge threshold measurement regression baseline evidence question answer note '
+  + 'meeting decision owner deadline risk mitigation summary context window prompt agent tool call response error retry')
+  .split(/\s+/)
+const PATHS = ['packages/core/src/service.mjs', 'apps/desktop/src/main/engine-watchdog.mjs', 'src/sources/okf-local.mjs',
+  'docs/architecture/README.md', '~/Library/Application Support/ContextCake/manifest.json', 'apps/console/src/store.tsx']
+const IDENTS = ['snapshotSource', 'MAX_DOC_BYTES', 'adoptIndexes', 'readContextManifestQuarantined', 'buildGraph',
+  'withDocumentDate', 'resolveLiveLayer', 'CONTEXTCAKE_MAX_SCAN_ENTRIES', 'sourceBudgetMs', 'layerRootMap']
+// Zipf-ish: common words dominate, exactly as they do in prose.
+const commonWord = () => WORDS[Math.floor(WORDS.length * (nextRandom() ** 2))]
+const hex = (digits) => Math.floor(nextRandom() * 16 ** digits).toString(16).padStart(digits, '0')
+const denseWord = () => {
+  const roll = nextRandom()
+  if (roll < 0.3) return `\`${pick(IDENTS)}\``
+  if (roll < 0.55) return `\`${pick(PATHS)}\``
+  if (roll < 0.7) return `2026-0${1 + Math.floor(nextRandom() * 8)}-${10 + Math.floor(nextRandom() * 19)}`
+  if (roll < 0.85) return hex(7)
+  return `https://github.com/contextcake/engine/pull/${100 + Math.floor(nextRandom() * 900)}`
+}
+const sentence = () => {
+  const words = []
+  for (let i = 9 + Math.floor(nextRandom() * 13); i > 0; i -= 1) {
+    words.push(nextRandom() < DENSE_WORD_RATE ? denseWord() : commonWord())
+  }
+  words[0] = words[0][0].toUpperCase() + words[0].slice(1)
+  return `${words.join(' ')}. `
+}
+
+let corpusBytes = 0
+for (let i = 0; i < DOCS; i += 1) {
+  const target = MIN_DOC_BYTES + Math.floor(nextRandom() * (MAX_DOC_BYTES - MIN_DOC_BYTES))
+  let doc = `---\nid: doc-${i}\ntitle: ${commonWord()} ${commonWord()}\nupdated: 2026-0${1 + (i % 8)}-1${i % 9}\n---\n\n`
+    + `# ${commonWord()} ${commonWord()}\n\n`
+  for (let section = 0; doc.length < target; section += 1) {
+    doc += `## ${commonWord()} ${commonWord()}\n\n`
+    for (let p = 0; p < 3; p += 1) doc += `${sentence()}${sentence()}${sentence()}\n\n`
+    if (section % 3 === 1) doc += `| ${commonWord()} | ${commonWord()} |\n|---|---|\n| ${denseWord()} | ${commonWord()} |\n\n`
+    if (section % 4 === 2) doc += `\`\`\`json\n{"${commonWord()}": "${denseWord()}", "id": "${hex(12)}"}\n\`\`\`\n\n`
+  }
+  fs.writeFileSync(path.join(corpus, `doc-${i}.md`), doc)
+  corpusBytes += doc.length
+}
+
+// A fixture too small to gate the bug is how a green gate gets mistaken for a
+// working one — the same shape as the churn assertion that passed WITH the bug
+// present earlier in this plan, and as this file's own first version. So the
+// corpus is checked before anything is measured: shrinking it has to break the
+// test loudly rather than quietly make it easier to pass.
+const MIN_CORPUS_BYTES = 80 * 1024 * 1024
+const avgDocBytes = corpusBytes / DOCS
+if (corpusBytes < MIN_CORPUS_BYTES || avgDocBytes < MIN_DOC_BYTES) {
+  process.stdout.write(
+    `ISOLATION FAIL: the fixture is ${(corpusBytes / 1048576).toFixed(1)}MB across ${DOCS} documents `
+    + `(avg ${(avgDocBytes / 1024).toFixed(1)}KB), under the ${MIN_CORPUS_BYTES / 1048576}MB / `
+    + `${MIN_DOC_BYTES / 1024}KB-per-document floor the thresholds below were measured against. `
+    + 'A corpus this small cannot produce the per-document CPU the SLO is about, so a pass would mean nothing.\n',
+  )
+  fs.rmSync(tmp, { recursive: true, force: true })
+  process.exit(1)
+}
+
 fs.writeFileSync(
   path.join(userData, 'manifest.json'),
   `${JSON.stringify({ layers: [{ name: 'corpus', level: 3, source: 'files', path: corpus }] }, null, 2)}\n`,
@@ -54,25 +155,51 @@ const MAX_LAG_MS = 400
 
 // The engine's own budget, sampled every ~20ms for 1.2s of the same index.
 //
-// Measured on an M-series Mac, three consecutive runs at DOCS=2500:
-//   p50 2ms / p95 3ms / max 38ms   (50 probes, 0 failures)
-//   p50 2ms / p95 3ms / max 29ms   (50 probes, 0 failures)
-//   p50 2ms / p95 3ms / max 15ms   (53 probes, 0 failures)
+// Measured on this fixture, M3 Pro, three consecutive runs (with other work on
+// the machine, which is the honest condition to calibrate against):
+//   p50 6ms / p95 11ms / max 12ms   (45 probes, 0 failures)
+//   p50 6ms / p95 10ms / max 29ms   (43 probes, 0 failures)
+//   p50 6ms / p95 12ms / max 18ms   (44 probes, 0 failures)
 //
-// The ceilings are the plan's API-responsiveness SLO (p95 < 50ms, max < 250ms),
-// which sits at ~17x and ~6.5x that headroom — loose enough for a loaded CI
-// runner, tight enough that a synchronous stretch in the engine's request path
-// fails immediately. Verified by putting one there: a 300ms busy-wait per
-// request took p95 to 306ms and the suite went red naming the engine.
+// The old fixture measured p50 2ms / p95 3ms / max 26ms, so the same ceilings
+// now sit above a signal ~3x larger: what changed is the measurement, not the
+// limits. The limits stay at the plan's API-responsiveness SLO (p95 < 50ms,
+// max < 250ms) on purpose — they are the product promise ("you can still
+// navigate while it indexes"), and Task 0.2 asks for generous thresholds
+// because CI machines vary. A GitHub macos-14 runner is roughly half this
+// machine, which puts a healthy p95 there near 20ms, still well under.
+//
+// What that ceiling costs in sensitivity, measured rather than assumed:
+//
+//   - A synchronous stall injected into the engine's request handler fails the
+//     gate from ~35ms per request upward (35ms → p95 51ms, red; 30ms → p95
+//     40ms, green). The 300ms busy-wait this file used to cite as proof was an
+//     order of magnitude grosser than what it can actually detect.
+//   - The regression class it exists for fails it without any artificial stall:
+//     replacing the files adapter's awaited `fsp.readFile`/`fsp.stat` with
+//     `readFileSync`/`statSync` — the one-line "simplification" that removes
+//     the per-document yield — takes p95 to 487ms over 6 probes.
+//
+// That second one is why the fixture above is what it is. Against the OLD
+// corpus the very same sync-I/O regression measured p95 8ms and the gate
+// printed ISOLATION OK, twice. The gate did not become stricter here; it became
+// able to see.
 const MAX_ENGINE_P95_MS = 50
 const MAX_ENGINE_MAX_MS = 250
-// Only guards "the probe loop ran at all" — a window that never opened, or a
-// loop that threw on its first iteration. It deliberately sits far below the
-// ~50 a healthy run produces, because a SLOW engine yields few probes by
-// construction (the window is fixed at 1.2s, so probes ≈ 1200/(latency+gap)):
-// a bar set for statistical density would fire on every latency above ~40ms and
-// make the ceilings below unreachable. Slowness is the latency assertion's job.
-const MIN_ENGINE_PROBES = 3
+// Guards "the probe loop ran for the window it claims to have run for", and
+// that is worth stating precisely, because an empty sample set makes every
+// latency assertion above pass vacuously (p50/p95/max all read 0).
+//
+// The floor is derived from the p95 ceiling rather than picked. The window is
+// 1.2s of probes spaced by a 20ms gap, so a run that honors p95 <= 50ms cannot
+// produce fewer than ~1200/(50+20) ≈ 17 probes — and for any sample count at or
+// below 20 the p95 estimator IS the maximum, so "p95 within budget" really does
+// mean every probe was. 12 keeps margin for boot jitter and a partially
+// consumed window while staying far below that 17, which is what makes it
+// impossible for a merely SLOW engine to fail here: it fails the latency
+// assertion first, and this check runs after it, so the message is never the
+// wrong one. A healthy run lands at 42-43.
+const MIN_ENGINE_PROBES = 12
 
 // Escape hatch for containers/CI images that need extra Chromium switches
 // (e.g. CC_ELECTRON_ARGS="--no-sandbox" when running as root). Unset on a
@@ -138,17 +265,6 @@ child.on('exit', (code) => {
     return
   }
 
-  // A number nobody sampled is not a measurement. The window is 1.2s of ~20ms
-  // probes, so anything near zero means the probe loop, not the engine, broke.
-  if (engine.probes < MIN_ENGINE_PROBES) {
-    process.stdout.write(
-      `ISOLATION FAIL: only ${engine.probes} engine probes landed (expected at least ${MIN_ENGINE_PROBES}); `
-      + 'the latency numbers below describe nothing.\n',
-    )
-    process.exitCode = 1
-    return
-  }
-
   if (engine.failures > 0) {
     process.stdout.write(
       `ISOLATION FAIL: ${engine.failures} of ${engine.probes} GET /api/status probes did not answer `
@@ -164,6 +280,21 @@ child.on('exit', (code) => {
       + `over ${engine.probes} probes while indexing ${DOCS} documents `
       + `(limits ${MAX_ENGINE_P95_MS}ms / ${MAX_ENGINE_MAX_MS}ms). `
       + `Main-process lag was ${lag}ms, so the stall is inside the engine's request path, not the UI thread.\n`,
+    )
+    process.exitCode = 1
+    return
+  }
+
+  // Last, and deliberately so: a number nobody sampled is not a measurement,
+  // and an empty sample set reads as p50/p95/max of 0 — which every assertion
+  // above would have passed. Running it after them means a slow engine is
+  // always reported as slow rather than as an unsampled one.
+  if (engine.probes < MIN_ENGINE_PROBES) {
+    process.stdout.write(
+      `ISOLATION FAIL: only ${engine.probes} engine probes landed over a 1.2s window `
+      + `(expected at least ${MIN_ENGINE_PROBES}, healthy is ~42). The latency numbers `
+      + `— p50 ${engine.p50}ms p95 ${engine.p95}ms max ${engine.max}ms — describe too little to mean anything, `
+      + 'so the probe loop itself is what broke, not the engine.\n',
     )
     process.exitCode = 1
     return

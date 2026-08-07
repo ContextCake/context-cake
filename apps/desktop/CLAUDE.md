@@ -18,7 +18,7 @@ npm run smoke   # headless boot check: service up, token enforced, exits
 npm run smoke:bootfail
 npm run smoke:relaunch   # engine restart re-points the window at the new origin
 npm run test:isolation   # engine must not block the UI thread, and must keep
-                         # answering itself (2500-doc corpus)
+                         # answering itself (3,000-doc / ~90MB corpus)
 npm run icon    # regenerate build/icon.icns + icon-master-1024.png from assets/brand/contextcake-app-icon.svg
 npm run pack    # unpacked .app (fast) — dist/ is gitignored
 npm run dist    # DMG + zip, ad-hoc signed in dev

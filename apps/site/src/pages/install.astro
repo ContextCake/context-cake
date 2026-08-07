@@ -121,7 +121,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		<section class="activation" aria-labelledby="activation-title">
 			<header class="section-intro">
 				<h2 id="activation-title">From download to a sourced answer.</h2>
-				<p>No archive, checksum, or manifest is required for the Mac app.</p>
+				<p>The Mac app skips the archive, the checksum, and the manifest.</p>
 			</header>
 
 			<ol class="activation-steps">
@@ -224,7 +224,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 						<div class="route-heading">
 							<span>Recommended source route</span>
 							<h3 id="archive-title">Download and verify the archive</h3>
-							<p>The checksum stops the workflow before extraction if the bytes do not match.</p>
+							<p>The checksum stops the workflow before extraction if the bytes don’t match.</p>
 						</div>
 						<CodeBlock lang="bash" code={terminalDownload} label="Download tagged source" copy />
 						<CodeBlock lang="bash" code={unpackCommand} label="Verify and unpack" copy />
@@ -306,18 +306,18 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		text-transform: uppercase;
 	}
 	h1 {
-		max-width: 11ch;
+		max-width: 13ch;
 		margin: 1.15rem 0 1.35rem;
-		font-size: clamp(3rem, 6vw, 5.6rem);
-		line-height: 0.98;
-		letter-spacing: -0.035em;
+		font-size: clamp(2.4rem, 3.8vw, 4.25rem);
+		line-height: 1.08;
+		letter-spacing: -0.03em;
 		text-wrap: balance;
 	}
 	.lede {
 		max-width: 39rem;
 		margin: 0;
 		color: var(--cc-text-body);
-		font-size: clamp(1.05rem, 1.5vw, 1.2rem);
+		font-size: clamp(1rem, 1.2vw, 1.15rem);
 		line-height: 1.65;
 		text-wrap: pretty;
 	}
@@ -534,9 +534,9 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 	.section-intro h2 {
 		max-width: 15ch;
 		margin: 0;
-		font-size: clamp(2.2rem, 5vw, 4.5rem);
-		line-height: 1;
-		letter-spacing: -0.035em;
+		font-size: clamp(1.9rem, 3.4vw, 3.4rem);
+		line-height: 1.1;
+		letter-spacing: -0.03em;
 		text-wrap: balance;
 	}
 	.section-intro > p {
@@ -825,7 +825,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 	}
 	@media (max-width: 520px) {
 		.install-page { padding-inline: 1rem; }
-		h1 { font-size: clamp(2.65rem, 14vw, 4rem); }
+		h1 { font-size: clamp(2rem, 11vw, 2.75rem); }
 		.hero-actions,
 		.hero-actions .button,
 		.download-strip,

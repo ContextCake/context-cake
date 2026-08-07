@@ -179,6 +179,11 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   // Every invalid manifest entry, off the unfiltered list: what a repair has to
   // clear is a property of the manifest, not of what the search box is showing.
   const invalid = sources.filter((source) => source.quarantined)
+  // The invalid entries a removal of THIS row has to take with it. Any write
+  // rewrites the whole manifest and the engine only saves one that validates,
+  // so an invalid entry blocks removing a perfectly healthy source just as
+  // surely as it blocks removing another invalid one.
+  const alsoInvalid = (s: Source) => invalid.filter((source) => source.name !== s.name)
 
   useEffect(() => {
     if (selectedName && sources.some((source) => source.name === selectedName)) return
@@ -234,13 +239,13 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     }
   }
 
-  // Removing an invalid entry removes every invalid entry, and the panel says
-  // so before the click. The engine will only persist a manifest that
-  // validates, so with two bad entries present, removing either alone is
-  // refused — one request naming all of them is the only thing that repairs
-  // the file. `name` repeats; the engine reads them all.
+  // A removal carries the invalid entries with it, and the panel names them
+  // before the click. The engine will only persist a manifest that validates,
+  // so while anything is invalid, removing this row alone is refused — one
+  // request naming all of them is the only thing that repairs the file.
+  // `name` repeats; the engine reads them all.
   const confirmRemove = async (s: Source) => {
-    const names = s.quarantined ? invalid.map((source) => source.name) : [s.name]
+    const names = [s.name, ...alsoInvalid(s).map((source) => source.name)]
     setBusy(true)
     setErr(null)
     try {
@@ -428,13 +433,13 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
             )}
 
             {removing && (() => {
-              // An invalid entry can only be removed alongside every other
-              // invalid entry: the engine writes a manifest only when the whole
-              // thing validates, so leaving one behind refuses the write. The
-              // panel names them before the click rather than removing rows the
-              // user did not choose.
-              const sweep = s.quarantined ? invalid : []
-              const others = sweep.filter((source) => source.name !== s.name)
+              // Any removal takes the invalid entries with it: the engine
+              // writes a manifest only when the whole thing validates, so
+              // leaving one behind refuses the write — including a write that
+              // was only meant to remove a healthy source. The panel names them
+              // before the click rather than removing rows the user did not
+              // choose.
+              const others = alsoInvalid(s)
               return (
                 <div style={css(`display:flex; flex-direction:column; gap:10px; padding:12px; border-radius:10px; background:${C.raised}; border:1px solid ${C.amberStroke};`)}>
                   <p style={css(`margin:0; font-size:12.5px; line-height:1.5; color:${C.body};`)}>
@@ -447,8 +452,9 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                       <strong style={css('display:block; margin-bottom:4px;')}>
                         {others.length === 1 ? 'One other entry is also invalid' : `${others.length} other entries are also invalid`}
                       </strong>
-                      Your manifest can only be saved once every invalid entry is gone, so this removes {others.length === 1 ? 'both' : `all ${sweep.length}`}:{' '}
-                      <span style={css(`font-family:${MONO};`)}>{sweep.map((source) => source.name).join(', ')}</span>
+                      Your manifest can only be saved once every invalid entry is gone, so this also removes{' '}
+                      {others.length === 1 ? 'it' : 'them'}:{' '}
+                      <span style={css(`font-family:${MONO};`)}>{others.map((source) => source.name).join(', ')}</span>
                     </div>
                   )}
                   {s.live && <LiveWarning verb="Removing" />}
@@ -459,7 +465,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                       {busy
                         ? 'Removing…'
                         : others.length > 0
-                          ? `Remove all ${sweep.length} invalid entries`
+                          ? `Remove ${others.length + 1} entries`
                           : s.quarantined ? 'Remove entry' : 'Remove source'}
                     </button>
                   </div>

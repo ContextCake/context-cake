@@ -194,19 +194,42 @@ describe('Sources with an invalid manifest entry', () => {
   })
 
   it('names every other invalid entry and removes them in one request', async () => {
-    // The engine only persists a manifest that validates, so removing one of
-    // three would be refused. The panel has to say that before the click
-    // rather than removing rows the user never selected.
+    // Two invalid entries: the engine only persists a manifest that validates,
+    // so removing either alone would be refused. The panel has to say that
+    // before the click rather than removing rows the user never selected.
     await mount([src({}), broken(), broken({ name: 'layer 4', error: 'Layer in legacy default must have a non-empty name.' })])
 
     await act(async () => sourceButton('bad-kind').click())
     await act(async () => buttonByAria('Remove bad-kind').click())
     expect(container.textContent).toContain('One other entry is also invalid')
-    expect(container.textContent).toContain('bad-kind, layer 4')
+    expect(container.textContent).toContain('layer 4')
 
-    await act(async () => button('Remove all 2 invalid entries').click())
+    await act(async () => button('Remove 2 entries').click())
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources?name=bad-kind&name=layer%204', expect.objectContaining({ method: 'DELETE' }))
     expect(mocks.reload).toHaveBeenCalled()
+  })
+
+  it('carries the invalid entries along when a healthy source is removed', async () => {
+    // The write rewrites the whole manifest, so an invalid entry blocks
+    // removing a working source too. Refusing with an explanation the user
+    // cannot act on would leave them stuck on a row that has nothing wrong.
+    await mount([src({ name: 'notes' }), broken()])
+
+    await act(async () => sourceButton('notes').click())
+    await act(async () => buttonByAria('Remove notes').click())
+    expect(container.textContent).toContain('One other entry is also invalid')
+    expect(container.textContent).toContain('only the cascade entry is removed')
+
+    await act(async () => button('Remove 2 entries').click())
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources?name=notes&name=bad-kind', expect.objectContaining({ method: 'DELETE' }))
+  })
+
+  it('leaves an ordinary removal alone when nothing is invalid', async () => {
+    await mount([src({ name: 'notes' })])
+
+    await act(async () => buttonByAria('Remove notes').click())
+    await act(async () => button('Remove source').click())
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources?name=notes', expect.objectContaining({ method: 'DELETE' }))
   })
 
   it('renders the engine refusal verbatim when the manifest cannot be repaired', async () => {

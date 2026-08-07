@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { useStore } from '../store'
-import { apiFetch, progressLabel, progressPercent } from '../api'
+import { apiFetch, isTimeout, progressLabel, progressPercent } from '../api'
 import type { GraphSummary, SourceStatus, StatusSummary } from '../types'
 
 type StepId = 'welcome' | 'personal' | 'team' | 'company' | 'source' | 'review' | 'success'
@@ -96,8 +96,17 @@ async function fetchStatus(timeoutMs = 4_000): Promise<StatusSummary | null> {
  * source is in the manifest — and reporting failure for a source that is
  * sitting right there sends the user into a retry that can only 409. Ask the
  * cheap route instead of guessing in either direction.
+ *
+ * `stillInFlight` is what separates "absent" from "not yet", and it is not a
+ * nicety. addSourceApi writes the manifest LAST — after gitCloneOrPull, after
+ * the MCP and github-rest probes — so when this fetch hit its own deadline the
+ * server is very often still cloning. Calling that absence `false` reported
+ * "nothing was added" for a large private repo that landed a minute later, and
+ * the retry afterwards then found it and said "already exists": two
+ * contradictory answers for one successful add. Absence is only evidence when
+ * nothing can still be writing the manifest.
  */
-async function sourceLanded(name: string, attempts = 4, gapMs = 350): Promise<boolean | null> {
+async function sourceLanded(name: string, stillInFlight: boolean, attempts = 4, gapMs = 350): Promise<boolean | null> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, gapMs))
     const status = await fetchStatus()
@@ -105,9 +114,9 @@ async function sourceLanded(name: string, attempts = 4, gapMs = 350): Promise<bo
     if (!status) return null
     if (status.sources.some((s) => s.name === name)) return true
   }
-  // The engine answered, repeatedly, and the source is not in it. The manifest
-  // write completes before the POST would have returned, so a second is plenty.
-  return false
+  // The engine answered, repeatedly, and the source is not in it — a real
+  // answer, unless the request that would have written it may still be running.
+  return stillInFlight ? null : false
 }
 
 async function postSource(body: Record<string, unknown>): Promise<AddResult> {
@@ -733,11 +742,18 @@ export function SetupWizard({
         // Everything left here is "we do not know what happened" — a lost
         // response, a timeout, or a 409 for a name that was not there before.
         // Ask, rather than declaring success as this used to.
-        const landed = await sourceLanded(name)
+        //
+        // A request that hit its own deadline has not been answered by anyone:
+        // the work may still be running server-side, so the cascade not holding
+        // the source yet is not evidence it never will.
+        const landed = await sourceLanded(name, isTimeout(e))
+        const detail = e instanceof Error ? e.message : String(e)
         if (landed === false) {
-          throw new Error(`${e instanceof Error ? e.message : String(e)} — “${name}” is not in the cascade, so nothing was added.`)
+          throw new Error(`${detail} — “${name}” is not in the cascade, so nothing was added.`)
         }
-        if (landed === null && !(conflict && isRetry)) throw e
+        if (landed === null && !(conflict && isRetry)) {
+          throw new Error(`${detail} — “${name}” may still be being added. Open Sources in a moment to see whether it arrived, rather than adding it again.`)
+        }
       }
       setAdded((prev) => [...prev, {
         kind: built.kind,

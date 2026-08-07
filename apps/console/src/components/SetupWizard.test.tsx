@@ -234,7 +234,9 @@ describe('SetupWizard first run', () => {
   it('refuses to report success for a source that never appeared', async () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === '/api/sources' && init?.method === 'POST') {
-        throw new DOMException('The operation timed out', 'TimeoutError')
+        // A definite failure of the request itself, not a deadline: nothing is
+        // still running server-side, so absence from the cascade is an answer.
+        throw new TypeError('Failed to fetch')
       }
       if (url === '/api/status') {
         // The engine is answering, and this source is not in it.
@@ -256,6 +258,42 @@ describe('SetupWizard first run', () => {
 
     expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
     expect(container.textContent).toContain('is not in the cascade, so nothing was added')
+  })
+
+  // The field case: a large private repo clones server-side for longer than
+  // apiFetch's 60s deadline. addSourceApi writes the manifest AFTER the clone,
+  // so the source is legitimately absent while the work continues — and the add
+  // then succeeds. Calling that "nothing was added" produced the second half of
+  // the contradiction: the retry afterwards found the source and said it
+  // already existed.
+  it('does not call a timed-out add a failure while the engine may still be working', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/sources' && init?.method === 'POST') {
+        throw new DOMException('The operation timed out', 'TimeoutError')
+      }
+      if (url === '/api/status') {
+        // Still cloning: the manifest write has not happened yet.
+        return new Response(JSON.stringify({ generation: 1, indexing: false, indexingSources: [], sources: [] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/vault')
+    await act(async () => {
+      button('Next').click()
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+    })
+
+    // Still on the step (nothing is claimed to have worked), but the copy says
+    // what is actually true and where to look.
+    expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
+    expect(container.textContent).toContain('may still be being added')
+    expect(container.textContent).toContain('Open Sources')
+    expect(container.textContent).not.toContain('nothing was added')
   })
 
   it('still calls a first-attempt 409 a real clash when the name was already there', async () => {

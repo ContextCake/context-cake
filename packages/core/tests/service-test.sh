@@ -230,6 +230,16 @@ code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=m3")" "cleanup plai
 MTN="$(curl -s "${AUTH[@]}" "$BASE/api/file?path=t/note.md" | JQ 'd.modified')"
 code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"note\",\"sectionKey\":\"body\",\"layers\":[\"t\"],\"content\":\"still hello.\",\"modified\":{\"t\":\"$MTN\"}}" "$BASE/api/section")" "write to a heading without updated="
 grep -q '## Body {#body}$' "$TMP/bundle/note.md" && pass "no updated= attr invented on an undated heading" || fail "heading changed ($(grep '## Body' "$TMP/bundle/note.md"))"
+# The section route reads the whole file before it rewrites it, so the cap the
+# other file routes enforce has to hold here too: a 30MB note came back
+# {"ok":true} and 64 bytes on disk — a document the indexer refuses to read,
+# destroyed by an editor that was never able to show it.
+node -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[1], "# Too big\n\n## Pick {#pick}\n\n" + "x".repeat(2_100_000) + "\n")' "$TMP/bundle/too-big.md"
+BIG_BEFORE="$(wc -c < "$TMP/bundle/too-big.md" | tr -d ' ')"
+code 413 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"too-big","sectionKey":"pick","layers":["t"],"content":"TRUNCATED"}' "$BASE/api/section")" "a document past the indexing cap is refused by /api/section"
+BIG_AFTER="$(wc -c < "$TMP/bundle/too-big.md" | tr -d ' ')"
+[ "$BIG_BEFORE" = "$BIG_AFTER" ] && pass "the oversized document was left byte-for-byte alone" || fail "oversized document was rewritten ($BIG_BEFORE -> $BIG_AFTER bytes)"
+rm -f "$TMP/bundle/too-big.md"
 code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=m2")" "cleanup second layer"
 
 echo "github-rest source kind (C-a)"

@@ -237,6 +237,16 @@ export async function writeSectionApi(rawBody, roots) {
       }
     } catch (err) { skipped.push({ layer, reason: err.message }); continue; }
     if (!target || !stat?.isFile()) { skipped.push({ layer, reason: "no such concept file" }); continue; }
+    // Same cap the read and write routes enforce, checked BEFORE the read.
+    // Without it this route would happily pull a 30MB document into memory and
+    // write back the section-replaced result — a file the indexer refuses to
+    // read, and so a document the cascade never served, silently rewritten
+    // down to the few lines the merge editor thought it was editing. A skip
+    // would be worse than a refusal here: resolving a conflict into every
+    // layer except the big one just mints a new partial disagreement.
+    if (stat.size > MAX_EDITABLE_BYTES) {
+      throw httpError(413, `File is too large to save from the editor: ${layer}/${conceptId}${target.ext}`);
+    }
     const originalText = await fsp.readFile(target.abs, "utf8");
     const currentContent = readSectionBody(originalText, sectionKey, { plainText: target.ext === ".txt" });
     const { text, replaced } = target.ext === ".txt"

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Sources } from './Sources'
 import type { Source } from '../data'
 
-const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), useStore: vi.fn(), reload: vi.fn() }))
+const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), useStore: vi.fn(), reload: vi.fn(), openFilesScope: vi.fn() }))
 
 vi.mock('../api', () => ({ apiFetch: mocks.apiFetch }))
 vi.mock('../store', () => ({ useStore: mocks.useStore }))
@@ -26,7 +26,7 @@ function src(over: Partial<Source>): Source {
 }
 
 function mount(sources: Source[], mode: 'live' | 'demo' = 'live', onAddSource?: () => void) {
-  mocks.useStore.mockReturnValue({ mode, sources, reload: mocks.reload })
+  mocks.useStore.mockReturnValue({ mode, sources, reload: mocks.reload, openFilesScope: mocks.openFilesScope })
   return act(async () => root.render(<Sources onAddSource={onAddSource} />))
 }
 
@@ -71,6 +71,7 @@ beforeEach(() => {
   mocks.apiFetch.mockReset()
   mocks.useStore.mockReset()
   mocks.reload.mockReset()
+  mocks.openFilesScope.mockReset()
   mocks.apiFetch.mockImplementation(async () => ok())
 })
 
@@ -132,7 +133,7 @@ describe('Sources remove', () => {
 
     await act(async () => buttonByAria('Remove repo docs').click())
     expect(container.textContent).toContain('Your files stay where they are')
-    expect(mocks.apiFetch).not.toHaveBeenCalled()
+    expect(mocks.apiFetch.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'DELETE')).toBe(false)
 
     await act(async () => button('Remove source').click())
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/sources?name=repo%20docs', expect.objectContaining({ method: 'DELETE' }))
@@ -295,6 +296,46 @@ describe('Sources rename + re-level', () => {
 
     expect(container.textContent).toContain('pack invariant violated: layer "team" is assigned to pack data-analytics')
     expect(mocks.reload).not.toHaveBeenCalled()
+  })
+})
+
+describe('Sources → Files', () => {
+  const listing = (layers: unknown[]) => ok({ layers })
+
+  it('shows the file count and root path, and browses scoped to that source', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') {
+        return listing([{ layer: 'notes', kind: 'files', root: '/Users/me/vault', fileCount: 3014, truncated: false, files: [] }])
+      }
+      return ok()
+    })
+    await mount([src({ name: 'notes' })])
+
+    expect(container.textContent).toContain('3014 files')
+    expect(container.textContent).toContain('/Users/me/vault')
+
+    await act(async () => buttonByAria('Browse the files in notes').click())
+    expect(mocks.openFilesScope).toHaveBeenCalledWith('notes')
+  })
+
+  it('says a remote source keeps nothing locally, and offers no browse action', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => (url === '/api/files' ? listing([]) : ok()))
+    await mount([src({ name: 'company-graph', kind: 'mcp', sourceKind: 'mcp', level: 0, layer: 'company', status: 'serving' })])
+
+    expect(container.textContent).toContain('None on this machine — remote graph')
+    expect(container.querySelector('button[aria-label^="Browse"]')).toBeNull()
+  })
+
+  it('marks a truncated listing rather than quoting a count it knows is short', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') {
+        return listing([{ layer: 'notes', kind: 'files', root: '/vault', fileCount: 10000, truncated: true, files: [] }])
+      }
+      return ok()
+    })
+    await mount([src({ name: 'notes' })])
+
+    expect(container.textContent).toContain('10000+ files')
   })
 })
 

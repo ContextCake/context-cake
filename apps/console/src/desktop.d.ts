@@ -96,7 +96,7 @@ declare global {
         set(patch: Partial<DeviceUiState>): Promise<DeviceUiState>
       }
       commands?: {
-        onInvoke(cb: (command: 'command-palette' | 'search' | 'ask' | 'settings' | 'toggle-sidebar' | `destination:${1 | 2 | 3 | 4 | 5}`) => void): () => void
+        onInvoke(cb: (command: 'command-palette' | 'search' | 'ask' | 'settings' | 'toggle-sidebar' | 'view:files' | `destination:${1 | 2 | 3 | 4 | 5}`) => void): () => void
       }
       windows?: {
         openSettings(pane?: DeviceUiState['settingsPane']): Promise<{ opened: boolean; existing: boolean }>

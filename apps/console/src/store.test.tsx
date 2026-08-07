@@ -33,7 +33,7 @@ let root: Root
 
 /** Renders the store's load state so assertions read it from the DOM. */
 function Probe() {
-  const { load, concepts, sources, reload, retryNow, view, selConcept } = useStore()
+  const { load, concepts, sources, reload, retryNow, view, selConcept, filesScope, filesPath, openFilesScope, setFilesScope, setFilesPath } = useStore()
   return (
     <div
       data-shell={String(load.shell)}
@@ -43,11 +43,16 @@ function Probe() {
       data-sources={String(sources.length)}
       data-view={view}
       data-selection={selConcept}
+      data-files-scope={filesScope ?? ''}
+      data-files-path={filesPath ?? ''}
       data-refresh-error={load.refreshError?.message ?? ''}
       data-tasks={load.tasks.map((t) => `${t.name}:${t.phase}:${t.loaded}/${t.total ?? '?'}${t.refreshing ? ':refreshing' : ''}`).join(',')}
     >
       <button type="button" onClick={reload}>reload</button>
       <button type="button" onClick={retryNow}>retry</button>
+      <button type="button" onClick={() => openFilesScope('team-docs')}>browse team-docs</button>
+      <button type="button" onClick={() => setFilesPath('team-docs/notes/a.md')}>open a.md</button>
+      <button type="button" onClick={() => setFilesScope(null)}>clear scope</button>
     </div>
   )
 }
@@ -400,5 +405,40 @@ describe('store load state', () => {
     expect(probe().dataset.view).toBe('concepts')
     expect(probe().dataset.selection).toBe('interfaces/auth')
     expect(window.location.hash).toBe('#/concepts')
+  })
+  it('lands the Files view scoped to a source, and puts the scope in the URL', async () => {
+    mocks.graph.mockResolvedValue(graphPayload([]))
+    mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+
+    await act(async () => (Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'browse team-docs') as HTMLButtonElement).click())
+    expect(probe().dataset.view).toBe('files')
+    expect(probe().dataset.filesScope).toBe('team-docs')
+    expect(window.location.hash).toBe('#/files/team-docs')
+
+    await act(async () => (Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'open a.md') as HTMLButtonElement).click())
+    expect(window.location.hash).toBe('#/files/team-docs/notes%2Fa.md')
+
+    // Clearing the scope keeps the open file — it just widens the navigator.
+    await act(async () => (Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'clear scope') as HTMLButtonElement).click())
+    expect(probe().dataset.filesScope).toBe('')
+    expect(probe().dataset.filesPath).toBe('team-docs/notes/a.md')
+    expect(window.location.hash).toBe('#/files')
+  })
+
+  it('restores scope and file from a deep link, and from Back', async () => {
+    window.history.replaceState(null, '', '/#/files/team-docs/notes%2Fa.md')
+    mocks.graph.mockResolvedValue(graphPayload([]))
+    mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+
+    expect(probe().dataset.view).toBe('files')
+    expect(probe().dataset.filesScope).toBe('team-docs')
+    expect(probe().dataset.filesPath).toBe('team-docs/notes/a.md')
+
+    window.history.pushState(null, '', '#/files')
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    expect(probe().dataset.filesScope).toBe('')
+    expect(probe().dataset.filesPath).toBe('')
   })
 })

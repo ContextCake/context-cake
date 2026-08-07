@@ -5,14 +5,16 @@
 // so instead of pretending otherwise. Errors render verbatim — including the
 // engine's pack-invariant messages — never paraphrased into vagueness.
 // Demo mode shows the same rows read-only.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { apiFetch, progressLabel, progressPercent } from '../api'
 import { LayerChip } from '../components/LayerChip'
 import { LevelStepper } from '../components/SetupWizard'
 import { useDetailSurface } from '../components/useDetailSurface'
+import { useLayerFiles } from '../layer-files'
 import { useStore } from '../store'
 import type { Source } from '../data'
+import type { LayerFiles } from '../types'
 
 // Sync of a clone-backed source runs `git pull` server-side (bounded at 120s
 // there) — same headroom as the wizard's mutations.
@@ -147,9 +149,30 @@ function CredentialWarning({ source }: { source: Source }) {
 
 type Panel = { name: string; kind: 'edit' | 'remove' } | null
 
+/**
+ * What the panel says about a source's files. A source with no folder on disk
+ * is a real, healthy state — an MCP graph or a repo read over the API — and the
+ * row says which, rather than leaving a blank that reads as a failure.
+ */
+function filesSummary(source: Source, entry: LayerFiles | undefined, known: boolean): string {
+  if (entry) return `${entry.fileCount}${entry.truncated ? '+' : ''} file${entry.fileCount === 1 ? '' : 's'}`
+  if (!known) return 'Reading…'
+  if (source.sourceKind === 'mcp') return 'None on this machine — remote graph'
+  if (source.sourceKind === 'github') return 'None on this machine — read over the API'
+  return 'None on this machine'
+}
+
 export function Sources({ onAddSource }: { onAddSource?: () => void }) {
-  const { mode, sources, reload, query } = useStore()
+  const { mode, sources, reload, query, openFilesScope } = useStore()
   const live = mode === 'live'
+  // The same listing the Files view builds its tree from: a source's file count
+  // and root path are already in that payload, and were being thrown away.
+  const { layers: fileLayers } = useLayerFiles(live, sources.length)
+  const filesByLayer = useMemo(() => {
+    const map = new Map<string, LayerFiles>()
+    for (const entry of fileLayers ?? []) map.set(entry.layer, entry)
+    return map
+  }, [fileLayers])
 
   const [panel, setPanel] = useState<Panel>(null)
   const [editName, setEditName] = useState('')
@@ -331,6 +354,8 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
               {/* "Not supported for this source kind" would be answering the
                   wrong question on an entry that is not a source at all. */}
               {!s.quarantined && <div><dt>Sync</dt><dd>{canSync(s) ? 'Available' : 'Not supported for this source kind'}</dd></div>}
+              {!s.quarantined && <div><dt>Files</dt><dd>{filesSummary(s, filesByLayer.get(s.name), fileLayers !== null)}</dd></div>}
+              {filesByLayer.get(s.name)?.root && <div><dt>Location</dt><dd style={css(`font-family:${MONO};`)}>{filesByLayer.get(s.name)!.root}</dd></div>}
               {s.origin && <div><dt>Repository</dt><dd>{s.origin}</dd></div>}
             </dl>
             {/* An invalid entry has no path, repo or command to speak of — the
@@ -385,6 +410,19 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
 
             {live && !isOpen && (
               <div style={css('display:flex; gap:8px; flex-wrap:wrap;')}>
+                {/* The way in to the navigator. Offered only where there is
+                    something to browse — a disabled button over a source that
+                    keeps nothing on disk would say less than the Files row
+                    above it already does. */}
+                {filesByLayer.has(s.name) && (
+                  <button
+                    type="button"
+                    className="cc-h-tealfill2"
+                    aria-label={`Browse the files in ${s.name}`}
+                    style={btnSmallPrimary()}
+                    onClick={() => openFilesScope(s.name)}
+                  >Browse files</button>
+                )}
                 {canSync(s) && (
                   <button
                     type="button"

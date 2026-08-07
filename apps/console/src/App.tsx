@@ -66,7 +66,7 @@ function ErrorState({ kind, message, reload }: { kind: LiveErrorKind; message: s
 }
 
 export function App() {
-  const { view, setView, chatOpen, openChat, closeChat, route, loading, load, error, reload, retryNow, mode, sources, loadErrors } = useStore()
+  const { view, setView, chatOpen, openChat, closeChat, route, loading, load, error, reload, retryNow, mode, sources, loadErrors, openFilesScope } = useStore()
   // Undefined = not yet decided by the auto-trigger effect below; true/false
   // once the user (or the trigger) has taken an explicit stance. Kept separate
   // from `needsSetup` so the wizard's own Success step stays visible even
@@ -171,16 +171,26 @@ export function App() {
     { id: 'home', label: 'Go to Home', keywords: 'overview', shortcut: '⌘1', run: () => setView('overview') },
     { id: 'cascade', label: 'Go to Cascade', keywords: 'canvas graph', shortcut: '⌘2', run: () => setView('canvas') },
     { id: 'concepts', label: 'Go to Knowledge: Concepts', keywords: 'browse', run: () => setView('concepts') },
-    { id: 'files', label: 'Go to Knowledge: Files', keywords: 'markdown documents', run: () => setView('files') },
+    { id: 'files', label: 'Go to Knowledge: Files', keywords: 'markdown documents', shortcut: '⇧⌘F', run: () => setView('files') },
     { id: 'sources', label: 'Go to Sources', shortcut: '⌘4', run: () => setView('sources') },
     { id: 'queue', label: 'Go to Review: Queue', keywords: 'triage', run: () => setView('triage') },
     { id: 'conflicts', label: 'Go to Review: Conflicts', keywords: 'resolve', run: () => setView('conflicts') },
+    // One per source: the palette is the keyboard route into the navigator,
+    // matching the Sources panel's "Browse files" button.
+    ...(mode === 'live'
+      ? sources.filter((source) => !source.quarantined).map((source) => ({
+          id: `files:${source.name}`,
+          label: `Browse files in ${source.name}`,
+          keywords: 'navigator folder tree source files',
+          run: () => openFilesScope(source.name),
+        }))
+      : []),
     ...(mode === 'live' ? [{ id: 'add-source', label: 'Add Source', keywords: 'folder repository', run: reopenWizard }] : []),
     ...(isDesktop ? [{ id: 'connect-agent', label: 'Connect Agent', keywords: 'cli mcp', run: openConnect }] : []),
     { id: 'ask', label: 'Ask ContextCake', shortcut: '⇧⌘A', run: openAskFromPalette },
     { id: 'settings', label: 'Open Settings', shortcut: '⌘,', run: openSettings },
     { id: 'sidebar', label: 'Toggle Sidebar', run: toggleSidebar },
-  ], [isDesktop, mode, openAskFromPalette, setView, sources.length, sourceSetupComplete])
+  ], [isDesktop, mode, openAskFromPalette, openFilesScope, setView, sources, sourceSetupComplete])
   const closeSettings = () => {
     const opener = settingsOpener.current
     setSettingsOpen(false)
@@ -277,7 +287,12 @@ export function App() {
       } else if (command && e.shiftKey && e.key.toLowerCase() === 'a') {
         e.preventDefault()
         if (!showWizard && !connectOpen && !settingsOpen) openAsk()
-      } else if (command && e.key.toLowerCase() === 'f' && SEARCHABLE_VIEWS.has(view)) {
+      } else if (command && e.shiftKey && e.key.toLowerCase() === 'f') {
+        // ⇧⌘F is the navigator, ⌘F is search-this-view — the desktop View menu
+        // carries the same pair, so the two surfaces agree.
+        e.preventDefault()
+        if (!showWizard && !connectOpen && !settingsOpen) setView('files')
+      } else if (command && !e.shiftKey && e.key.toLowerCase() === 'f' && SEARCHABLE_VIEWS.has(view)) {
         e.preventDefault()
         window.dispatchEvent(new Event('contextcake:focus-search'))
       } else if (command && !editing && !e.shiftKey && /^[1-5]$/.test(e.key)) {
@@ -305,6 +320,7 @@ export function App() {
     const editing = active instanceof Element && active.matches('input, textarea, select, [contenteditable="true"]')
     const modalOpen = showWizard || connectOpen || settingsOpen
     if (command === 'command-palette' && !modalOpen) openPalette()
+    else if (command === 'view:files' && !modalOpen) setView('files')
     else if (command === 'search' && SEARCHABLE_VIEWS.has(view) && !modalOpen) window.dispatchEvent(new Event('contextcake:focus-search'))
     else if (command === 'ask' && !modalOpen) openAsk()
     else if (command === 'settings' && !showWizard && !connectOpen) openSettings()

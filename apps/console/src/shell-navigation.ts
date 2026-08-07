@@ -37,7 +37,20 @@ export function viewForDestination(
   return reviewView
 }
 
-export function parseHash(hash: string): { view?: ViewId; concept?: string } {
+/**
+ * What a location hash says. `layer`/`file` belong to the Files route:
+ * `layer` is the source the navigator is scoped to and `file` is the engine's
+ * own `<layer>/<rel>` path — the same string `/api/file?path=` takes, so a
+ * deep link needs no translation on either side.
+ */
+export interface ParsedHash {
+  view?: ViewId
+  concept?: string
+  layer?: string
+  file?: string
+}
+
+export function parseHash(hash: string): ParsedHash {
   const value = hash.replace(/^#\/?/, '')
   if (!value) return {}
   const slash = value.indexOf('/')
@@ -48,7 +61,34 @@ export function parseHash(hash: string): { view?: ViewId; concept?: string } {
     try { return { view: candidate, concept: decodeURIComponent(rest) } }
     catch { return { view: candidate } }
   }
+  if (candidate === 'files' && rest) {
+    // Two segments, each percent-encoded on its own, so a layer name with a
+    // space and a note nested six folders deep both survive the round trip.
+    const cut = rest.indexOf('/')
+    try {
+      const layer = decodeURIComponent(cut === -1 ? rest : rest.slice(0, cut))
+      if (!layer) return { view: candidate }
+      const rel = cut === -1 ? '' : decodeURIComponent(rest.slice(cut + 1))
+      return rel ? { view: candidate, layer, file: `${layer}/${rel}` } : { view: candidate, layer }
+    } catch { return { view: candidate } }
+  }
   return { view: candidate }
+}
+
+/**
+ * The Files route as a hash. The scope is the addressable part: a file is
+ * carried only while the navigator is scoped to the layer that holds it, so
+ * `parseHash(filesHash(scope, file))` restores exactly the state it left.
+ * Unscoped browsing is `#/files` — a stable URL, not an alias for whichever
+ * file happened to be open (the same bare/deep split Concepts already makes).
+ */
+export function filesHash(layer: string | null, file?: string | null): string {
+  if (!layer) return '#/files'
+  const prefix = `${layer}/`
+  const rel = file && file.startsWith(prefix) ? file.slice(prefix.length) : ''
+  return rel
+    ? `#/files/${encodeURIComponent(layer)}/${encodeURIComponent(rel)}`
+    : `#/files/${encodeURIComponent(layer)}`
 }
 
 export function dispatchNavigationGuard(): boolean {

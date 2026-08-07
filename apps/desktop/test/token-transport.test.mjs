@@ -27,8 +27,10 @@ test('source credentials reach the engine over the message port, never argv or e
   // ...and no env carrying them either.
   assert.doesNotMatch(fork, /\benv\b/)
 
-  // The port is the only path in.
-  assert.match(hostSource, /postWithAck\(\{ type: 'tokens', tokens/)
+  // The port is the only path in. (The helper became `acks.send` when reload
+  // acknowledgements were made honest; the property it guards is unchanged —
+  // the credential map is posted down the message port and nowhere else.)
+  assert.match(hostSource, /acks\.send\(\{ type: 'tokens', tokens/)
   assert.match(engineSource, /message\.type === 'tokens'/)
   assert.match(engineSource, /service\.setTokens\(/)
 })

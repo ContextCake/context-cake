@@ -60,6 +60,7 @@ test('every native IPC capability has an explicit least-privilege window policy'
   assert.deepEqual(TRUSTED_IPC_ROLES['contextcake:cli-install'], ['main'])
   assert.deepEqual(TRUSTED_IPC_ROLES['windows:open-settings'], ['main'])
   assert.deepEqual(TRUSTED_IPC_ROLES['data:reload-requested'], ['settings'])
+  assert.deepEqual(TRUSTED_IPC_ROLES['contextcake:engine-relaunch'], ['main'])
   assert.deepEqual(TRUSTED_IPC_ROLES['contextcake:get-api-token'], ['main', 'settings'])
   assert.deepEqual(TRUSTED_IPC_ROLES['auth:delete-account'], ['main', 'settings'])
   assert.throws(() => trustedRolesForChannel('arbitrary:invoke'), /No trusted-window policy/)

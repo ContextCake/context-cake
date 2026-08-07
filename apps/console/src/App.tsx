@@ -11,6 +11,7 @@ import { Conflicts } from './views/Conflicts'
 import { Concepts } from './views/Concepts'
 import { Files } from './views/Files'
 import { ChatPanel } from './components/ChatPanel'
+import { EngineBanner } from './components/EngineBanner'
 import { SetupWizard } from './components/SetupWizard'
 import { ConnectAgentDialog } from './components/ConnectAgentDialog'
 import { SettingsView } from './components/SettingsView'
@@ -380,6 +381,12 @@ export function App() {
             <div className="sr-only" aria-live="polite">
               {backgroundAnnouncement}
             </div>
+            {/*
+              Above the refresh banner on purpose: a wedged engine is the CAUSE
+              of the failing refresh below it, and holds its own state so this
+              app-wide render never runs for it.
+            */}
+            <EngineBanner />
             {load.refreshError && load.refreshError.message !== dismissedRefreshError && (
               <div role="status" style={css(`display:flex; align-items:center; gap:10px; padding:8px 16px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; font-size:12px; color:${C.amberText};`)}>
                 <span aria-hidden="true">⚠</span>

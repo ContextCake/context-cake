@@ -113,6 +113,18 @@ declare global {
         requestReload(): Promise<{ requested: boolean }>
         onReloadRequested(cb: () => void): () => void
       }
+      /**
+       * Liveness of the local engine, as measured by the desktop shell.
+       *
+       * Optional like everything else here, and optional a second time within
+       * itself: a packaged app older than this channel exposes `__CC_DESKTOP`
+       * without it, and the console has to keep working against that build.
+       */
+      engine?: {
+        onStatus?(cb: (state: import('./components/EngineBanner').EngineHealth) => void): () => void
+        /** Restart the engine process and reload this window at its new origin. */
+        relaunch?(): Promise<{ ok: boolean; reason?: string }>
+      }
       /** Open the native macOS directory picker. Null means the user canceled. */
       chooseFolder?: () => Promise<string | null>
       /**

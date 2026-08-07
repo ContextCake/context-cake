@@ -16,7 +16,9 @@ npm run test:navigation
 npm run test:cli-status
 npm run smoke   # headless boot check: service up, token enforced, exits
 npm run smoke:bootfail
-npm run test:isolation   # engine must not block the UI thread (2500-doc corpus)
+npm run smoke:relaunch   # engine restart re-points the window at the new origin
+npm run test:isolation   # engine must not block the UI thread, and must keep
+                         # answering itself (2500-doc corpus)
 npm run icon    # regenerate build/icon.icns + icon-master-1024.png from assets/brand/contextcake-app-icon.svg
 npm run pack    # unpacked .app (fast) — dist/ is gitignored
 npm run dist    # DMG + zip, ad-hoc signed in dev
@@ -59,6 +61,26 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   `ps`-readable); `GIT_TRACE*`/`GIT_CURL_VERBOSE` are stripped so a tracing var
   already in the user's shell can't dump the exchange. Proven against the real
   git binary in `packages/core/tests/git-auth.test.mjs`.
+- **An engine that EXITS is fatal; an engine that WEDGES is recoverable, and
+  the two must not share a path.** `src/main/engine-watchdog.mjs` pings
+  `GET /api/status` every 10s with a per-ping deadline; more than 3 consecutive
+  misses sends `engine:status` to the main window (the console's
+  `EngineBanner`), and 60s unresponsive additionally offers a restart —
+  `relaunchEngine()` re-forks the engine and calls `loadURL` on the new origin.
+  That re-point works (`npm run smoke:relaunch` proves origin, token, window
+  URL, old-engine death and trusted-IPC revalidation); the older comments
+  claiming a loaded window could not be re-pointed were about the crash path and
+  were wrong as a general statement. An unasked-for exit stays fatal because
+  nothing in the main process knows why the child died, so re-forking could
+  loop. Never route a wedge through `handleFatal`.
+- **`reload()`/`sendTokens()` resolve to `{acked}`, and the flag is the point.**
+  `src/main/ack-channel.mjs` resolves `{acked: false, reason}` when the
+  message-port deadline expires; the old code resolved the same empty promise
+  either way, so a wedged engine's silence was indistinguishable from agreement
+  (`npm run smoke` now fails on an unacked reload — verified by suppressing the
+  ack, where the pre-change code printed `SMOKE OK`). Never make these reject:
+  the settings-pull path does not await them, and an unhandled rejection on the
+  main process is the fatal handler.
 - **Every path that ends the app must stop the engine first** via
   `shutdownEngine()` in `main.mjs`. `app.exit()` does not fire `before-quit`,
   so skipping it makes a normal shutdown look like a crash and reports a

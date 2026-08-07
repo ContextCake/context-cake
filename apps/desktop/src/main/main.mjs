@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron'
 import { startEngineService } from './service-host.mjs'
+import { createEngineWatchdog } from './engine-watchdog.mjs'
 import { createGithubConnections, verifyGithubToken } from './github-connections.mjs'
 import { buildMenu } from './menu.mjs'
 import { configDir, enginePaths, manifestPath, settingsPath } from './paths.mjs'
@@ -98,13 +99,24 @@ const trustedWindows = createTrustedWindowRegistry(() => service?.origin)
  * Stop the engine process and stop treating its exit as a crash. Every path
  * that ends the app — before-quit, a fatal error, the smoke check's app.exit —
  * must go through this, because app.exit() does not fire before-quit.
+ *
+ * `close()` marks the handle closing before it kills the child, which is what
+ * keeps a deliberate teardown (including the watchdog's relaunch) out of the
+ * fatal-exit path.
  */
 function shutdownEngine() {
+  engineWatchdog?.stop()
   try { service?.close() } catch { /* already down */ }
   service = null
 }
 
 let authManager = null
+let engineWatchdog = null
+let relaunchingEngine = false
+let relaunchPromptOpen = false
+// Asked once per outage, not once per tick. The banner keeps a Restart Engine
+// button on screen, so declining hides a dialog rather than the option.
+let relaunchDeclined = false
 let settingsSync = null
 let pendingDeepLink = null
 let settingsPushTimer = null
@@ -125,6 +137,129 @@ function currentSyncState() {
 
 function sendToRenderer(channel, payload) {
   trustedWindows.broadcast(channel, payload)
+}
+
+// ---- Engine liveness --------------------------------------------------------
+//
+// An engine that EXITS is fatal and already handled (onCrash below). An engine
+// that is alive and has stopped answering is a different failure, and until now
+// nothing looked for it: the window kept its last paint, every fetch hung, and
+// the app was indistinguishable from one that had simply gone quiet. The
+// watchdog pings the cheapest endpoint the engine has, tells the window when the
+// answers stop, and — once it has been unresponsive long enough to call stuck
+// rather than busy — lets the user restart it without losing the app.
+
+async function pingEngine(signal) {
+  const current = service
+  if (!current) throw new Error('the engine is not running')
+  const res = await fetch(`${current.origin}/api/status`, {
+    headers: { authorization: `Bearer ${current.token}` },
+    signal,
+  })
+  // Drain the body: an undrained response holds its socket, and this runs
+  // forever. The status code itself is not the signal — ANY answer means the
+  // engine's loop is turning, which is the only thing being measured here.
+  await res.text().catch(() => '')
+  return res.status
+}
+
+function startEngineWatchdog() {
+  engineWatchdog ??= createEngineWatchdog({
+    ping: pingEngine,
+    onState: (state) => {
+      // Only the main window carries the shell banner; the settings window has
+      // no place to put it.
+      trustedWindows.broadcast('engine:status', state, ['main'])
+      if (state.healthy) relaunchDeclined = false
+      else if (state.canRelaunch && !relaunchDeclined) offerEngineRelaunch()
+    },
+  })
+  engineWatchdog.start()
+}
+
+/**
+ * Ping now rather than at the next tick. A message-port round trip that went
+ * unanswered is evidence about the same process the watchdog is watching, so
+ * it converts into the one measurement that can confirm or dismiss it — never
+ * into a fabricated miss, which would let a busy port alone raise a banner.
+ */
+function noteUnackedEngineMessage(kind, reason) {
+  console.error(`[contextcake] the engine did not acknowledge ${kind} (${reason})`)
+  engineWatchdog?.checkNow()?.catch(() => {})
+}
+
+/**
+ * Reload the engine's manifest and act on whether it actually happened. The
+ * old fire-and-forget call could not tell a re-read from a wedge.
+ */
+function reloadEngine() {
+  const current = service
+  if (!current?.reload) return Promise.resolve({ acked: false, reason: 'no-engine' })
+  return current.reload().then((result) => {
+    if (result?.acked === false) noteUnackedEngineMessage('a manifest reload', result.reason)
+    return result
+  })
+}
+
+async function offerEngineRelaunch() {
+  // Smoke and CI must never meet a modal. The banner still reaches the window.
+  if (process.env.CC_SMOKE === '1' || !app.isReady()) return
+  if (relaunchPromptOpen || relaunchingEngine || !win || win.isDestroyed()) return
+  relaunchPromptOpen = true
+  try {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Keep Waiting', 'Restart Engine'],
+      defaultId: 1,
+      cancelId: 0,
+      title: 'ContextCake Engine Not Responding',
+      message: 'The ContextCake engine has stopped responding.',
+      detail: 'Restarting it keeps the app open and your sources and settings untouched. '
+        + 'The window will reload, so anything you have typed but not saved will be lost.',
+    })
+    if (response === 1) await relaunchEngine()
+    else relaunchDeclined = true
+  } catch { /* the window went away mid-prompt */ } finally {
+    relaunchPromptOpen = false
+  }
+}
+
+/**
+ * Re-fork the engine and point the windows at the new one.
+ *
+ * The renderer reload is not avoidable: the engine binds an ephemeral loopback
+ * port and mints a fresh bearer per launch, so the loaded document is on an
+ * origin that no longer exists. That is the same fact that makes an engine
+ * *exit* fatal — but an exit leaves nothing to restart, whereas here the app,
+ * its windows and its config are all intact, so the honest move is to rebuild
+ * the one part that broke rather than to quit.
+ */
+async function relaunchEngine() {
+  if (relaunchingEngine) return { ok: false, reason: 'already-restarting' }
+  relaunchingEngine = true
+  try {
+    shutdownEngine()
+    service = await startEngineService({ onCrash: handleFatal })
+    await pushGithubTokens()
+    const targets = [[win, `${service.origin}/console/`]]
+    if (settingsWin) targets.push([settingsWin, `${service.origin}/console/?surface=settings`])
+    for (const [window, url] of targets) {
+      if (!window || window.isDestroyed()) continue
+      await window.loadURL(url)
+    }
+    startEngineWatchdog()
+    // Clear the banner on the new engine's first answer rather than at the next
+    // tick — the user just asked for this and is watching.
+    engineWatchdog?.checkNow()?.catch(() => {})
+    return { ok: true }
+  } catch (err) {
+    // The engine could not be rebuilt. There is no cascade and no window worth
+    // showing, which is the boot-failure case exactly.
+    handleFatal(err)
+    return { ok: false, reason: 'restart-failed' }
+  } finally {
+    relaunchingEngine = false
+  }
 }
 
 function desktopPreferencesSnapshot(settings = readSettings()) {
@@ -273,7 +408,7 @@ function applyPulledManifest(settings) {
   })
   if (!mutation.changed) return
   lastAppliedManifest = mutation.serialized
-  service?.reload?.()
+  reloadEngine()
 }
 
 function publishPulledSettings(pulled) {
@@ -442,7 +577,11 @@ function connections() {
 async function pushGithubTokens() {
   if (!service?.sendTokens) return
   try {
-    await service.sendTokens(connections().injectionMap())
+    const result = await service.sendTokens(connections().injectionMap())
+    // An unacknowledged send is not a no-op: the engine is still holding the
+    // previous credential map, so a private layer reads anonymously and looks
+    // empty. Say so instead of leaving the user to wonder about the repo.
+    if (result?.acked === false) noteUnackedEngineMessage('source credentials', result.reason)
   } catch {
     // Never surface the payload in an error path.
     console.error('[contextcake] could not hand credentials to the engine')
@@ -616,6 +755,10 @@ handleTrustedIpc('contextcake:reveal-file', async ({ layer, rel } = {}) => {
   }
 })
 
+// The shell's own recovery action for a wedged engine. It is a restart of the
+// engine only — the app, its windows and its config all survive.
+handleTrustedIpc('contextcake:engine-relaunch', () => relaunchEngine())
+
 handleTrustedIpc('windows:open-settings', (pane) => openSettingsWindow(pane))
 handleTrustedIpc('data:reload-requested', () => {
   trustedWindows.broadcast('data:reload-requested', undefined, ['main'])
@@ -709,10 +852,15 @@ async function openSettingsWindow(requestedPane) {
 }
 
 async function createWindow() {
-  // The engine runs in its own utilityProcess (service-host.mjs). If it dies
-  // after boot the app has no cascade to show and no way to re-point the
-  // already-loaded window at a new port, so an unexpected exit is fatal —
-  // same clean dialog-and-exit as a failed boot.
+  // The engine runs in its own utilityProcess (service-host.mjs). An
+  // unexpected exit after boot is fatal — same clean dialog-and-exit as a
+  // failed boot (specs/contextcake-distribution/design.md).
+  //
+  // Not because the window cannot be re-pointed: it can, and relaunchEngine()
+  // does exactly that for a wedge (proved by `npm run smoke:relaunch`). The
+  // distinction is that a wedge is a process the app can still reason about,
+  // while an exit the app did not ask for means the engine died of something
+  // this process cannot see — and silently re-forking into it would loop.
   service ??= await startEngineService({ onCrash: handleFatal })
   // Hand the engine its source credentials before the window loads, so a
   // private layer indexes on first paint instead of appearing empty and then
@@ -765,6 +913,7 @@ async function createWindow() {
   win.on('closed', () => { clearTimeout(windowStateTimer); windowStateTimer = null; win = null })
   await win.loadURL(`${service.origin}/console/${process.env.CC_SMOKE_UI === '1' ? '?mode=demo' : ''}`)
   startManifestSync()
+  startEngineWatchdog()
 }
 
 /**
@@ -784,6 +933,40 @@ function measureMainLoopLag(durationMs, intervalMs = 20) {
     }, intervalMs)
     setTimeout(() => { clearInterval(ticker); resolve(worst) }, durationMs)
   })
+}
+
+/**
+ * Round-trip latency of the engine's cheapest endpoint, sampled while it is
+ * busy. Isolation says the engine cannot freeze the WINDOW; this says the
+ * engine has not frozen ITSELF — a synchronous stretch in its request path
+ * would leave main-loop lag at zero and still make every source operation feel
+ * dead. Nothing measured that before, which is why a wedged engine could only
+ * ever be inferred.
+ *
+ * Measured from the main process, so a stalled UI thread inflates it too; that
+ * is why the main-loop lag number is reported beside it rather than instead of
+ * it. The two together say which side is at fault.
+ */
+async function measureEngineLatency(durationMs, { gapMs = 20, timeoutMs = 5_000 } = {}) {
+  const headers = { authorization: `Bearer ${service.token}` }
+  const samples = []
+  let failures = 0
+  const deadline = Date.now() + durationMs
+  while (Date.now() < deadline) {
+    const startedAt = Date.now()
+    try {
+      const res = await fetch(`${service.origin}/api/status`, { headers, signal: AbortSignal.timeout(timeoutMs) })
+      await res.text()
+      if (!res.ok) failures += 1
+    } catch {
+      failures += 1
+    }
+    samples.push(Date.now() - startedAt)
+    await new Promise((resolve) => setTimeout(resolve, gapMs))
+  }
+  const sorted = [...samples].sort((a, b) => a - b)
+  const at = (q) => (sorted.length === 0 ? 0 : sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))])
+  return { p50: at(0.5), p95: at(0.95), max: sorted[sorted.length - 1] ?? 0, probes: samples.length, failures }
 }
 
 async function smokeCheck() {
@@ -914,15 +1097,65 @@ async function smokeCheck() {
       if (rendererErrors.length > 0) throw new Error(`Renderer console errors: ${rendererErrors.join(' | ')}`)
       console.log('UI SMOKE OK renderer-console-errors=0')
     }
+    // CC_SMOKE_RELAUNCH=1: prove the watchdog's recovery actually recovers.
+    //
+    // Worth a seam of its own because the doubt is real and load-bearing: the
+    // comment at createWindow() says there is no way to re-point a loaded
+    // window at a new port, which is the reason an engine *exit* is fatal. If
+    // that were true of a deliberate restart too, the relaunch offer would be a
+    // button that half-works. It is not true — loadURL re-points it — and this
+    // is where that stays true. Everything after this block then runs against
+    // the relaunched engine, so the restart is proven end to end rather than
+    // just observed to return.
+    if (process.env.CC_SMOKE_RELAUNCH === '1') {
+      const before = { origin: service.origin, token: service.token }
+      const result = await relaunchEngine()
+      const loaded = win.webContents.getURL()
+      const answered = await fetch(`${service.origin}/api/status`, {
+        headers: { authorization: `Bearer ${service.token}` },
+      })
+      // The old engine must be gone, not merely orphaned and still listening.
+      const oldEngine = await fetch(`${before.origin}/api/status`, {
+        headers: { authorization: `Bearer ${before.token}` },
+        signal: AbortSignal.timeout(2_000),
+      }).then((r) => r.status).catch(() => 'unreachable')
+      // Trusted IPC re-validates the sender against the CURRENT engine origin;
+      // if that getter had gone stale the window would be silently unable to
+      // authenticate a single API call after recovering.
+      const tokenViaIpc = await win.webContents.executeJavaScript('window.__CC_DESKTOP.getApiToken()')
+      const relaunchOk = result.ok
+        && service.origin !== before.origin
+        && service.token !== before.token
+        && loaded.startsWith(service.origin)
+        && answered.ok
+        && oldEngine === 'unreachable'
+        && tokenViaIpc === service.token
+      if (!relaunchOk) {
+        throw new Error(`Relaunch smoke failed: ${JSON.stringify({
+          result, before: before.origin, after: service.origin, loaded,
+          answered: answered.status, oldEngine, ipcTokenMatches: tokenViaIpc === service.token,
+        })}`)
+      }
+      console.log(
+        `RELAUNCH SMOKE OK ${before.origin} -> ${service.origin}`
+        + ' window-repointed=true old-engine=unreachable ipc-token=rotated',
+      )
+    }
+
     // Exercise the wrapper used after a settings pull, not only HTTP reads.
-    // It round-trips to the engine process now, so await the acknowledgement.
-    await service.reload()
+    // It round-trips to the engine process now, so await the acknowledgement —
+    // and check it, because a resolved promise no longer implies one arrived.
+    const reloaded = await service.reload()
+    if (reloaded?.acked !== true) {
+      throw new Error(`the engine did not acknowledge a manifest reload (${reloaded?.reason ?? 'unknown'})`)
+    }
     const authHeaders = { authorization: `Bearer ${service.token}` }
-    // The first read starts the engine's background index; measure the main
-    // loop while that work is actually running.
+    // The first read starts the engine's background index; measure both loops
+    // while that work is actually running — the main process's (is the UI
+    // thread free?) and the engine's own (is it still answering?).
     const first = await fetch(`${service.origin}/api/graph`, { headers: authHeaders })
     const graph = await first.json().catch(() => null)
-    const lag = await measureMainLoopLag(1200)
+    const [lag, latency] = await Promise.all([measureMainLoopLag(1200), measureEngineLatency(1200)])
     const res = await fetch(`${service.origin}/api/graph`, { headers: authHeaders })
     const unauth = await fetch(`${service.origin}/api/graph`)
     // Guard the app-name/CLI agreement: userData must resolve under a dir named
@@ -932,7 +1165,9 @@ async function smokeCheck() {
     if (res.ok && unauth.status === 401 && okName) {
       console.log(
         `SMOKE OK ${service.origin} api=200 unauth=401 userData=${userDataName}`
-        + ` lag=${lag}ms indexing=${graph?.indexing === true}`,
+        + ` lag=${lag}ms indexing=${graph?.indexing === true}`
+        + ` engineP50=${latency.p50}ms engineP95=${latency.p95}ms engineMax=${latency.max}ms`
+        + ` engineProbes=${latency.probes} engineFailures=${latency.failures}`,
       )
       shutdownEngine()
       flushSettingsSync()

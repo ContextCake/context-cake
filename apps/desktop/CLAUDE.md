@@ -16,7 +16,9 @@ npm run test:navigation
 npm run test:cli-status
 npm run smoke   # headless boot check: service up, token enforced, exits
 npm run smoke:bootfail
-npm run test:isolation   # engine must not block the UI thread (2500-doc corpus)
+npm run smoke:relaunch   # engine restart re-points the window at the new origin
+npm run test:isolation   # engine must not block the UI thread, and must keep
+                         # answering itself (3,000-doc / ~90MB corpus)
 npm run icon    # regenerate build/icon.icns + icon-master-1024.png from assets/brand/contextcake-app-icon.svg
 npm run pack    # unpacked .app (fast) — dist/ is gitignored
 npm run dist    # DMG + zip, ad-hoc signed in dev
@@ -24,6 +26,15 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
 
 ## Gotchas
 
+- **CI runs Node 22; a green local run on Node 24 is not proof.** The two differ
+  on when the test runner gives up on a pending promise, and this package is
+  full of deliberately `unref()`ed timers (ack deadlines, the watchdog), so a
+  test whose only pending work is one of them passes on 24 and fails on 22 with
+  "Promise resolution is still pending but the event loop has already resolved".
+  The fix belongs in the test — a ref'd keepalive while it awaits the deadline —
+  never in the source: dropping an `unref()` to green a test puts a multi-second
+  stall into every quit. Reproduce with
+  `/opt/homebrew/opt/node@22/bin/node --test test/*.test.mjs` before blaming CI.
 - **Never add dependencies to the engine.** This package may hold Electron
   deps; `packages/core` stays dependency-free. The app imports the engine by
   path (dev: repo-relative; packaged: `process.resourcesPath/engine`) — see
@@ -59,10 +70,53 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   `ps`-readable); `GIT_TRACE*`/`GIT_CURL_VERBOSE` are stripped so a tracing var
   already in the user's shell can't dump the exchange. Proven against the real
   git binary in `packages/core/tests/git-auth.test.mjs`.
+- **An engine that EXITS is fatal; an engine that WEDGES is recoverable, and
+  the two must not share a path.** `src/main/engine-watchdog.mjs` pings
+  `GET /api/status` every 10s with a per-ping deadline; more than 3 consecutive
+  misses sends `engine:status` to the main window (the console's
+  `EngineBanner`), and 60s unresponsive additionally offers a restart —
+  `relaunchEngine()` re-forks the engine and calls `loadURL` on the new origin.
+  That re-point works (`npm run smoke:relaunch` proves origin, token, window
+  URL, old-engine death and trusted-IPC revalidation); the older comments
+  claiming a loaded window could not be re-pointed were about the crash path and
+  were wrong as a general statement. An unasked-for exit stays fatal because
+  nothing in the main process knows why the child died, so re-forking could
+  loop. Never route a wedge through `handleFatal`.
+- **`reload()`/`sendTokens()` resolve to `{acked}`, and the flag is the point.**
+  `src/main/ack-channel.mjs` resolves `{acked: false, reason}` when the
+  message-port deadline expires; the old code resolved the same empty promise
+  either way, so a wedged engine's silence was indistinguishable from agreement
+  (`npm run smoke` now fails on an unacked reload — verified by suppressing the
+  ack, where the pre-change code printed `SMOKE OK`). Never make these reject:
+  the settings-pull path does not await them, and an unhandled rejection on the
+  main process is the fatal handler.
 - **Every path that ends the app must stop the engine first** via
   `shutdownEngine()` in `main.mjs`. `app.exit()` does not fire `before-quit`,
   so skipping it makes a normal shutdown look like a crash and reports a
-  bogus fatal error.
+  bogus fatal error. `shutdownEngine()` also bumps an epoch, and
+  `startEngine()` refuses to adopt a handle forked before that bump — a quit
+  landing inside `relaunchEngine`'s `await` otherwise left an engine nobody
+  would ever `close()`, and `close()` is the only thing that tells the engine
+  to kill the MCP servers it spawned.
+- **`before-quit` fires BEFORE the window's `close`, and `close` again after.**
+  On ⌘Q the order is `before-quit → close → closed → will-quit → quit`; on the
+  red X it is `close → closed → window-all-closed → quit → before-quit`. So
+  anything that must be captured *from* a window at exit belongs in
+  `before-quit` (the frame is still alive there), and anything a `close`
+  handler queues is landed by `before-quit`'s `flushSettingsSync()`. Saving
+  window geometry only in `close` lost it on every ⌘Q, because the async write
+  queue outlived nothing. `test/quit-persistence.test.mjs` drives both paths
+  through the real binary.
+- **A settings write can fail, and the caller has to hear about it.**
+  `settings.mjs` writes asynchronously through a queue; a failed write KEEPS
+  `unflushed` (so reads stay honest and the next patch retries it) and reports
+  `{ok: false}` on the `written` promise that `writeSettings`/
+  `writeLocalSettings` hand back. `preferences:set` and `ui-state:set` await it
+  and reject the `invoke`, which is how the renderer learns. `written` never
+  rejects, on purpose: an ignored return must not reach the main process's
+  `unhandledRejection`, which is `handleFatal`. Never restore a `finally` that
+  clears `unflushed` regardless of outcome — that is what made a failed write
+  silently revert to the stale file while telling the console it was saved.
 - **The renderer is sandboxed** (`contextIsolation`, `sandbox: true`). The only
   bridge is `src/preload.cjs`: `window.__CC_DESKTOP` exposes static launch metadata,
   while `window.__CC_AUTH` exposes the narrow auth/settings IPC surface. Keep both
@@ -86,6 +140,23 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   in renderer code will 401 inside the app.
 - **`resources/bin/contextcake` must stay executable** (mode 755) and POSIX-sh
   compatible — it's exec'd before any Node exists.
+- **The CLI runs a second engine, and it does not share the app's.** The shim
+  execs `src/cli/cli.mjs`, which forks an engine entrypoint against the same
+  manifest the app's utility process is already serving. That independence is
+  the point (the CLI works with the app closed), but `contextcake mcp` — the
+  harness connection — is long-lived and normally runs *while* the app is open,
+  so the two overlap for hours. `mcp-server.mjs` has no background index: it
+  re-walks every layer root and reloads every concept per `list_concepts` /
+  `search`, so a vault the app indexed once gets walked again per tool call,
+  with only the OS page cache shared. Each engine also spawns its own child for
+  every `"source":"mcp"` layer (one manifest entry, two server processes), and
+  a shared `cache` directory gives each process its own memory cache and TTL
+  clock. Live git layers are safe but lossy under contention — `git-core.mjs`'s
+  advisory lock makes the loser skip its pull, not wait. Nothing here corrupts
+  anything; it is duplicated work and split freshness. The fix, when it is
+  worth building, is to dispatch to the running app's loopback service, and the
+  blocker is that the bearer deliberately exists only in memory and on the
+  message port (see the comment at the spawn site in `src/cli/cli.mjs`).
 - **Harness connection is sudo-free.** The `contextcake:cli-status` and
   `cli-install` IPC results carry `shimPath` — the packaged shim's absolute
   path — and the console builds every harness connect command from it when the

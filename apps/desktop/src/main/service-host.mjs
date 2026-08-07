@@ -14,6 +14,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pathToFileURL } from 'node:url'
 import { utilityProcess } from 'electron'
+import { createAckChannel } from './ack-channel.mjs'
 import { enginePaths, manifestPath, configDir } from './paths.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -22,6 +23,9 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 // ceiling only exists so a wedged child can never leave the app windowless
 // and silent; it fails to the same clean fatal dialog as any other boot error.
 const BOOT_TIMEOUT_MS = 20_000
+// How long a message-port round trip may take before the caller is told it did
+// not happen. Reload and setTokens are both a synchronous field assignment in
+// the child, so this is a wedge detector, not a work budget.
 const RELOAD_TIMEOUT_MS = 5_000
 
 function ensureConfig(withManifestLock, writeContextManifest) {
@@ -68,8 +72,10 @@ export async function startEngineService({ onCrash } = {}) {
   let settled = false // boot resolved or rejected — the promise is done either way
   let started = false // boot SUCCEEDED — only then is an exit a crash
   let closing = false
-  let nextRequestId = 1
-  const pendingAcks = new Map()
+  const acks = createAckChannel({
+    post: (message) => child.postMessage(message),
+    timeoutMs: RELOAD_TIMEOUT_MS,
+  })
 
   const handle = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -95,41 +101,35 @@ export async function startEngineService({ onCrash } = {}) {
         settled = true
         started = true
         clearTimeout(timer)
-        const postWithAck = (payload) => {
-          if (closing) return Promise.resolve()
-          return new Promise((done) => {
-            const id = nextRequestId++
-            pendingAcks.set(id, done)
-            // A missed ack must not leave a caller awaiting forever.
-            const ackTimer = setTimeout(() => {
-              if (pendingAcks.delete(id)) done()
-            }, RELOAD_TIMEOUT_MS)
-            ackTimer.unref?.()
-            try {
-              child.postMessage({ ...payload, id })
-            } catch {
-              clearTimeout(ackTimer)
-              pendingAcks.delete(id)
-              done()
-            }
-          })
-        }
 
         resolve({
           origin: message.origin,
           token: message.token,
-          /** Re-read the manifest in the engine; resolves once it acknowledges. */
+          /**
+           * Re-read the manifest in the engine.
+           *
+           * Resolves to `{acked: true}` only when the engine actually answered.
+           * A deadline that expires resolves to `{acked: false, reason}` — it
+           * never rejects (callers on the settings-pull path don't await it,
+           * and an unhandled rejection here is a main-process crash dialog) and
+           * it never claims success. Treat a false ack as a live symptom: the
+           * engine is still serving the pre-reload manifest, if it is serving
+           * anything at all.
+           */
           reload() {
-            return postWithAck({ type: 'reload' })
+            return acks.send({ type: 'reload' })
           },
           /**
            * Hand the engine the credentials for remote sources. Travels the
            * message port for the same reason the bearer token comes back up
            * it — argv and env are readable by any process running as this
            * user, and this payload is the secrets themselves.
+           *
+           * Same `{acked}` contract as reload(): an unacknowledged send means
+           * private layers are reading anonymously.
            */
           sendTokens(tokens) {
-            return postWithAck({ type: 'tokens', tokens: tokens ?? {} })
+            return acks.send({ type: 'tokens', tokens: tokens ?? {} })
           },
           mutateManifest(buildCandidate) {
             return withManifestLock(manifestPath(), () => {
@@ -145,6 +145,7 @@ export async function startEngineService({ onCrash } = {}) {
           close() {
             if (closing) return
             closing = true
+            acks.close('closing')
             // Ask first so the engine can close its own sources (killing
             // spawned MCP children), then make sure it goes.
             try { child.postMessage({ type: 'close' }) } catch { /* already gone */ }
@@ -157,18 +158,19 @@ export async function startEngineService({ onCrash } = {}) {
         fail(new Error(message.message || 'The ContextCake engine failed to start.'))
         return
       }
-      if (message.type === 'ack') {
-        const done = pendingAcks.get(message.id)
-        if (done) { pendingAcks.delete(message.id); done() }
-      }
+      if (message.type === 'ack') acks.settle(message.id)
     })
 
     child.on('exit', (code) => {
-      for (const done of pendingAcks.values()) done()
-      pendingAcks.clear()
+      // Anything still owed is owed by a process that no longer exists. Say so
+      // rather than letting the caller time out and blame a wedge.
+      acks.close(closing ? 'closing' : 'exit')
       if (started) {
-        // A crash after boot: the app has no cascade and no way to re-point
-        // the loaded window at a new port, so the caller treats it as fatal.
+        // A crash after boot: the app has no cascade, and the exit was not
+        // asked for, so the caller treats it as fatal. (A WEDGE is the other
+        // failure and is recoverable — see main.mjs's relaunchEngine. The
+        // difference is not whether the window can be re-pointed; it can. It is
+        // that nothing here knows why the child died, so re-forking could loop.)
         if (!closing) onCrash?.(new Error(`The ContextCake engine stopped unexpectedly (code ${code}).`))
         return
       }

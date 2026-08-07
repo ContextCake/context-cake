@@ -10,7 +10,10 @@ vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
   apiFetch: mocks.apiFetch,
 }))
-vi.mock('../store', () => ({ useStore: () => ({ reload: mocks.reload }) }))
+vi.mock('../store', () => {
+  const store = () => ({ reload: mocks.reload })
+  return { useStore: store, useStoreData: store, useStoreNav: store, useStoreInput: store }
+})
 
 let container: HTMLDivElement
 let root: Root

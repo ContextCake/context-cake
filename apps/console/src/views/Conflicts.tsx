@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { C, css, lc, MONO } from '../theme'
 import { layerLevel, layerName } from '../data'
 import type { Conflict, Contribution } from '../data'
 import { LayerChip } from '../components/LayerChip'
 import { Markdown } from '../components/Markdown'
-import { useStore } from '../store'
+import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import { useDetailSurface } from '../components/useDetailSurface'
 
 function WandIcon() {
@@ -71,11 +71,13 @@ function Choice({
   )
 }
 
-export function Conflicts() {
+function ConflictsInner() {
   const {
-    conflicts, selConflict, setSelConflict, resolveConflict, resolveSafeConflicts,
-    resolvingConflict, resolutionError, query,
-  } = useStore()
+    conflicts, setSelConflict, resolveConflict, resolveSafeConflicts,
+    resolvingConflict, resolutionError,
+  } = useStoreData()
+  const { selConflict } = useStoreNav()
+  const { query } = useStoreInput()
   const [selectedLayer, setSelectedLayer] = useState('')
   const [changing, setChanging] = useState(false)
 
@@ -333,3 +335,11 @@ function Resolved({ conflict, onChange, disabled }: { conflict: Conflict; onChan
     </>
   )
 }
+
+/**
+ * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
+ * background-activity tick — and this view has no business repainting for any
+ * of them. It re-renders when the store slices it subscribes to change, and
+ * otherwise not at all.
+ */
+export const Conflicts = memo(ConflictsInner)

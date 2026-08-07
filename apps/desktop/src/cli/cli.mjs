@@ -91,6 +91,29 @@ if (cmd === 'pack' && !['inspect', 'help', '--help', '-h'].includes(args[0]) && 
   args.splice(1, 0, '--manifest', DEFAULT_MANIFEST)
 }
 
+// This forks a SECOND, independent engine over the same manifest the app's
+// engine is already serving — deliberate (the CLI must work with the app
+// closed) but not free, and `contextcake mcp` is the long-lived case that
+// normally runs while the app is open. What actually contends:
+//
+//   - Reads. mcp-server.mjs has no background index: every list_concepts /
+//     search walks each layer root and loads every concept again. So both
+//     processes walk the same folders, sharing only the OS page cache — on a
+//     3,000-note vault that is a full re-walk per tool call beside an engine
+//     that had the answer indexed.
+//   - Foreign MCP layers. Each engine spawns its own child per "source":"mcp"
+//     layer, so one manifest entry becomes two running server processes.
+//   - Disk cache. Layers with a `cache` block share one directory. Writes are
+//     pid-scoped tmp + rename so neither corrupts the other, but each process
+//     keeps its own memory cache and its own TTL clock.
+//   - Live git layers. git-core.mjs's advisory .contextcake.lock serializes
+//     mutations; the loser SKIPS its pull rather than blocking, so which
+//     engine sees fresh commits depends on who got the lock.
+//
+// Future: when the app is running, dispatch to its already-warm loopback
+// service instead of forking. The blocker is the bearer — it is minted per
+// launch and travels up the engine message port precisely so it never lands in
+// argv, env, or a file the CLI could read, so that handoff needs designing.
 const child = spawn(process.execPath, [path.join(engineSrc(), command.entry), ...args], {
   stdio: 'inherit',
   env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },

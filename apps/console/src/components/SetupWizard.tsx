@@ -9,7 +9,7 @@
 // MCP server lands under its own name instead of colliding with "team".
 import { useEffect, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
-import { useStore } from '../store'
+import { useStoreData } from '../store'
 import { apiFetch, isTimeout, progressLabel, progressPercent } from '../api'
 import type { GraphSummary, SourceStatus, StatusSummary } from '../types'
 
@@ -649,7 +649,7 @@ export function SetupWizard({
   onConnectAgent?: () => void
   addingSource?: boolean
 }) {
-  const { reload } = useStore()
+  const { reload } = useStoreData()
   // Frozen at mount: adding the first source flips the shell's live
   // `sources.length > 0` mid-flow (reload() lands while the success fetch is
   // in flight), and letting that swap the step array under a live stepIdx

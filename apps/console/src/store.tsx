@@ -58,6 +58,24 @@ const TAB_TO_ROUTE: Record<TriageTab, RouteId> = {
   review: 'review_required', captured: 'team_candidate', ignored: 'ignore',
 }
 
+/**
+ * The Queue's one tab, filtered by the toolbar search.
+ *
+ * Pure, and exported rather than handed out as a store callback, because the
+ * callback version is what broke the Queue: it closed over a `queryRef` so its
+ * identity never changed, which meant `Triage` could call it while subscribing
+ * only to the data and nav contexts — and then sat out every keystroke. Taking
+ * `query` as an argument puts the dependency in the type, so a caller has to
+ * have subscribed to it before it can call this at all.
+ */
+export function filterSignals(signals: Signal[], tab: TriageTab, query: string): Signal[] {
+  const route = TAB_TO_ROUTE[tab]
+  const q = query.trim().toLowerCase()
+  return signals.filter(
+    (s) => s.route === route && (!q || `${s.title} ${s.repo} ${s.owner}`.toLowerCase().includes(q)),
+  )
+}
+
 /** A compact textual view of the resolved cascade, for the chat prompt. */
 function buildContext(concepts: Concept[]): string {
   return concepts
@@ -156,26 +174,31 @@ function asLiveDataError(e: unknown): LiveDataError {
   return new LiveDataError('bad-shape', e instanceof Error ? e.message : String(e))
 }
 
-export interface Store {
+/**
+ * The store is three contexts, not one, and the split is by how often each
+ * changes rather than by subject.
+ *
+ * A single context value memoized over ~25 dependencies meant one keystroke in
+ * the toolbar search re-rendered the sidebar, the header and the active view —
+ * every consumer, for a value only the view cares about. Splitting by cadence
+ * is what lets a component subscribe to what it actually reads:
+ *
+ *   data  — engine answers and every action. Changes when the cascade changes.
+ *   nav   — where the user is. Changes on navigation and selection.
+ *   input — the search box and the chat composer. Changes per keystroke.
+ *
+ * Actions all live in `data` and are all stable identities, so a memoized child
+ * that takes one as a prop keeps its memo.
+ *
+ * `useStore()` still hands back all three merged, for consumers that genuinely
+ * read across them; it re-renders on any of the three, which is the cost of
+ * that convenience. Prefer the narrow hooks in anything on a hot path.
+ */
+export interface StoreData {
   mode: Mode
   loading: boolean
   load: LoadState
   error: LiveDataError | null
-
-  view: ViewId
-  triageTab: TriageTab
-  selSignal: string | null
-  selConflict: string
-  selConcept: string
-  /** Files navigator: the one source it is scoped to, or null for every source. */
-  filesScope: string | null
-  /** The open file as the engine names it (`<layer>/<rel>`), or null. */
-  filesPath: string | null
-  query: string
-  chatOpen: boolean
-  chatBusy: boolean
-  chatInput: string
-  chatMessages: ChatMessage[]
 
   concepts: Concept[]
   sources: Source[]
@@ -208,7 +231,6 @@ export interface Store {
   closeChat: () => void
   setChatInput: (v: string) => void
 
-  filtered: (tab: TriageTab) => Signal[]
   /** Poll again right now — the "Retry now" affordance on the refresh banner. */
   retryNow: () => void
   route: (target: RouteId) => void
@@ -226,7 +248,38 @@ export interface Store {
   reloadKey: number
 }
 
-const StoreContext = createContext<Store | null>(null)
+/** Where the user is. Changes on navigation and selection, never on a keystroke. */
+export interface StoreNav {
+  view: ViewId
+  triageTab: TriageTab
+  selSignal: string | null
+  selConflict: string
+  selConcept: string
+  /** Files navigator: the one source it is scoped to, or null for every source. */
+  filesScope: string | null
+  /** The open file as the engine names it (`<layer>/<rel>`), or null. */
+  filesPath: string | null
+  /**
+   * The Ask panel. Navigation rather than input: the shell reads it to decide
+   * what is on screen, and a shell that re-rendered for the chat *composer*
+   * would re-render for the search box beside it too.
+   */
+  chatOpen: boolean
+}
+
+/** The two things a user types into. Changes per keystroke — subscribe narrowly. */
+export interface StoreInput {
+  query: string
+  chatBusy: boolean
+  chatInput: string
+  chatMessages: ChatMessage[]
+}
+
+export type Store = StoreData & StoreNav & StoreInput
+
+const StoreDataContext = createContext<StoreData | null>(null)
+const StoreNavContext = createContext<StoreNav | null>(null)
+const StoreInputContext = createContext<StoreInput | null>(null)
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const source = useMemo(() => createDataSource(), [])
@@ -260,6 +313,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const initial = useMemo(initialRoute, [])
   const [view, setViewState] = useState<ViewId>(initial.view)
+  // Read by `setView` and `setQuery` so both keep a stable identity. An action
+  // whose identity changed with the current view would put `view` back into the
+  // data context's dependency list, and with it every consumer this split
+  // exists to keep out of a navigation render.
+  const viewRef = useRef(view); viewRef.current = view
   const [triageTab, setTriageTab] = useState<TriageTab>('review')
   const [selSignal, setSelSignal] = useState<string | null>(mode === 'demo' ? 'sig-1' : null)
   const [selConflict, setSelConflict] = useState('')
@@ -276,7 +334,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [])
   const [queries, setQueries] = useState<Partial<Record<ViewId, string>>>({})
   const query = queries[view] ?? ''
-  const setQuery = useCallback((value: string) => setQueries((current) => ({ ...current, [view]: value })), [view])
+  const setQuery = useCallback((value: string) => setQueries((current) => ({ ...current, [viewRef.current]: value })), [])
   const [chatOpen, setChatOpen] = useState(false)
   const [chatBusy, setChatBusy] = useState(false)
   const [chatInput, setChatInput] = useState('')
@@ -562,11 +620,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const prevViewRef = useRef<ViewId>(view)
 
   const setView = useCallback((next: ViewId) => {
-    if (next === view) return
+    if (next === viewRef.current) return
     if (!dispatchNavigationGuard()) return
     if (next === 'concepts') setConceptRouteMode('bare')
     setViewState(next)
-  }, [view])
+  }, [])
 
   const setFilesScope = useCallback((layer: string | null) => setFilesScopeState(layer), [])
   const setFilesPath = useCallback((path: string | null) => setFilesPathState(path), [])
@@ -692,31 +750,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('popstate', onPop)
   }, [currentHash, view])
 
-  const filtered = useCallback((tab: TriageTab): Signal[] => {
-    const route = TAB_TO_ROUTE[tab]
-    const q = queryRef.current.trim().toLowerCase()
-    return signalsRef.current.filter(
-      (s) => s.route === route && (!q || `${s.title} ${s.repo} ${s.owner}`.toLowerCase().includes(q)),
-    )
-  }, [])
-
   const route = useCallback((target: RouteId) => {
     if (modeRef.current !== 'demo') return // live triage is read-only (D6)
     const sig = signalsRef.current.find((s) => s.id === selSignalRef.current)
     if (!sig) return
 
+    // An action, not a render: reading the freshest query off the ref is the
+    // point here, because the keyboard shortcut fires outside the view.
     const currentTab = triageTabRef.current
     const currentRoute = TAB_TO_ROUTE[currentTab]
-    const q = queryRef.current.trim().toLowerCase()
-    const matches = (s: Signal) => !q || `${s.title} ${s.repo} ${s.owner}`.toLowerCase().includes(q)
-    const before = signalsRef.current.filter((s) => s.route === currentRoute && matches(s))
+    const q = queryRef.current
+    const before = filterSignals(signalsRef.current, currentTab, q)
     const pos = before.findIndex((s) => s.id === sig.id)
 
     const nextSignals = signalsRef.current.map((s) => (s.id === sig.id ? { ...s, route: target } : s))
     signalsRef.current = nextSignals
     setSignals(nextSignals)
 
-    const after = nextSignals.filter((s) => s.route === currentRoute && matches(s))
+    const after = filterSignals(nextSignals, currentTab, q)
     const stayed = target === currentRoute
     const next = stayed
       ? after[pos + 1] ?? after[pos] ?? null
@@ -833,22 +884,62 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [loading, conceptsLoading, indexingSources, tasks, refreshError, lastRefreshAt],
   )
 
-  const value = useMemo<Store>(() => ({
+  const data = useMemo<StoreData>(() => ({
     mode, loading, load, error,
-    view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, query,
-    chatOpen, chatBusy, chatInput, chatMessages,
     concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
     setFilesScope, setFilesPath, openFilesScope, openConcept,
     openChat, closeChat, setChatInput,
-    filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey,
-  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey, setView, setQuery, setFilesScope, setFilesPath, openFilesScope, openConcept, openChat, closeChat])
+    retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey,
+  }), [mode, loading, load, error, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey, setView, setSelConcept, setQuery, setFilesScope, setFilesPath, openFilesScope, openConcept, openChat, closeChat])
 
-  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
+  const nav = useMemo<StoreNav>(
+    () => ({ view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, chatOpen }),
+    [view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, chatOpen],
+  )
+
+  const input = useMemo<StoreInput>(
+    () => ({ query, chatBusy, chatInput, chatMessages }),
+    [query, chatBusy, chatInput, chatMessages],
+  )
+
+  return (
+    <StoreDataContext.Provider value={data}>
+      <StoreNavContext.Provider value={nav}>
+        <StoreInputContext.Provider value={input}>{children}</StoreInputContext.Provider>
+      </StoreNavContext.Provider>
+    </StoreDataContext.Provider>
+  )
 }
 
-export function useStore(): Store {
-  const ctx = useContext(StoreContext)
-  if (!ctx) throw new Error('useStore must be used within StoreProvider')
+function required<T>(ctx: T | null, name: string): T {
+  if (!ctx) throw new Error(`${name} must be used within StoreProvider`)
   return ctx
+}
+
+/** Engine answers and every action. Does not re-render on navigation or typing. */
+export function useStoreData(): StoreData {
+  return required(useContext(StoreDataContext), 'useStoreData')
+}
+
+/** Current view and selection. Does not re-render on typing. */
+export function useStoreNav(): StoreNav {
+  return required(useContext(StoreNavContext), 'useStoreNav')
+}
+
+/** Search box and chat composer. Re-renders per keystroke — subscribe last. */
+export function useStoreInput(): StoreInput {
+  return required(useContext(StoreInputContext), 'useStoreInput')
+}
+
+/**
+ * All three at once. Convenient, and correspondingly expensive: a consumer of
+ * this re-renders on every keystroke whether or not it reads `query`. Reach for
+ * the narrow hooks in anything that renders more than a few nodes.
+ */
+export function useStore(): Store {
+  const data = useStoreData()
+  const nav = useStoreNav()
+  const input = useStoreInput()
+  return useMemo(() => ({ ...data, ...nav, ...input }), [data, nav, input])
 }

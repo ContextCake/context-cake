@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { C, css, lc, MONO, type LayerId } from '../theme'
 import { layerLevel, layers, type Concept } from '../data'
 import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
-import { useStore } from '../store'
+import { useStoreData } from '../store'
 
 // ---- layout constants (world coordinates) ----
 const NODE_W = 214, NODE_H = 96
@@ -71,8 +71,8 @@ function edgePath(x1: number, y1: number, x2: number, y2: number) {
   return `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`
 }
 
-export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: boolean }) {
-  const { setSelConcept, setSelConflict, setView, conflicts, concepts } = useStore()
+function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolean }) {
+  const { setSelConcept, setSelConflict, setView, conflicts, concepts } = useStoreData()
   // Memoized: pan/zoom re-renders every pointermove — don't re-lay-out for those.
   const { nodes, ghosts, worldW, worldH } = useMemo(() => computeLayout(concepts), [concepts])
   const laneCounts = useMemo(() => {
@@ -294,8 +294,17 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
         </div>
       </div>
 
-      {/* legend */}
-      <div style={css(`position:absolute; left:20px; bottom:20px; display:flex; flex-direction:column; gap:8px; padding:12px 14px; background:var(--cc-header-bg); backdrop-filter:blur(10px); border:1px solid ${C.line}; border-radius:11px; box-shadow:0 4px 16px var(--cc-shadow);`)}>
+      {/*
+        legend — the one blurred surface in the app with moving content behind
+        it. It floats over the pan/zoom viewport, so concept nodes and their
+        conflict edges slide underneath as the user drags; going opaque here
+        turned a card the graph reads through into a hole punched in it. That is
+        the opposite of the chrome panels, which sit in normal flow over a static
+        page gradient. Users who want it gone have the reduce-transparency
+        preference, which resolves --cc-header-bg to the opaque raised surface
+        and kills backdrop-filter app-wide (see styles.css).
+      */}
+      <div style={css(`position:absolute; left:20px; bottom:20px; display:flex; flex-direction:column; gap:8px; padding:12px 14px; background:var(--cc-header-bg); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid ${C.line}; border-radius:11px; box-shadow:0 4px 16px var(--cc-shadow);`)}>
         <div style={css(`font-size:10px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:${C.caption};`)}>The cascade — higher lanes win</div>
         <div style={css('display:flex; align-items:center; gap:8px;')}>
           <svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" stroke="var(--cc-edge-conflict)" strokeWidth="1.8" strokeDasharray="5 5" /></svg>
@@ -342,3 +351,11 @@ export function Canvas({ keyboardSuspended = false }: { keyboardSuspended?: bool
     </div>
   )
 }
+
+/**
+ * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
+ * background-activity tick — and this view has no business repainting for any
+ * of them. It re-renders when the store slices it subscribes to change, and
+ * otherwise not at all.
+ */
+export const Canvas = memo(CanvasInner)

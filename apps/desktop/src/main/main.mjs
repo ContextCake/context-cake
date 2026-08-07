@@ -4,11 +4,12 @@ import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron'
 import { startEngineService } from './service-host.mjs'
+import { createEngineWatchdog } from './engine-watchdog.mjs'
 import { createGithubConnections, verifyGithubToken } from './github-connections.mjs'
 import { buildMenu } from './menu.mjs'
 import { configDir, enginePaths, manifestPath, settingsPath } from './paths.mjs'
 import { resolveRevealTarget } from './reveal.mjs'
-import { markSettingsDirty, readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
+import { flushSettings, flushSettingsSync, markSettingsDirty, readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
 import { createAuthManager } from './auth.mjs'
 import {
   combineManifestSources,
@@ -47,8 +48,10 @@ function handleFatal(err) {
   const detail = (err && err.stack) || String(err)
   // Stop the engine child first. app.exit() below skips before-quit, so
   // without this its teardown would look like an unexpected exit and report a
-  // second, misleading failure.
+  // second, misleading failure. Settings writes are queued and asynchronous;
+  // app.exit() does not drain that queue, so land it synchronously here too.
   shutdownEngine()
+  flushSettingsSync()
   // Synchronous write: app.exit() below is abrupt and would race an async
   // console.error, so the diagnostic (and CI's grep for it) could be lost.
   try { fs.writeSync(2, `[contextcake] fatal: ${detail}\n`) } catch { /* stderr gone */ }
@@ -93,16 +96,56 @@ let settingsWin = null
 const trustedWindows = createTrustedWindowRegistry(() => service?.origin)
 
 /**
+ * Bumped by every teardown. An engine forked before the bump belongs to a
+ * generation nobody is going to close — see startEngine().
+ */
+let engineEpoch = 0
+
+/**
  * Stop the engine process and stop treating its exit as a crash. Every path
  * that ends the app — before-quit, a fatal error, the smoke check's app.exit —
  * must go through this, because app.exit() does not fire before-quit.
+ *
+ * `close()` marks the handle closing before it kills the child, which is what
+ * keeps a deliberate teardown (including the watchdog's relaunch) out of the
+ * fatal-exit path.
  */
 function shutdownEngine() {
+  engineEpoch += 1
+  engineWatchdog?.stop()
   try { service?.close() } catch { /* already down */ }
   service = null
 }
 
+/**
+ * Fork the engine and adopt it — but only if nothing tore the engine down
+ * while it was booting. Without the epoch check, a quit that arrived during
+ * the `await` ran shutdownEngine() against a null handle (a no-op), and the
+ * handle assigned afterwards was never closed: `close()` is the only thing
+ * that sends the engine the `{type:'close'}` it needs in order to kill the MCP
+ * servers it spawned, so the leak was an engine process plus one child per
+ * `"source":"mcp"` layer.
+ *
+ * @returns the live handle, or null when the app is no longer interested.
+ */
+async function startEngine() {
+  const epoch = engineEpoch
+  const started = await startEngineService({ onCrash: handleFatal })
+  if (engineEpoch !== epoch) {
+    try { started.close() } catch { /* already down */ }
+    return null
+  }
+  service = started
+  return started
+}
+
 let authManager = null
+let engineWatchdog = null
+let relaunchingEngine = false
+let relaunchPromptOpen = false
+// Asked once per outage, not once per tick. The banner keeps a Restart Engine
+// button on screen, so declining hides a dialog rather than the option.
+let relaunchDeclined = false
 let settingsSync = null
 let pendingDeepLink = null
 let settingsPushTimer = null
@@ -111,7 +154,22 @@ let lastAppliedManifest = ''
 let installMetricAbortController = null
 let consentPromptDeferred = false
 let windowStateTimer = null
+// Renderer console errors, kept for the UI smoke check. A renderer stuck in an
+// error loop emits them faster than anything reads them, so this is a ring:
+// the newest RENDERER_ERROR_LIMIT are held and the overflow is counted, never
+// accumulated. Unbounded, a single bad render kept every message string alive
+// in the main process for the life of the app.
+const RENDERER_ERROR_LIMIT = 200
 const rendererErrors = []
+let rendererErrorsDropped = 0
+
+function recordRendererError(message) {
+  rendererErrors.push(String(message ?? 'Unknown renderer error'))
+  while (rendererErrors.length > RENDERER_ERROR_LIMIT) {
+    rendererErrors.shift()
+    rendererErrorsDropped += 1
+  }
+}
 
 function currentAuthState() {
   return authManager?.getState() ?? { available: false, signedIn: false }
@@ -125,15 +183,182 @@ function sendToRenderer(channel, payload) {
   trustedWindows.broadcast(channel, payload)
 }
 
+// ---- Engine liveness --------------------------------------------------------
+//
+// An engine that EXITS is fatal and already handled (onCrash below). An engine
+// that is alive and has stopped answering is a different failure, and until now
+// nothing looked for it: the window kept its last paint, every fetch hung, and
+// the app was indistinguishable from one that had simply gone quiet. The
+// watchdog pings the cheapest endpoint the engine has, tells the window when the
+// answers stop, and — once it has been unresponsive long enough to call stuck
+// rather than busy — lets the user restart it without losing the app.
+
+async function pingEngine(signal) {
+  const current = service
+  if (!current) throw new Error('the engine is not running')
+  const res = await fetch(`${current.origin}/api/status`, {
+    headers: { authorization: `Bearer ${current.token}` },
+    signal,
+  })
+  // Drain the body: an undrained response holds its socket, and this runs
+  // forever. The status code itself is not the signal — ANY answer means the
+  // engine's loop is turning, which is the only thing being measured here.
+  await res.text().catch(() => '')
+  return res.status
+}
+
+function startEngineWatchdog() {
+  engineWatchdog ??= createEngineWatchdog({
+    ping: pingEngine,
+    onState: (state) => {
+      // Only the main window carries the shell banner; the settings window has
+      // no place to put it.
+      trustedWindows.broadcast('engine:status', state, ['main'])
+      if (state.healthy) relaunchDeclined = false
+      else if (state.canRelaunch && !relaunchDeclined) offerEngineRelaunch()
+    },
+  })
+  engineWatchdog.start()
+}
+
+/**
+ * Ping now rather than at the next tick. A message-port round trip that went
+ * unanswered is evidence about the same process the watchdog is watching, so
+ * it converts into the one measurement that can confirm or dismiss it — never
+ * into a fabricated miss, which would let a busy port alone raise a banner.
+ */
+function noteUnackedEngineMessage(kind, reason) {
+  console.error(`[contextcake] the engine did not acknowledge ${kind} (${reason})`)
+  engineWatchdog?.checkNow()?.catch(() => {})
+}
+
+/**
+ * Reload the engine's manifest and act on whether it actually happened. The
+ * old fire-and-forget call could not tell a re-read from a wedge.
+ */
+function reloadEngine() {
+  const current = service
+  if (!current?.reload) return Promise.resolve({ acked: false, reason: 'no-engine' })
+  return current.reload().then((result) => {
+    if (result?.acked === false) noteUnackedEngineMessage('a manifest reload', result.reason)
+    return result
+  })
+}
+
+async function offerEngineRelaunch() {
+  // Smoke and CI must never meet a modal. The banner still reaches the window.
+  if (process.env.CC_SMOKE === '1' || !app.isReady()) return
+  if (relaunchPromptOpen || relaunchingEngine || !win || win.isDestroyed()) return
+  relaunchPromptOpen = true
+  try {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Keep Waiting', 'Restart Engine'],
+      defaultId: 1,
+      cancelId: 0,
+      title: 'ContextCake Engine Not Responding',
+      message: 'The ContextCake engine has stopped responding.',
+      detail: 'Restarting it keeps the app open and your sources and settings untouched. '
+        + 'The window will reload, so anything you have typed but not saved will be lost.',
+    })
+    if (response === 1) await relaunchEngine()
+    else relaunchDeclined = true
+  } catch { /* the window went away mid-prompt */ } finally {
+    relaunchPromptOpen = false
+  }
+}
+
+/**
+ * Re-fork the engine and point the windows at the new one.
+ *
+ * The renderer reload is not avoidable: the engine binds an ephemeral loopback
+ * port and mints a fresh bearer per launch, so the loaded document is on an
+ * origin that no longer exists. That is the same fact that makes an engine
+ * *exit* fatal — but an exit leaves nothing to restart, whereas here the app,
+ * its windows and its config are all intact, so the honest move is to rebuild
+ * the one part that broke rather than to quit.
+ */
+async function relaunchEngine() {
+  if (relaunchingEngine) return { ok: false, reason: 'already-restarting' }
+  relaunchingEngine = true
+  try {
+    shutdownEngine()
+    if (!(await startEngine())) return { ok: false, reason: 'shutting-down' }
+    await pushGithubTokens()
+    const targets = [[win, `${service.origin}/console/`]]
+    if (settingsWin) targets.push([settingsWin, `${service.origin}/console/?surface=settings`])
+    for (const [window, url] of targets) {
+      if (!window || window.isDestroyed()) continue
+      await window.loadURL(url)
+    }
+    startEngineWatchdog()
+    // Clear the banner on the new engine's first answer rather than at the next
+    // tick — the user just asked for this and is watching.
+    engineWatchdog?.checkNow()?.catch(() => {})
+    return { ok: true }
+  } catch (err) {
+    // The engine could not be rebuilt — and the app must survive that, because
+    // the prompt above promised it would. Routing this through handleFatal
+    // showed BOOT-failure copy ("The local engine failed to start. Please
+    // reopen ContextCake.") after a boot that had plainly succeeded, and then
+    // exited: the one thing the dialog said would not happen. The window, the
+    // manifest, the account session and anything typed into Settings are all
+    // still here, so keep them, say what actually failed, and leave the
+    // banner's Restart Engine button live for another try.
+    console.error(`[contextcake] the engine could not be restarted: ${err?.stack ?? err}`)
+    shutdownEngine()
+    reportEngineRestartFailure(err)
+    return { ok: false, reason: 'restart-failed' }
+  } finally {
+    relaunchingEngine = false
+  }
+}
+
+/**
+ * Tell the user a restart failed, without ending the app.
+ *
+ * The banner is re-armed rather than replaced: with no engine, the watchdog's
+ * ping rejects immediately, so it goes on reporting an unhealthy engine and
+ * re-offers a restart on its own clock. `relaunchDeclined` is reset because
+ * the user did not decline this — they asked, and it did not work.
+ */
+function reportEngineRestartFailure(err) {
+  relaunchDeclined = false
+  startEngineWatchdog()
+  engineWatchdog?.checkNow()?.catch(() => {})
+  if (process.env.CC_SMOKE === '1' || !app.isReady()) return
+  const options = {
+    type: 'error',
+    buttons: ['OK'],
+    title: 'ContextCake Engine Could Not Restart',
+    message: 'The ContextCake engine could not be restarted.',
+    detail: 'ContextCake is still open and your sources and settings are untouched, but it '
+      + 'cannot read them until the engine is running. Try Restart Engine again from the '
+      + 'banner, or quit and reopen ContextCake.\n\n'
+      + ((err && err.message) || String(err)),
+  }
+  const parent = win && !win.isDestroyed() ? win : null
+  const shown = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options)
+  // A rejected dialog promise on the main process is the fatal handler.
+  shown.catch(() => { /* the window went away mid-prompt */ })
+}
+
 function desktopPreferencesSnapshot(settings = readSettings()) {
   const theme = ['system', 'light', 'dark'].includes(settings.theme) ? settings.theme : 'system'
   const density = ['comfortable', 'compact'].includes(settings.density) ? settings.density : 'comfortable'
+  // Reduce transparency follows this Mac's Accessibility setting until the user
+  // says otherwise in ContextCake's own Settings; `reducedTransparencyPreference`
+  // is what they chose (null = still following), `reducedTransparency` is what
+  // the renderer should actually do.
+  const chosenTransparency = typeof settings.reducedTransparency === 'boolean' ? settings.reducedTransparency : null
   return {
     theme,
     density,
     updateCheck: settings.updateCheck !== false,
     anonymousMetrics: typeof settings.anonymousMetrics === 'boolean' ? settings.anonymousMetrics : null,
-    reducedTransparency: nativeTheme.prefersReducedTransparency === true,
+    reducedTransparency: chosenTransparency ?? nativeTheme.prefersReducedTransparency === true,
+    reducedTransparencyPreference: chosenTransparency,
+    systemReducedTransparency: nativeTheme.prefersReducedTransparency === true,
     highContrast: nativeTheme.shouldUseHighContrastColors === true,
   }
 }
@@ -211,7 +436,11 @@ function scheduleSettingsPush() {
   clearTimeout(settingsPushTimer)
   settingsPushTimer = setTimeout(() => {
     settingsPushTimer = null
-    settingsSync.push(settingsSnapshot()).catch(() => {})
+    // settings-sync reads and rewrites settings.json itself. Let our own queued
+    // write land first or it reads a copy one patch behind and writes it back —
+    // and if it could not land at all, do not sync a state this Mac cannot
+    // reproduce. The push comes back with the next change once writing works.
+    flushSettings().then((ok) => { if (ok) settingsSync.push(settingsSnapshot()) }).catch(() => {})
   }, 750)
   settingsPushTimer.unref?.()
 }
@@ -242,6 +471,11 @@ function safeProfiles(profiles) {
 }
 
 function applyPulledManifest(settings) {
+  // mutateManifest lives on the engine handle, which is null while a relaunch
+  // is in flight. Dropping the pulled source list is better than a TypeError
+  // here — the next push carries it, and `settings:pull` would otherwise
+  // reject for a reason that has nothing to do with the pull.
+  if (!service) return
   const currentUserId = authManager?.getUserId?.() ?? null
   const incomingSources = Array.isArray(settings?.sources) ? settings.sources : null
   const profiles = safeProfiles(settings?.profiles)
@@ -262,7 +496,7 @@ function applyPulledManifest(settings) {
   })
   if (!mutation.changed) return
   lastAppliedManifest = mutation.serialized
-  service?.reload?.()
+  reloadEngine()
 }
 
 function publishPulledSettings(pulled) {
@@ -327,13 +561,11 @@ async function ensureAnonymousMetricsPreference() {
     cancelId: 1,
   })
   const enabled = response === 0
-  try {
-    writeLocalSettings({ anonymousMetrics: enabled })
-  } catch {
-    // A metrics-only preference must never turn a writable-settings problem
-    // into a fatal app startup. Without a persisted opt-in, do not report.
-    return false
-  }
+  const { written } = writeLocalSettings({ anonymousMetrics: enabled })
+  // A metrics-only preference must never turn a writable-settings problem into
+  // a fatal app startup. Without a persisted opt-in, do not report — which is
+  // why this one caller waits for its own queued write instead of assuming it.
+  if (!(await written).ok) return false
   return enabled
 }
 
@@ -374,6 +606,7 @@ function startManifestSync() {
 async function syncAfterSignIn() {
   if (!settingsSync) return
   try {
+    if (!(await flushSettings())) return
     const pulled = await settingsSync.pull(settingsSnapshot())
     if (pulled) publishPulledSettings(pulled)
     else await settingsSync.push(settingsSnapshot())
@@ -432,7 +665,11 @@ function connections() {
 async function pushGithubTokens() {
   if (!service?.sendTokens) return
   try {
-    await service.sendTokens(connections().injectionMap())
+    const result = await service.sendTokens(connections().injectionMap())
+    // An unacknowledged send is not a no-op: the engine is still holding the
+    // previous credential map, so a private layer reads anonymously and looks
+    // empty. Say so instead of leaving the user to wonder about the repo.
+    if (result?.acked === false) noteUnackedEngineMessage('source credentials', result.reason)
   } catch {
     // Never surface the payload in an error path.
     console.error('[contextcake] could not hand credentials to the engine')
@@ -487,6 +724,13 @@ function registerAccountIpc() {
   })
   handle('settings:sync-state', currentSyncState)
   handle('settings:pull', async () => {
+    // A pull rewrites settings.json from what it finds there. Running one while
+    // a local write is still owed would write the pre-change file back.
+    if (!(await flushSettings())) {
+      throw new Error('ContextCake could not save this Mac\'s settings, so syncing was skipped '
+        + 'rather than risk overwriting them. Check that the disk is not full and that '
+        + '~/Library/Application Support/ContextCake is writable.')
+    }
     const pulled = await settingsSync?.pull(settingsSnapshot())
     publishPulledSettings(pulled)
     return pulled ? { overwritten: pulled.overwritten, settings: selectSyncSettings(pulled.settings) } : null
@@ -540,31 +784,67 @@ registerIntegrationIpc()
 
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
 handleTrustedIpc('contextcake:cli-install', ({ window }) => installCli(window, { showSuccess: false }))
+// What the renderer is told when a preference it just set did not reach disk.
+// It travels as a rejected `invoke`, which is what every caller in the console
+// already handles — and is what the synchronous write used to do by throwing,
+// until the write became an async queue that swallowed the failure and
+// answered with a snapshot that looked like success.
+const SETTINGS_WRITE_FAILED = 'ContextCake could not save that change. It is in effect now '
+  + 'but will be lost when the app quits — check that the disk is not full and that '
+  + '~/Library/Application Support/ContextCake is writable.'
+
+/** Wait for a set of queued writes and report the first that failed. */
+async function settleSettingsWrites(pending) {
+  const outcomes = await Promise.all(pending)
+  const failure = outcomes.find((outcome) => outcome.ok === false)
+  if (!failure) return true
+  console.error(`[contextcake] settings could not be written: ${failure.error?.message ?? 'unknown error'}`)
+  return false
+}
+
 handleTrustedIpc('preferences:get', () => desktopPreferencesSnapshot())
-handleTrustedIpc('preferences:set', (candidate) => {
+handleTrustedIpc('preferences:set', async (candidate) => {
   const current = readSettings()
   const changed = changedPreferencePatch(current, candidate)
   if (Object.keys(changed).length === 0) return desktopPreferencesSnapshot(current)
 
-  const { anonymousMetrics, ...synced } = changed
+  // Device-local preferences never enter account sync state: one is a privacy
+  // choice and the other describes this Mac's display, not the user's taste.
+  const { anonymousMetrics, reducedTransparency, ...synced } = changed
   let next = current
-  if (Object.keys(synced).length > 0) next = writeSettings(synced)
-  if (anonymousMetrics !== undefined) next = writeLocalSettings({ anonymousMetrics })
+  const pending = []
+  const record = (write) => { next = write.settings; pending.push(write.written) }
+  if (Object.keys(synced).length > 0) record(writeSettings(synced))
+  if (anonymousMetrics !== undefined) record(writeLocalSettings({ anonymousMetrics }))
+  if (reducedTransparency !== undefined) record(writeLocalSettings({ reducedTransparency }))
 
+  // Appearance is applied before the disk answers, deliberately: the choice is
+  // already what every readSettings() returns, and a theme switch should not
+  // wait on I/O. What waits is everything that leaves this machine.
   const preferences = applyNativeAppearance(next)
   if (Object.hasOwn(changed, 'updateCheck')) initUpdater()
+  if (anonymousMetrics !== undefined) installApplicationMenu()
+
+  const persisted = await settleSettingsWrites(pending)
   if (anonymousMetrics !== undefined) {
-    installApplicationMenu()
-    if (anonymousMetrics) reportAnonymousFirstLaunch()
+    // The same rule the first-run prompt follows: never report on a choice
+    // that is not on disk. Not persisting is a reason to stay quiet, never a
+    // reason to start talking, so a failed write cancels either way.
+    if (anonymousMetrics && persisted) reportAnonymousFirstLaunch()
     else cancelAnonymousFirstLaunch()
   }
-  if (Object.keys(synced).length > 0) scheduleSettingsPush()
+  // Pushing settings we could not save locally would upload a state this Mac
+  // cannot reproduce after a restart.
+  if (Object.keys(synced).length > 0 && persisted) scheduleSettingsPush()
+  if (!persisted) throw new Error(SETTINGS_WRITE_FAILED)
   return preferences
 })
-handleTrustedIpc('ui-state:set', (patch) => {
+handleTrustedIpc('ui-state:set', async (patch) => {
   const currentSettings = readSettings()
   const result = applyUiStatePatch(currentSettings.uiState, patch)
-  if (result.changed) writeLocalSettings({ uiState: result.state })
+  if (!result.changed) return result.state
+  const { written } = writeLocalSettings({ uiState: result.state })
+  if (!(await settleSettingsWrites([written]))) throw new Error(SETTINGS_WRITE_FAILED)
   return result.state
 })
 // The API token is a credential: never put it in BrowserWindow
@@ -602,6 +882,10 @@ handleTrustedIpc('contextcake:reveal-file', async ({ layer, rel } = {}) => {
   }
 })
 
+// The shell's own recovery action for a wedged engine. It is a restart of the
+// engine only — the app, its windows and its config all survive.
+handleTrustedIpc('contextcake:engine-relaunch', () => relaunchEngine())
+
 handleTrustedIpc('windows:open-settings', (pane) => openSettingsWindow(pane))
 handleTrustedIpc('data:reload-requested', () => {
   trustedWindows.broadcast('data:reload-requested', undefined, ['main'])
@@ -620,6 +904,8 @@ function rendererArguments(preferences, uiState, role) {
     `--cc-update-check=${preferences.updateCheck ? '1' : '0'}`,
     `--cc-anonymous-metrics=${preferences.anonymousMetrics === null ? '' : preferences.anonymousMetrics ? '1' : '0'}`,
     `--cc-reduced-transparency=${preferences.reducedTransparency ? '1' : '0'}`,
+    `--cc-reduced-transparency-preference=${preferences.reducedTransparencyPreference === null ? '' : preferences.reducedTransparencyPreference ? '1' : '0'}`,
+    `--cc-system-reduced-transparency=${preferences.systemReducedTransparency ? '1' : '0'}`,
     `--cc-high-contrast=${preferences.highContrast ? '1' : '0'}`,
     `--cc-native-vibrancy=${process.platform === 'darwin' && role === 'main' ? '1' : '0'}`,
     `--cc-ui-state=${encodeURIComponent(JSON.stringify(uiState))}`,
@@ -630,17 +916,22 @@ function rendererArguments(preferences, uiState, role) {
 function protectWindowNavigation(window) {
   window.webContents.on('console-message', (event) => {
     const { level, message } = event
-    if (level === 'error' || level === 3) rendererErrors.push(String(message ?? 'Unknown renderer error'))
+    if (level === 'error' || level === 3) recordRendererError(message)
   })
   window.webContents.setWindowOpenHandler(({ url }) => {
     openExternalHttps(url)
     return { action: 'deny' }
   })
   window.webContents.on('will-navigate', (event, url) => {
-    if (!isEngineOrigin(url, service.origin)) {
-      event.preventDefault()
-      openExternalHttps(url)
-    }
+    // `service` is null for as long as an engine relaunch is in flight, and
+    // windows stay live through it. Reading `.origin` off null here threw, and
+    // an uncaughtException on the main process IS the fatal handler — a
+    // renderer-initiated navigation during a wedge recovery would have taken
+    // the whole app down. With no engine there is no origin to trust, so the
+    // navigation is refused, which is the correct direction to fail.
+    if (isEngineOrigin(url, service?.origin)) return
+    event.preventDefault()
+    openExternalHttps(url)
   })
 }
 
@@ -693,11 +984,16 @@ async function openSettingsWindow(requestedPane) {
 }
 
 async function createWindow() {
-  // The engine runs in its own utilityProcess (service-host.mjs). If it dies
-  // after boot the app has no cascade to show and no way to re-point the
-  // already-loaded window at a new port, so an unexpected exit is fatal —
-  // same clean dialog-and-exit as a failed boot.
-  service ??= await startEngineService({ onCrash: handleFatal })
+  // The engine runs in its own utilityProcess (service-host.mjs). An
+  // unexpected exit after boot is fatal — same clean dialog-and-exit as a
+  // failed boot (specs/contextcake-distribution/design.md).
+  //
+  // Not because the window cannot be re-pointed: it can, and relaunchEngine()
+  // does exactly that for a wedge (proved by `npm run smoke:relaunch`). The
+  // distinction is that a wedge is a process the app can still reason about,
+  // while an exit the app did not ask for means the engine died of something
+  // this process cannot see — and silently re-forking into it would loop.
+  if (!service && !(await startEngine())) return
   // Hand the engine its source credentials before the window loads, so a
   // private layer indexes on first paint instead of appearing empty and then
   // filling in.
@@ -749,6 +1045,7 @@ async function createWindow() {
   win.on('closed', () => { clearTimeout(windowStateTimer); windowStateTimer = null; win = null })
   await win.loadURL(`${service.origin}/console/${process.env.CC_SMOKE_UI === '1' ? '?mode=demo' : ''}`)
   startManifestSync()
+  startEngineWatchdog()
 }
 
 /**
@@ -770,10 +1067,120 @@ function measureMainLoopLag(durationMs, intervalMs = 20) {
   })
 }
 
+/**
+ * Round-trip latency of the engine's cheapest endpoint, sampled while it is
+ * busy. Isolation says the engine cannot freeze the WINDOW; this says the
+ * engine has not frozen ITSELF — a synchronous stretch in its request path
+ * would leave main-loop lag at zero and still make every source operation feel
+ * dead. Nothing measured that before, which is why a wedged engine could only
+ * ever be inferred.
+ *
+ * Measured from the main process, so a stalled UI thread inflates it too; that
+ * is why the main-loop lag number is reported beside it rather than instead of
+ * it. The two together say which side is at fault.
+ */
+async function measureEngineLatency(durationMs, { gapMs = 20, timeoutMs = 5_000 } = {}) {
+  const headers = { authorization: `Bearer ${service.token}` }
+  const samples = []
+  let failures = 0
+  const deadline = Date.now() + durationMs
+  while (Date.now() < deadline) {
+    const startedAt = Date.now()
+    try {
+      const res = await fetch(`${service.origin}/api/status`, { headers, signal: AbortSignal.timeout(timeoutMs) })
+      await res.text()
+      if (!res.ok) failures += 1
+    } catch {
+      failures += 1
+    }
+    samples.push(Date.now() - startedAt)
+    await new Promise((resolve) => setTimeout(resolve, gapMs))
+  }
+  const sorted = [...samples].sort((a, b) => a - b)
+  const at = (q) => (sorted.length === 0 ? 0 : sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))])
+  return { p50: at(0.5), p95: at(0.95), max: sorted[sorted.length - 1] ?? 0, probes: samples.length, failures }
+}
+
 async function smokeCheck() {
   // CC_SMOKE=1: boot, prove the service answers with the token, exit.
   // Used by CI and agents — no lingering window.
   try {
+    // CC_SMOKE_QUIT=quit|close: prove the window's frame survives the exit.
+    // Moves the window and then ends the app while the 250ms bounds debounce
+    // is still pending — which is exactly what "resize, then ⌘Q" looks like.
+    // `quit` is app.quit() with the window open (before-quit fires FIRST);
+    // `close` is the red X (before-quit fires last). Driven by
+    // test/quit-persistence.test.mjs, which reads the geometry back off disk.
+    if (process.env.CC_SMOKE_QUIT) {
+      win.setBounds({ x: 140, y: 100, width: 1024, height: 720 })
+      // Let the platform settle the frame and deliver `resize` (which arms the
+      // debounce) without letting the debounce itself fire.
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      console.log(`QUIT SMOKE bounds=${JSON.stringify(win.getBounds())} pendingSave=${windowStateTimer !== null}`)
+      if (process.env.CC_SMOKE_QUIT === 'close') win.close()
+      else app.quit()
+      return
+    }
+    // CC_SMOKE_ENGINE_LIFECYCLE=1: the three ways a relaunch used to go wrong,
+    // exercised in the real app because all three are about what Electron and
+    // the utility process actually do. Driven by test/engine-lifecycle.test.mjs.
+    if (process.env.CC_SMOKE_ENGINE_LIFECYCLE === '1') {
+      const failures = []
+
+      // 1. A teardown that arrives DURING the relaunch's boot must not leave a
+      //    freshly forked engine adopted behind it. `shutdownEngine()` is what
+      //    before-quit calls; before the epoch check it ran against a null
+      //    handle and the engine assigned afterwards was never closed — so it
+      //    never got the `{type:'close'}` that kills its spawned MCP children.
+      const racing = relaunchEngine()
+      shutdownEngine()
+      const raced = await racing
+      if (raced?.ok !== false || raced?.reason !== 'shutting-down') {
+        failures.push(`race: relaunch answered ${JSON.stringify(raced)}`)
+      }
+      if (service !== null) failures.push('race: an engine forked during a teardown was adopted')
+
+      // 2. With no engine, a renderer-initiated navigation must be refused
+      //    rather than throw. `will-navigate` read `service.origin` unguarded,
+      //    and an uncaughtException on the main process is the fatal handler:
+      //    the app would exit here. A plain-http target keeps the refusal from
+      //    handing anything to the real browser.
+      const loadedBefore = win.webContents.getURL()
+      await win.webContents.executeJavaScript("location.href = 'http://127.0.0.1:1/blocked'")
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      if (win.webContents.getURL() !== loadedBefore) failures.push('navigation guard: the window navigated off the engine origin')
+
+      // 3. A relaunch that FAILS must keep the app — that is exactly what the
+      //    relaunch prompt promises. It used to call handleFatal, which shows
+      //    boot-failure copy after a successful boot and then exits.
+      process.env.CC_FORCE_BOOT_FAIL = '1'
+      const failed = await relaunchEngine()
+      delete process.env.CC_FORCE_BOOT_FAIL
+      if (failed?.ok !== false || failed?.reason !== 'restart-failed') {
+        failures.push(`failed restart: relaunch answered ${JSON.stringify(failed)}`)
+      }
+      if (!win || win.isDestroyed()) failures.push('failed restart: the window did not survive')
+
+      // 4. …and the app is still recoverable afterwards.
+      const recovered = await relaunchEngine()
+      if (recovered?.ok !== true) failures.push(`recovery: relaunch answered ${JSON.stringify(recovered)}`)
+      if (!win.webContents.getURL().startsWith(service?.origin ?? ' ')) {
+        failures.push('recovery: the window was not re-pointed at the new engine')
+      }
+
+      if (failures.length > 0) {
+        console.error(`ENGINE LIFECYCLE FAIL ${failures.join(' | ')}`)
+        shutdownEngine()
+        flushSettingsSync()
+        app.exit(1)
+        return
+      }
+      console.log('ENGINE LIFECYCLE OK teardown-race=closed navigation-guard=refused failed-restart=survived recovery=repointed')
+      shutdownEngine()
+      flushSettingsSync()
+      app.exit(0)
+      return
+    }
     const artifactDir = process.env.CC_SMOKE_ARTIFACT_DIR || ''
     const capture = async (window, name) => {
       if (!artifactDir) return
@@ -895,18 +1302,71 @@ async function smokeCheck() {
         await capture(settingsWin, 'settings-general')
         settingsWin?.close()
       }
-      if (rendererErrors.length > 0) throw new Error(`Renderer console errors: ${rendererErrors.join(' | ')}`)
+      if (rendererErrors.length > 0) {
+        const dropped = rendererErrorsDropped > 0 ? ` (${rendererErrorsDropped} earlier errors dropped)` : ''
+        throw new Error(`Renderer console errors${dropped}: ${rendererErrors.join(' | ')}`)
+      }
       console.log('UI SMOKE OK renderer-console-errors=0')
     }
+    // CC_SMOKE_RELAUNCH=1: prove the watchdog's recovery actually recovers.
+    //
+    // Worth a seam of its own because the doubt is real and load-bearing: the
+    // comment at createWindow() says there is no way to re-point a loaded
+    // window at a new port, which is the reason an engine *exit* is fatal. If
+    // that were true of a deliberate restart too, the relaunch offer would be a
+    // button that half-works. It is not true — loadURL re-points it — and this
+    // is where that stays true. Everything after this block then runs against
+    // the relaunched engine, so the restart is proven end to end rather than
+    // just observed to return.
+    if (process.env.CC_SMOKE_RELAUNCH === '1') {
+      const before = { origin: service.origin, token: service.token }
+      const result = await relaunchEngine()
+      const loaded = win.webContents.getURL()
+      const answered = await fetch(`${service.origin}/api/status`, {
+        headers: { authorization: `Bearer ${service.token}` },
+      })
+      // The old engine must be gone, not merely orphaned and still listening.
+      const oldEngine = await fetch(`${before.origin}/api/status`, {
+        headers: { authorization: `Bearer ${before.token}` },
+        signal: AbortSignal.timeout(2_000),
+      }).then((r) => r.status).catch(() => 'unreachable')
+      // Trusted IPC re-validates the sender against the CURRENT engine origin;
+      // if that getter had gone stale the window would be silently unable to
+      // authenticate a single API call after recovering.
+      const tokenViaIpc = await win.webContents.executeJavaScript('window.__CC_DESKTOP.getApiToken()')
+      const relaunchOk = result.ok
+        && service.origin !== before.origin
+        && service.token !== before.token
+        && loaded.startsWith(service.origin)
+        && answered.ok
+        && oldEngine === 'unreachable'
+        && tokenViaIpc === service.token
+      if (!relaunchOk) {
+        throw new Error(`Relaunch smoke failed: ${JSON.stringify({
+          result, before: before.origin, after: service.origin, loaded,
+          answered: answered.status, oldEngine, ipcTokenMatches: tokenViaIpc === service.token,
+        })}`)
+      }
+      console.log(
+        `RELAUNCH SMOKE OK ${before.origin} -> ${service.origin}`
+        + ' window-repointed=true old-engine=unreachable ipc-token=rotated',
+      )
+    }
+
     // Exercise the wrapper used after a settings pull, not only HTTP reads.
-    // It round-trips to the engine process now, so await the acknowledgement.
-    await service.reload()
+    // It round-trips to the engine process now, so await the acknowledgement —
+    // and check it, because a resolved promise no longer implies one arrived.
+    const reloaded = await service.reload()
+    if (reloaded?.acked !== true) {
+      throw new Error(`the engine did not acknowledge a manifest reload (${reloaded?.reason ?? 'unknown'})`)
+    }
     const authHeaders = { authorization: `Bearer ${service.token}` }
-    // The first read starts the engine's background index; measure the main
-    // loop while that work is actually running.
+    // The first read starts the engine's background index; measure both loops
+    // while that work is actually running — the main process's (is the UI
+    // thread free?) and the engine's own (is it still answering?).
     const first = await fetch(`${service.origin}/api/graph`, { headers: authHeaders })
     const graph = await first.json().catch(() => null)
-    const lag = await measureMainLoopLag(1200)
+    const [lag, latency] = await Promise.all([measureMainLoopLag(1200), measureEngineLatency(1200)])
     const res = await fetch(`${service.origin}/api/graph`, { headers: authHeaders })
     const unauth = await fetch(`${service.origin}/api/graph`)
     // Guard the app-name/CLI agreement: userData must resolve under a dir named
@@ -916,18 +1376,23 @@ async function smokeCheck() {
     if (res.ok && unauth.status === 401 && okName) {
       console.log(
         `SMOKE OK ${service.origin} api=200 unauth=401 userData=${userDataName}`
-        + ` lag=${lag}ms indexing=${graph?.indexing === true}`,
+        + ` lag=${lag}ms indexing=${graph?.indexing === true}`
+        + ` engineP50=${latency.p50}ms engineP95=${latency.p95}ms engineMax=${latency.max}ms`
+        + ` engineProbes=${latency.probes} engineFailures=${latency.failures}`,
       )
       shutdownEngine()
+      flushSettingsSync()
       app.exit(0)
     } else {
       console.error(`SMOKE FAIL api=${res.status} unauth=${unauth.status} userData=${userDataName}`)
       shutdownEngine()
+      flushSettingsSync()
       app.exit(1)
     }
   } catch (err) {
     console.error('SMOKE FAIL', err?.message ?? err)
     shutdownEngine()
+    flushSettingsSync()
     app.exit(1)
   }
 }
@@ -984,7 +1449,19 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   clearTimeout(settingsPushTimer)
+  settingsPushTimer = null
   clearTimeout(windowStateTimer)
+  windowStateTimer = null
+  // Electron fires before-quit BEFORE the window's own `close`, so this is the
+  // last point at which the frame still exists AND a synchronous flush can
+  // still land it. Leaving the save to `close` alone lost every ⌘Q made after
+  // a resize: this handler cancelled the pending debounce, flushed an empty
+  // queue, and only then did `close` compute the geometry — onto an
+  // asynchronous queue the exiting process never drained. The red-X path is
+  // the mirror image (close → window-all-closed → quit → before-quit), and the
+  // flush below is what lands what `close` queued there.
+  saveWindowState(win)
+  flushSettingsSync()
   if (manifestWatchStarted) fs.unwatchFile(manifestPath())
   authManager?.close()
   shutdownEngine()

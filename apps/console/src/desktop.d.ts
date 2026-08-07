@@ -35,7 +35,12 @@ type DesktopPreferences = {
   density: Density
   updateCheck: boolean
   anonymousMetrics: boolean | null
+  /** What the renderer should do: the user's choice, or the OS setting. */
   reducedTransparency: boolean
+  /** What the user chose. null = still following this Mac's setting. */
+  reducedTransparencyPreference: boolean | null
+  /** What this Mac's Accessibility setting says, regardless of the override. */
+  systemReducedTransparency: boolean
   highContrast: boolean
 }
 
@@ -88,7 +93,9 @@ declare global {
       preferences?: {
         initial: DesktopPreferences
         get(): Promise<DesktopPreferences>
-        set(patch: Partial<Pick<DesktopPreferences, 'theme' | 'density' | 'updateCheck' | 'anonymousMetrics'>>): Promise<DesktopPreferences>
+        set(patch: Partial<Pick<DesktopPreferences, 'theme' | 'density' | 'updateCheck' | 'anonymousMetrics'>>
+          /** null is a real value: hand the choice back to this Mac's setting. */
+          & { reducedTransparency?: boolean | null }): Promise<DesktopPreferences>
         onChanged(cb: (preferences: DesktopPreferences) => void): () => void
       }
       uiState?: {
@@ -105,6 +112,18 @@ declare global {
       data?: {
         requestReload(): Promise<{ requested: boolean }>
         onReloadRequested(cb: () => void): () => void
+      }
+      /**
+       * Liveness of the local engine, as measured by the desktop shell.
+       *
+       * Optional like everything else here, and optional a second time within
+       * itself: a packaged app older than this channel exposes `__CC_DESKTOP`
+       * without it, and the console has to keep working against that build.
+       */
+      engine?: {
+        onStatus?(cb: (state: import('./components/EngineBanner').EngineHealth) => void): () => void
+        /** Restart the engine process and reload this window at its new origin. */
+        relaunch?(): Promise<{ ok: boolean; reason?: string }>
       }
       /** Open the native macOS directory picker. Null means the user canceled. */
       chooseFolder?: () => Promise<string | null>

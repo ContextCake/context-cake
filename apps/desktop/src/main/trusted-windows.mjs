@@ -28,6 +28,9 @@ export const TRUSTED_IPC_ROLES = Object.freeze({
   // Only the main window browses files, and the payload is a layer name plus a
   // relative path — never a path the renderer chose (see reveal.mjs).
   'contextcake:reveal-file': Object.freeze(['main']),
+  // Restarting the engine reloads the main window at a new origin, so only the
+  // window that owns the wedge banner may ask for it.
+  'contextcake:engine-relaunch': Object.freeze(['main']),
   'windows:open-settings': Object.freeze(['main']),
   'data:reload-requested': Object.freeze(['settings']),
 })

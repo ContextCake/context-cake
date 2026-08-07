@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
       updateCheck: arg('cc-update-check') !== '0',
       anonymousMetrics: arg('cc-anonymous-metrics') === '' ? null : arg('cc-anonymous-metrics') === '1',
       reducedTransparency: arg('cc-reduced-transparency') === '1',
+      // '' = still following this Mac's Accessibility setting.
+      reducedTransparencyPreference: arg('cc-reduced-transparency-preference') === '' ? null : arg('cc-reduced-transparency-preference') === '1',
+      systemReducedTransparency: arg('cc-system-reduced-transparency') === '1',
       highContrast: arg('cc-high-contrast') === '1',
     },
     get: () => ipcRenderer.invoke('preferences:get'),
@@ -55,6 +58,14 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   data: {
     requestReload: () => ipcRenderer.invoke('data:reload-requested'),
     onReloadRequested: (cb) => subscribe('data:reload-requested', cb),
+  },
+  // Engine liveness. The main process watches the engine's HTTP loop, because
+  // an engine that is alive but no longer answering is invisible from in here —
+  // requests just never come back. `relaunch` restarts the engine and reloads
+  // this window at its new origin; the app, its windows and its config survive.
+  engine: {
+    onStatus: (cb) => subscribe('engine:status', cb),
+    relaunch: () => ipcRenderer.invoke('contextcake:engine-relaunch'),
   },
   chooseFolder: () => ipcRenderer.invoke('contextcake:choose-folder'),
   // Show a file in Finder. Deliberately a source name plus a path INSIDE that

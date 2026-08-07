@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   useStore: vi.fn(),
 }))
 
-vi.mock('../store', () => ({ useStore: mocks.useStore }))
+vi.mock('../store', () => ({ useStore: mocks.useStore, useStoreData: mocks.useStore, useStoreNav: mocks.useStore, useStoreInput: mocks.useStore }))
 
 let container: HTMLDivElement
 let root: Root

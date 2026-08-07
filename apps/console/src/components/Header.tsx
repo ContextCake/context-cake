@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { useStore, type ViewId } from '../store'
+import { memo, useEffect, useRef } from 'react'
+import { useStoreData, useStoreInput, useStoreNav, type ViewId } from '../store'
 import { destinationForView, SEARCHABLE_VIEWS } from '../shell-navigation'
 import { AgentIcon, PlusIcon, SidebarIcon, SparkleIcon } from './icons'
 import { BackgroundActivity } from './BackgroundActivity'
@@ -10,7 +10,7 @@ const TITLES: Record<ViewId, string> = {
   conflicts: 'Review', concepts: 'Knowledge', files: 'Knowledge',
 }
 
-export function Header({
+function HeaderInner({
   onToggleSidebar, onAsk, onAddSource, onConnectAgent,
 }: {
   onToggleSidebar: () => void
@@ -18,7 +18,9 @@ export function Header({
   onAddSource?: () => void
   onConnectAgent?: () => void
 }) {
-  const { view, setView, query, setQuery, loadErrors, mode, signals, conflicts } = useStore()
+  const { setView, setQuery, loadErrors, mode, signals, conflicts } = useStoreData()
+  const { view } = useStoreNav()
+  const { query } = useStoreInput()
   const search = useRef<HTMLInputElement>(null)
   const destination = destinationForView(view)
   const searchable = SEARCHABLE_VIEWS.has(view)
@@ -69,3 +71,11 @@ export function Header({
     </header>
   )
 }
+
+/**
+ * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
+ * background-activity tick — and this view has no business repainting for any
+ * of them. It re-renders when the store slices it subscribes to change, and
+ * otherwise not at all.
+ */
+export const Header = memo(HeaderInner)

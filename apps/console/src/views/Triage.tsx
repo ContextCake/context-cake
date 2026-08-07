@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { C, css, badgeStyle, lc, MONO, rc } from '../theme'
 import { layerName, layers } from '../data'
-import { useStore, type TriageTab } from '../store'
+import { filterSignals, useStoreData, useStoreInput, useStoreNav, type TriageTab } from '../store'
 import { useDetailSurface } from '../components/useDetailSurface'
 
 const TAB_DEFS: [TriageTab, string, 'review_required' | 'team_candidate' | 'ignore'][] = [
@@ -10,10 +10,15 @@ const TAB_DEFS: [TriageTab, string, 'review_required' | 'team_candidate' | 'igno
   ['ignored', 'Ignored', 'ignore'],
 ]
 
-export function Triage() {
-  const { triageTab, setTriageTab, selSignal, setSelSignal, filtered, signals, setView, route } = useStore()
+function TriageInner() {
+  const { setTriageTab, setSelSignal, signals, setView, route } = useStoreData()
+  const { triageTab, selSignal } = useStoreNav()
+  // The Queue is one of the views the toolbar offers a search box for, so this
+  // subscription is what makes the box work at all — without it the component
+  // is memoized against every keystroke and the list never moves.
+  const { query } = useStoreInput()
 
-  const curList = filtered(triageTab)
+  const curList = filterSignals(signals, triageTab, query)
   const selSig = signals.find((s) => s.id === selSignal) || null
   const [detailOpen, setDetailOpen] = useState(Boolean(selSignal))
   const selectedButton = useRef<HTMLButtonElement | null>(null)
@@ -47,7 +52,7 @@ export function Triage() {
           return (
             <button
               key={id}
-              onClick={() => { const first = filtered(id)[0]; setTriageTab(id); setSelSignal(first ? first.id : null) }}
+              onClick={() => { const first = filterSignals(signals, id, query)[0]; setTriageTab(id); setSelSignal(first ? first.id : null) }}
               style={css(`display:flex; align-items:center; gap:8px; border:none; border-radius:8px; padding:8px 15px; font:inherit; font-weight:${active ? 600 : 500}; font-size:13px; cursor:pointer; background:${active ? '#FBFAF6' : 'transparent'}; color:${active ? C.ink : C.caption}; box-shadow:${active ? '0 1px 2px rgba(26,25,21,0.08)' : 'none'};`)}
             >
               <span>{label}</span>
@@ -172,3 +177,11 @@ export function Triage() {
     </div>
   )
 }
+
+/**
+ * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
+ * background-activity tick — and this view has no business repainting for any
+ * of them. It re-renders when the store slices it subscribes to change, and
+ * otherwise not at all.
+ */
+export const Triage = memo(TriageInner)

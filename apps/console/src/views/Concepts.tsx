@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { C, css, conceptTypeStyle, MONO } from '../theme'
 import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
 import { useDetailSurface } from '../components/useDetailSurface'
-import { useStore } from '../store'
+import { useStoreData, useStoreInput, useStoreNav } from '../store'
 
-export function Concepts() {
-  const { query, selConcept, setSelConcept, concepts } = useStore()
+function ConceptsInner() {
+  const { setSelConcept, concepts } = useStoreData()
+  const { selConcept } = useStoreNav()
+  const { query } = useStoreInput()
   const q = query.trim().toLowerCase()
   const list = concepts.filter((c) => !q || `${c.title} ${c.id}`.toLowerCase().includes(q))
   const selCpt = concepts.find((c) => c.id === selConcept) || null
@@ -59,3 +61,11 @@ export function Concepts() {
     </div>
   )
 }
+
+/**
+ * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
+ * background-activity tick — and this view has no business repainting for any
+ * of them. It re-renders when the store slices it subscribes to change, and
+ * otherwise not at all.
+ */
+export const Concepts = memo(ConceptsInner)

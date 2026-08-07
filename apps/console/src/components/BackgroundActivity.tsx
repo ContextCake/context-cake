@@ -13,7 +13,7 @@
 // quiet note, never a spinner in front of an answer).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { progressPercent } from '../api'
-import { useStore } from '../store'
+import { useStoreData } from '../store'
 import type { BackgroundTask } from '../store'
 import { C, css, MONO } from '../theme'
 
@@ -149,7 +149,7 @@ function TaskRow({ task }: { task: BackgroundTask }) {
 }
 
 export function BackgroundActivity() {
-  const { load, retryNow, setView } = useStore()
+  const { load, retryNow, setView } = useStoreData()
   const { tasks, refreshError, lastRefreshAt } = load
   const [open, setOpen] = useState(false)
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null)

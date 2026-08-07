@@ -3,7 +3,7 @@ import { C, css, lc, MONO, conceptTypeStyle } from '../theme'
 import { layerName } from '../data'
 import type { Concept } from '../data'
 import { filesRevalidation, useLayerFiles } from '../layer-files'
-import { useStore } from '../store'
+import { useStoreData } from '../store'
 import { LayerChip } from './LayerChip'
 
 /** Which document extension wins when one concept id has several files behind it. */
@@ -24,7 +24,7 @@ const contributorKey = (layer: string, conceptId: string) => JSON.stringify([lay
  * link, and so no affordance that opens on an error.
  */
 function useFileByContributor(): Map<string, string> {
-  const { mode, sources, reloadKey } = useStore()
+  const { mode, sources, reloadKey } = useStoreData()
   const { layers } = useLayerFiles(mode, filesRevalidation(sources, reloadKey))
   return useMemo(() => {
     const best = new Map<string, { path: string; rank: number }>()
@@ -43,7 +43,7 @@ function useFileByContributor(): Map<string, string> {
 
 /** "Open file" for one contributor, or nothing when that layer keeps no file here. */
 function OpenFile({ layer, path, conceptId }: { layer: string; path: string | undefined; conceptId: string }) {
-  const { openFilesScope } = useStore()
+  const { openFilesScope } = useStoreData()
   if (!path) return null
   return (
     <button

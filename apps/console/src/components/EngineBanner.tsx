@@ -43,8 +43,17 @@ export function EngineBanner() {
   const restart = useCallback(() => {
     setRestarting(true)
     // The restart reloads this window at the new engine origin, so there is no
-    // success path to render here — only the failure to hand back control.
-    window.__CC_DESKTOP?.engine?.relaunch?.().catch(() => setRestarting(false))
+    // success path to render here — only the failures, and there are three of
+    // them. The shell REFUSES by resolving `{ok: false}` (a relaunch is already
+    // running), not by rejecting, so a `.catch` alone left the button disabled
+    // reading "Restarting…" until a `healthy` verdict cleared it — and a wedged
+    // engine is exactly the case where one may never arrive. A bridge with no
+    // `relaunch` at all short-circuits to `undefined` and settles nothing.
+    const pending = window.__CC_DESKTOP?.engine?.relaunch?.()
+    if (!pending) { setRestarting(false); return }
+    pending
+      .then((result) => { if (!result?.ok) setRestarting(false) })
+      .catch(() => setRestarting(false))
   }, [])
 
   if (!state || state.healthy) return null

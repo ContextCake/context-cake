@@ -97,6 +97,41 @@ describe('the wedged-engine banner', () => {
     expect(restart?.disabled).toBe(true)
   })
 
+  it('hands the button back when the shell declines the relaunch', async () => {
+    installBridge()
+    // The bridge answers a refused relaunch, it does not throw one: a second
+    // click while a restart is already running resolves `{ok: false}`. A
+    // `.catch`-only recovery never runs for that, so the button stayed disabled
+    // reading "Restarting…" until a `healthy` verdict arrived — and a wedged
+    // engine is precisely the case where one does not.
+    relaunch.mockResolvedValue({ ok: false, reason: 'already-restarting' })
+    await act(async () => root.render(<EngineBanner />))
+    await send(health({ canRelaunch: true }))
+
+    await act(async () => { button('Restart')?.click() })
+    expect(button('Restart')?.disabled).toBe(false)
+    expect(text()).toContain('Restart Engine')
+
+    // And it is a live control again, not merely an enabled-looking one.
+    await act(async () => { button('Restart')?.click() })
+    expect(relaunch).toHaveBeenCalledTimes(2)
+  })
+
+  it('hands the button back when the relaunch channel is missing entirely', async () => {
+    // A packaged app whose preload predates `relaunch` but not `onStatus`:
+    // the offer renders, the call short-circuits to undefined, and nothing ever
+    // resolves. Without this the first click disables the button permanently.
+    unsubscribe = vi.fn()
+    window.__CC_DESKTOP = {
+      engine: { onStatus: (cb: (state: EngineHealth) => void) => { publish = cb; return unsubscribe } },
+    } as unknown as typeof window.__CC_DESKTOP
+    await act(async () => root.render(<EngineBanner />))
+    await send(health({ canRelaunch: true }))
+
+    await act(async () => { button('Restart')?.click() })
+    expect(button('Restart')?.disabled).toBe(false)
+  })
+
   it('clears when the engine answers again', async () => {
     installBridge()
     await act(async () => root.render(<EngineBanner />))

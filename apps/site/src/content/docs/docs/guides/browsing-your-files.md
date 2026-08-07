@@ -77,7 +77,7 @@ frontmatter, `{#anchor}` heading attributes and all — and that tab is the
 editor.
 
 Edit, then **Save** (`⌘S`). ContextCake writes the file and re-resolves the
-cascade, so Concepts, Cascade and Conflicts agree with what you just typed
+cascade, so Concepts, Cascade and Discrepancies agree with what you just typed
 rather than with what was there when the app started. Editing a section that
 another layer disagrees with is one way to settle a conflict; the
 [merge resolver](/docs/guides/playground-tour#resolving-conflicts) is the other.

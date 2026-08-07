@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>One sourced answer from the context your team already has.</strong><br />
-  ContextCake resolves company policy, team practice, and personal judgment into an effective knowledge graph for people and AI agents.
+  ContextCake links company policy, team practice, and personal judgment through shared OKF identities, then resolves them into an effective knowledge graph for people and AI agents.
 </p>
 
 <p align="center">
@@ -43,13 +43,13 @@ The app is Apple silicon (arm64) only. On an Intel Mac or Linux, run the engine 
 
 Teams do not have one source of truth. They have an org policy, a service runbook, a team decision, and the local note that explains the exception. Flattening those into another wiki loses both the useful detail and the disagreement.
 
-ContextCake keeps each scope separate, then resolves them at read time. The result is an answer an agent can use **with its source, date, and contradictions intact**.
+ContextCake keeps each scope separate, then resolves them at read time. The result is an answer an agent can use **with its source, date, and structural discrepancies intact**.
 
 | What you need | What ContextCake does |
 | --- | --- |
 | Local nuance without copying every policy | Higher-priority layers override only the sections they address. Everything else inherits. |
 | An AI agent that can explain its answer | Returns provenance for frontmatter and every resolved section. |
-| A safe way through disagreement | Clears formatting-only conflicts automatically; asks a direct question when meaning changes; keeps the original answers and every decision in append-only local history. |
+| A safe way through disagreement | Surfaces structural discrepancies with complete evidence; applies explicit decisions transactionally; suggests governed rules only after repeated, consistent choices. |
 | Knowledge from more than one system | Layers any folder of Markdown, any GitHub repository, local [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundles, and trusted foreign MCP graphs in one cascade. |
 
 ## The layer cake

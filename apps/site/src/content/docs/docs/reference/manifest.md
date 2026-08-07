@@ -252,6 +252,14 @@ rather than broken: a duplicated layer name, or a second `live` layer, stops the
 read outright rather than guessing which one you meant. Writes always validate
 strictly, so an invalid layer can never be saved through a tolerated read.
 
+You can remove a broken row from the app — the Remove action on that row edits
+the manifest for you, and it is the only action offered there, since renaming or
+syncing something that was never built could only fail. Because a manifest is
+only ever saved once the whole file validates, removing one broken row while
+another remains is refused: the app asks to remove them together, and names the
+others before you confirm. Anything else — settings included — stays blocked
+until the manifest is valid again, and says so.
+
 GitHub may truncate very large recursive tree responses. ContextCake refuses to
 index that partial response as if it were complete; it serves the last complete
 cached index when available, or resolves without that layer until a complete tree

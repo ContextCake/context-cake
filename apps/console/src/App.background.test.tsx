@@ -214,6 +214,31 @@ describe('background work in the shell', () => {
     expect(activity()).toBeNull()
   })
 
+  // The other half of that transition, for a keyboard. The indicator leaving
+  // the toolbar used to take focus with it: the button unmounted in the same
+  // commit as the render that dropped it, focus fell to <body>, and the user
+  // was silently returned to the top of the document mid-task.
+  it('hands focus to the toolbar rather than dropping it when the indicator retires', async () => {
+    const engine = fakeEngine()
+    mocks.graph.mockImplementation(async () => engine.graph())
+    mocks.status.mockImplementation(async () => engine.status())
+    mocks.resolveAll.mockImplementation(async () => engine.resolveAll())
+
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+    const control = activity()!
+    await act(async () => control.focus())
+    expect(document.activeElement).toBe(control)
+
+    engine.advance({ phase: 'ready', loaded: 3000, total: 3000, count: 3000 })
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+
+    expect(activity()).toBeNull()
+    expect(document.activeElement).not.toBe(document.body)
+    expect(container.contains(document.activeElement)).toBe(true)
+  })
+
   it('lets the banner be dismissed without silencing the next distinct failure', async () => {
     mocks.graph
       .mockResolvedValueOnce(indexingGraph())

@@ -19,6 +19,9 @@ import { C, css, MONO } from '../theme'
 
 const NUM = new Intl.NumberFormat()
 
+/** The same set App.tsx restores focus across, so the two agree on "a control". */
+const FOCUSABLE = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+
 const PHASES: Record<string, string> = {
   queued: 'Queued', scanning: 'Scanning', loading: 'Reading', cloning: 'Cloning',
   ready: 'Ready', error: 'Failed',
@@ -132,8 +135,39 @@ export function BackgroundActivity() {
     window.requestAnimationFrame(() => buttonRef.current?.focus())
   }, [])
 
-  // Nothing left to show: never leave an orphaned popover floating over the app.
-  useEffect(() => { if (idle && open) setOpen(false) }, [idle, open])
+  // Work finishing takes this control out of the toolbar, and React removes the
+  // DOM node in the same commit as the render that returns null. A focused node
+  // removed that way drops focus to <body> — a keyboard user who was standing
+  // on this button, or inside its popover, lands back at the top of the
+  // document with no idea why. So retire in two steps: notice `idle`, hand
+  // focus to the next control in the toolbar, and only then unmount. Both steps
+  // are in a layout effect, so the extra commit never reaches the screen.
+  //
+  // `everMounted` keeps the ordinary case free: an app with no background work
+  // has never rendered this control and still renders nothing at all.
+  const everMounted = useRef(false)
+  const [retired, setRetired] = useState(true)
+
+  useLayoutEffect(() => {
+    if (!idle) { everMounted.current = true; setRetired(false); return }
+    if (!everMounted.current || retired) return
+    const button = buttonRef.current
+    const holdsFocus = button?.contains(document.activeElement) === true
+      || popoverRef.current?.contains(document.activeElement) === true
+    if (holdsFocus && button) {
+      const toolbar = button.parentElement
+      const candidates = [...(toolbar?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter((el) => !button.contains(el))
+      const after = candidates.filter((el) => button.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)
+      const target = after[0] ?? candidates[candidates.length - 1] ?? button.closest<HTMLElement>('header')
+      // A header is a landmark, not a control — make it focusable only for the
+      // moment it has to catch focus that has nowhere better to go.
+      if (target && target.tagName === 'HEADER') target.tabIndex = -1
+      target?.focus()
+    }
+    setOpen(false)
+    setRetired(true)
+    everMounted.current = false
+  }, [idle, retired])
 
   useLayoutEffect(() => {
     if (!open) return
@@ -167,7 +201,7 @@ export function BackgroundActivity() {
     }
   }, [close, open])
 
-  if (idle) return null
+  if (idle && retired) return null
 
   const percent = aggregatePercent(tasks.filter((t) => !t.refreshing)) ?? aggregatePercent(tasks)
   const label = activityLabel(tasks, failing)

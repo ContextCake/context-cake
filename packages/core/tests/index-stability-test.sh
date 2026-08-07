@@ -13,6 +13,17 @@
 #      a couple of seconds — the control assertion below proves exactly that, so
 #      a failure here is the watcher and not a slow machine.
 #
+#   1b. THE SAME CHURN COSTS A FULL RE-WALK EVERY QUIET PERIOD. Two independent
+#      changes answer symptom 1 — the watcher stops forwarding events the walk
+#      would never read (isSkippedPath), and invalidateIndex coalesces instead
+#      of cancelling — and assertion 1 gates only the second of them. Measured,
+#      not assumed: with isSkippedPath deleted, assertion 1 stays green; with
+#      the coalescer ALSO reverted it goes red. So a cleanup that drops the
+#      filter ("the coalescer handles it") would ship green while an open vault
+#      re-read every file on a timer for as long as Obsidian was running.
+#      Assertion 1b gates the filter on its own terms: under churn confined to
+#      a dot-directory, a settled source must run ZERO further index passes.
+#
 #   2. RENAME THROWS THE INDEX AWAY. The index cache key is JSON.stringify(layer),
 #      which includes `name` and `level`. Renaming a source through
 #      PATCH /api/sources therefore mints a new key: pruneIndexes drops the
@@ -25,7 +36,7 @@
 #      /api/settings, /api/graph and everything else answer 500 — including the
 #      Settings screen a user would need to fix the bad source.
 #
-# What "fixed" looks like: all three assertions pass with no change to the
+# What "fixed" looks like: every assertion passes with no change to the
 # assertions themselves. Network-free. Run from the repo root.
 set -uo pipefail
 
@@ -53,6 +64,10 @@ CHURN_SLEEP="$(awk "BEGIN{print $CHURN_MS/1000}")"
 POLL_MS=400            # /api/graph resolves every concept; polling harder starves the indexer
 READY_TIMEOUT_MS=30000 # recomputed from the control measurement below
 RENAME_OBSERVE_MS=5000
+DOT_CHURN_S=3          # assertion 1b's churn window: ~10 cycles, so several
+                       # watcher debounce periods elapse inside it
+DOT_SETTLE_S=2         # then long enough for a pass triggered by the LAST event
+                       # to have been started and counted (debounce is 250ms)
 
 # The floor a control pass must clear for assertion 1 to mean anything. The
 # watcher debounces WATCH_DEBOUNCE_MS (250ms in service.mjs) before restarting
@@ -145,38 +160,40 @@ WATCH_PROBE="$(node "$TMP/watch-probe.mjs")"
 # Two copies of the same corpus: one gets churned, one never does, so the
 # control's timing is a real answer about this machine rather than a reading
 # taken through the bug under test.
-mkdir -p "$TMP/vault" "$TMP/vault-control" "$TMP/seed"
+#
+# Written by a function rather than inline because the control below may decide
+# this machine is too fast for the default size and rebuild the fixture larger.
+VAULT_DIR="$TMP/vault"
+mkdir -p "$TMP/seed"
 printf '# Seed\n\n## Body\n\nA small layer that is never churned.\n' > "$TMP/seed/seed.md"
-node -e '
-  const fs = require("node:fs");
-  const [dirA, dirB, count] = process.argv.slice(1);
-  const words = "decision architecture retrieval cascade layer precedence conflict provenance manifest indexing rollout migration schema latency invariant".split(" ");
-  const para = (i) => Array.from({ length: 70 }, (_, k) => words[(i + k) % words.length]).join(" ");
-  for (let i = 0; i < Number(count); i++) {
-    const body = Array.from({ length: 6 }, (_, p) => para(i + p)).join("\n\n");
-    const doc = `# Note ${i}\n\n## Body\n\n${body}\n\n## Links\n\n${body}\n`;
-    fs.writeFileSync(`${dirA}/note-${i}.md`, doc);
-    fs.writeFileSync(`${dirB}/note-${i}.md`, doc);
-  }
-' "$TMP/vault" "$TMP/vault-control" "$NOTES"
-# The vault's own app-state directory, present before anything watches it —
-# this is the file Obsidian rewrites while it is open.
-mkdir -p "$TMP/vault/.obsidian"
-printf '{"main":{"id":"seed"}}' > "$TMP/vault/.obsidian/workspace.json"
+gen_notes() { # <count> <dir>...
+  local count="$1"; shift
+  for _d in "$@"; do mkdir -p "$_d"; done
+  node -e '
+    const fs = require("node:fs");
+    const count = Number(process.argv[1]);
+    const dirs = process.argv.slice(2);
+    const words = "decision architecture retrieval cascade layer precedence conflict provenance manifest indexing rollout migration schema latency invariant".split(" ");
+    const para = (i) => Array.from({ length: 70 }, (_, k) => words[(i + k) % words.length]).join(" ");
+    for (let i = 0; i < count; i++) {
+      const body = Array.from({ length: 6 }, (_, p) => para(i + p)).join("\n\n");
+      const doc = `# Note ${i}\n\n## Body\n\n${body}\n\n## Links\n\n${body}\n`;
+      for (const dir of dirs) fs.writeFileSync(`${dir}/note-${i}.md`, doc);
+    }
+  ' "$count" "$@"
+}
+gen_notes "$NOTES" "$VAULT_DIR" "$TMP/vault-control"
 
 # A generous per-source budget so a slow machine reports the watcher behaviour
-# under test rather than the 30s default budget tripping first.
+# under test rather than the 30s default budget tripping first. The control host
+# starts with only the seed layer: each control measurement adds its corpus
+# through POST /api/sources, so a re-measurement at a larger size is a fresh
+# index of a fresh source rather than a reading taken through a warm one.
 cat > "$TMP/manifest.json" <<EOF
 { "settings": { "sourceBudgetMs": 120000 },
   "layers": [ { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seed" } ] }
 EOF
-cat > "$TMP/manifest-control.json" <<EOF
-{ "settings": { "sourceBudgetMs": 120000 },
-  "layers": [
-    { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seed" },
-    { "name": "vault", "level": 3, "source": "files", "path": "$TMP/vault-control" }
-  ] }
-EOF
+cp "$TMP/manifest.json" "$TMP/manifest-control.json"
 
 # ---- a bare node:http host around createEngineService ------------------------
 # argv: <port> <manifest> <token|-> <allowMutations> <consoleDist|->
@@ -277,35 +294,66 @@ node "$TMP/host.mjs" "$PORT2" "$TMP/manifest-control.json" sekrit true - >/dev/n
 PIDS+=($!)
 for _ in $(seq 1 60); do curl -sf "${AUTH[@]}" "$BASE2/api/graph" >/dev/null 2>&1 && break; sleep 0.1; done
 
-echo "control: an unchurned vault of $NOTES notes indexes to ready"
-CTRL="$(node "$TMP/observe.mjs" "$BASE2" vault "$READY_TIMEOUT_MS" "$POLL_MS" true sekrit)"
-CTRL_READY="$(JQ 'String(d.reachedReady)' <<<"$CTRL")"
-CTRL_MS="$(JQ 'String(d.observedMs)' <<<"$CTRL")"
-CTRL_COUNT="$(JQ 'String(d.maxConceptCount)' <<<"$CTRL")"
-[ "$CTRL_READY" = "true" ] \
-  && pass "the corpus reaches phase=ready untouched in ${CTRL_MS}ms (poller and fixture are sound)" \
-  || fail "control never reached ready in ${CTRL_MS}ms — the fixture is too big for this machine or the poller is broken ($CTRL)"
-[ "$CTRL_COUNT" = "$NOTES" ] \
-  && pass "the control indexed all $NOTES notes" \
-  || fail "control concept count ($CTRL_COUNT, want $NOTES) ($CTRL)"
+# Add one corpus to the control host and time it to ready. Sets CTRL/CTRL_READY/
+# CTRL_MS/CTRL_COUNT. CTRL_MS is 0 when nothing usable came back — that is a
+# broken measurement, and must never read as a slow (and therefore acceptable)
+# one, which is what the old 30000ms fallback did to the floor guard below.
+measure_control() { # <sourceName> <dir>
+  local added
+  added="$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' \
+    -d "{\"kind\":\"files\",\"name\":\"$1\",\"level\":3,\"path\":\"$2\"}" "$BASE2/api/sources")"
+  if [ "$added" != "200" ]; then
+    CTRL="{\"addFailed\":$added}"; CTRL_READY=false; CTRL_MS=0; CTRL_COUNT=""
+    return
+  fi
+  CTRL="$(node "$TMP/observe.mjs" "$BASE2" "$1" "$READY_TIMEOUT_MS" "$POLL_MS" true sekrit)"
+  CTRL_READY="$(JQ 'String(d.reachedReady)' <<<"$CTRL")"
+  CTRL_MS="$(JQ 'String(d.observedMs)' <<<"$CTRL")"
+  CTRL_COUNT="$(JQ 'String(d.maxConceptCount)' <<<"$CTRL")"
+  case "$CTRL_MS" in ''|*[!0-9]*) CTRL_MS=0 ;; esac
+}
 
-case "$CTRL_MS" in ''|*[!0-9]*) CTRL_MS=30000 ;; esac
-[ "$CTRL_MS" -lt 1 ] && CTRL_MS=1
+run_control() { # <sourceName> <dir> <expectedCount>
+  measure_control "$1" "$2"
+  [ "$CTRL_READY" = "true" ] \
+    && pass "the corpus reaches phase=ready untouched in ${CTRL_MS}ms (poller and fixture are sound)" \
+    || fail "control never reached ready in ${CTRL_MS}ms — the fixture is too big for this machine or the poller is broken ($CTRL)"
+  [ "$CTRL_COUNT" = "$3" ] \
+    && pass "the control indexed all $3 notes" \
+    || fail "control concept count ($CTRL_COUNT, want $3) ($CTRL)"
+}
+
+echo "control: an unchurned vault of $NOTES notes indexes to ready"
+run_control vault "$TMP/vault-control" "$NOTES"
 
 # The other direction of the same problem. READY_TIMEOUT_MS below protects a
 # SLOW machine from a false failure; this protects a FAST one from a false pass.
 # A corpus that indexes in less than a few watcher debounce periods finishes
 # inside the gap between restarts, so assertion 1 goes green against an unfixed
-# engine — which is exactly what happens at INDEX_STABILITY_NOTES=800. Fail
-# loudly with a concrete remedy rather than reporting a green that means
-# nothing. Assertions 2 and 3 do not depend on corpus size and still run.
-if [ "$CTRL_MS" -lt "$CONTROL_FLOOR_MS" ]; then
-  # Scale the note count by the shortfall, plus half again so a re-run lands
-  # clear of the floor instead of on it.
-  SUGGEST=$(( (NOTES * CONTROL_FLOOR_MS * 3) / (CTRL_MS * 2) + 1 ))
-  fail "fixture too small to gate the bug on this machine (control settled in ${CTRL_MS}ms, need >=${CONTROL_FLOOR_MS}ms) — a corpus this fast indexes between watcher restarts, so a green assertion 1 would prove nothing; re-run with INDEX_STABILITY_NOTES=$SUGGEST"
-else
+# engine — which is exactly what happens at INDEX_STABILITY_NOTES=800.
+#
+# A runner fast enough to trip that is a healthy runner, so the fixture is
+# rebuilt from the measurement and re-timed ONCE rather than turning the build
+# red and waiting for a human to re-run it with an env var. The loud failure
+# stays as the fallback: if even the scaled corpus indexes under the floor, a
+# green assertion 1 would still prove nothing and must not be reported as a
+# pass. Assertions 2 and 3 do not depend on corpus size and still run.
+scale_suggestion() { echo $(( (NOTES * CONTROL_FLOOR_MS * 3) / (CTRL_MS * 2) + 1 )); }
+if [ "$CTRL_MS" -ge "$CONTROL_FLOOR_MS" ]; then
   pass "the control is slow enough for the churn to matter (${CTRL_MS}ms >= ${CONTROL_FLOOR_MS}ms floor)"
+elif [ "$CTRL_MS" -lt 1 ]; then
+  fail "the control produced no usable timing, so the fixture cannot be sized for this machine ($CTRL)"
+else
+  SCALED="$(scale_suggestion)"
+  echo "  control settled in ${CTRL_MS}ms, under the ${CONTROL_FLOOR_MS}ms floor — rebuilding at $SCALED notes and re-measuring"
+  gen_notes "$SCALED" "$VAULT_DIR" "$TMP/vault-control-2"
+  NOTES="$SCALED"
+  run_control vault-scaled "$TMP/vault-control-2" "$NOTES"
+  if [ "$CTRL_MS" -ge "$CONTROL_FLOOR_MS" ]; then
+    pass "the rebuilt $NOTES-note fixture is slow enough for the churn to matter (${CTRL_MS}ms >= ${CONTROL_FLOOR_MS}ms floor)"
+  else
+    fail "fixture still too small to gate the bug after scaling to $NOTES notes (control settled in ${CTRL_MS}ms, need >=${CONTROL_FLOOR_MS}ms) — a corpus this fast indexes between watcher restarts, so a green assertion 1 would prove nothing; re-run with INDEX_STABILITY_NOTES=$(scale_suggestion)"
+  fi
 fi
 
 # The churned vault gets a generous multiple of what the SAME corpus just took
@@ -317,6 +365,12 @@ READY_TIMEOUT_MS=$((CTRL_MS * 8))
 [ "$READY_TIMEOUT_MS" -gt 90000 ] && READY_TIMEOUT_MS=90000
 
 # ---- host A: churn + rename ---------------------------------------------------
+# The vault's own app-state directory, present before anything watches it —
+# this is the file Obsidian rewrites while it is open. Created after the control
+# has settled the corpus size, so it always lands in the vault host A watches.
+mkdir -p "$VAULT_DIR/.obsidian"
+printf '{"main":{"id":"seed"}}' > "$VAULT_DIR/.obsidian/workspace.json"
+
 node "$TMP/host.mjs" "$PORT" "$TMP/manifest.json" sekrit true - >/dev/null 2>&1 &
 PIDS+=($!)
 for _ in $(seq 1 60); do curl -sf "${AUTH[@]}" "$BASE/api/graph" >/dev/null 2>&1 && break; sleep 0.1; done
@@ -331,12 +385,12 @@ echo "1. an open Obsidian vault still finishes indexing"
 # version CI pins), so writes under .obsidian/ do reach the watcher there.
 (
   while true; do
-    printf '{"main":{"id":"%s%s"}}' "$RANDOM" "$RANDOM" > "$TMP/vault/.obsidian/workspace.json"
+    printf '{"main":{"id":"%s%s"}}' "$RANDOM" "$RANDOM" > "$VAULT_DIR/.obsidian/workspace.json"
     sleep "$CHURN_SLEEP"
   done
 ) &
 CHURN_PID=$!
-code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"vault\",\"level\":3,\"path\":\"$TMP/vault\"}" "$BASE/api/sources")" "the vault is added while its app-state file churns"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"vault\",\"level\":3,\"path\":\"$VAULT_DIR\"}" "$BASE/api/sources")" "the vault is added while its app-state file churns"
 CHURNED="$(node "$TMP/observe.mjs" "$BASE" vault "$READY_TIMEOUT_MS" "$POLL_MS" true sekrit)"
 CH_READY="$(JQ 'String(d.reachedReady)' <<<"$CHURNED")"
 CH_MS="$(JQ 'String(d.observedMs)' <<<"$CHURNED")"
@@ -360,6 +414,48 @@ SETTLED_READY="$(JQ 'String(d.reachedReady)' <<<"$SETTLED")"
 [ "$SETTLED_READY" = "true" ] \
   && pass "with the churn stopped the same vault settles in $(JQ 'String(d.observedMs)' <<<"$SETTLED")ms" \
   || fail "the vault never settled even after the churn stopped ($SETTLED)"
+
+echo "1b. churn the walk would never read costs no index pass at all"
+# Assertion 1 asks whether the vault ever settles, and the coalescer alone is
+# enough to make it. This asks the separate question the filter exists to
+# answer: does that churn cost anything? indexing.passes counts index passes for
+# the life of the entry, so a settled source under churn it should be ignoring
+# has a delta of exactly zero. With the events forwarded, each quiet period buys
+# another full re-walk of every note in the vault, forever.
+#
+# The churn is shaped to isolate isSkippedPath from isIndexableFile, the other
+# half of onChange's filtering — otherwise this assertion would gate whichever
+# of the two happened to run first. workspace.json is rejected by BOTH (a .json
+# file is not indexable), so churning it alone gates neither. A DIRECTORY under
+# .obsidian — a plugin folder appearing and disappearing — is accepted by
+# isIndexableFile whatever the timing: present, it is a directory; gone, it is a
+# path that may have been in the index. isSkippedPath is the only thing between
+# it and a re-index, so this goes red the moment the filter is dropped.
+passes_of() { curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ "String(d.sources?.find((s) => s.name === \"$1\")?.indexing?.passes)"; }
+sleep "$DOT_SETTLE_S"   # anything armed by assertion 1's window has landed
+PASSES_BEFORE="$(passes_of vault)"
+(
+  while true; do
+    mkdir -p "$VAULT_DIR/.obsidian/plugins/dataview"
+    printf '{"main":{"id":"%s%s"}}' "$RANDOM" "$RANDOM" > "$VAULT_DIR/.obsidian/workspace.json"
+    rm -rf "$VAULT_DIR/.obsidian/plugins/dataview"
+    sleep "$CHURN_SLEEP"
+  done
+) &
+CHURN_PID=$!
+sleep "$DOT_CHURN_S"
+kill "$CHURN_PID" 2>/dev/null
+wait "$CHURN_PID" 2>/dev/null
+CHURN_PID=""
+sleep "$DOT_SETTLE_S"
+PASSES_AFTER="$(passes_of vault)"
+DOT_DESC="indexing.passes ${PASSES_BEFORE} -> ${PASSES_AFTER} across ${DOT_CHURN_S}s of .obsidian churn"
+case "${PASSES_BEFORE}${PASSES_AFTER}" in
+  ''|*[!0-9]*) fail "could not read indexing.passes for the vault ($DOT_DESC) — /api/graph no longer reports it, so this assertion gates nothing" ;;
+  *) [ "$PASSES_BEFORE" = "$PASSES_AFTER" ] \
+       && pass "a settled vault runs no further index passes while .obsidian churns ($DOT_DESC)" \
+       || fail "churn under a dot-directory re-indexed the vault ($DOT_DESC) — onChange forwarded an event for a path walkDocs skips, so an open vault pays a full re-walk every quiet period for as long as the editor is running" ;;
+esac
 
 echo "2. renaming a settled source does not re-read it"
 BEFORE_COUNT="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ 'String(d.sources?.find((s) => s.name === "vault")?.conceptCount)')"

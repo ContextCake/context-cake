@@ -78,6 +78,8 @@ export interface SourceStatus {
   /** Ready and re-reading behind a good snapshot. Distinct from `status: indexing`. */
   refreshing: boolean
   error: string | null
+  /** An invalid manifest entry rather than a source — same meaning as GraphSource's. */
+  quarantined?: boolean
 }
 
 /**
@@ -115,6 +117,12 @@ export interface GraphSource {
    */
   status: string
   error: string | null
+  /**
+   * This row is a manifest entry that failed validation, not a source that
+   * failed to read: nothing was built for it, so there is nothing to retry,
+   * rename or sync. Removing the entry is the only action that helps.
+   */
+  quarantined?: boolean
   /**
    * Things this source could not read even though it indexed successfully — a
    * document over the per-file size cap, a subfolder it lacks permission to

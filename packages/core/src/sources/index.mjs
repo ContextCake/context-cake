@@ -56,8 +56,14 @@ export function buildSourcesQuarantined(manifest, manifestDir, { tokens = {}, pr
  * background index is what reads it — that throw is how the layer reaches the
  * user as an error row — while loadConcept answers null so one broken layer
  * cannot fail a resolve the healthy layers can still answer.
+ *
+ * `quarantined` separates the two cases, because the app can only act on one of
+ * them: a layer lifted out by the manifest reader is a config defect the user
+ * fixes by removing the entry, while a layer that validated and then failed to
+ * construct is a real source having a bad day — renaming, syncing and removing
+ * all still work on it as usual.
  */
-export function createErrorSource({ name, level, kind = null, error }) {
+export function createErrorSource({ name, level, kind = null, error, quarantined = false }) {
   return {
     name: typeof name === "string" && name.trim() ? name : "unnamed source",
     level: Number.isFinite(Number(level)) ? Number(level) : 0,
@@ -65,7 +71,7 @@ export function createErrorSource({ name, level, kind = null, error }) {
     // entry in. Null for a layer that validated and then failed to construct —
     // there the manifest still knows what it was.
     quarantinedKind: kind,
-    quarantined: true,
+    quarantined,
     async loadConcept() { return null; },
     async listConceptIds() { throw new Error(error); },
     close() {},

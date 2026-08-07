@@ -528,6 +528,7 @@ export function adaptSources(g: GraphSummary): Source[] {
       conceptCount: s.conceptCount,
       origin: s.origin ?? null,
       error: s.error ?? null,
+      ...(s.quarantined === true ? { quarantined: true } : {}),
       // The true count, which the capped message list is not: a source with 40
       // unreadable files sends 40 here and 10 messages.
       warnings: s.warnings ?? (s.warningMessages?.length ?? 0),

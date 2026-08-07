@@ -108,6 +108,23 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   in renderer code will 401 inside the app.
 - **`resources/bin/contextcake` must stay executable** (mode 755) and POSIX-sh
   compatible — it's exec'd before any Node exists.
+- **The CLI runs a second engine, and it does not share the app's.** The shim
+  execs `src/cli/cli.mjs`, which forks an engine entrypoint against the same
+  manifest the app's utility process is already serving. That independence is
+  the point (the CLI works with the app closed), but `contextcake mcp` — the
+  harness connection — is long-lived and normally runs *while* the app is open,
+  so the two overlap for hours. `mcp-server.mjs` has no background index: it
+  re-walks every layer root and reloads every concept per `list_concepts` /
+  `search`, so a vault the app indexed once gets walked again per tool call,
+  with only the OS page cache shared. Each engine also spawns its own child for
+  every `"source":"mcp"` layer (one manifest entry, two server processes), and
+  a shared `cache` directory gives each process its own memory cache and TTL
+  clock. Live git layers are safe but lossy under contention — `git-core.mjs`'s
+  advisory lock makes the loser skip its pull, not wait. Nothing here corrupts
+  anything; it is duplicated work and split freshness. The fix, when it is
+  worth building, is to dispatch to the running app's loopback service, and the
+  blocker is that the bearer deliberately exists only in memory and on the
+  message port (see the comment at the spawn site in `src/cli/cli.mjs`).
 - **Harness connection is sudo-free.** The `contextcake:cli-status` and
   `cli-install` IPC results carry `shimPath` — the packaged shim's absolute
   path — and the console builds every harness connect command from it when the

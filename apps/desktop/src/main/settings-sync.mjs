@@ -350,17 +350,42 @@ export function prepareSyncPayload(settings) {
   return payload
 }
 
+function entryIdentity(entry) {
+  return entry && typeof entry === 'object' ? (entry.name ?? entry.id) : undefined
+}
+
 function mergeRemoteValue(local, remote) {
   if (isMarker(remote)) return local
   if (Array.isArray(remote)) {
     const localArray = Array.isArray(local) ? local : []
-    return remote.map((entry, index) => {
-      const identity = entry && typeof entry === 'object' && (entry.name ?? entry.id)
+    const merged = remote.map((entry, index) => {
+      const identity = entryIdentity(entry)
       const localEntry = identity
-        ? localArray.find((candidate) => candidate && typeof candidate === 'object' && (candidate.name ?? candidate.id) === identity)
+        ? localArray.find((candidate) => entryIdentity(candidate) === identity)
         : localArray[index]
       return mergeRemoteValue(localEntry, entry)
     })
+    // Union by name, matching the push side (overlayLocalValue). A pull carries
+    // the sources of whichever Mac last pushed, so treating the remote array as
+    // the whole truth deletes every source this Mac added on its own — layers
+    // and their paths, out of the manifest, silently. Named entries the remote
+    // has never heard of are kept instead.
+    //
+    // The cost is that a source deleted on another Mac comes back here rather
+    // than propagating. Distinguishing "never synced" from "deleted remotely"
+    // needs the last-synced blob as a merge base (_sync.shadow, already stored)
+    // — the three-way merge to build when deletions need to travel. Losing a
+    // local source is the worse of the two failures, so this is the side to
+    // err on until then.
+    const remoteIdentities = new Set(remote.map(entryIdentity).filter((identity) => typeof identity === 'string'))
+    for (const entry of localArray) {
+      const identity = entryIdentity(entry)
+      // Unidentified entries (a profile's plain string source references) have
+      // nothing to union on; those arrays stay remote-authoritative.
+      if (typeof identity !== 'string' || remoteIdentities.has(identity)) continue
+      merged.push(entry)
+    }
+    return merged
   }
   if (!remote || typeof remote !== 'object') return remote
 

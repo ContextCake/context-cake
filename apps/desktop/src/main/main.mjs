@@ -125,7 +125,22 @@ let lastAppliedManifest = ''
 let installMetricAbortController = null
 let consentPromptDeferred = false
 let windowStateTimer = null
+// Renderer console errors, kept for the UI smoke check. A renderer stuck in an
+// error loop emits them faster than anything reads them, so this is a ring:
+// the newest RENDERER_ERROR_LIMIT are held and the overflow is counted, never
+// accumulated. Unbounded, a single bad render kept every message string alive
+// in the main process for the life of the app.
+const RENDERER_ERROR_LIMIT = 200
 const rendererErrors = []
+let rendererErrorsDropped = 0
+
+function recordRendererError(message) {
+  rendererErrors.push(String(message ?? 'Unknown renderer error'))
+  while (rendererErrors.length > RENDERER_ERROR_LIMIT) {
+    rendererErrors.shift()
+    rendererErrorsDropped += 1
+  }
+}
 
 function currentAuthState() {
   return authManager?.getState() ?? { available: false, signedIn: false }
@@ -789,7 +804,7 @@ function rendererArguments(preferences, uiState, role) {
 function protectWindowNavigation(window) {
   window.webContents.on('console-message', (event) => {
     const { level, message } = event
-    if (level === 'error' || level === 3) rendererErrors.push(String(message ?? 'Unknown renderer error'))
+    if (level === 'error' || level === 3) recordRendererError(message)
   })
   window.webContents.setWindowOpenHandler(({ url }) => {
     openExternalHttps(url)
@@ -1094,7 +1109,10 @@ async function smokeCheck() {
         await capture(settingsWin, 'settings-general')
         settingsWin?.close()
       }
-      if (rendererErrors.length > 0) throw new Error(`Renderer console errors: ${rendererErrors.join(' | ')}`)
+      if (rendererErrors.length > 0) {
+        const dropped = rendererErrorsDropped > 0 ? ` (${rendererErrorsDropped} earlier errors dropped)` : ''
+        throw new Error(`Renderer console errors${dropped}: ${rendererErrors.join(' | ')}`)
+      }
       console.log('UI SMOKE OK renderer-console-errors=0')
     }
     // CC_SMOKE_RELAUNCH=1: prove the watchdog's recovery actually recovers.

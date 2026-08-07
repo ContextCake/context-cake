@@ -560,6 +560,22 @@ node -e '
 code 404 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=ghost")" "a name that is neither a layer nor a quarantined row is still 404"
 code 400 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources")" "DELETE with no name is still 400"
 
+# An invalid entry blocks removing a HEALTHY source too — the write rewrites the
+# whole manifest either way. So the same one-request repair has to accept a mix,
+# or a user with a bad layer cannot remove anything at all.
+cat > "$TMP/manifest-bad.json" <<EOF
+{ "settings": { "maxDocFiles": 222 },
+  "layers": [
+    { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seedq" },
+    { "name": "extra", "level": 2, "source": "files", "path": "$TMP/seedq" },
+    { "name": "late-bad", "level": 3, "source": "notarealkind" }
+  ] }
+EOF
+code 409 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=extra")" "removing a healthy source is refused while an entry is invalid"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=extra&name=late-bad")" "a healthy source and an invalid entry come out together"
+[ "$(node -e 'process.stdout.write(JSON.stringify(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).layers.map((l) => l.name)))' "$TMP/manifest-bad.json")" = '["seed"]' ] \
+  && pass "the mixed removal left exactly the untouched layer" || fail "mixed removal wrong ($(cat "$TMP/manifest-bad.json"))"
+
 echo "injected credentials: reported, never echoed"
 # The engine receives secrets by value from whoever owns the keychain. Two
 # things have to hold at once: the credential must actually reach the adapter,

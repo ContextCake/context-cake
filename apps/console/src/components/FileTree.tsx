@@ -264,6 +264,10 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
   // Set only by the movement handlers: a re-render caused by data arriving must
   // never yank focus away from wherever the user actually is.
   const wantFocus = useRef(false)
+  // Whether focus is inside the tree, tracked as it moves rather than read off
+  // document.activeElement when it matters: removing a focused node moves focus
+  // to <body> without firing anything, so by then the answer is always "no".
+  const hasFocus = useRef(false)
   const activeRef = useRef<string | null>(null)
   activeRef.current = activeId
 
@@ -275,9 +279,16 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
   // Directories are closed until asked for. The layer roots are the exception —
   // a source with nothing open under it still has to show that it is there — as
   // are the ancestors of `reveal`, since a deep link must show its own file.
+  //
+  // `expandAll` (a search is running: every remaining row matched, so a closed
+  // tree hides the answer) is a DEFAULT, not an override. Checked first, it made
+  // every folder permanently open for as long as the filter lasted: ArrowLeft
+  // always took the collapse branch and never walked to the parent, and clicking
+  // a folder was a visible no-op that silently dropped its stored state — during
+  // the flow the tree is used in most.
   const isExpanded = useCallback((id: string) => {
-    if (expandAll) return true
     if (collapsed.has(id)) return false
+    if (expandAll) return true
     return rootIds.has(id) || opened.has(id)
   }, [collapsed, expandAll, opened, rootIds])
 
@@ -313,13 +324,6 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
     visible.forEach((entry, index) => map.set(entry.id, index))
     return map
   }, [visible])
-
-  // There is always exactly one tab stop. When the active row disappears
-  // (filter typed, its folder collapsed) the first row inherits it.
-  useEffect(() => {
-    if (activeId && indexById.has(activeId)) return
-    setActiveId(visible[0]?.id ?? null)
-  }, [activeId, indexById, visible])
 
   // How tall the window is. Measured, never assumed — but the measurement is
   // deliberately re-taken on scroll as well, because a first measurement taken
@@ -389,8 +393,26 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
     if (activeId) rows.current.get(activeId)?.focus({ preventScroll: true })
   }, [activeId, scrollTop, visible])
 
+  // There is always exactly one tab stop. When the active row disappears — its
+  // folder collapsed, or a filter dropped it — the first row inherits it.
+  //
+  // If the vanished row also held focus, focus is on <body> by the time this
+  // runs and the keyboard is dead: hand it to the row that inherited the tab
+  // stop, and scroll that row into view. Only when focus was already inside the
+  // tree, though. The usual way to make a row vanish is to type in the search
+  // box, and stealing focus out of the box mid-word would be worse than the bug.
+  useEffect(() => {
+    if (activeId && indexById.has(activeId)) return
+    if (!visible[0]) { setActiveId(null); return }
+    if (hasFocus.current) focusRow(0)
+    else setActiveId(visible[0].id)
+  }, [activeId, focusRow, indexById, visible])
+
+  // Every close is RECORDED, not inferred from the absence of an open marker.
+  // Two things default to open — layer roots, and everything while a search is
+  // running — and for those the absence of a marker means open, so a close that
+  // wrote nothing down was a close that never happened.
   const setExpanded = useCallback((id: string, open: boolean) => {
-    const root = rootIds.has(id)
     setOpened((prev) => {
       const next = new Set(prev)
       if (open) next.add(id); else next.delete(id)
@@ -398,13 +420,10 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
     })
     setCollapsed((prev) => {
       const next = new Set(prev)
-      // Layer roots default to open, so "closed" for them has to be recorded
-      // rather than inferred from the absence of an open marker.
-      if (!open && root) next.add(id)
-      else next.delete(id)
+      if (open) next.delete(id); else next.add(id)
       return next
     })
-  }, [rootIds])
+  }, [])
 
   const open = useCallback((entry: TreeEntry) => {
     const index = indexById.get(entry.id)
@@ -501,6 +520,10 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
         className="cc-tree"
         style={{ height: total * ROW_HEIGHT }}
         onKeyDown={onKeyDown}
+        onFocus={() => { hasFocus.current = true }}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) hasFocus.current = false
+        }}
       >
         {rendered}
       </div>

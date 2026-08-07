@@ -485,7 +485,7 @@ describe('Files navigator tree', () => {
     const ascending = (values: number[]) => values.every((v, i) => i === 0 || v > values[i - 1])
 
     expect(ascending(tops())).toBe(true)
-    expect(rows().at(-1)?.title).not.toBe(active()?.title)
+    expect(rows()[rows().length - 1].title).not.toBe(active()?.title)
 
     // And once the window has moved past the focused row: still in the DOM —
     // that is the focus guarantee — and now first, which is where it belongs.
@@ -586,6 +586,78 @@ describe('Files navigator tree', () => {
     mocks.store.sources = [{ name: 'vault', layer: 'personal', sourceKind: 'files' }]
     await act(async () => root.render(<Files />))
     expect(container.textContent).toContain('Nothing matches that')
+  })
+
+  it('still collapses a folder while a search is running', async () => {
+    // A filter opens every folder because every remaining row matched — but as
+    // a default, not a veto. Treated as a veto it left ArrowLeft unable to do
+    // anything but "collapse" (which then did nothing), so it could never walk
+    // to the parent, and a click on a folder was a visible no-op.
+    mocks.store.query = 'a' // matches every path below
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json(NESTED)
+      return json({ ...MEETING, path: 'vault/Projects/alpha.md', rel: 'Projects/alpha.md' })
+    })
+    await act(async () => root.render(<Files />))
+
+    expect(row('vault/Projects').getAttribute('aria-expanded')).toBe('true')
+    const opened = rows().length
+
+    await act(async () => row('vault/Projects').click())
+    expect(row('vault/Projects').getAttribute('aria-expanded')).toBe('false')
+    expect(rows().length).toBeLessThan(opened)
+    expect(container.querySelector('[title="vault/Projects/deep"]')).toBeNull()
+
+    // ...and the keyboard agrees: collapsed already, so ArrowLeft walks up.
+    await act(async () => row('vault/Projects').focus())
+    await act(async () => press(active()!, 'ArrowLeft'))
+    expect(active()?.title).toBe('vault')
+  })
+
+  it('hands focus to the row that inherits the tab stop, but never takes it from the search box', async () => {
+    // The listing is refetched in the background, so the row under the cursor
+    // can be deleted out from under the keyboard. The tab stop moves to the
+    // first row; focus, left behind on a node that no longer exists, falls to
+    // <body> and the keyboard goes dead with no way back but the mouse.
+    const PRUNED = {
+      layers: [{ ...NESTED.layers[0], fileCount: 2, files: NESTED.layers[0].files.slice(0, 2) }],
+    }
+    let listing: unknown = NESTED
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json(listing)
+      return json({ ...MEETING, path: 'vault/Projects/deep/beta.md', rel: 'Projects/deep/beta.md' })
+    })
+    await act(async () => root.render(<Files />))
+
+    await act(async () => row('vault').focus())
+    await act(async () => press(active()!, 'ArrowDown'))
+    await act(async () => press(active()!, 'ArrowRight')) // expand Projects
+    await act(async () => press(active()!, 'ArrowRight')) // → vault/Projects/deep
+    expect(active()?.title).toBe('vault/Projects/deep')
+
+    listing = PRUNED
+    mocks.store.reloadKey = 1
+    await act(async () => root.render(<Files />))
+
+    expect(container.querySelector('[title="vault/Projects/deep"]')).toBeNull()
+    expect(document.activeElement).not.toBe(document.body)
+    expect(active()?.getAttribute('role')).toBe('treeitem')
+    expect(active()?.getAttribute('tabindex')).toBe('0')
+    expect(rows().filter((r) => r.getAttribute('tabindex') === '0')).toHaveLength(1)
+
+    // The same reset usually fires while the user is typing in the search box —
+    // where taking focus would be worse than the bug. Focus is tracked as it
+    // moves, so a tree that has already handed focus away does not take it back.
+    const box = document.createElement('input')
+    document.body.appendChild(box)
+    box.focus()
+    expect(document.activeElement).toBe(box)
+
+    mocks.store.query = 'alpha' // drops every row but vault/Projects/alpha.md
+    await act(async () => root.render(<Files />))
+    expect(container.querySelector('[title="vault/README.md"]')).toBeNull()
+    expect(document.activeElement).toBe(box)
+    box.remove()
   })
 })
 

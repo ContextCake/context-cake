@@ -1253,7 +1253,12 @@ button { font-family: inherit; }
 .cc-tree-row[aria-expanded="true"] > .cc-tree-twisty { transform: rotate(90deg); }
 .cc-tree-leaf { flex: 0 0 auto; width: 12px; height: 12px; }
 .cc-tree-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px; }
-.cc-tree-name { overflow: hidden; text-overflow: ellipsis; }
+/* The floor that keeps a deep row from shrinking to nothing. Flex may not take
+   this item below 4ch even when the indent has eaten the row — it overflows
+   into the clip instead, which shows the start of a name rather than a blank
+   row you can still click. MAX_INDENT_DEPTH in components/FileTree.tsx is the
+   other half: together they leave the name real width at any depth. */
+.cc-tree-name { min-width: 4ch; overflow: hidden; text-overflow: ellipsis; }
 .cc-tree-count { margin-left: auto; padding-left: 8px; color: var(--cc-faint); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; font-weight: 400; text-transform: none; letter-spacing: 0; }
 
 .cc-files-scope { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 8px 6px; border-bottom: 1px solid var(--cc-line); }

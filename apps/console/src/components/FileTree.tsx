@@ -27,6 +27,21 @@ export const ROW_HEIGHT = 28
 const OVERSCAN = 8
 /** Used until the scroll container has been measured (and in jsdom, where it never is). */
 const FALLBACK_VIEWPORT = 640
+/** Left inset per level, and the depth past which it stops growing. */
+const INDENT_STEP = 13
+const INDENT_BASE = 8
+/**
+ * Depth is unbounded — `walkAll` in the engine caps files, not nesting — but the
+ * navigator column is not: `minmax(220px, 300px)`, with `overflow-x: hidden`.
+ * Left unclamped, indent ate the name outright, and a file 20 folders down
+ * rendered as a blank row that was still clickable and still focusable. Ten
+ * levels is the deepest inset that still leaves room for a name at the column's
+ * *narrowest*, so past it rows share an inset. Nesting is then carried by
+ * `aria-level` and the row's `title`, which stay truthful at any depth — a
+ * flatter picture of a deep tree beats an invisible one.
+ */
+const MAX_INDENT_DEPTH = 10
+const rowIndent = (depth: number) => INDENT_BASE + Math.min(depth, MAX_INDENT_DEPTH) * INDENT_STEP
 
 /**
  * One row of the tree. Shaped after `apps/site/src/lib/pack-explorer.ts` —
@@ -186,7 +201,7 @@ const Row = memo(function Row({ entry, index, active, selected, expanded, layerI
       data-root={root ? 'true' : undefined}
       title={entry.path}
       className="cc-tree-row"
-      style={{ top: index * ROW_HEIGHT, paddingLeft: 8 + entry.depth * 13 }}
+      style={{ top: index * ROW_HEIGHT, paddingLeft: rowIndent(entry.depth) }}
       onClick={() => onOpen(entry)}
     >
       {dir ? <Chevron /> : <span className="cc-tree-leaf" aria-hidden="true" />}

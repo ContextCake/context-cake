@@ -275,6 +275,41 @@ describe('store load state', () => {
       expect(probe().dataset.count).toBe('1')
     })
 
+    // A rejected heavy refetch used to advance the poll gate anyway. The next
+    // tick then saw nothing moved, skipped the retry, and took the success
+    // path — clearing the banner while the page showed pre-edit concepts, for
+    // the rest of the session. A failure that erases its own evidence.
+    it('never reports success for a refetch that failed, and owes it to the next poll', async () => {
+      mocks.graph
+        .mockResolvedValueOnce(graphPayload([]))
+        .mockResolvedValue(graphPayload([], 5, 3))
+      mocks.resolveAll
+        .mockResolvedValueOnce({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+        .mockRejectedValue(new Error('resolve-all timed out'))
+      // The engine's answer moved once and then sat still — which is the whole
+      // problem: no later poll reopens the gate by itself.
+      mocks.status.mockResolvedValue(statusPayload({ generation: 5, indexing: false, conceptCount: 3 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      expect(probe().dataset.count).toBe('1')
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_100) })
+      const afterFirstFailure = mocks.resolveAll.mock.calls.length
+      expect(probe().dataset.refreshError).toBe('resolve-all timed out')
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+      // Still retrying the heavy read, and still saying it is failing.
+      expect(mocks.resolveAll.mock.calls.length).toBeGreaterThan(afterFirstFailure)
+      expect(probe().dataset.refreshError).toBe('resolve-all timed out')
+
+      mocks.resolveAll.mockResolvedValue({
+        concepts: [conceptPayload('a'), conceptPayload('b')], errors: [], indexing: false,
+      })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(probe().dataset.refreshError).toBe('')
+      expect(probe().dataset.count).toBe('2')
+    })
+
     it('reports a refreshing source as work in flight without holding up its data', async () => {
       mocks.graph.mockResolvedValue(graphPayload([]))
       mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })

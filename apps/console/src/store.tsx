@@ -303,6 +303,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let running = false
     let generation: number | undefined
     let signature: string | undefined
+    // A heavy refetch was attempted and has not landed. The gate below is only
+    // ever committed by a readAll that finished, but a signature that flapped
+    // back to its previous value would still close it, so the owed refetch is
+    // remembered explicitly rather than inferred.
+    let refetchOwed = false
     // Flipped off permanently when the engine 404s /api/status — an engine
     // older than this console. Progress then comes off the graph, as before.
     let hasStatusRoute = typeof source.status === 'function'
@@ -381,8 +386,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setConceptsLoading(Boolean(indexing))
       // Seed the gate from the payload we just took, so the next poll does not
       // immediately pull the same thing back for a generation it already has.
+      // This is the ONLY place the gate advances, and it is past every await:
+      // a read that threw leaves the gate where it was, so the next poll owes
+      // the same refetch instead of inheriting a success it never had.
       generation = g.generation
       signature = graphSignature(g)
+      refetchOwed = false
       return Boolean(indexing)
     }
 
@@ -412,10 +421,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             // source erroring, a refresh finishing — or, while the engine is
             // quiet, on any generation change at all (the file-edit case).
             const moved = status.generation !== generation
-            const worthRefetching = moved && (nextSignature !== signature || !active)
-            generation = status.generation
-            signature = nextSignature
-            if (worthRefetching) active = (await readAll()) || active
+            const worthRefetching = refetchOwed || (moved && (nextSignature !== signature || !active))
+            if (worthRefetching) {
+              // Committing the gate here — before the heavy read — is how a
+              // failed refetch used to hide: the next poll saw nothing moved,
+              // skipped the retry, and then took the success path below,
+              // clearing the banner over pre-edit concepts. Nothing recovers
+              // from that on its own, because contentSignature deliberately
+              // excludes document content, so a pure edit never reopens the
+              // gate. readAll commits it, once it has actually landed.
+              refetchOwed = true
+              active = (await readAll()) || active
+            } else {
+              generation = status.generation
+              signature = nextSignature
+            }
           }
         }
         if (!hasStatusRoute) active = await readAll()

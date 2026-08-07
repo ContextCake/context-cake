@@ -133,6 +133,13 @@ interface ThemeCtx {
   setDensity: (density: Density) => void
   setTransparency: (choice: TransparencyChoice) => void
   toggle: () => void
+  /**
+   * The Mac app could not write the last appearance change to disk. The change
+   * is in effect — the main process applied it and every read returns it — but
+   * it will not survive a restart, which is the part a user cannot see and has
+   * to be told. Cleared by the next write that lands.
+   */
+  saveFailed: boolean
 }
 
 const Ctx = createContext<ThemeCtx | null>(null)
@@ -176,17 +183,35 @@ export function ThemeModeProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const [saveFailed, setSaveFailed] = useState(false)
+
+  /**
+   * Persist an appearance change, and remember whether it reached the disk.
+   *
+   * `preferences.set` began rejecting when the write fails; swallowing that is
+   * what this codebase keeps getting wrong. Note what is deliberately NOT done
+   * here: the change is not rolled back. The main process applied it and every
+   * `readSettings()` returns it, so reverting the control would show a state
+   * the app is not in. What the user loses is durability, so that — and only
+   * that — is what gets reported.
+   */
+  const persist = useCallback((patch: Parameters<NonNullable<NonNullable<Window['__CC_DESKTOP']>['preferences']>['set']>[0]) => {
+    const bridge = window.__CC_DESKTOP?.preferences
+    if (!bridge) return
+    bridge.set(patch).then(() => setSaveFailed(false), () => setSaveFailed(true))
+  }, [])
+
   const setPreference = useCallback((preference: ThemePreference) => {
     if (!THEME_VALUES.has(preference)) return
     setAppearance((current) => current.preference === preference ? current : { ...current, preference })
-    window.__CC_DESKTOP?.preferences?.set({ theme: preference }).catch(() => {})
-  }, [])
+    persist({ theme: preference })
+  }, [persist])
 
   const setDensity = useCallback((density: Density) => {
     if (!DENSITY_VALUES.has(density)) return
     setAppearance((current) => current.density === density ? current : { ...current, density })
-    window.__CC_DESKTOP?.preferences?.set({ density }).catch(() => {})
-  }, [])
+    persist({ density })
+  }, [persist])
 
   const setTransparency = useCallback((choice: TransparencyChoice) => {
     const preference = choice === 'system' ? null : choice === 'on'
@@ -198,8 +223,8 @@ export function ThemeModeProvider({ children }: { children: ReactNode }) {
       reducedTransparencyPreference: preference,
       reducedTransparency: preference ?? current.systemReducedTransparency,
     })
-    window.__CC_DESKTOP?.preferences?.set({ reducedTransparency: preference }).catch(() => {})
-  }, [])
+    persist({ reducedTransparency: preference })
+  }, [persist])
 
   const mode = resolveTheme(appearance.preference)
   const toggle = useCallback(() => setPreference(mode === 'dark' ? 'light' : 'dark'), [mode, setPreference])
@@ -214,10 +239,11 @@ export function ThemeModeProvider({ children }: { children: ReactNode }) {
     setDensity,
     setTransparency,
     toggle,
+    saveFailed,
   }), [
     appearance.density, appearance.preference, appearance.reducedTransparency,
     appearance.reducedTransparencyPreference, appearance.systemReducedTransparency,
-    mode, setDensity, setPreference, setTransparency, toggle,
+    mode, saveFailed, setDensity, setPreference, setTransparency, toggle,
   ])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

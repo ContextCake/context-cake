@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useThemeMode } from '../theme-mode'
 import { isUpdateCheckEnabled, setUpdateCheckEnabled } from '../update'
 import type { Mode } from '../api'
+import { C, css } from '../theme'
 import { AccountPanel } from './AccountPanel'
 import { IndexingSettings } from './IndexingSettings'
 import { IntegrationsPanel } from './IntegrationsPanel'
@@ -28,8 +29,12 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
   const [pane, setPaneState] = useState<SettingsPane>(VALID_PANES.has(requestedInitial as SettingsPane) ? requestedInitial as SettingsPane : 'general')
   const [updatesEnabled, setUpdatesEnabled] = useState(() => isUpdateCheckEnabled(appMode))
   const [metricsEnabled, setMetricsEnabled] = useState<boolean | null>(null)
+  const [writeFailed, setWriteFailed] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
-  const { preference: theme, density, setPreference: setTheme, setDensity, transparency, systemReducedTransparency, setTransparency } = useThemeMode()
+  const { preference: theme, density, setPreference: setTheme, setDensity, transparency, systemReducedTransparency, setTransparency, saveFailed } = useThemeMode()
+  // Appearance writes and this view's own toggles hit the same file for the same
+  // reasons, so they get one notice rather than two competing ones.
+  const settingsUnsaved = saveFailed || writeFailed
   const accountsAvailable = window.__CC_DESKTOP?.authState?.available === true && Boolean(window.__CC_AUTH)
   const integrationsAvailable = Boolean(window.__CC_INTEGRATIONS)
 
@@ -91,22 +96,29 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, surface])
 
+  // A rejected `preferences.set` means the Mac app could not write the choice to
+  // disk. It does NOT mean the choice was ignored: the main process applied it
+  // and keeps serving it, so snapping the switch back would show a state the app
+  // is not in — the user would read "off" while updates are genuinely off, and
+  // turn it off again. Hold the new value and report the part that actually
+  // failed, which is that it will not survive a restart.
   const toggleUpdates = async () => {
-    const previous = updatesEnabled
-    const next = !previous
+    const next = !updatesEnabled
     setUpdatesEnabled(next)
-    if (window.__CC_DESKTOP?.preferences) {
-      try { setUpdatesEnabled((await window.__CC_DESKTOP.preferences.set({ updateCheck: next })).updateCheck) }
-      catch { setUpdatesEnabled(previous) }
-    } else setUpdateCheckEnabled(next)
+    if (!window.__CC_DESKTOP?.preferences) { setUpdateCheckEnabled(next); return }
+    try {
+      setUpdatesEnabled((await window.__CC_DESKTOP.preferences.set({ updateCheck: next })).updateCheck)
+      setWriteFailed(false)
+    } catch { setWriteFailed(true) }
   }
 
   const toggleMetrics = async () => {
     if (!window.__CC_DESKTOP?.preferences || metricsEnabled === null) return
-    const previous = metricsEnabled
-    setMetricsEnabled(!previous)
-    try { setMetricsEnabled((await window.__CC_DESKTOP.preferences.set({ anonymousMetrics: !previous })).anonymousMetrics) }
-    catch { setMetricsEnabled(previous) }
+    setMetricsEnabled(!metricsEnabled)
+    try {
+      setMetricsEnabled((await window.__CC_DESKTOP.preferences.set({ anonymousMetrics: !metricsEnabled })).anonymousMetrics)
+      setWriteFailed(false)
+    } catch { setWriteFailed(true) }
   }
 
   const indexingChanged = () => {
@@ -129,6 +141,14 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
         <div className="cc-settings-column">
           {pane === 'general' && <>
             <header className="cc-settings-header"><h1>General</h1><span>Adjust how ContextCake looks and behaves.</span></header>
+            {settingsUnsaved && <div role="status" style={css(`display:flex; gap:10px; padding:10px 14px; margin-bottom:14px; border:1px solid ${C.amberStroke}; border-radius:var(--cc-radius-md); background:${C.amberFill}; font-size:12px; color:${C.amberText};`)}>
+              <span aria-hidden="true">⚠</span>
+              <span style={css('flex:1 1 auto; min-width:0; overflow-wrap:anywhere;')}>
+                These settings are in effect but could not be saved to this Mac, so they will
+                revert when ContextCake restarts. Check that the disk is not full and that
+                ContextCake can write to its configuration folder.
+              </span>
+            </div>}
             <section className="cc-settings-section" aria-labelledby="cc-settings-appearance">
               <h2 id="cc-settings-appearance">Appearance</h2>
               <div className="cc-settings-group">

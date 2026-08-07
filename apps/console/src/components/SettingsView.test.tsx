@@ -305,6 +305,55 @@ describe('SettingsView', () => {
     expect(container.textContent).not.toContain('Reduce transparency')
   })
 
+  it('holds a setting the Mac could not save, and says it will not survive a restart', async () => {
+    // The main process rejects `preferences.set` when the disk write fails, but
+    // it has already applied the change and keeps serving it. Snapping the
+    // control back would show a state the app is not in — the user would read
+    // "on" while updates are genuinely off. Hold the value; report durability.
+    const bridge = withDesktopPreferences()
+    bridge.set.mockRejectedValue(new Error('settings could not be saved'))
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+    await act(async () => {})
+
+    const updates = container.querySelector<HTMLInputElement>('input[aria-label="Check for updates automatically"]')
+    expect(updates?.checked).toBe(true)
+    expect(container.textContent).not.toContain('could not be saved to this Mac')
+
+    await act(async () => updates?.click())
+    expect(updates?.checked).toBe(false)
+    expect(container.textContent).toContain('could not be saved to this Mac')
+
+    // An appearance change routes through the same file and must report the
+    // same way rather than failing silently, which is what it used to do.
+    bridge.set.mockClear()
+    await act(async () => groupButton('Density', 'Compact').click())
+    expect(bridge.set).toHaveBeenCalledWith({ density: 'compact' })
+    expect(document.documentElement.dataset.density).toBe('compact')
+    expect(container.textContent).toContain('could not be saved to this Mac')
+  })
+
+  it('clears the unsaved notice once a write lands', async () => {
+    const bridge = withDesktopPreferences()
+    bridge.set.mockRejectedValueOnce(new Error('settings could not be saved'))
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+    await act(async () => {})
+
+    await act(async () => groupButton('Density', 'Compact').click())
+    expect(container.textContent).toContain('could not be saved to this Mac')
+
+    await act(async () => groupButton('Density', 'Comfortable').click())
+    await act(async () => {})
+    expect(container.textContent).not.toContain('could not be saved to this Mac')
+  })
+
   it('explains anonymous metrics and lets desktop users opt out', async () => {
     const setEnabled = withDesktopMetrics(true)
     await act(async () => root.render(

@@ -255,3 +255,14 @@ export interface DemoBundle {
   graph: GraphSummary
   concepts: ResolvedConcept[]
 }
+
+/**
+ * The file half of the demo bundle: one `/api/files` listing plus the
+ * `/api/file` answer for every path in it, both from the engine's own file APIs
+ * (build-demo-data.mjs). Read-only by construction — there is no write route to
+ * snapshot, so the demo has nothing to fake.
+ */
+export interface DemoFiles {
+  layers: LayerFiles[]
+  files: Record<string, FileContent>
+}

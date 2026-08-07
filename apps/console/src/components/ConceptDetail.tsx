@@ -25,7 +25,7 @@ const contributorKey = (layer: string, conceptId: string) => JSON.stringify([lay
  */
 function useFileByContributor(): Map<string, string> {
   const { mode, sources } = useStore()
-  const { layers } = useLayerFiles(mode === 'live', sources.length)
+  const { layers } = useLayerFiles(mode, sources.length)
   return useMemo(() => {
     const best = new Map<string, { path: string; rank: number }>()
     for (const entry of layers ?? []) {

@@ -34,7 +34,8 @@ release builds and deploys the matching public Web Demo from the same commit.
 
 The gates are `npm run typecheck` (strict, `noUnusedLocals`/`noUnusedParameters`)
 and `npm test`; CI runs both. dev/build/typecheck/test all regenerate
-`src/generated/demo-cascade.json` (gitignored) via their pre-hooks.
+`src/generated/demo-cascade.json` + `src/generated/demo-files.json` (gitignored)
+via their pre-hooks.
 
 ## Architecture
 
@@ -47,9 +48,13 @@ and `npm test`; CI runs both. dev/build/typecheck/test all regenerate
 - **Views** — `src/views/` (Canvas, Overview, Sources, Triage, Conflicts,
   Concepts, Files). `App.tsx` is the shell: topbar + subbar + routed view, plus
   the Triage S/R/D keyboard handler. The canvas view stays full-height inside
-  the chrome. Files is live-mode only: it browses and edits the real files
-  behind each layer through the engine's `/api/files` + `/api/file`, with a
-  rendered/raw toggle for Markdown. Sources manages the layers themselves —
+  the chrome. Files browses and edits the real files behind each layer through
+  the engine's `/api/files` + `/api/file`, with a rendered/raw toggle for
+  Markdown. It renders in demo mode too, read-only, over the generated
+  `demo-files.json` snapshot (see **Data**): same tree, same documents, same
+  cross-links, no Save — `canEdit = live && file.editable` gates the save
+  button, the ⌘S binding and the textarea, and the raw-preview fetch is skipped
+  because a snapshot carries text, not bytes. Sources manages the layers themselves —
   rename + re-level + repoint a folder-backed source (PATCH `/api/sources`),
   remove with confirm (DELETE), Sync-now for github kinds (POST
   `/api/sources/sync`) — read-only in demo mode; `live: true` layers get a
@@ -79,7 +84,11 @@ and `npm test`; CI runs both. dev/build/typecheck/test all regenerate
 - **Data** — `src/api.ts` is the single seam: demo mode imports a bundle
   generated at build time by shelling out to the real `packages/core/src/resolver.mjs`
   (`scripts/build-demo-data.mjs`), live mode fetches the same-origin playground
-  API (`/api/status`, `/api/graph`, `/api/resolve-all`). Adapters map wire types (`types.ts`)
+  API (`/api/status`, `/api/graph`, `/api/resolve-all`). `src/layer-files.ts` is
+  the same seam for files: the demo half of `demo-files.json` is one
+  `listFilesApi` listing plus a `readFileApi` answer per path, produced by
+  calling the engine's own file APIs — never hand-authored, and read-only
+  because only the two GET answers are captured. Adapters map wire types (`types.ts`)
   onto the view model in `src/data.ts`, deriving provenance from contributor
   levels. `src/data.ts` keeps only lane semantics and the demo-only
   triage/activity fixtures. Live errors are typed (`LiveDataError`) and

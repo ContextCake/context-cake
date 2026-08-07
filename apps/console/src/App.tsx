@@ -176,15 +176,14 @@ export function App() {
     { id: 'queue', label: 'Go to Review: Queue', keywords: 'triage', run: () => setView('triage') },
     { id: 'conflicts', label: 'Go to Review: Conflicts', keywords: 'resolve', run: () => setView('conflicts') },
     // One per source: the palette is the keyboard route into the navigator,
-    // matching the Sources panel's "Browse files" button.
-    ...(mode === 'live'
-      ? sources.filter((source) => !source.quarantined).map((source) => ({
-          id: `files:${source.name}`,
-          label: `Browse files in ${source.name}`,
-          keywords: 'navigator folder tree source files',
-          run: () => openFilesScope(source.name),
-        }))
-      : []),
+    // matching the Sources panel's "Browse files" button — including in the
+    // demo, where that button is offered too. Browsing is a read.
+    ...sources.filter((source) => !source.quarantined).map((source) => ({
+      id: `files:${source.name}`,
+      label: `Browse files in ${source.name}`,
+      keywords: 'navigator folder tree source files',
+      run: () => openFilesScope(source.name),
+    })),
     ...(mode === 'live' ? [{ id: 'add-source', label: 'Add Source', keywords: 'folder repository', run: reopenWizard }] : []),
     ...(isDesktop ? [{ id: 'connect-agent', label: 'Connect Agent', keywords: 'cli mcp', run: openConnect }] : []),
     { id: 'ask', label: 'Ask ContextCake', shortcut: '⇧⌘A', run: openAskFromPalette },

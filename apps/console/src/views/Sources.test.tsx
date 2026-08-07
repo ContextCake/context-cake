@@ -131,6 +131,17 @@ describe('Sources rows', () => {
     expect(container.querySelector('button[aria-label^="Remove"]')).toBeNull()
     expect(container.querySelector('button[aria-label^="Rename"]')).toBeNull()
   })
+
+  // Read-only is about writes, not about looking. The demo bundle carries the
+  // files behind `personal`, so the way into the navigator is offered there too.
+  it('still offers the way into the files in demo mode', async () => {
+    await mount([src({ name: 'personal' })], 'demo')
+
+    expect(container.textContent).toContain('2 files')
+    await act(async () => buttonByAria('Browse the files in personal').click())
+    expect(mocks.openFilesScope).toHaveBeenCalledWith('personal')
+    expect(container.querySelector('button[aria-label^="Remove"]')).toBeNull()
+  })
 })
 
 describe('Sources remove', () => {

@@ -1,0 +1,9 @@
+Scratch — not filed yet.
+
+- The ClickHouse ETL retried three times last night before it went green. Ask
+  Data whether that retry window is deliberate or just the default.
+- The staging smoke test doesn't cover the auth token TTL. It should.
+- Rollback first, then fix forward. Wrote that down after Tuesday.
+
+Plain .txt, so the OKF reader for this bundle never turns it into a concept: it
+lives in the folder, not in the cascade.

@@ -3,6 +3,11 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Files } from './Files'
+// The real generated demo bundle — the same JSON the shipped web build imports.
+// The demo tests below run against it rather than a fixture, because what they
+// are checking is precisely that the build-time snapshot feeds this view.
+import demoBundle from '../generated/demo-cascade.json'
+import demoFiles from '../generated/demo-files.json'
 
 const mocks = vi.hoisted(() => ({
   apiFetch: vi.fn(),
@@ -250,14 +255,6 @@ describe('Files view', () => {
     const allowed = window.dispatchEvent(new Event('contextcake:before-navigate', { cancelable: true }))
     expect(allowed).toBe(false)
     expect(window.confirm).toHaveBeenCalled()
-  })
-
-  it('tells demo users why there is nothing to edit', async () => {
-    mocks.store.mode = 'demo'
-    await act(async () => root.render(<Files />))
-
-    expect(container.textContent).toContain('live-mode view')
-    expect(mocks.apiFetch).not.toHaveBeenCalled()
   })
 
   it('explains an empty state when no source has files on disk', async () => {
@@ -514,6 +511,54 @@ describe('Files navigator tree', () => {
   })
 })
 
+describe('Files in the demo', () => {
+  beforeEach(() => { mocks.store.mode = 'demo' })
+
+  it('renders the navigator over the build-time snapshot, with no engine behind it', async () => {
+    await act(async () => root.render(<Files />))
+
+    // Every layer in the generated listing gets a root row carrying its count.
+    for (const layer of demoFiles.layers) {
+      expect(row(layer.layer).getAttribute('aria-expanded')).toBe('true')
+      expect(row(layer.layer).textContent).toContain(String(layer.fileCount))
+    }
+    // A real tree, not a flat list: folders are there and start closed.
+    expect(row('personal/decisions').getAttribute('aria-expanded')).toBe('false')
+    expect(container.querySelector('[title="personal/decisions/primary-db.md"]')).toBeNull()
+
+    // The first document is open and rendered from the snapshot's own text.
+    expect(container.querySelector('.cc-md')?.textContent).toContain('Postgres in every shared environment')
+    expect(mocks.apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('offers no way to write, and says why', async () => {
+    await act(async () => root.render(<Files />))
+
+    expect(() => button('Save')).toThrow()
+    expect(container.textContent).toContain('read-only in the demo')
+
+    // The raw tab still shows the source — reading is the whole point — but the
+    // editor cannot take a keystroke it would have to throw away.
+    await act(async () => button('raw').click())
+    const editor = container.querySelector<HTMLTextAreaElement>('textarea')!
+    expect(editor.readOnly).toBe(true)
+    expect(editor.getAttribute('aria-label')).toContain('read-only')
+    expect(() => button('Save')).toThrow()
+    expect(mocks.apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('lists a binary the snapshot cannot carry instead of hiding it', async () => {
+    await act(async () => root.render(<Files />))
+    await act(async () => row('company/assets').click())
+    await act(async () => row('company/assets/contextcake-brief.pdf').click())
+
+    expect(container.textContent).toContain('Not in the demo snapshot')
+    // Never the forever-spinner: no raw fetch is attempted in the first place.
+    expect(container.textContent).not.toContain('Loading preview…')
+    expect(mocks.apiFetch).not.toHaveBeenCalled()
+  })
+})
+
 describe('Files → concept', () => {
   it('links an open document to the concept it resolves to, conflicts named not just coloured', async () => {
     mocks.store.concepts = [{
@@ -542,6 +587,29 @@ describe('Files → concept', () => {
     mocks.store.concepts = [{ id: 'something-else', title: 'Other', type: 'note', layers: ['personal'], sections: [] }]
     await act(async () => root.render(<Files />))
 
+    expect(container.textContent).not.toContain('Resolves to')
+  })
+
+  it('walks from a demo document to its concept, and offers nothing for the file the cascade skips', async () => {
+    mocks.store.mode = 'demo'
+    // Ids straight from the generated cascade, so this can only pass while the
+    // two halves of the demo bundle are built from the same corpus.
+    mocks.store.concepts = demoBundle.concepts.map((c) => ({
+      id: c.id,
+      title: (c.frontmatter?.title as string) ?? c.id,
+      type: 'concept',
+      layers: ['personal'],
+      sections: [],
+    }))
+    await act(async () => root.render(<Files />))
+
+    expect(container.textContent).toContain('Resolves to')
+    expect(container.textContent).toContain('decisions/primary-db')
+
+    // A .txt in an OKF bundle is read by no adapter, so it has no concept —
+    // and the strip says nothing rather than linking somewhere that isn't there.
+    await act(async () => row('personal/notes').click())
+    await act(async () => row('personal/notes/scratch.txt').click())
     expect(container.textContent).not.toContain('Resolves to')
   })
 

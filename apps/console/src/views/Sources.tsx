@@ -194,7 +194,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   const live = mode === 'live'
   // The same listing the Files view builds its tree from: a source's file count
   // and root path are already in that payload, and were being thrown away.
-  const { layers: fileLayers } = useLayerFiles(live, sources.length)
+  const { layers: fileLayers } = useLayerFiles(mode, sources.length)
   const filesByLayer = useMemo(() => {
     const map = new Map<string, LayerFiles>()
     for (const entry of fileLayers ?? []) map.set(entry.layer, entry)
@@ -461,7 +461,9 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
               </div>
             )}
 
-            {live && !isOpen && (
+            {/* Reading is offered in both modes; only the writes below need an
+                engine behind them. */}
+            {(live || filesByLayer.has(s.name)) && !isOpen && (
               <div style={css('display:flex; gap:8px; flex-wrap:wrap;')}>
                 {/* The way in to the navigator. Offered only where there is
                     something to browse — a disabled button over a source that
@@ -477,7 +479,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                   >Browse files</button>
                 )}
                 {/* Desktop only — hidden, not disabled, in the browser build. */}
-                {finder.available && filesByLayer.has(s.name) && (
+                {live && finder.available && filesByLayer.has(s.name) && (
                   <button
                     type="button"
                     className="cc-h-bd-strong"
@@ -486,7 +488,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                     onClick={() => void finder.reveal(s.name, '')}
                   >Reveal in Finder</button>
                 )}
-                {canSync(s) && (
+                {live && canSync(s) && (
                   <button
                     type="button"
                     className="cc-h-bd-strong"
@@ -503,7 +505,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                     called "Rename / level" over a form that also repoints the
                     source would hide the very thing this pass added — and the
                     visible words have to be inside the accessible name. */}
-                {!s.quarantined && (
+                {live && !s.quarantined && (
                   <button
                     type="button"
                     className="cc-h-bd-strong"
@@ -512,7 +514,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                     onClick={() => openEdit(s)}
                   >{canEditPath(s) ? 'Rename / level / folder' : 'Rename / level'}</button>
                 )}
-                <button type="button" className="cc-h-bd-amber2" aria-label={`Remove ${s.name}`} style={btnSmallGhost()} onClick={() => openRemove(s)}>{s.quarantined ? 'Remove entry' : 'Remove'}</button>
+                {live && <button type="button" className="cc-h-bd-amber2" aria-label={`Remove ${s.name}`} style={btnSmallGhost()} onClick={() => openRemove(s)}>{s.quarantined ? 'Remove entry' : 'Remove'}</button>}
               </div>
             )}
 

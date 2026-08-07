@@ -4,6 +4,12 @@
 // listing is cheap, so this view is useful immediately, even while sources are
 // still being read. Markdown opens rendered by default with a Raw tab for the
 // actual .md source (frontmatter, OKF heading attrs and all).
+//
+// The demo runs the same navigator over a build-time snapshot of the engine's
+// file APIs (layer-files.ts): same tree, same documents, same file ⇄ concept
+// links, and no way to save. Editing is the one thing a snapshot cannot honour,
+// so the demo drops the affordance rather than accepting a keystroke it would
+// have to throw away.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { C, css, lc, MONO, type LayerId } from '../theme'
 import { apiFetch } from '../api'
@@ -11,7 +17,7 @@ import type { Concept } from '../data'
 import { buildTree, FileTree } from '../components/FileTree'
 import { Markdown } from '../components/Markdown'
 import { useDetailSurface } from '../components/useDetailSurface'
-import { useLayerFiles } from '../layer-files'
+import { readLayerFile, useLayerFiles } from '../layer-files'
 import { useReveal } from '../reveal'
 import { useStore } from '../store'
 import type { FileContent, LayerFile } from '../types'
@@ -20,13 +26,6 @@ type Tab = 'rendered' | 'raw'
 
 /** Extensions the cascade reads as documents — a concept id is the rel minus one of these. */
 const DOC_EXT = /\.(md|markdown|mdx|txt)$/i
-
-async function getJson<T>(path: string): Promise<T> {
-  const res = await apiFetch(path, { headers: { accept: 'application/json' } })
-  const data = await res.json().catch(() => ({}) as { error?: string })
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
-  return data as T
-}
 
 function Empty({ title, detail }: { title: string; detail: string }) {
   return (
@@ -115,11 +114,14 @@ export function Files() {
   const selected = filesPath
   const selectedRef = useRef(selected)
   selectedRef.current = selected
-  const dirty = file?.text !== undefined && draft !== file.text
+  // Saving needs a file the engine will take a write for AND an engine to take
+  // it: the demo has the document but no write route behind it.
+  const canEdit = live && file?.editable === true
+  const dirty = canEdit && file?.text !== undefined && draft !== file.text
 
   // The listing is cheap even mid-index, so it loads on its own and doesn't
   // wait for the cascade. It re-runs when the source set changes.
-  const { layers, error: listError } = useLayerFiles(live, sources.length)
+  const { layers, error: listError } = useLayerFiles(mode, sources.length)
 
   // Which source each layer belongs to, for the layer-coloured root rows. The
   // hues are product semantics (personal amber / team teal / company indigo),
@@ -156,7 +158,7 @@ export function Files() {
     let cancelled = false
     void (async () => {
       try {
-        const data = await getJson<FileContent>(`/api/file?path=${encodeURIComponent(selected)}`)
+        const data = await readLayerFile(mode, selected)
         if (cancelled) return
         setFile(data)
         setDraft(data.text ?? '')
@@ -170,7 +172,7 @@ export function Files() {
       }
     })()
     return () => { cancelled = true }
-  }, [selected])
+  }, [mode, selected])
 
   // Images and PDFs must be fetched through apiFetch so the desktop bearer is
   // present; putting /api/file/raw directly in src would 401 inside the app.
@@ -182,6 +184,10 @@ export function Files() {
     setPreviewUrl(null)
     setPreviewError(null)
     if (!file || (file.kind !== 'image' && file.kind !== 'pdf')) return undefined
+    // The demo snapshot carries text, not bytes: there is no /api/file/raw to
+    // ask, and asking anyway would leave the pane on "Loading preview…" for
+    // good. The render says so instead.
+    if (!live) return undefined
     void (async () => {
       try {
         const res = await apiFetch(`/api/file/raw?path=${encodeURIComponent(file.path)}`)
@@ -273,8 +279,11 @@ export function Files() {
     }
   }, [file, dirty, draft, saving, reload])
 
-  // ⌘S / Ctrl+S saves, the shortcut everyone tries in an editor.
+  // ⌘S / Ctrl+S saves, the shortcut everyone tries in an editor. Not bound where
+  // there is nothing to save: swallowing the browser's own ⌘S over a read-only
+  // demo would take a shortcut away and give nothing back.
   useEffect(() => {
+    if (!canEdit) return undefined
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         e.preventDefault()
@@ -283,11 +292,8 @@ export function Files() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [save])
+  }, [canEdit, save])
 
-  if (!live) {
-    return <Empty title="Files are a live-mode view" detail="Open ContextCake with your own sources to browse and edit the files behind each layer. The demo uses a build-time snapshot with no files on disk." />
-  }
   if (listError) {
     return <Empty title="Couldn't list your files" detail={listError} />
   }
@@ -388,6 +394,8 @@ export function Files() {
                   {(file.bytes / 1024).toFixed(1)} KB · edited {new Date(file.modified).toLocaleString()}
                   {savedAt && !dirty && <span style={css(`color:${C.tealText};`)}> · saved {savedAt}</span>}
                   {dirty && <span style={css('color:var(--cc-amber-text);')}> · unsaved changes</span>}
+                  {/* Where the Save button would be, an honest reason it isn't. */}
+                  {!live && <span title="The demo runs from a build-time snapshot of a real folder."> · read-only in the demo</span>}
                 </div>
               </div>
 
@@ -417,7 +425,7 @@ export function Files() {
                 >Reveal in Finder</button>
               )}
 
-              {file.editable && (
+              {canEdit && (
                 <button
                   type="button"
                   onClick={() => void save()}
@@ -463,7 +471,12 @@ export function Files() {
 
             <div style={css('flex:1; min-height:0; overflow:auto;')}>
               {!file.editable && (file.kind === 'image' || file.kind === 'pdf') ? (
-                previewError ? (
+                !live ? (
+                  <Empty
+                    title="Not in the demo snapshot"
+                    detail="The demo carries the text of each document, not its bytes, so this one is listed but not rendered. Open ContextCake with your own folder to preview images and PDFs."
+                  />
+                ) : previewError ? (
                   <Empty title="Couldn't preview this file" detail={previewError} />
                 ) : previewUrl ? (
                   file.kind === 'image'
@@ -487,7 +500,8 @@ export function Files() {
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   spellCheck={false}
-                  aria-label={`Edit ${file.path}`}
+                  readOnly={!canEdit}
+                  aria-label={canEdit ? `Edit ${file.path}` : `${file.path}, read-only`}
                   style={css(`display:block; width:100%; height:100%; min-height:340px; box-sizing:border-box; padding:20px 24px; border:none; resize:none; outline:none; background:transparent; color:${C.ink}; font-family:${MONO}; font-size:12.5px; line-height:1.7; tab-size:2;`)}
                 />
               )}

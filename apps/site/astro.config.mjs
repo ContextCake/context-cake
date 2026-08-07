@@ -48,6 +48,7 @@ export default defineConfig({
 				{
 					label: 'Guides',
 					items: [
+						{ label: 'Browsing your context files', slug: 'docs/guides/browsing-your-files' },
 						{ label: 'Playground tour', slug: 'docs/guides/playground-tour' },
 						{ label: 'Foreign MCP sources', slug: 'docs/guides/foreign-mcp-sources' },
 						{ label: 'The capture write path', slug: 'docs/guides/capture-write-path' },

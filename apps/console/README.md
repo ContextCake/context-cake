@@ -3,7 +3,8 @@
 The React front end for inspecting and resolving a ContextCake cascade. It runs in
 three environments from the same codebase:
 
-- **demo** — bundled sample data for the public site;
+- **demo** — bundled sample data for the public site, including a snapshot of
+  the files behind each layer so the navigator works read-only;
 - **live browser** — reads the local engine through `/api/status` (the cheap
   poll), `/api/graph`, `/api/resolve*`, `/api/conflict-resolutions`, and the
   source-management endpoints;
@@ -52,7 +53,16 @@ playground/service command documented in the repository instructions.
   `.contextcake/conflict-resolutions.ndjson` beside the manifest. History can
   be reopened to choose a different saved answer later. The service refuses
   the whole change if a source is remote, missing, or changed since review.
-- **Concepts** shows the effective concept with per-section provenance.
+- **Concepts** shows the effective concept with per-section provenance, and each
+  contributor links to the file it came from.
+- **Files** is the source navigator: a keyboard tree per source, scoping to one
+  source, deep links (`#/files/<source>/<path>`), a rendered/raw view of each
+  document, and editing with re-resolve on save. Demo mode renders the same
+  navigator read-only. Sources whose content is remote — a GitHub repository
+  read over the API, an MCP graph — keep no files here and say so.
+- **Sources** manages the layers themselves: rename, re-level, repoint a
+  folder-backed source, remove, and sync. Read-only in demo mode, where the way
+  into the navigator is still offered.
 - **Ask ContextCake** uses the resolved cascade when a compatible
   `window.claude.complete` harness bridge is present. Otherwise it returns a
   visibly labeled sample answer; Electron does not currently provide that
@@ -86,6 +96,7 @@ metadata; each Mac requires its own local setup.
 ```text
 src/
   api.ts                  demo/live adapters and authenticated desktop fetch
+  layer-files.ts          the same seam for /api/files and /api/file
   store.tsx               application state and live reload/actions
   theme.ts                CSS-variable references and style helpers
   theme-mode.tsx          local theme plus optional desktop sync
@@ -95,6 +106,7 @@ src/
     SettingsView.tsx      full-window General and Account settings
     AccountPanel.tsx      desktop auth and settings-sync controls
     SetupWizard.tsx       first-run source configuration
+    FileTree.tsx          windowed ARIA tree behind the Files navigator
     ConnectAgentDialog.tsx
     ChatPanel.tsx
   views/
@@ -103,6 +115,8 @@ src/
     Triage.tsx
     Conflicts.tsx
     Concepts.tsx
+    Files.tsx
+    Sources.tsx
   styles.css
 ```
 

@@ -39,6 +39,7 @@ import {
   layerRootMap, listFilesApi, readFileApi, serveRawApi, writeFileApi, writeSectionApi,
 } from "./layer-files.mjs";
 import { createConflictResolutionLog, trivialConflictReason } from "./conflict-resolutions.mjs";
+import { indexEntryKeys, layerIdentity } from "./index-keys.mjs";
 import {
   classifyManifest,
   getManifestProfileLayers,
@@ -231,30 +232,6 @@ function snapshotView(source, snap) {
   };
 }
 
-// A layer's *content identity*: everything that decides what this source reads,
-// with `name` and `level` deliberately left out. Both are presentation — the
-// snapshot holds only {ids, concepts, tokens}, and snapshotView reads name and
-// level off the live source object (rebuilt from the manifest by every
-// openSources) when a concept is resolved, never from the snapshot. So a rename
-// or a precedence change lands immediately and costs nothing, where keying on
-// the whole layer blanked the source to zero concepts and re-read every file.
-//
-// A denylist rather than a list of known identity fields, on purpose: a source
-// option added later changes what gets read until someone proves otherwise, so
-// anything new must invalidate the index by default.
-const PRESENTATION_FIELDS = new Set(["name", "level"]);
-
-function layerIdentity(layer) {
-  // Normalized rather than copied through, so a manifest rewrite that spells
-  // out the default kind does not re-read the whole source.
-  const identity = { kind: layer?.source ?? "okf-local" };
-  for (const [field, value] of Object.entries(layer ?? {})) {
-    if (field === "source" || PRESENTATION_FIELDS.has(field)) continue;
-    identity[field] = value;
-  }
-  return stableJson(identity);
-}
-
 // The watcher must filter exactly what the walk filters, or a file the index
 // would never read still costs a full re-index. This is walkDocs' skip rule
 // (dot-entries and node_modules), applied to the path fs.watch reports.
@@ -435,20 +412,36 @@ export function createEngineService({
     // Only the profile this service actually reads. A layer quarantined out of
     // some other profile's stack has no row here because it has no source here.
     const broken = quarantined.filter((entry) => entry.profileId === "default");
-    // What a layer *reads*, with the two fields that only decide how it is
+    // What each row *reads*, with the two fields that only decide how it is
     // presented left out. See layerIdentity().
-    const identities = [
-      ...layers.map(layerIdentity),
+    const rows = [
+      ...layers.map((layer) => ({
+        name: layer.name,
+        identity: layerIdentity(layer),
+        // A token that arrives after an anonymous GitHub index must invalidate
+        // that index, but connecting an account must not rescan every local
+        // folder and MCP graph in the cascade.
+        epoch: layer.source === "github" && layer.auth ? tokenState.epoch : 0,
+      })),
       // A quarantined layer reads nothing, so its "identity" is the complaint
       // itself: stable across rebuilds (no needless restart) and distinct per
       // row (two broken layers never share one index entry).
-      ...broken.map((entry) => stableJson({ quarantined: entry.name, error: entry.error })),
+      ...broken.map((entry) => ({
+        name: entry.name,
+        identity: stableJson({ quarantined: entry.name, error: entry.error }),
+        epoch: 0,
+      })),
     ];
+    // Two strings per row, and they are not the same string: `validities` says
+    // whether a finished entry is still a correct index of this layer (so it
+    // can be carried across a re-key), `keys` says which row owns it. See
+    // index-keys.mjs.
+    const { validities, keys } = indexEntryKeys(rows, settings);
     const next = {
       stamp,
       manifest,
       settings,
-      identities,
+      validities,
       // Appended, never interleaved: `manifest.layers` holds the valid layers
       // alone — it is what feeds the watchers and the file APIs' sandbox roots —
       // so a broken layer's path must not reach it. The stubs ride alongside in
@@ -457,22 +450,14 @@ export function createEngineService({
         ...buildSourcesQuarantined(manifest, MANIFEST_DIR, { tokens: tokenState.tokens }),
         ...broken.map((entry) => createErrorSource(entry)),
       ],
-      // Identity of a source's *configuration* (plus the settings that govern
-      // indexing, plus the credential epoch for layers that actually name a
-      // credential). A token that arrives after an anonymous GitHub index must
-      // invalidate that index, but connecting an account must not rescan every
-      // local folder and MCP graph in the cascade.
-      keys: identities.map((identity, i) => {
-        const l = layers[i] ?? {};
-        return `${identity}::${stableJson(settings)}::t${l.source === "github" && l.auth ? tokenState.epoch : 0}`;
-      }),
+      keys,
     };
     const prev = cache;
     cache = next;
     deferClose(prev);
-    // Snapshots from entries this rebuild orphaned, so a key change that did
-    // NOT change what the layer reads can hand its answer to the replacement.
-    next.salvage = pruneIndexes(next.keys);
+    // Carry entries this rebuild orphaned over to the row that still wants
+    // them, and drop the rest.
+    adoptIndexes(next);
     // Deferred: syncWatchers calls openSources() itself, and cache is now set,
     // so this returns immediately rather than recursing.
     queueMicrotask(() => { try { syncWatchers(); } catch { /* watching is best effort */ } });
@@ -514,24 +499,56 @@ export function createEngineService({
 
   // ---- background index ------------------------------------------------------
 
-  // Drop index entries no live key claims any more, handing back what they had
-  // read. A key carries the settings and the credential epoch as well as the
-  // layer's identity, so changing an indexing limit or connecting an account
-  // orphans an entry whose *content identity* is untouched — the replacement
-  // has to re-read, but it must not blank the source to zero concepts while it
-  // does. Keyed by identity so the handoff survives the key change that caused
-  // it.
-  function pruneIndexes(keys) {
-    const live = new Set(keys);
-    const salvage = new Map();
+  /**
+   * Re-home index entries this rebuild orphaned, and drop the ones nothing
+   * wants.
+   *
+   * An entry is orphaned when its key is no longer in the live set, which does
+   * NOT mean it is worthless: the key carries the layer row (its name) as well
+   * as what the layer reads, so renaming a source orphans an entry that is
+   * still a perfectly correct index of that source. Such an entry is MOVED to
+   * the new key — snapshot, status, and any pass still in flight — rather than
+   * mined for its snapshot and restarted. The rename costs nothing at all,
+   * which is the point: re-reading a 3,000-note vault because the user edited
+   * its label is the bug this whole split exists to prevent.
+   *
+   * The match is on `validity`, which is what makes the handoff safe rather
+   * than merely convenient. Validity carries the indexing settings and the
+   * credential epoch, so an entry orphaned BY a policy change — a lowered
+   * document cap, a disconnected account — never matches anything and is
+   * dropped. It has to be: its answer was produced under rules the user has
+   * since changed, and handing it forward served a pre-change answer as if it
+   * were current (indefinitely, when the re-index then failed) and kept
+   * serving a private repo's content after Disconnect.
+   *
+   * Entries move before any caller can observe the rebuild, so there is no
+   * window in which one consumer sees the handoff and another misses it.
+   */
+  function adoptIndexes(next) {
+    const live = new Set(next.keys);
+    // Live rows with no entry yet, grouped by what would make an orphan valid
+    // for them. Rows that already have an entry are not looking for one.
+    const wanted = new Map();
+    next.keys.forEach((key, i) => {
+      if (indexes.has(key)) return;
+      const validity = next.validities[i];
+      if (!wanted.has(validity)) wanted.set(validity, []);
+      wanted.get(validity).push(key);
+    });
     for (const key of [...indexes.keys()]) {
       if (live.has(key)) continue;
       const entry = indexes.get(key);
-      if (entry?.snap && entry.identity !== null) salvage.set(entry.identity, entry.snap);
-      entry?.cancel?.();
       indexes.delete(key);
+      const claim = entry?.validity != null ? wanted.get(entry.validity)?.shift() : undefined;
+      if (claim === undefined) {
+        entry?.cancel?.();
+        continue;
+      }
+      // The entry's own completion handlers find themselves through
+      // `entry.key`, so a move is a single assignment rather than a rebind.
+      entry.key = claim;
+      indexes.set(claim, entry);
     }
-    return salvage;
   }
 
   /**
@@ -543,16 +560,14 @@ export function createEngineService({
     const open = openSources();
     const entries = open.sources.map((source, i) => {
       const key = open.keys[i];
-      const identity = open.identities[i];
       let entry = indexes.get(key);
       if (!entry) {
-        // A snapshot the last rebuild orphaned under a different key, for a
-        // layer that still reads the same thing: serve it through the re-index
-        // rather than showing an empty source. Consumed once — a later
-        // re-index must not resurrect an answer this old.
-        const salvaged = open.salvage?.get(identity) ?? null;
-        open.salvage?.delete(identity);
-        entry = startIndex(source, key, open.settings, { identity, previousSnap: salvaged });
+        // Nothing to inherit: an entry that could legitimately have been
+        // inherited was already moved here by adoptIndexes, before any caller
+        // reached this function. A row with no entry at this point is a row
+        // whose previous answer is not valid any more, and an empty source
+        // being re-read is the honest way to say so.
+        entry = startIndex(source, key, open.settings, { validity: open.validities[i] });
         indexes.set(key, entry);
       }
       return { source, key, entry, layer: (open.manifest.layers ?? [])[i] ?? {} };
@@ -560,24 +575,49 @@ export function createEngineService({
     return { ...open, entries };
   }
 
-  // `previousSnap` keeps the last good answer readable while a re-index runs,
-  // so a file edit refreshes the cascade without the UI blinking to empty.
-  // `dirty` is the coalesce flag: an invalidation that arrives mid-job sets it
-  // instead of cancelling, and the job starts one follow-up pass when it lands.
-  function startIndex(source, key, settings, { identity = null, previousSnap = null } = {}) {
+  /**
+   * Start one index pass over one source.
+   *
+   * `previousSnap` keeps the last good answer readable while a re-index runs,
+   * so a file edit refreshes the cascade without the UI blinking to empty —
+   * and, because that answer is genuinely usable, a pass with one does NOT
+   * report the source as `indexing`. It stays `ready` and raises `refreshing`
+   * alongside it: the data stays usable and the status stays honest while work
+   * proceeds in the background. Only a source with nothing to serve is
+   * `indexing`, which is the one case where a client has a reason to wait.
+   *
+   * `dirty` is the coalesce flag: an invalidation that arrives mid-pass sets it
+   * instead of cancelling, and the entry owes exactly one follow-up when this
+   * pass lands (see scheduleFollowUp for when it actually runs).
+   */
+  function startIndex(source, key, settings, { validity = null, previousSnap = null, passes = 1 } = {}) {
     const controller = new AbortController();
+    const refreshing = previousSnap !== null;
     const entry = {
-      status: "indexing",
-      phase: "queued",
+      key,
+      status: refreshing ? "ready" : "indexing",
+      phase: refreshing ? "ready" : "queued",
       loaded: 0,
       total: null,
       snap: previousSnap,
-      identity,
+      validity,
+      // Whether a pass is in flight, tracked separately from `status` — which
+      // now says "ready" through a background refresh — because every decision
+      // about coalescing and waiting is about the PASS, not about whether the
+      // source can be read.
+      running: true,
+      refreshing,
+      passes,
       dirty: false,
+      followUp: null,
       error: null,
       startedAt: Date.now(),
       finishedAt: null,
-      cancel: () => controller.abort(new Error("Indexing superseded")),
+      cancel: () => {
+        clearTimeout(entry.followUp);
+        entry.followUp = null;
+        controller.abort(new Error("Indexing superseded"));
+      },
     };
     const budget = settings.sourceBudgetMs;
     withDeadline(
@@ -587,44 +627,86 @@ export function createEngineService({
       () => controller.abort(new Error("Indexing timed out")),
     )
       .then((snap) => {
-        if (indexes.get(key) !== entry) return; // superseded by a newer config
+        if (indexes.get(entry.key) !== entry) return; // superseded by a newer config
         entry.snap = snap;
         entry.status = "ready";
         entry.phase = "ready";
       })
       .catch((err) => {
-        if (indexes.get(key) !== entry) return;
+        if (indexes.get(entry.key) !== entry) return;
         entry.status = "error";
         entry.phase = "error";
         entry.error = err.message;
       })
       .finally(() => {
+        entry.running = false;
+        entry.refreshing = false;
         entry.finishedAt = Date.now();
         // Whatever changed on disk while this pass ran is not in the snapshot
         // it just produced, so exactly one more pass is owed — after a failure
         // too, where the change may well be the fix.
-        if (indexes.get(key) === entry && entry.dirty) {
+        if (indexes.get(entry.key) === entry && entry.dirty) {
           entry.dirty = false;
-          restartIndex(key, entry);
+          scheduleFollowUp(entry);
         }
       });
     return entry;
+  }
+
+  /**
+   * How long an entry must go untouched before the follow-up pass it owes
+   * actually runs.
+   *
+   * Without a gate, a source under sustained editing chains passes forever:
+   * every pass is dirtied before it finishes, so it starts another, and each
+   * one is a full re-walk and re-read of every document in the layer. A user
+   * typing in an open vault got a pegged core and continuous disk I/O for as
+   * long as they kept typing — measurably: a 3,000-note vault under a 300ms
+   * rewrite of one real .md never settled in 25 seconds.
+   *
+   * The interval is the last pass's own duration, floored and capped. That
+   * bounds re-index work to roughly half the wall clock under ANY churn rate,
+   * without guessing an editor's autosave cadence: a big vault (seconds per
+   * pass) waits seconds, a small one (tens of milliseconds) waits the floor and
+   * still feels immediate. The floor is comfortably above the watcher's own
+   * 250ms debounce so the two do not fight.
+   */
+  const FOLLOW_UP_MIN_QUIET_MS = 1000;
+  const FOLLOW_UP_MAX_QUIET_MS = 15000;
+  function followUpQuietMs(entry) {
+    const lastPassMs = (entry.finishedAt ?? Date.now()) - entry.startedAt;
+    return Math.min(FOLLOW_UP_MAX_QUIET_MS, Math.max(FOLLOW_UP_MIN_QUIET_MS, lastPassMs));
+  }
+
+  // Arm (or re-arm) the follow-up. Every further invalidation pushes the window
+  // back, so a burst of edits costs one extra pass once it ends rather than one
+  // pass per edit while it continues.
+  function scheduleFollowUp(entry) {
+    clearTimeout(entry.followUp);
+    const quiet = followUpQuietMs(entry);
+    entry.followUp = setTimeout(() => {
+      entry.followUp = null;
+      restartIndex(entry);
+    }, quiet);
+    entry.followUp.unref?.();
   }
 
   // The follow-up pass a coalesced invalidation asked for. The adapter is
   // re-resolved from the current source set rather than reused: a rebuild may
   // have replaced it while the finished job ran, and deferClose kills the old
   // set's MCP children fifteen seconds later.
-  function restartIndex(key, entry) {
+  function restartIndex(entry) {
     if (closed) return;
     let open;
     try { open = openSources(); } catch { return; } // manifest unreadable — nothing to refresh
-    if (indexes.get(key) !== entry) return; // pruned or superseded while we looked
+    const key = entry.key; // openSources may have adopted this entry under a new one
+    if (indexes.get(key) !== entry) return; // dropped or superseded while we looked
     const i = open.keys.indexOf(key);
     if (i === -1) return; // the layer this index belonged to is gone
     indexes.set(key, startIndex(open.sources[i], key, open.settings, {
-      identity: open.identities[i],
+      validity: open.validities[i],
       previousSnap: entry.snap,
+      passes: entry.passes + 1,
     }));
   }
 
@@ -632,12 +714,17 @@ export function createEngineService({
    * Wait (up to `ms`) for every source to finish indexing. Requests never call
    * this by default — it exists for clients that explicitly ask (`?wait=`) and
    * for tests that need a settled graph to assert on.
+   *
+   * Settled means no pass running and none owed, not `status !== "indexing"`:
+   * a background refresh reports `ready` throughout, and a caller that asks to
+   * wait is asking for the answer AFTER the change it just made, not for
+   * whatever was current before it.
    */
   async function awaitIndexes(ms) {
     const deadline = Date.now() + Math.max(0, ms);
     for (;;) {
       const { entries } = ensureIndexes();
-      if (!entries.some((e) => e.entry.status === "indexing")) return;
+      if (!entries.some((e) => e.entry.running || e.entry.followUp)) return;
       if (Date.now() >= deadline) return;
       await sleep(25);
     }
@@ -663,7 +750,7 @@ export function createEngineService({
    * `layerName` null re-indexes every layer (a section write can touch several).
    *
    * An invalidation that lands mid-index does NOT cancel the running pass: it
-   * marks the entry dirty and the job starts one follow-up when it lands. A
+   * marks the entry dirty and the job owes one follow-up when it lands. A
    * cancel-and-restart is fine for a single save but catastrophic under a
    * source that writes continuously — an open Obsidian vault rewrites its
    * app-state file every few hundred milliseconds, which is shorter than any
@@ -671,6 +758,12 @@ export function createEngineService({
    * reached ready. Filtering the watcher (see onChange) keeps that particular
    * churn out; coalescing is what makes a restart storm impossible rather than
    * merely unlikely, for the genuine edits a filter must let through.
+   *
+   * Three states, and only the last of them starts work now: a pass is running
+   * (coalesce into it), a follow-up is already waiting out its quiet period
+   * (push the window back — this is what keeps sustained editing from chaining
+   * full re-reads), or the entry is idle (refresh it immediately, so a single
+   * save lands promptly).
    */
   function invalidateIndex(layerName = null) {
     if (closed) return;
@@ -680,13 +773,18 @@ export function createEngineService({
       if (layerName !== null && source.name !== layerName) return;
       const key = open.keys[i];
       const previous = indexes.get(key);
-      if (previous && previous.status === "indexing") {
+      if (previous?.running) {
         previous.dirty = true;
         return;
       }
+      if (previous?.followUp) {
+        scheduleFollowUp(previous);
+        return;
+      }
       indexes.set(key, startIndex(source, key, open.settings, {
-        identity: open.identities[i],
+        validity: open.validities[i],
         previousSnap: previous?.snap ?? null,
+        passes: (previous?.passes ?? 0) + 1,
       }));
     });
   }
@@ -776,6 +874,13 @@ export function createEngineService({
       loaded: entry.loaded,
       total: entry.total,
       elapsedMs: (entry.finishedAt ?? Date.now()) - entry.startedAt,
+      // Additive, and orthogonal to `status`: this source is serving a good
+      // snapshot AND re-reading in the background. A client that ignores it
+      // sees exactly what it saw before — a ready source — which is the point.
+      refreshing: entry.refreshing === true,
+      // How many passes this entry has run, carried across refreshes. Cheap to
+      // report and the only way to see a re-index storm from outside.
+      passes: entry.passes ?? 1,
     };
   }
 
@@ -1102,6 +1207,7 @@ export function createEngineService({
       parts.push([
         source.name, source.level, entry.snap?.gen ?? 0,
         entry.status, entry.phase, entry.loaded, entry.total ?? "",
+        entry.refreshing === true ? "refreshing" : "",
         entry.error ?? "",
         health ? `${health.ok}:${health.lastErrorAt ?? ""}:${health.lastSuccessAt ?? ""}` : "",
       ].join("~"));
@@ -1142,9 +1248,15 @@ export function createEngineService({
         loaded: entry.loaded,
         total: entry.total,
         conceptCount: entry.snap?.ids.length ?? 0,
+        // Same additive signal /api/graph carries: serving a snapshot AND
+        // re-reading behind it. Never a reason to show a source as unready.
+        refreshing: entry.refreshing === true,
         error: degraded ? health.lastError : entry.error ?? null,
       };
     });
+    // A source with nothing to serve yet. A source refreshing behind a good
+    // snapshot is deliberately NOT here: it has an answer, so a client has
+    // nothing to wait for and no reason to hold a spinner up in front of it.
     const pending = entries.filter((e) => e.entry.status === "indexing").map((e) => e.source.name);
     return {
       generation: bumpGeneration(entries),

@@ -50,9 +50,17 @@ and `npm test`; CI runs both. dev/build/typecheck/test all regenerate
   the chrome. Files is live-mode only: it browses and edits the real files
   behind each layer through the engine's `/api/files` + `/api/file`, with a
   rendered/raw toggle for Markdown. Sources manages the layers themselves —
-  rename + re-level (PATCH `/api/sources`), remove with confirm (DELETE),
-  Sync-now for github kinds (POST `/api/sources/sync`) — read-only in demo
-  mode; `live: true` layers get a capture warning on rename/remove.
+  rename + re-level + repoint a folder-backed source (PATCH `/api/sources`),
+  remove with confirm (DELETE), Sync-now for github kinds (POST
+  `/api/sources/sync`) — read-only in demo mode; `live: true` layers get a
+  capture warning on rename/remove.
+- **Files ⇄ Concepts** — the two ends of one thing, and walkable both ways. An
+  open document names the concept it resolves to (`conceptForFile`: the file's
+  `rel` minus its document extension, matched against a loaded concept id —
+  verified 3,000/3,000 against a real `files` layer); each contributor in
+  `ConceptDetail` gets an "Open file" link, but only where `/api/files` lists a
+  file for that (source, concept id) pair, so an MCP or REST-read contributor
+  gets no affordance rather than one that opens on an error.
 - **Setup wizard** — `src/components/SetupWizard.tsx` has two shapes from one
   component: the first-run guided narrative (personal → optional team →
   optional company MCP → review) and a one-step add-a-source mode (four-kind

@@ -195,8 +195,14 @@ export interface Store {
   /** Narrow the navigator to one source, or clear it. Leaves the open file alone. */
   setFilesScope: (layer: string | null) => void
   setFilesPath: (path: string | null) => void
-  /** Go to Files scoped to a source — the "Browse files" action and its palette twin. */
-  openFilesScope: (layer: string | null) => void
+  /**
+   * Go to Files scoped to a source — the "Browse files" action and its palette
+   * twin. `file` (an engine `<layer>/<rel>` path) opens one specific file, for
+   * the cross-link from a concept's contributor.
+   */
+  openFilesScope: (layer: string | null, file?: string | null) => void
+  /** Go to Concepts on one concept — the cross-link from the file behind it. */
+  openConcept: (id: string) => void
   setQuery: (q: string) => void
   openChat: () => void
   closeChat: () => void
@@ -559,12 +565,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
    * going through setView, which would ask a second time — and drops an open
    * file that belongs to a different source, so the navigator and the editor
    * never disagree about which source you are looking at.
+   *
+   * `file` is the engine's own `<layer>/<rel>` path, for arriving at one
+   * specific file (a concept's "open file" link). Passing one from another
+   * source is a caller bug, so it is ignored rather than silently changing the
+   * scope out from under the navigator.
    */
-  const openFilesScope = useCallback((layer: string | null) => {
+  const openFilesScope = useCallback((layer: string | null, file?: string | null) => {
     if (!dispatchNavigationGuard()) return
     setFilesScopeState(layer)
-    setFilesPathState((current) => (layer && current && !current.startsWith(`${layer}/`) ? null : current))
+    const wanted = file && (!layer || file.startsWith(`${layer}/`)) ? file : null
+    if (wanted) setFilesPathState(wanted)
+    else setFilesPathState((current) => (layer && current && !current.startsWith(`${layer}/`) ? null : current))
     setViewState('files')
+  }, [])
+
+  /**
+   * "Open the concept behind this file" — the mirror of openFilesScope, and
+   * guarded once for the same reason: setView would ask about unsaved changes,
+   * and then setSelConcept would have already moved the selection whether the
+   * user said yes or not.
+   */
+  const openConcept = useCallback((id: string) => {
+    if (!dispatchNavigationGuard()) return
+    setConceptRouteMode('deep')
+    setSelConceptState(id)
+    setViewState('concepts')
   }, [])
 
   useEffect(() => {
@@ -779,10 +805,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     chatOpen, chatBusy, chatInput, chatMessages,
     concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
-    setFilesScope, setFilesPath, openFilesScope,
+    setFilesScope, setFilesPath, openFilesScope, openConcept,
     openChat, closeChat, setChatInput,
     filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload,
-  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, setView, setQuery, setFilesScope, setFilesPath, openFilesScope, openChat, closeChat])
+  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, setView, setQuery, setFilesScope, setFilesPath, openFilesScope, openConcept, openChat, closeChat])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

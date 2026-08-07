@@ -108,6 +108,13 @@ declare global {
       }
       /** Open the native macOS directory picker. Null means the user canceled. */
       chooseFolder?: () => Promise<string | null>
+      /**
+       * Show a file in Finder. Takes a source name and a path INSIDE that
+       * source — never an absolute path. The main process resolves it against
+       * the manifest and refuses anything that escapes the source's folder,
+       * answering `{ ok: false, error }` rather than throwing.
+       */
+      revealFile?: (layer: string, rel: string) => Promise<{ ok: boolean; error?: string }>
       /** Fixed native operations for ContextCake's own command-line tool. */
       cli: {
         getStatus: () => Promise<CliResult>

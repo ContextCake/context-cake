@@ -1,11 +1,66 @@
+import { useMemo } from 'react'
 import { C, css, lc, MONO, conceptTypeStyle } from '../theme'
 import { layerName } from '../data'
 import type { Concept } from '../data'
+import { useLayerFiles } from '../layer-files'
+import { useStore } from '../store'
 import { LayerChip } from './LayerChip'
+
+/** Which document extension wins when one concept id has several files behind it. */
+const DOC_EXT = ['.md', '.markdown', '.mdx', '.txt']
+
+/** JSON, not a joined string: a source name may contain spaces, and
+ *  "a b" + "c" must never collide with "a" + "b c". */
+const contributorKey = (layer: string, conceptId: string) => JSON.stringify([layer, conceptId])
+
+/**
+ * (source name, concept id) → the engine file path behind it.
+ *
+ * Built from the real `/api/files` listing rather than guessed as
+ * `<id>.md`, so the link is only ever offered for a file that exists — a
+ * `files`-kind layer may hold the concept as `.mdx` or `.txt`, and a
+ * contributor read over MCP or the GitHub API keeps no file here at all and is
+ * therefore absent from the listing. That absence is the gate: no entry, no
+ * link, and so no affordance that opens on an error.
+ */
+function useFileByContributor(): Map<string, string> {
+  const { mode, sources } = useStore()
+  const { layers } = useLayerFiles(mode === 'live', sources.length)
+  return useMemo(() => {
+    const best = new Map<string, { path: string; rank: number }>()
+    for (const entry of layers ?? []) {
+      for (const file of entry.files) {
+        const rank = DOC_EXT.indexOf(file.ext)
+        if (rank === -1) continue
+        const key = contributorKey(entry.layer, file.rel.slice(0, -file.ext.length))
+        const current = best.get(key)
+        if (!current || rank < current.rank) best.set(key, { path: file.path, rank })
+      }
+    }
+    return new Map([...best].map(([key, value]) => [key, value.path]))
+  }, [layers])
+}
+
+/** "Open file" for one contributor, or nothing when that layer keeps no file here. */
+function OpenFile({ layer, path, conceptId }: { layer: string; path: string | undefined; conceptId: string }) {
+  const { openFilesScope } = useStore()
+  if (!path) return null
+  return (
+    <button
+      type="button"
+      className="cc-h-bd-strong"
+      aria-label={`Open the ${layer} file behind ${conceptId}`}
+      onClick={() => openFilesScope(layer, path)}
+      style={css(`flex:0 0 auto; padding:2px 8px; border:1px solid ${C.line}; border-radius:999px; background:${C.raised}; cursor:pointer; font:inherit; font-size:10.5px; font-weight:600; color:${C.caption};`)}
+    >Open file</button>
+  )
+}
 
 /** The resolved read of a concept — provenance chips per section + inline dissent.
  *  Shared by the Concepts view and the Canvas node slide-over. */
 export function ConceptDetail({ concept }: { concept: Concept }) {
+  const fileByContributor = useFileByContributor()
+  const fileFor = (sourceLayer: string) => fileByContributor.get(contributorKey(sourceLayer, concept.id))
   return (
     <>
       <div style={css('display:flex; align-items:center; gap:10px;')}>
@@ -32,6 +87,7 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
                 <span aria-hidden="true" style={css(`flex:0 0 auto; width:10px; height:10px; border-radius:3px; background:${col.strokeE};`)} />
                 <h3 style={css('margin:0; font-size:14px; font-weight:600;')}>{s.name}</h3>
                 <span style={css(`margin-left:auto; flex:0 0 auto; font-family:${MONO}; font-size:10.5px; color:${col.text2};`)}>{provenance}</span>
+                <OpenFile layer={s.sourceLayer} path={fileFor(s.sourceLayer)} conceptId={concept.id} />
               </div>
 
               {s.suppressed ? (
@@ -54,6 +110,7 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
                           <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:1px 6px; border-radius:999px; background:#FFFFFF; color:${dc.text}; border:1px solid ${dc.strokeE}; margin-right:2px;`)}>{layerName(d.layer)}</span> says <span style={{ color: 'var(--cc-amber-text2)' }}>"{d.value}"</span> — overridden here.
                         </div>
                         {d.updated && <span style={css(`flex:0 0 auto; font-family:${MONO}; font-size:10px; color:${C.amberText2};`)}>{d.updated}</span>}
+                        <OpenFile layer={d.sourceLayer} path={fileFor(d.sourceLayer)} conceptId={concept.id} />
                       </div>
                     )
                   })}

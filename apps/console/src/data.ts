@@ -68,9 +68,16 @@ export interface Conflict {
   history: ConflictResolutionRecord[]
 }
 
-export interface Dissent { layer: LayerId; value: string; updated?: string | null }
+/** `sourceLayer` is the source's real name; `layer` is the lane it renders in. */
+export interface Dissent { layer: LayerId; sourceLayer: string; value: string; updated?: string | null }
 export interface ConceptSection {
   name: string; winner: LayerId; value: string
+  /**
+   * The name of the source that won this section — the manifest's own layer
+   * name, not the three-lane `winner`. Two sources can share a lane, and only
+   * this string identifies the one holding the file behind the value.
+   */
+  sourceLayer: string
   key?: string; updated?: string | null; suppressed?: boolean
   /** All dissenting layers (surfaced, not hidden). */
   dissents?: Dissent[]

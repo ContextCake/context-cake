@@ -1,10 +1,17 @@
 // The `/api/files` listing, shared by the two views that need it.
 //
 // Sources reads it for a source's file count and root path; Files reads it to
-// build the navigator tree. One module so both ask the same question the same
-// way — and so a source that owns no local files (a remote graph, a REST-read
-// repo) is absent from the payload in exactly one place, which is what lets
-// both views explain that state instead of rendering an empty list.
+// build the navigator tree; the concept detail reads it to find the file
+// behind each contributor. One module so they all ask the same question the
+// same way — and so a source that owns no local files (a remote graph, a
+// REST-read repo) is absent from the payload in exactly one place, which is
+// what lets every consumer explain that state instead of rendering an empty
+// list or an "open file" link that opens nothing.
+//
+// Deliberately uncached. The walk is bounded and cheap — 20–40ms and 440KB on
+// a 3,030-file vault — so a per-mount fetch costs less than the staleness a
+// shared cache would introduce (a note added in Finder has to show up the next
+// time you look).
 import { useEffect, useState } from 'react'
 import { apiFetch } from './api'
 import type { LayerFiles } from './types'

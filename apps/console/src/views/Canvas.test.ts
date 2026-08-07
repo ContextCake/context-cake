@@ -11,8 +11,9 @@ function concept(id: string, layer: Concept['layers'][number], dissent?: Concept
     sections: [{
       name: 'summary',
       winner: layer,
+      sourceLayer: layer,
       value: id,
-      dissents: dissent ? [{ layer: dissent, value: `${id}-dissent` }] : undefined,
+      dissents: dissent ? [{ layer: dissent, sourceLayer: dissent, value: `${id}-dissent` }] : undefined,
     }],
   }
 }

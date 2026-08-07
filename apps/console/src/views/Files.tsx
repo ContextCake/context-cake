@@ -7,14 +7,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { C, css, lc, MONO, type LayerId } from '../theme'
 import { apiFetch } from '../api'
+import type { Concept } from '../data'
 import { buildTree, FileTree } from '../components/FileTree'
 import { Markdown } from '../components/Markdown'
 import { useDetailSurface } from '../components/useDetailSurface'
 import { useLayerFiles } from '../layer-files'
+import { useReveal } from '../reveal'
 import { useStore } from '../store'
 import type { FileContent, LayerFile } from '../types'
 
 type Tab = 'rendered' | 'raw'
+
+/** Extensions the cascade reads as documents — a concept id is the rel minus one of these. */
+const DOC_EXT = /\.(md|markdown|mdx|txt)$/i
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await apiFetch(path, { headers: { accept: 'application/json' } })
@@ -73,8 +78,25 @@ function absentReason(kind: string | undefined): string {
   return 'This source has no folder on disk, so there are no files to browse. Its content is in Knowledge → Concepts.'
 }
 
+/**
+ * The concept a document file resolves to, if any.
+ *
+ * A concept id is a file's path inside its layer with the document extension
+ * taken off — the same derivation the engine's adapters make, which is why the
+ * link can be drawn without asking the server anything. A file that matches no
+ * concept gets no strip: the cascade genuinely does not read it (a note under
+ * the size cap, an asset, a file added since the last index).
+ */
+function conceptForFile(file: FileContent | null, concepts: Concept[]): { concept: Concept; conflicts: number } | null {
+  if (!file || !DOC_EXT.test(file.ext)) return null
+  const id = file.rel.replace(DOC_EXT, '')
+  const concept = concepts.find((candidate) => candidate.id === id)
+  if (!concept) return null
+  return { concept, conflicts: concept.sections.filter((s) => (s.dissents?.length ?? 0) > 0).length }
+}
+
 export function Files() {
-  const { mode, sources, reload, query, filesScope, filesPath, setFilesScope, setFilesPath } = useStore()
+  const { mode, concepts, sources, reload, query, filesScope, filesPath, setFilesScope, setFilesPath, openConcept } = useStore()
   const [file, setFile] = useState<FileContent | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('rendered')
@@ -87,6 +109,7 @@ export function Files() {
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const navigatorRef = useRef<HTMLElement | null>(null)
   const detail = useDetailSurface<HTMLDivElement, HTMLElement>(detailOpen)
+  const finder = useReveal()
 
   const live = mode === 'live'
   const selected = filesPath
@@ -288,6 +311,7 @@ export function Files() {
   const scopeAbsent = Boolean(filesScope) && layers !== null && !layers.some((l) => l.layer === filesScope)
   const truncated = visibleLayers.filter((layer) => layer.truncated)
   const scopeColor = filesScope ? lc(layerIds.get(filesScope) ?? 'team') : null
+  const resolved = conceptForFile(file, concepts)
 
   return (
     <div ref={detail.containerRef} className="cc-files-workspace" style={css('display:grid; grid-template-columns:minmax(220px, 300px) minmax(0, 1fr); gap:0; height:100%; min-height:0;')}>
@@ -381,6 +405,18 @@ export function Files() {
                 </div>
               )}
 
+              {/* Desktop only, and absent rather than disabled elsewhere: the
+                  web build has no Finder to reveal anything in. */}
+              {finder.available && (
+                <button
+                  type="button"
+                  className="cc-h-bd-strong"
+                  aria-label={`Reveal ${file.rel} in Finder`}
+                  onClick={() => void finder.reveal(file.layer, file.rel)}
+                  style={css(`padding:7px 12px; border-radius:8px; cursor:pointer; font:inherit; font-size:12px; font-weight:600; border:1px solid ${C.line}; background:transparent; color:${C.caption};`)}
+                >Reveal in Finder</button>
+              )}
+
               {file.editable && (
                 <button
                   type="button"
@@ -391,8 +427,38 @@ export function Files() {
               )}
             </header>
 
+            {/* What this file becomes in the cascade. The point of the whole
+                view is that files and concepts are two ends of one thing, and
+                until now you could only walk it in one direction. */}
+            {resolved && (
+              <div style={css(`display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 16px; border-bottom:1px solid ${C.line}; background:${C.surface};`)}>
+                <span style={css(`font-size:10px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; color:${C.faint};`)}>Resolves to</span>
+                <button
+                  type="button"
+                  className="cc-h-bd-strong"
+                  aria-label={`Open the concept ${resolved.concept.title} in Knowledge`}
+                  onClick={() => openConcept(resolved.concept.id)}
+                  style={css(`display:inline-flex; align-items:center; gap:8px; padding:4px 10px; border:1px solid ${C.line}; border-radius:999px; background:${C.raised}; cursor:pointer; font:inherit; font-size:12px; font-weight:600; color:${C.ink};`)}
+                >
+                  {resolved.concept.title}
+                  <code style={css(`font-family:${MONO}; font-size:10.5px; font-weight:500; color:${C.caption};`)}>{resolved.concept.id}</code>
+                </button>
+                {/* Icon + words, never the amber alone — the same "conflict"
+                    marker the canvas node uses. */}
+                {resolved.conflicts > 0 && (
+                  <span style={css(`display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; color:${C.amberText};`)}>
+                    <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></svg>
+                    {resolved.conflicts} conflict{resolved.conflicts === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+            )}
+
             {fileError && (
               <p role="alert" style={css(`margin:0; padding:8px 16px; font-size:12px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; color:var(--cc-amber-text);`)}>{fileError}</p>
+            )}
+            {finder.error && (
+              <p role="alert" style={css(`margin:0; padding:8px 16px; font-size:12px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; color:var(--cc-amber-text);`)}>{finder.error}</p>
             )}
 
             <div style={css('flex:1; min-height:0; overflow:auto;')}>

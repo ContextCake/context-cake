@@ -7,7 +7,15 @@ import { Files } from './Files'
 const mocks = vi.hoisted(() => ({
   apiFetch: vi.fn(),
   reload: vi.fn(),
-  store: { mode: 'live', sources: [] as unknown[], query: '', scope: null as string | null, path: null as string | null },
+  openConcept: vi.fn(),
+  store: {
+    mode: 'live',
+    sources: [] as unknown[],
+    concepts: [] as unknown[],
+    query: '',
+    scope: null as string | null,
+    path: null as string | null,
+  },
 }))
 
 vi.mock('../api', () => ({ apiFetch: mocks.apiFetch }))
@@ -23,12 +31,14 @@ vi.mock('../store', async () => {
       return {
         mode: mocks.store.mode,
         sources: mocks.store.sources,
+        concepts: mocks.store.concepts,
         reload: mocks.reload,
         query: mocks.store.query,
         filesScope,
         filesPath,
         setFilesScope,
         setFilesPath,
+        openConcept: mocks.openConcept,
       }
     },
   }
@@ -94,8 +104,10 @@ beforeEach(() => {
   root = createRoot(container)
   mocks.apiFetch.mockReset()
   mocks.reload.mockReset()
+  mocks.openConcept.mockReset()
   mocks.store.mode = 'live'
   mocks.store.sources = []
+  mocks.store.concepts = []
   mocks.store.query = ''
   mocks.store.scope = null
   mocks.store.path = null
@@ -499,5 +511,55 @@ describe('Files navigator tree', () => {
     mocks.store.sources = [{ name: 'vault', layer: 'personal', sourceKind: 'files' }]
     await act(async () => root.render(<Files />))
     expect(container.textContent).toContain('Nothing matches that')
+  })
+})
+
+describe('Files → concept', () => {
+  it('links an open document to the concept it resolves to, conflicts named not just coloured', async () => {
+    mocks.store.concepts = [{
+      id: 'meeting',
+      title: 'Weekly sync',
+      type: 'note',
+      layers: ['personal'],
+      sections: [
+        { name: 'Decision', winner: 'personal', sourceLayer: 'personal', value: 'x', dissents: [{ layer: 'team', sourceLayer: 'team-docs', value: 'y' }] },
+        { name: 'Owner', winner: 'personal', sourceLayer: 'personal', value: 'z', dissents: [] },
+      ],
+    }]
+    await act(async () => root.render(<Files />))
+
+    expect(container.textContent).toContain('Resolves to')
+    // The count is words, not a hue — the a11y rule this strip has to keep.
+    expect(container.textContent).toContain('1 conflict')
+
+    await act(async () => button('Weekly syncmeeting').click())
+    expect(mocks.openConcept).toHaveBeenCalledWith('meeting')
+  })
+
+  it('offers no strip for a file the cascade does not read', async () => {
+    // Same file, no matching concept id: the cascade genuinely does not serve
+    // it, and a link to a concept that isn't there would be a lie.
+    mocks.store.concepts = [{ id: 'something-else', title: 'Other', type: 'note', layers: ['personal'], sections: [] }]
+    await act(async () => root.render(<Files />))
+
+    expect(container.textContent).not.toContain('Resolves to')
+  })
+
+  it('hides Reveal in Finder outside the desktop app, and reveals a layer-relative path inside it', async () => {
+    mocks.store.concepts = []
+    await act(async () => root.render(<Files />))
+    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Reveal in Finder')).toBe(false)
+
+    const revealFile = vi.fn().mockResolvedValue({ ok: true })
+    ;(window as unknown as { __CC_DESKTOP?: unknown }).__CC_DESKTOP = { revealFile }
+    await act(async () => root.render(<Files key="desktop" />))
+    await act(async () => button('Reveal in Finder').click())
+    // A source name and a path inside it — never an absolute path.
+    expect(revealFile).toHaveBeenCalledWith('personal', 'meeting.md')
+
+    revealFile.mockResolvedValue({ ok: false, error: 'That path is outside the folder for “personal”.' })
+    await act(async () => button('Reveal in Finder').click())
+    expect(container.textContent).toContain('outside the folder')
+    delete (window as unknown as { __CC_DESKTOP?: unknown }).__CC_DESKTOP
   })
 })

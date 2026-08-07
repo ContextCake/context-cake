@@ -911,7 +911,11 @@ function formatUtcTimestamp(value) {
   return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
-function stableJson(value) {
+// Key-order-independent JSON. Exported because the service keys its background
+// indexes on layer configuration, and JSON.stringify would mint a new key —
+// re-reading the whole source — for a manifest rewrite that only reordered a
+// layer's fields.
+export function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (!value || typeof value !== "object") return JSON.stringify(value);
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;

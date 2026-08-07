@@ -44,6 +44,7 @@ import {
   getManifestProfileLayers,
   mutateContextManifest,
   readContextManifest,
+  stableJson,
   withManifestLockAsync,
 } from "./manifest.mjs";
 
@@ -126,7 +127,11 @@ async function snapshotSource(source, entry, signal = null) {
   };
   throwIfAborted();
   entry.phase = "scanning";
-  const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds() : [];
+  // The signal goes INTO the listing, not just around it: scanning a big tree
+  // is one long await, so a cancel that only fires between phases leaves the
+  // walk running to completion — and a churning layer would stack one live walk
+  // per cancelled job. Adapters that ignore the argument are unaffected.
+  const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds({ signal }) : [];
   throwIfAborted();
   entry.phase = "loading";
   entry.total = ids.length;
@@ -156,6 +161,56 @@ function snapshotView(source, snap) {
     level: source.level,
     async loadConcept(id) { return snap.concepts.get(id) ?? null; },
   };
+}
+
+// A layer's *content identity*: everything that decides what this source reads,
+// with `name` and `level` deliberately left out. Both are presentation — the
+// snapshot holds only {ids, concepts, tokens}, and snapshotView reads name and
+// level off the live source object (rebuilt from the manifest by every
+// openSources) when a concept is resolved, never from the snapshot. So a rename
+// or a precedence change lands immediately and costs nothing, where keying on
+// the whole layer blanked the source to zero concepts and re-read every file.
+//
+// A denylist rather than a list of known identity fields, on purpose: a source
+// option added later changes what gets read until someone proves otherwise, so
+// anything new must invalidate the index by default.
+const PRESENTATION_FIELDS = new Set(["name", "level"]);
+
+function layerIdentity(layer) {
+  // Normalized rather than copied through, so a manifest rewrite that spells
+  // out the default kind does not re-read the whole source.
+  const identity = { kind: layer?.source ?? "okf-local" };
+  for (const [field, value] of Object.entries(layer ?? {})) {
+    if (field === "source" || PRESENTATION_FIELDS.has(field)) continue;
+    identity[field] = value;
+  }
+  return stableJson(identity);
+}
+
+// The watcher must filter exactly what the walk filters, or a file the index
+// would never read still costs a full re-index. This is walkDocs' skip rule
+// (dot-entries and node_modules), applied to the path fs.watch reports.
+// Obsidian rewrites .obsidian/workspace.json every few hundred milliseconds for
+// as long as a vault is open, and that one unread file is why a user's vault
+// sat at zero concepts indefinitely.
+//
+// A null filename — macOS can report one — is unknown, not uninteresting. It
+// invalidates: a missed edit is a wrong answer, a needless re-index is only
+// work.
+function isSkippedPath(filename) {
+  if (filename == null) return false;
+  return String(filename).split(/[\\/]/).some((segment) => segment.startsWith(".") || segment === "node_modules");
+}
+
+// The same argument for extensions, but only where the answer is certain. An
+// entry with no extension may well be a directory — a folder rename delivers
+// the folder, never the documents inside it — so it counts as a change. An
+// image dropped into attachments/ does not.
+function isIndexableFile(filename, kind) {
+  if (filename == null) return true;
+  const ext = path.extname(String(filename).split(/[\\/]/).pop()).toLowerCase();
+  if (!ext) return true;
+  return (kind === "files" ? FILES_EXTENSIONS : [".md"]).includes(ext);
 }
 
 const sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
@@ -263,22 +318,31 @@ export function createEngineService({
     const manifest = { ...stored, layers: getManifestProfileLayers(stored) };
     const settings = resolveSettings(manifest);
     const layers = manifest.layers;
+    // What a layer *reads*, with the two fields that only decide how it is
+    // presented left out. See layerIdentity().
+    const identities = layers.map(layerIdentity);
     const next = {
       stamp,
       manifest,
       settings,
+      identities,
       sources: buildSources(manifest, MANIFEST_DIR, { tokens: tokenState.tokens }),
       // Identity of a source's *configuration* (plus the settings that govern
       // indexing, plus the credential epoch for layers that actually name a
       // credential). A token that arrives after an anonymous GitHub index must
       // invalidate that index, but connecting an account must not rescan every
       // local folder and MCP graph in the cascade.
-      keys: layers.map((l) => `${JSON.stringify(l)}::${JSON.stringify(settings)}::t${l.source === "github" && l.auth ? tokenState.epoch : 0}`),
+      keys: identities.map((identity, i) => {
+        const l = layers[i];
+        return `${identity}::${stableJson(settings)}::t${l.source === "github" && l.auth ? tokenState.epoch : 0}`;
+      }),
     };
     const prev = cache;
     cache = next;
     deferClose(prev);
-    pruneIndexes(next.keys);
+    // Snapshots from entries this rebuild orphaned, so a key change that did
+    // NOT change what the layer reads can hand its answer to the replacement.
+    next.salvage = pruneIndexes(next.keys);
     // Deferred: syncWatchers calls openSources() itself, and cache is now set,
     // so this returns immediately rather than recursing.
     queueMicrotask(() => { try { syncWatchers(); } catch { /* watching is best effort */ } });
@@ -318,13 +382,24 @@ export function createEngineService({
 
   // ---- background index ------------------------------------------------------
 
+  // Drop index entries no live key claims any more, handing back what they had
+  // read. A key carries the settings and the credential epoch as well as the
+  // layer's identity, so changing an indexing limit or connecting an account
+  // orphans an entry whose *content identity* is untouched — the replacement
+  // has to re-read, but it must not blank the source to zero concepts while it
+  // does. Keyed by identity so the handoff survives the key change that caused
+  // it.
   function pruneIndexes(keys) {
     const live = new Set(keys);
+    const salvage = new Map();
     for (const key of [...indexes.keys()]) {
       if (live.has(key)) continue;
-      indexes.get(key)?.cancel?.();
+      const entry = indexes.get(key);
+      if (entry?.snap && entry.identity !== null) salvage.set(entry.identity, entry.snap);
+      entry?.cancel?.();
       indexes.delete(key);
     }
+    return salvage;
   }
 
   /**
@@ -336,9 +411,16 @@ export function createEngineService({
     const open = openSources();
     const entries = open.sources.map((source, i) => {
       const key = open.keys[i];
+      const identity = open.identities[i];
       let entry = indexes.get(key);
       if (!entry) {
-        entry = startIndex(source, key, open.settings);
+        // A snapshot the last rebuild orphaned under a different key, for a
+        // layer that still reads the same thing: serve it through the re-index
+        // rather than showing an empty source. Consumed once — a later
+        // re-index must not resurrect an answer this old.
+        const salvaged = open.salvage?.get(identity) ?? null;
+        open.salvage?.delete(identity);
+        entry = startIndex(source, key, open.settings, { identity, previousSnap: salvaged });
         indexes.set(key, entry);
       }
       return { source, key, entry, layer: (open.manifest.layers ?? [])[i] ?? {} };
@@ -348,7 +430,9 @@ export function createEngineService({
 
   // `previousSnap` keeps the last good answer readable while a re-index runs,
   // so a file edit refreshes the cascade without the UI blinking to empty.
-  function startIndex(source, key, settings, previousSnap = null) {
+  // `dirty` is the coalesce flag: an invalidation that arrives mid-job sets it
+  // instead of cancelling, and the job starts one follow-up pass when it lands.
+  function startIndex(source, key, settings, { identity = null, previousSnap = null } = {}) {
     const controller = new AbortController();
     const entry = {
       status: "indexing",
@@ -356,6 +440,8 @@ export function createEngineService({
       loaded: 0,
       total: null,
       snap: previousSnap,
+      identity,
+      dirty: false,
       error: null,
       startedAt: Date.now(),
       finishedAt: null,
@@ -380,8 +466,34 @@ export function createEngineService({
         entry.phase = "error";
         entry.error = err.message;
       })
-      .finally(() => { entry.finishedAt = Date.now(); });
+      .finally(() => {
+        entry.finishedAt = Date.now();
+        // Whatever changed on disk while this pass ran is not in the snapshot
+        // it just produced, so exactly one more pass is owed — after a failure
+        // too, where the change may well be the fix.
+        if (indexes.get(key) === entry && entry.dirty) {
+          entry.dirty = false;
+          restartIndex(key, entry);
+        }
+      });
     return entry;
+  }
+
+  // The follow-up pass a coalesced invalidation asked for. The adapter is
+  // re-resolved from the current source set rather than reused: a rebuild may
+  // have replaced it while the finished job ran, and deferClose kills the old
+  // set's MCP children fifteen seconds later.
+  function restartIndex(key, entry) {
+    if (closed) return;
+    let open;
+    try { open = openSources(); } catch { return; } // manifest unreadable — nothing to refresh
+    if (indexes.get(key) !== entry) return; // pruned or superseded while we looked
+    const i = open.keys.indexOf(key);
+    if (i === -1) return; // the layer this index belonged to is gone
+    indexes.set(key, startIndex(open.sources[i], key, open.settings, {
+      identity: open.identities[i],
+      previousSnap: entry.snap,
+    }));
   }
 
   /**
@@ -417,6 +529,16 @@ export function createEngineService({
    * previous snapshot meanwhile keeps reads answering during the re-read.
    *
    * `layerName` null re-indexes every layer (a section write can touch several).
+   *
+   * An invalidation that lands mid-index does NOT cancel the running pass: it
+   * marks the entry dirty and the job starts one follow-up when it lands. A
+   * cancel-and-restart is fine for a single save but catastrophic under a
+   * source that writes continuously — an open Obsidian vault rewrites its
+   * app-state file every few hundred milliseconds, which is shorter than any
+   * real index takes, so the job restarted forever and the source never
+   * reached ready. Filtering the watcher (see onChange) keeps that particular
+   * churn out; coalescing is what makes a restart storm impossible rather than
+   * merely unlikely, for the genuine edits a filter must let through.
    */
   function invalidateIndex(layerName = null) {
     if (closed) return;
@@ -426,40 +548,53 @@ export function createEngineService({
       if (layerName !== null && source.name !== layerName) return;
       const key = open.keys[i];
       const previous = indexes.get(key);
-      previous?.cancel?.();
-      indexes.set(key, startIndex(source, key, open.settings, previous?.snap ?? null));
+      if (previous && previous.status === "indexing") {
+        previous.dirty = true;
+        return;
+      }
+      indexes.set(key, startIndex(source, key, open.settings, {
+        identity: open.identities[i],
+        previousSnap: previous?.snap ?? null,
+      }));
     });
   }
 
   // Disk-backed layers can also change from outside the app — someone edits a
   // note in Obsidian or pulls a repo. Watch each layer root and re-index on
-  // change, debounced so a burst of writes costs one pass. Best effort by
-  // design: recursive watching is supported on macOS and Windows but not
-  // Linux, where only top-level changes are seen. Every write through this
-  // service invalidates explicitly (above), so the watcher is a convenience,
-  // never the only path to freshness.
+  // change, debounced so a burst of writes costs one pass. Recursive watching
+  // is supported on macOS, Windows and (since Node 20.13) Linux, so nested
+  // events reach us on every platform the app ships to; the non-recursive
+  // fallback below is for a host that cannot give us a recursive watch at all
+  // — inotify exhaustion is the realistic way in — and it says so out loud,
+  // because in that state an edit inside a subfolder is silently never noticed.
+  // Best effort either way: every write through this service invalidates
+  // explicitly (above), so the watcher is a convenience, never the only path to
+  // freshness.
   const watchers = new Map(); // root -> { watcher, timer }
   const WATCH_DEBOUNCE_MS = 250;
 
   function syncWatchers() {
-    const roots = new Map(); // root -> layer name
-    for (const [name, { root }] of layerRootMap(openSources().manifest, MANIFEST_DIR)) {
-      roots.set(root, name);
-    }
+    // Keyed by root alone. The layer NAME is resolved when an event fires, not
+    // captured here: a watcher installed before a rename would otherwise keep
+    // invalidating a name that no longer matches any source, and edits to a
+    // renamed layer would stop reaching the index entirely.
+    const roots = new Set();
+    for (const [, { root }] of layerRootMap(openSources().manifest, MANIFEST_DIR)) roots.add(root);
     for (const [root, state] of watchers) {
       if (roots.has(root)) continue;
       clearTimeout(state.timer);
       try { state.watcher.close(); } catch { /* already gone */ }
       watchers.delete(root);
     }
-    for (const [root, name] of roots) {
+    for (const root of roots) {
       if (watchers.has(root)) continue;
       let watcher;
       try {
-        watcher = fs.watch(root, { recursive: true, persistent: false }, () => onChange(root, name));
-      } catch {
+        watcher = fs.watch(root, { recursive: true, persistent: false }, (_event, filename) => onChange(root, filename));
+      } catch (err) {
         try {
-          watcher = fs.watch(root, { persistent: false }, () => onChange(root, name));
+          watcher = fs.watch(root, { persistent: false }, (_event, filename) => onChange(root, filename));
+          console.error(`[service watcher] ${root}: recursive watching unavailable (${err.message}) — edits in subfolders will not refresh this layer until it is re-read`);
         } catch {
           continue; // unwatchable (missing, permissions, descriptor limits) — reads still work
         }
@@ -469,11 +604,28 @@ export function createEngineService({
     }
   }
 
-  function onChange(root, layerName) {
+  // Which layer currently reads this root, per the manifest as it stands now.
+  function layerAtRoot(root) {
+    let manifest;
+    try { manifest = openSources().manifest; } catch { return null; }
+    for (const [name, entry] of layerRootMap(manifest, MANIFEST_DIR)) {
+      if (entry.root === root) return { name, kind: entry.kind };
+    }
+    return null;
+  }
+
+  function onChange(root, filename) {
     const state = watchers.get(root);
     if (!state) return;
+    if (isSkippedPath(filename)) return;
+    const layer = layerAtRoot(root);
+    if (!layer) return; // no source reads this root any more; syncWatchers drops the watcher
+    if (!isIndexableFile(filename, layer.kind)) return;
     clearTimeout(state.timer);
-    state.timer = setTimeout(() => invalidateIndex(layerName), WATCH_DEBOUNCE_MS);
+    state.timer = setTimeout(() => {
+      const current = layerAtRoot(root);
+      if (current) invalidateIndex(current.name);
+    }, WATCH_DEBOUNCE_MS);
     state.timer.unref?.();
   }
 
@@ -990,8 +1142,18 @@ export function createEngineService({
     let st;
     try { st = await fsp.stat(abs); } catch { throw httpError(400, `Folder not found: ${abs}`); }
     if (!st.isDirectory()) throw httpError(400, `Not a folder: ${abs}`);
+    const controller = new AbortController();
     try {
-      return await withDeadline(probeDocs(abs, extensions), 5_000, "probe timed out");
+      // The deadline has to reach the walk, not just the promise: without the
+      // signal a probe of a slow or enormous folder answers the form in 5s and
+      // then keeps scanning in the background, competing with the index the add
+      // just started.
+      return await withDeadline(
+        probeDocs(abs, extensions, undefined, { signal: controller.signal }),
+        5_000,
+        "probe timed out",
+        () => controller.abort(new Error("Folder probe timed out")),
+      );
     } catch {
       return { found: false, scanned: 0, complete: false }; // slow disk — let the background index decide
     }

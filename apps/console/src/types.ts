@@ -59,6 +59,8 @@ export interface IndexProgress {
   elapsedMs: number
   /** Serving a good snapshot AND re-reading behind it — never a blocking wait. */
   refreshing?: boolean
+  /** Passes this entry has run, carried across refreshes — a re-index storm is visible here. */
+  passes?: number
 }
 
 /** One source row from GET /api/status — progress and health, no concepts. */

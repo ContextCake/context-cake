@@ -122,8 +122,10 @@ differ.
 ## How it fits
 
 The server is a thin, dependency-free shell over the real engine — it does not
-reimplement resolution. `GET /api/graph` returns the source topology + concept
-index; `GET /api/resolve?concept=<id>` returns exactly what the CLI and MCP
+reimplement resolution. `GET /api/status` is the cheap poll (per-source index
+progress plus a `generation` counter, no resolve and no tokenizing);
+`GET /api/graph` returns the source topology + concept index;
+`GET /api/resolve?concept=<id>` returns exactly what the CLI and MCP
 server would. The browser is just another reader of that output.
 
 Point `--manifest` at your own bundle to explore real layers. As with any

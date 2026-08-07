@@ -80,7 +80,8 @@ and `npm test`; CI runs both. dev/build/typecheck/test all regenerate
   `window.claude.complete` when present and fall back to canned answers.
 
 Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
-`src/styles.css` (shell/theme variables), `src/views/Canvas.tsx` (pan/zoom layout).
+`src/styles.css` (shell/theme variables), `src/views/Canvas.tsx` (pan/zoom layout),
+`src/components/BackgroundActivity.tsx` (the header activity control + refresh-failure banner).
 
 ## Gotchas
 

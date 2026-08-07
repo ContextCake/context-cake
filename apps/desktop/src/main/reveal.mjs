@@ -45,10 +45,22 @@ function loadEngine(engineSrc) {
 export async function resolveRevealTarget({ layer, rel = '', manifestFile, engineSrc }) {
   if (typeof layer !== 'string' || !layer) throw new Error('Reveal needs the name of a source.')
   if (typeof rel !== 'string') throw new Error('Reveal needs a path inside that source.')
-  const [{ layerRootMap }, { assertInsideRoot }, { getManifestProfileLayers }] = await loadEngine(engineSrc)
+  const [
+    { layerRootMap },
+    { assertInsideRoot },
+    { getManifestProfileLayers, readContextManifestQuarantined },
+  ] = await loadEngine(engineSrc)
 
+  // The engine's READ-path manifest, quarantine and all — the same one
+  // service.mjs answers /api/files from. A strict read throws on any malformed
+  // layer, which made one hand-edited entry refuse Reveal for every *healthy*
+  // source in the app, blaming "could not read its list of sources" for a
+  // problem confined to one row the console was already listing as broken.
+  // Quarantine only ever removes: a bad layer is absent here, so it is refused
+  // by name below and nothing else changes.
   let manifest
-  try { manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8')) }
+  let quarantined
+  try { ({ manifest, quarantined } = readContextManifestQuarantined(manifestFile, { allowMissing: false })) }
   catch { throw new Error('ContextCake could not read its list of sources.') }
 
   // The same profile-unified view every engine read site builds, so a manifest
@@ -59,7 +71,14 @@ export async function resolveRevealTarget({ layer, rel = '', manifestFile, engin
   } catch { throw new Error('ContextCake could not read its list of sources.') }
 
   const entry = roots.get(layer)
-  if (!entry) throw new Error(`“${layer}” keeps no files on this machine.`)
+  if (!entry) {
+    // Say which of the two it is. A source that is misconfigured is a thing the
+    // user can fix; one that simply keeps nothing locally is not.
+    if (quarantined.some((broken) => broken.name === layer)) {
+      throw new Error(`“${layer}” is not set up correctly — open Sources to fix it.`)
+    }
+    throw new Error(`“${layer}” keeps no files on this machine.`)
+  }
 
   const abs = path.resolve(entry.root, rel)
   const real = assertInsideRoot(abs, entry.root, `That path is outside the folder for “${layer}”.`)

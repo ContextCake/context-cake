@@ -74,9 +74,13 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   copied) before `shell.showItemInFolder`. A path that escapes its source folder
   is refused, never clamped — clamping would answer a request nobody made, and
   quietly. Keep the payload shape: a channel that accepted an absolute path would
-  let a compromised renderer point Finder anywhere on the machine.
+  let a compromised renderer point Finder anywhere on the machine. The manifest
+  is read through the engine's `readContextManifestQuarantined`, the same
+  read-path tolerance `service.mjs` uses — a strict read throws on the whole
+  file, which made one hand-edited layer disable Reveal for every healthy source.
   `scripts/navigation-test.mjs` covers traversal, an absolute rel, an out-of-root
-  symlink, a layer with no folder, and the trusted-window policy.
+  symlink, a layer with no folder, a manifest holding a broken layer, and the
+  trusted-window policy.
 - **Every `/api` call needs the bearer token** — the console's `apiFetch`
   (apps/console/src/api.ts) injects it automatically. Raw `fetch('/api/…')`
   in renderer code will 401 inside the app.

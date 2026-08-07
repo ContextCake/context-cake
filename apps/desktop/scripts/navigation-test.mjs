@@ -71,6 +71,34 @@ await refused('a missing file', 'vault', 'notes/gone.md')
 await refused('a non-string layer', 42, 'notes/a.md')
 await refused('a non-string rel', 'vault', { toString: () => 'notes/a.md' })
 
+// One malformed layer must not take the healthy ones with it. A strict manifest
+// read throws on the whole file, which disabled Reveal for every source in the
+// app while the console went on listing and browsing the sources that were
+// fine — the same failure mode service.mjs's quarantined read exists to remove.
+fs.writeFileSync(manifestFile, JSON.stringify({
+  version: 2,
+  profiles: {
+    default: {
+      layers: [
+        { name: 'vault', level: 3, source: 'files', path: layerRoot },
+        { name: 'graph', level: 1, source: 'mcp', command: 'node', args: ['nope.mjs'] },
+        { name: 'noplace', level: 1 }, // hand-edited: an okf-local layer with no path
+      ],
+    },
+  },
+}))
+
+assert.equal(await reveal('vault', 'notes/a.md'), fs.realpathSync.native(path.join(layerRoot, 'notes', 'a.md')))
+assert.equal(await reveal('vault', ''), fs.realpathSync.native(layerRoot))
+await refused('traversal, with a broken layer in the manifest', 'vault', '../outside/private.md')
+await refused('a layer with no folder, with a broken layer in the manifest', 'graph', 'anything.md')
+// And the refusal for the broken layer names that layer, not the whole list.
+await assert.rejects(
+  reveal('noplace', 'a.md'),
+  (err) => err instanceof Error && err.message.includes('noplace') && !/list of sources/.test(err.message),
+  'a quarantined layer must be refused by name',
+)
+
 fs.rmSync(tmp, { recursive: true, force: true })
 
-console.log('navigation test passed (exact engine origin only; reveal-in-finder stays inside a layer root and refuses escapes)')
+console.log('navigation test passed (exact engine origin only; reveal-in-finder stays inside a layer root, refuses escapes, and survives one broken layer)')

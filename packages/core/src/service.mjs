@@ -46,6 +46,7 @@ import {
   mutateContextManifest,
   readContextManifest,
   readContextManifestQuarantined,
+  repairContextManifest,
   stableJson,
   withManifestLockAsync,
 } from "./manifest.mjs";
@@ -455,7 +456,7 @@ export function createEngineService({
       // the source list purely so the index gives each one an error row.
       sources: [
         ...buildSourcesQuarantined(manifest, MANIFEST_DIR, { tokens: tokenState.tokens }),
-        ...broken.map((entry) => createErrorSource(entry)),
+        ...broken.map((entry) => createErrorSource({ ...entry, quarantined: true })),
       ],
       keys,
     };
@@ -998,7 +999,7 @@ export function createEngineService({
       if (p === "/api/sources" && (req.method === "POST" || req.method === "DELETE" || req.method === "PATCH")) {
         if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
         if (req.method === "POST") { json(res, 200, await addSourceApi(await readBody(req))); return true; }
-        if (req.method === "DELETE") { json(res, 200, removeSourceApi(url.searchParams.get("name"))); return true; }
+        if (req.method === "DELETE") { json(res, 200, removeSourceApi(url.searchParams.getAll("name"))); return true; }
         json(res, 200, patchSourceApi(await readBody(req)));
         return true;
       }
@@ -1096,6 +1097,11 @@ export function createEngineService({
         // contributed nothing.
         status: degraded ? "degraded" : status,
         error: degraded ? health.lastError : error ?? null,
+        // This row is a manifest entry that failed validation, not a source
+        // that failed to read: there is nothing behind it to retry, and the
+        // only action that helps is removing it. Says so out loud because the
+        // two are indistinguishable from `status: "error"` alone.
+        quarantined: s.quarantined === true,
         // Orthogonal to status, on purpose: this source read successfully and
         // is serving what it read — it just isn't serving everything it was
         // pointed at. The count drives a badge; the messages are capped so one
@@ -1284,6 +1290,7 @@ export function createEngineService({
         name: source.name,
         level: source.level,
         kind: source.quarantinedKind ?? layerMeta.get(source.name)?.source ?? "okf-local",
+        quarantined: source.quarantined === true, // same meaning as /api/graph's
         status: degraded ? "degraded" : status,
         phase: progress.phase,
         loaded: progress.loaded,
@@ -1451,15 +1458,26 @@ export function createEngineService({
     } catch (err) {
       throw httpError(400, err.message);
     }
-    mutateContextManifest(MANIFEST, (manifest) => {
-      const next = { ...(manifest.settings ?? {}) };
-      for (const key of Object.keys(body.settings ?? body)) {
-        if (clean[key] === undefined) delete next[key]; // null = reset to default
-        else next[key] = clean[key];
-      }
-      if (Object.keys(next).length === 0) delete manifest.settings;
-      else manifest.settings = next;
-    }, { allowMissing: false, allowTransitional: true });
+    try {
+      mutateContextManifest(MANIFEST, (manifest) => {
+        const next = { ...(manifest.settings ?? {}) };
+        for (const key of Object.keys(body.settings ?? body)) {
+          if (clean[key] === undefined) delete next[key]; // null = reset to default
+          else next[key] = clean[key];
+        }
+        if (Object.keys(next).length === 0) delete manifest.settings;
+        else manifest.settings = next;
+      }, { allowMissing: false, allowTransitional: true });
+    } catch (err) {
+      // Settings deliberately stay a STRICT write — an invalid layer is not
+      // this route's to tolerate, and quietly rewriting a manifest read around
+      // one is how a hand-edited layer would get dropped without being asked
+      // about. But answering 500 with a layer's validation error, on the
+      // Settings screen, tells the user nothing about where to go. Removing
+      // the bad source is the repair, and it has a screen of its own.
+      if (err.status) throw err;
+      throw httpError(409, `Settings were not saved: a source in your manifest is invalid, and saving would rewrite the file around it. Remove it in Sources first — ${err.message}`);
+    }
     // New limits change how sources are read, so their indexes are stale: the
     // settings are part of the index key, so reload() rebuilds them.
     reload();
@@ -1651,27 +1669,76 @@ export function createEngineService({
     }
   }
 
-  function removeSourceApi(name) {
-    if (!name) throw httpError(400, "Provide ?name=");
-    let removed = null;
+  /**
+   * The one repair route. It reads through repairContextManifest rather than
+   * mutateContextManifest, so a quarantined layer — the row /api/graph shows as
+   * an error — can be taken out from the app. Everything about what may be
+   * WRITTEN is unchanged: repairContextManifest validates the whole manifest
+   * before the file is touched.
+   *
+   * `?name=` may repeat, and that is not a convenience. What may be persisted
+   * is a VALID manifest, so with two invalid entries present, removing either
+   * one on its own is refused — the remaining one still fails validation. A
+   * manifest with several bad layers would be unrepairable from the app, which
+   * is the situation this whole path exists to end. Removing them in one
+   * transaction is the only shape that both fixes the file and keeps the write
+   * strict. The 409 below says so when a client asked for too little.
+   */
+  function removeSourceApi(names) {
+    const wanted = [...new Set(names.filter((name) => typeof name === "string" && name))];
+    if (wanted.length === 0) throw httpError(400, "Provide ?name=");
+    const removed = [];
     let survivors = [];
-    mutateContextManifest(MANIFEST, (manifest) => {
-      const layers = getManifestProfileLayers(manifest);
-      const before = layers.length;
-      const container = defaultProfileContainer(manifest);
-      const pendingBefore = container.pendingSources?.length ?? 0;
-      removed = layers.find((layer) => layer.name === name) ?? null;
-      const retained = layers.filter((layer) => layer.name !== name);
-      layers.splice(0, layers.length, ...retained);
-      removePendingSource(container, name);
-      if (layers.length === before && (container.pendingSources?.length ?? 0) === pendingBefore) {
-        throw httpError(404, `No source named "${name}"`);
+    let blocking = [];
+    try {
+      repairContextManifest(MANIFEST, ({ manifest, layers, quarantined }) => {
+        const container = defaultProfileContainer(manifest);
+        // Quarantined rows for the profile this service reads. A layer
+        // quarantined out of some OTHER profile has no row here to have been
+        // clicked, and removing it is not this route's business.
+        const broken = quarantined.filter((entry) => entry.profileId === "default");
+        // A set, because these become splices: two names resolving to one index
+        // would take a second, innocent layer with them.
+        const doomed = new Set();
+        for (const name of wanted) {
+          const pendingBefore = container.pendingSources?.length ?? 0;
+          removePendingSource(container, name);
+          const droppedPending = (container.pendingSources?.length ?? 0) !== pendingBefore;
+          const index = layers.findIndex((layer) => layer.name === name);
+          if (index >= 0) { doomed.add(index); continue; }
+          // A quarantined row is matched on the name the graph gave it, which
+          // may be synthesized, and removed at the index that name was minted
+          // for — see the record's `index`. Valid layers win the name first, so
+          // this can never shadow a healthy row.
+          const entry = broken.find((candidate) => candidate.name === name);
+          if (entry) { doomed.add(entry.index); continue; }
+          if (!droppedPending) throw httpError(404, `No source named "${name}"`);
+        }
+        // Descending, so each splice leaves the indices below it alone.
+        for (const index of [...doomed].sort((a, b) => b - a)) {
+          removed.push(layers[index]);
+          layers.splice(index, 1);
+        }
+        // What the write is about to reject on, if it rejects: every invalid
+        // entry the caller did NOT ask to remove.
+        blocking = broken.filter((entry) => !doomed.has(entry.index));
+        survivors = allManifestLayers(manifest); // every profile — a shared clone must survive
+      }, { allowTransitional: true });
+    } catch (err) {
+      if (err.status) throw err;
+      if (blocking.length > 0) {
+        const listed = blocking.map((entry) => `"${entry.name}" (${entry.error})`).join("; ");
+        throw httpError(409, `Nothing was removed: ${blocking.length} other source${blocking.length === 1 ? " is" : "s are"} also invalid, and the manifest cannot be saved while ${blocking.length === 1 ? "it remains" : "they remain"}. Remove ${blocking.length === 1 ? "it" : "them"} in the same request — ${listed}`);
       }
-      survivors = allManifestLayers(manifest); // every profile — a shared clone must survive
-    }, { allowMissing: false, allowTransitional: true });
-    cleanupCloneDir(removed, survivors);
+      // A manifest broken in a way no single layer explains (two layers sharing
+      // a name, a malformed profiles block) is not repairable from here, and a
+      // 500 would read as "the app is broken" rather than "your file is". Say
+      // which, and keep the engine's own message — it names the actual defect.
+      throw httpError(409, `Nothing was removed: the manifest is invalid in a way this app cannot repair. Edit ${MANIFEST} by hand — ${err.message}`);
+    }
+    for (const layer of removed) cleanupCloneDir(layer, survivors);
     reload();
-    return { ok: true, removed: name };
+    return { ok: true, removed: wanted[0], removedNames: wanted };
   }
 
   // Every layer the manifest still declares, across the legacy array and every

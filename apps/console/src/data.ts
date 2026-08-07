@@ -32,6 +32,12 @@ export interface Source {
   /** Git remote a clone-backed layer came from; enables Sync alongside kind 'github'. */
   origin?: string | null
   error?: string | null
+  /**
+   * Not a source at all: a manifest entry the engine could not validate, so
+   * nothing was built for it. Rename and Sync have nothing to act on; removing
+   * the entry is the repair.
+   */
+  quarantined?: boolean
   /** Progress while the background index is reading this source. */
   indexing?: SourceProgress
   /** Content this source indexed around: too big to read, or not readable. */

@@ -91,7 +91,7 @@ function fmtTime(iso: string): string {
 
 /** Sync applies to REST github layers and to clone-backed layers (origin set). */
 function canSync(s: Source): boolean {
-  return s.sourceKind === 'github' || Boolean(s.origin)
+  return !s.quarantined && (s.sourceKind === 'github' || Boolean(s.origin))
 }
 
 function btnSmallGhost(): React.CSSProperties {
@@ -176,6 +176,15 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     ].some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery)))
     .sort((a, b) => b.level - a.level || a.name.localeCompare(b.name))
 
+  // Every invalid manifest entry, off the unfiltered list: what a repair has to
+  // clear is a property of the manifest, not of what the search box is showing.
+  const invalid = sources.filter((source) => source.quarantined)
+  // The invalid entries a removal of THIS row has to take with it. Any write
+  // rewrites the whole manifest and the engine only saves one that validates,
+  // so an invalid entry blocks removing a perfectly healthy source just as
+  // surely as it blocks removing another invalid one.
+  const alsoInvalid = (s: Source) => invalid.filter((source) => source.name !== s.name)
+
   useEffect(() => {
     if (selectedName && sources.some((source) => source.name === selectedName)) return
     setSelectedName(ordered[0]?.name ?? null)
@@ -230,11 +239,17 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     }
   }
 
+  // A removal carries the invalid entries with it, and the panel names them
+  // before the click. The engine will only persist a manifest that validates,
+  // so while anything is invalid, removing this row alone is refused — one
+  // request naming all of them is the only thing that repairs the file.
+  // `name` repeats; the engine reads them all.
   const confirmRemove = async (s: Source) => {
+    const names = [s.name, ...alsoInvalid(s).map((source) => source.name)]
     setBusy(true)
     setErr(null)
     try {
-      await callApi(`/api/sources?name=${encodeURIComponent(s.name)}`, { method: 'DELETE' })
+      await callApi(`/api/sources?${names.map((n) => `name=${encodeURIComponent(n)}`).join('&')}`, { method: 'DELETE' })
       closePanel()
       reload()
     } catch (e) {
@@ -313,10 +328,22 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
             <dl className="cc-source-metadata">
               <div><dt>Last success</dt><dd>{s.lastSuccessAt ? fmtTime(s.lastSuccessAt) : 'Not yet'}</dd></div>
               <div><dt>Last error</dt><dd>{s.lastErrorAt ? fmtTime(s.lastErrorAt) : 'None'}</dd></div>
-              <div><dt>Sync</dt><dd>{canSync(s) ? 'Available' : 'Not supported for this source kind'}</dd></div>
+              {/* "Not supported for this source kind" would be answering the
+                  wrong question on an entry that is not a source at all. */}
+              {!s.quarantined && <div><dt>Sync</dt><dd>{canSync(s) ? 'Available' : 'Not supported for this source kind'}</dd></div>}
               {s.origin && <div><dt>Repository</dt><dd>{s.origin}</dd></div>}
             </dl>
-            <p className="cc-source-immutable">The path, repository, or command is fixed for this source. To change it, remove the source and add it again.</p>
+            {/* An invalid entry has no path, repo or command to speak of — the
+                sentence below is about a working source, and printing it here
+                would describe a source that was never built. */}
+            {!s.quarantined && <p className="cc-source-immutable">The path, repository, or command is fixed for this source. To change it, remove the source and add it again.</p>}
+            {s.quarantined && (
+              <div role="alert" style={css(`padding:9px 11px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.55; color:${C.amberText};`)}>
+                <strong style={css('display:block; margin-bottom:4px;')}>This entry is not a working source</strong>
+                ContextCake could not read it as a valid source, so nothing was built for it and nothing from it reaches the cascade.
+                Renaming and syncing have nothing to act on — removing the entry is the fix, and your files are never touched.
+              </div>
+            )}
             {s.error && (
               <div role="alert" style={css(`padding:8px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-family:${MONO}; font-size:11px; line-height:1.5; color:${C.amberText}; overflow-wrap:anywhere;`)}>
                 {s.error}
@@ -368,8 +395,11 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                     onClick={() => void syncNow(s)}
                   >{syncing === s.name ? 'Syncing…' : 'Sync now'}</button>
                 )}
-                <button type="button" className="cc-h-bd-strong" aria-label={`Rename or re-level ${s.name}`} style={btnSmallGhost()} onClick={() => openEdit(s)}>Rename / level</button>
-                <button type="button" className="cc-h-bd-amber2" aria-label={`Remove ${s.name}`} style={btnSmallGhost()} onClick={() => openRemove(s)}>Remove</button>
+                {/* Rename/level writes through the strict manifest path, so on
+                    an invalid entry it could only fail. Remove is the one
+                    action that goes anywhere from here. */}
+                {!s.quarantined && <button type="button" className="cc-h-bd-strong" aria-label={`Rename or re-level ${s.name}`} style={btnSmallGhost()} onClick={() => openEdit(s)}>Rename / level</button>}
+                <button type="button" className="cc-h-bd-amber2" aria-label={`Remove ${s.name}`} style={btnSmallGhost()} onClick={() => openRemove(s)}>{s.quarantined ? 'Remove entry' : 'Remove'}</button>
               </div>
             )}
 
@@ -402,21 +432,46 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
               </div>
             )}
 
-            {removing && (
-              <div style={css(`display:flex; flex-direction:column; gap:10px; padding:12px; border-radius:10px; background:${C.raised}; border:1px solid ${C.amberStroke};`)}>
-                <p style={css(`margin:0; font-size:12.5px; line-height:1.5; color:${C.body};`)}>
-                  Remove <strong style={css(`font-family:${MONO};`)}>{s.name}</strong> from the cascade? Your files stay where they are — only the cascade entry is removed.
-                </p>
-                {s.live && <LiveWarning verb="Removing" />}
-                {err && <p role="alert" style={css(`margin:0; font-size:12px; color:${C.amberText}; overflow-wrap:anywhere;`)}>{err}</p>}
-                <div style={css('display:flex; justify-content:flex-end; gap:8px;')}>
-                  <button type="button" style={btnSmallGhost()} onClick={closePanel}>Cancel</button>
-                  <button type="button" disabled={busy} style={busy ? btnSmallDisabled() : btnSmallDanger()} onClick={() => void confirmRemove(s)}>
-                    {busy ? 'Removing…' : 'Remove source'}
-                  </button>
+            {removing && (() => {
+              // Any removal takes the invalid entries with it: the engine
+              // writes a manifest only when the whole thing validates, so
+              // leaving one behind refuses the write — including a write that
+              // was only meant to remove a healthy source. The panel names them
+              // before the click rather than removing rows the user did not
+              // choose.
+              const others = alsoInvalid(s)
+              return (
+                <div style={css(`display:flex; flex-direction:column; gap:10px; padding:12px; border-radius:10px; background:${C.raised}; border:1px solid ${C.amberStroke};`)}>
+                  <p style={css(`margin:0; font-size:12.5px; line-height:1.5; color:${C.body};`)}>
+                    {s.quarantined
+                      ? <>Remove the invalid entry <strong style={css(`font-family:${MONO};`)}>{s.name}</strong> from your manifest? Your files stay where they are — nothing was being read from this entry.</>
+                      : <>Remove <strong style={css(`font-family:${MONO};`)}>{s.name}</strong> from the cascade? Your files stay where they are — only the cascade entry is removed.</>}
+                  </p>
+                  {others.length > 0 && (
+                    <div role="alert" style={css(`padding:9px 11px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.55; color:${C.amberText};`)}>
+                      <strong style={css('display:block; margin-bottom:4px;')}>
+                        {others.length === 1 ? 'One other entry is also invalid' : `${others.length} other entries are also invalid`}
+                      </strong>
+                      Your manifest can only be saved once every invalid entry is gone, so this also removes{' '}
+                      {others.length === 1 ? 'it' : 'them'}:{' '}
+                      <span style={css(`font-family:${MONO};`)}>{others.map((source) => source.name).join(', ')}</span>
+                    </div>
+                  )}
+                  {s.live && <LiveWarning verb="Removing" />}
+                  {err && <p role="alert" style={css(`margin:0; font-size:12px; color:${C.amberText}; overflow-wrap:anywhere;`)}>{err}</p>}
+                  <div style={css('display:flex; justify-content:flex-end; gap:8px;')}>
+                    <button type="button" style={btnSmallGhost()} onClick={closePanel}>Cancel</button>
+                    <button type="button" disabled={busy} style={busy ? btnSmallDisabled() : btnSmallDanger()} onClick={() => void confirmRemove(s)}>
+                      {busy
+                        ? 'Removing…'
+                        : others.length > 0
+                          ? `Remove ${others.length + 1} entries`
+                          : s.quarantined ? 'Remove entry' : 'Remove source'}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )
+            })()}
           </section>
         })()}
       </div>

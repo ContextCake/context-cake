@@ -18,6 +18,7 @@ import {
   normalizeProfileLabel,
   readContextManifest,
   readContextManifestQuarantined,
+  repairContextManifest,
   selectManifestProfile,
   sourceConfigFingerprint,
   validateContextManifest,
@@ -283,6 +284,96 @@ test("a quarantined read rejects every reserved key the strict read rejects", (t
   // And the smuggled profile never reached a prototype on the way through.
   assert.equal({}.label, undefined);
   assert.equal(Object.prototype.layers, undefined);
+});
+
+test("a repair can remove a quarantined layer, and can persist only a manifest that validates", (t) => {
+  const directory = temporaryDirectory(t);
+  const write = (manifest) => {
+    const file = path.join(directory, `${crypto.randomUUID()}.json`);
+    fs.writeFileSync(file, JSON.stringify(manifest));
+    return file;
+  };
+  const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+  const good = { name: "seed", level: 1, source: "files", path: "seed" };
+  const badKind = { name: "bad-kind", level: 2, source: "notarealkind" };
+  // Removes the layer the record points at. Mirrors what removeSourceApi does.
+  const removeByRow = (file, ...names) => repairContextManifest(file, ({ layers, quarantined }) => {
+    const doomed = names.map((name) => {
+      const index = layers.findIndex((layer) => layer.name === name);
+      if (index >= 0) return index;
+      const entry = quarantined.find((candidate) => candidate.profileId === "default" && candidate.name === name);
+      assert.ok(entry, `no row named ${name}`);
+      return entry.index;
+    });
+    for (const index of [...doomed].sort((a, b) => b - a)) layers.splice(index, 1);
+  });
+
+  // The point of the whole exercise: the strict readers cannot get here at all.
+  const single = write({ layers: [good, badKind] });
+  assert.throws(() => mutateContextManifest(single, () => {}, { allowMissing: false }), /unsupported source kind/);
+  removeByRow(single, "bad-kind");
+  assert.deepEqual(read(single), { layers: [good] });
+
+  // The callback sees the RAW manifest, invalid layers and all. Handing it the
+  // cleaned one would delete every other broken layer as a side effect of
+  // removing this one — data loss the user never asked for.
+  const many = write({ layers: [good, badKind, { name: "bad-shape", level: 0 }] });
+  assert.throws(() => repairContextManifest(many, ({ manifest, quarantined }) => {
+    assert.equal(manifest.layers.length, 3, "the repair reads the file as written");
+    assert.deepEqual(quarantined.map((entry) => [entry.name, entry.index]), [["bad-kind", 1], ["bad-shape", 2]]);
+    throw new Error("abort");
+  }), /abort/);
+  assert.equal(read(many).layers.length, 3, "a thrown repair writes nothing");
+
+  // Removing one of two invalid layers leaves a manifest that does not
+  // validate, so the write is refused and the file is untouched.
+  assert.throws(() => removeByRow(many, "bad-kind"), /must have a non-empty name|requires a path|integer level/);
+  assert.equal(read(many).layers.length, 3, "a refused repair leaves the file exactly as it was");
+  removeByRow(many, "bad-kind", "bad-shape");
+  assert.deepEqual(read(many), { layers: [good] });
+
+  // A broken layer that also reuses a healthy layer's name is quarantined under
+  // a distinct row name and removed by INDEX, so the healthy layer survives.
+  const shadowed = write({ layers: [good, { name: "seed", level: 9, source: "notarealkind" }] });
+  assert.deepEqual(
+    readContextManifestQuarantined(shadowed).quarantined.map((entry) => [entry.name, entry.index]),
+    [["seed (2)", 1]],
+  );
+  removeByRow(shadowed, "seed (2)");
+  assert.deepEqual(read(shadowed), { layers: [good] });
+
+  // The repair door only removes. Anything else and the write never happens.
+  const guarded = write({ layers: [good, badKind] });
+  assert.throws(
+    () => repairContextManifest(guarded, ({ layers }) => { layers.push({ name: "sneak", level: 5, source: "files", path: "x" }); }),
+    /may only remove layers/,
+  );
+  assert.throws(
+    () => repairContextManifest(guarded, ({ manifest, layers }) => { layers.splice(1, 1); manifest.profiles = { default: profile("Default", [good]) }; }),
+    /may only remove layers/,
+  );
+  // Nor is it a way to write a layer that does not validate.
+  assert.throws(
+    () => repairContextManifest(guarded, ({ layers }) => { layers.splice(1, 1, { name: "worse", level: 1, source: "alsonotreal" }); }),
+    /unsupported source kind: alsonotreal/,
+  );
+  assert.equal(read(guarded).layers.length, 2, "none of the refused repairs touched the file");
+
+  // Whole-manifest breakage is no more repairable here than it is readable.
+  assert.throws(() => repairContextManifest(write({ layers: [good, { ...good, level: 2 }] }), () => {}), /duplicate layer name/);
+  assert.throws(() => repairContextManifest(path.join(directory, "absent.json"), () => {}), /does not exist/);
+
+  // v2 repairs the profile the service reads, and leaves the others alone.
+  const v2 = write({
+    profiles: {
+      default: profile("Default", [good, { name: "bad", level: 1, source: "mcp" }]),
+      other: profile("Other", [good]),
+    },
+    projects: {},
+  });
+  removeByRow(v2, "bad");
+  assert.deepEqual(read(v2).profiles.default.layers, [good]);
+  assert.deepEqual(read(v2).profiles.other.layers, [good]);
 });
 
 test("inactive Pack drift warns while selecting the affected profile fails closed", () => {

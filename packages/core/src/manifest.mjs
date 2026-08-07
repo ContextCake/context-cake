@@ -120,12 +120,29 @@ export function readContextManifest(manifestPath, { allowMissing = true, validat
  *
  * Returns { manifest, quarantined }, where each quarantined record carries the
  * `profileId` of the layers array it came from — "default" is always the array
- * getManifestProfileLayers(manifest) itself would return.
+ * getManifestProfileLayers(manifest) itself would return — and the `index` it
+ * sat at in that array, which is the only handle a repair can remove it by.
  */
 export function readContextManifestQuarantined(manifestPath, { allowMissing = true, validatePacks = true } = {}) {
+  const { cleaned, quarantined } = readTolerantManifest(manifestPath, { allowMissing, validatePacks });
+  return { manifest: cleaned, quarantined };
+}
+
+// The one tolerance rule, written once. Both tolerant entry points read through
+// this, so the door a repair comes in by can never accept a manifest the read
+// path would have rejected.
+//
+// Returns { raw, cleaned, quarantined }: `cleaned` is the manifest with the
+// invalid layers deleted (what may be BUILT), `raw` is the parsed file with
+// them still in place (what may be REPAIRED). They are the same object when
+// nothing was quarantined.
+function readTolerantManifest(manifestPath, { allowMissing, validatePacks }) {
   const resolved = path.resolve(manifestPath);
   if (!fs.existsSync(resolved)) {
-    if (allowMissing) return { manifest: { layers: [] }, quarantined: [] };
+    if (allowMissing) {
+      const empty = { layers: [] };
+      return { raw: empty, cleaned: empty, quarantined: [] };
+    }
     throw new Error(`ContextCake manifest does not exist: ${resolved}`);
   }
   let manifest;
@@ -140,7 +157,7 @@ export function readContextManifestQuarantined(manifestPath, { allowMissing = tr
   let firstError;
   try {
     validateContextManifest(manifest, { validatePacks });
-    return { manifest, quarantined: [] };
+    return { raw: manifest, cleaned: manifest, quarantined: [] };
   } catch (error) {
     firstError = error;
   }
@@ -159,7 +176,75 @@ export function readContextManifestQuarantined(manifestPath, { allowMissing = tr
   // never per-layer (a broken profiles block, a dangling pack). Fail closed
   // exactly as before rather than serving a manifest nobody has validated.
   validateContextManifest(cleaned, { validatePacks });
-  return { manifest: cleaned, quarantined };
+  return { raw: manifest, cleaned, quarantined };
+}
+
+/**
+ * mutateContextManifest's repair door: the one mutation allowed to READ a
+ * manifest that still holds an invalid layer, because it is the mutation that
+ * takes one out. Without it, quarantine left a user able to see the broken
+ * layer and unable to do anything about it — every write route reads strictly
+ * first, so the removal that would make the manifest valid again was itself
+ * blocked by the manifest being invalid.
+ *
+ * What is tolerated is the way IN, and only as far as the read path already
+ * tolerates it (same readTolerantManifest rule: per-layer breakage only, a
+ * whole-manifest failure still throws). Two things keep the door narrow:
+ *
+ *   1. The manifest that gets WRITTEN goes through the unchanged
+ *      writeContextManifest, so it must pass validateContextManifest in full.
+ *      A repair that does not leave the manifest valid is refused and the file
+ *      on disk is untouched.
+ *   2. A repair may only REMOVE. No layers array may come out of the callback
+ *      longer than it went in, so this cannot become a back way to add or
+ *      re-point a source from an unvalidated read.
+ *
+ * The callback receives the RAW manifest — invalid layers included — because
+ * removing exactly the layer that was asked for is the point: handing it the
+ * cleaned manifest would silently drop every OTHER broken layer from the user's
+ * file as a side effect of removing one.
+ *
+ * mutate({ manifest, layers, quarantined }) where `layers` is the live default
+ * layers array (the one getManifestProfileLayers would return) and each
+ * quarantined record's `index` addresses that array directly.
+ */
+export function repairContextManifest(manifestPath, mutate, { allowLegacy = true, allowTransitional = false } = {}) {
+  const resolved = path.resolve(manifestPath);
+  return withManifestLock(resolved, () => {
+    // allowMissing is deliberately not an option: there is nothing to repair in
+    // a manifest that does not exist.
+    const { raw, quarantined } = readTolerantManifest(resolved, { allowMissing: false, validatePacks: true });
+    const before = layerCountsByContainer(raw);
+    const result = mutate({ manifest: raw, layers: defaultLayersInPlace(raw), quarantined });
+    for (const [container, count] of layerCountsByContainer(raw)) {
+      if (count > (before.get(container) ?? 0)) throw new Error("A manifest repair may only remove layers.");
+    }
+    writeContextManifest(resolved, raw, { allowLegacy, allowTransitional });
+    return result;
+  });
+}
+
+// The default container's layers array, in place and without validating — the
+// array a repair removes from. Mirrors getManifestProfileLayers(manifest) for
+// profile=null, including its habit of creating the array when it is absent so
+// the caller mutates the manifest rather than a copy.
+function defaultLayersInPlace(manifest) {
+  if (classifyManifest(manifest) === "v2") {
+    assertObject(manifest.profiles.default, "Profile default");
+    manifest.profiles.default.layers ??= [];
+    return manifest.profiles.default.layers;
+  }
+  manifest.layers ??= [];
+  return manifest.layers;
+}
+
+function layerCountsByContainer(manifest) {
+  const counts = new Map();
+  if (Array.isArray(manifest.layers)) counts.set("", manifest.layers.length);
+  for (const [id, profile] of Object.entries(manifest.profiles ?? {})) {
+    if (Array.isArray(profile?.layers)) counts.set(id, profile.layers.length);
+  }
+  return counts;
 }
 
 // Splits every layers array in the manifest into the layers that validate and
@@ -246,6 +331,11 @@ function partitionLayers(layers, owner, transitional) {
       taken.add(name);
       return {
         name,
+        // Where this layer sits in its own layers array. A repair removes by
+        // index, never by name: the name above may have been synthesized, and
+        // a broken layer that also reuses a valid layer's name would otherwise
+        // take that healthy layer down with it.
+        index,
         level: Number.isInteger(Number(layer?.level)) ? Number(layer.level) : 0,
         // The declared kind, as a scalar. The layer OBJECT deliberately never
         // leaves this module — that is what makes it structurally impossible to

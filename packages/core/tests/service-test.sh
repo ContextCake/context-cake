@@ -13,10 +13,13 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 TMP="$(mktemp -d)"
 PORT4=$((PORT + 3))            # graph-cache host: freshness of the memoized /api/graph
 BASE4="http://127.0.0.1:$PORT4"
+PORT5=$((PORT + 4))            # quarantine-repair host: a manifest with invalid layers
+BASE5="http://127.0.0.1:$PORT5"
 PID1=""
 PID2=""
 PID3=""
 PID4=""
+PID5=""
 FAILED=0
 
 cleanup() {
@@ -24,6 +27,7 @@ cleanup() {
   [ -n "$PID2" ] && kill "$PID2" 2>/dev/null
   [ -n "$PID3" ] && kill "$PID3" 2>/dev/null
   [ -n "$PID4" ] && kill "$PID4" 2>/dev/null
+  [ -n "$PID5" ] && kill "$PID5" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -512,6 +516,76 @@ code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"ma
 for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "ok" ] && break; sleep 0.25; done
 [ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts match a fresh encode once the limit is restored" || fail "stale counts after settings were restored"
 
+echo "repairing a manifest from the app: an invalid layer can be removed"
+# Quarantine made a bad layer visible. This is the other half: it has to be
+# fixable from the same app that shows it. The write stays strict — what these
+# assertions pin is that the way IN tolerates a bad layer while the way OUT
+# still refuses to persist one.
+mkdir -p "$TMP/seedq"
+printf '# Seed\n\n## Body\n\nquarantine fixture.\n' > "$TMP/seedq/seed.md"
+cat > "$TMP/manifest-bad.json" <<EOF
+{ "layers": [
+    { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seedq" },
+    { "name": "bad-kind", "level": 2, "source": "notarealkind" },
+    { "name": "seed", "level": 9, "source": "alsonotreal" },
+    { "level": 4 }
+  ] }
+EOF
+node "$TMP/host.mjs" "$PORT5" "$TMP/manifest-bad.json" sekrit true - >/dev/null 2>&1 &
+PID5=$!
+for _ in $(seq 1 60); do [ "$(C "${AUTH[@]}" "$BASE5/api/graph")" != "000" ] && break; sleep 0.1; done
+BADG="$(curl -s "${AUTH[@]}" "$BASE5/api/graph?wait=15000")"
+[ "$(JQ 'JSON.stringify(d.sources.map((s) => [s.name, s.status, s.quarantined === true]))' <<<"$BADG")" \
+  = '[["seed","ok",false],["bad-kind","error",true],["seed (2)","error",true],["layer 4","error",true]]' ] \
+  && pass "invalid entries are rows of their own, flagged quarantined, and never shadow the healthy layer" \
+  || fail "quarantined rows wrong ($(JQ 'JSON.stringify(d.sources.map((s) => [s.name, s.status, s.quarantined]))' <<<"$BADG"))"
+
+# One of three cannot be removed: the remaining two still fail validation, and
+# a manifest that does not validate is never written. The refusal has to name
+# what is blocking it, or the user is stuck with no way forward.
+ONE="$(curl -s -o "$TMP/one.json" -w '%{http_code}' -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=bad-kind")"
+code 409 "$ONE" "removing one of three invalid entries is refused"
+grep -q '2 other sources are also invalid' "$TMP/one.json" && pass "the refusal names how many others block it" || fail "refusal message unhelpful ($(cat "$TMP/one.json"))"
+grep -q 'notarealkind' "$TMP/manifest-bad.json" && pass "the refused removal left the manifest untouched" || fail "a refused removal edited the manifest"
+
+# Settings are a strict write and stay one — but the answer has to point at the
+# repair rather than dropping a layer validation error on the Settings screen.
+SET="$(curl -s -o "$TMP/set.json" -w '%{http_code}' -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":222}' "$BASE5/api/settings")"
+code 409 "$SET" "settings cannot be saved while a source is invalid"
+grep -q 'Remove it in Sources first' "$TMP/set.json" && pass "the settings refusal points at the screen that fixes it" || fail "settings refusal unhelpful ($(cat "$TMP/set.json"))"
+
+# All three together is a repair, so it lands.
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=bad-kind&name=seed%20(2)&name=layer%204")" "removing every invalid entry at once succeeds"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":222}' "$BASE5/api/settings")" "settings save once the manifest is valid"
+node -e '
+  const m = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const names = m.layers.map((l) => l.name);
+  process.stdout.write(JSON.stringify([names, m.layers.length, m.settings?.maxDocFiles]));
+' "$TMP/manifest-bad.json" > "$TMP/after.json"
+[ "$(cat "$TMP/after.json")" = '[["seed"],1,222]' ] \
+  && pass "only the invalid entries were removed — the healthy same-named layer survived" \
+  || fail "manifest after repair is wrong ($(cat "$TMP/after.json"))"
+[ "$(curl -s "${AUTH[@]}" "$BASE5/api/graph?wait=15000" | JQ 'String(d.sources.find((s) => s.name === "seed")?.conceptCount)')" = "1" ] \
+  && pass "the surviving layer still resolves after the repair" || fail "the repair damaged the healthy layer"
+code 404 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=ghost")" "a name that is neither a layer nor a quarantined row is still 404"
+code 400 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources")" "DELETE with no name is still 400"
+
+# An invalid entry blocks removing a HEALTHY source too — the write rewrites the
+# whole manifest either way. So the same one-request repair has to accept a mix,
+# or a user with a bad layer cannot remove anything at all.
+cat > "$TMP/manifest-bad.json" <<EOF
+{ "settings": { "maxDocFiles": 222 },
+  "layers": [
+    { "name": "seed", "level": 1, "source": "files", "path": "$TMP/seedq" },
+    { "name": "extra", "level": 2, "source": "files", "path": "$TMP/seedq" },
+    { "name": "late-bad", "level": 3, "source": "notarealkind" }
+  ] }
+EOF
+code 409 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=extra")" "removing a healthy source is refused while an entry is invalid"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE5/api/sources?name=extra&name=late-bad")" "a healthy source and an invalid entry come out together"
+[ "$(node -e 'process.stdout.write(JSON.stringify(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).layers.map((l) => l.name)))' "$TMP/manifest-bad.json")" = '["seed"]' ] \
+  && pass "the mixed removal left exactly the untouched layer" || fail "mixed removal wrong ($(cat "$TMP/manifest-bad.json"))"
+
 echo "injected credentials: reported, never echoed"
 # The engine receives secrets by value from whoever owns the keychain. Two
 # things have to hold at once: the credential must actually reach the adapter,
@@ -726,4 +800,4 @@ else
   fail "could not enter the window this assertion needs — the remote layer did not land during the graph build, so nothing below was actually gated ($PIN)"
 fi
 
-[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection + graph-cache freshness + /api/status + pinned generation)" || { echo "service test FAILED"; exit 1; }
+[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection + graph-cache freshness + /api/status + pinned generation + quarantine repair)" || { echo "service test FAILED"; exit 1; }

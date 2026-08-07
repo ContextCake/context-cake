@@ -58,6 +58,24 @@ const TAB_TO_ROUTE: Record<TriageTab, RouteId> = {
   review: 'review_required', captured: 'team_candidate', ignored: 'ignore',
 }
 
+/**
+ * The Queue's one tab, filtered by the toolbar search.
+ *
+ * Pure, and exported rather than handed out as a store callback, because the
+ * callback version is what broke the Queue: it closed over a `queryRef` so its
+ * identity never changed, which meant `Triage` could call it while subscribing
+ * only to the data and nav contexts — and then sat out every keystroke. Taking
+ * `query` as an argument puts the dependency in the type, so a caller has to
+ * have subscribed to it before it can call this at all.
+ */
+export function filterSignals(signals: Signal[], tab: TriageTab, query: string): Signal[] {
+  const route = TAB_TO_ROUTE[tab]
+  const q = query.trim().toLowerCase()
+  return signals.filter(
+    (s) => s.route === route && (!q || `${s.title} ${s.repo} ${s.owner}`.toLowerCase().includes(q)),
+  )
+}
+
 /** A compact textual view of the resolved cascade, for the chat prompt. */
 function buildContext(concepts: Concept[]): string {
   return concepts
@@ -213,7 +231,6 @@ export interface StoreData {
   closeChat: () => void
   setChatInput: (v: string) => void
 
-  filtered: (tab: TriageTab) => Signal[]
   /** Poll again right now — the "Retry now" affordance on the refresh banner. */
   retryNow: () => void
   route: (target: RouteId) => void
@@ -733,31 +750,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('popstate', onPop)
   }, [currentHash, view])
 
-  const filtered = useCallback((tab: TriageTab): Signal[] => {
-    const route = TAB_TO_ROUTE[tab]
-    const q = queryRef.current.trim().toLowerCase()
-    return signalsRef.current.filter(
-      (s) => s.route === route && (!q || `${s.title} ${s.repo} ${s.owner}`.toLowerCase().includes(q)),
-    )
-  }, [])
-
   const route = useCallback((target: RouteId) => {
     if (modeRef.current !== 'demo') return // live triage is read-only (D6)
     const sig = signalsRef.current.find((s) => s.id === selSignalRef.current)
     if (!sig) return
 
+    // An action, not a render: reading the freshest query off the ref is the
+    // point here, because the keyboard shortcut fires outside the view.
     const currentTab = triageTabRef.current
     const currentRoute = TAB_TO_ROUTE[currentTab]
-    const q = queryRef.current.trim().toLowerCase()
-    const matches = (s: Signal) => !q || `${s.title} ${s.repo} ${s.owner}`.toLowerCase().includes(q)
-    const before = signalsRef.current.filter((s) => s.route === currentRoute && matches(s))
+    const q = queryRef.current
+    const before = filterSignals(signalsRef.current, currentTab, q)
     const pos = before.findIndex((s) => s.id === sig.id)
 
     const nextSignals = signalsRef.current.map((s) => (s.id === sig.id ? { ...s, route: target } : s))
     signalsRef.current = nextSignals
     setSignals(nextSignals)
 
-    const after = nextSignals.filter((s) => s.route === currentRoute && matches(s))
+    const after = filterSignals(nextSignals, currentTab, q)
     const stayed = target === currentRoute
     const next = stayed
       ? after[pos + 1] ?? after[pos] ?? null
@@ -880,8 +890,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
     setFilesScope, setFilesPath, openFilesScope, openConcept,
     openChat, closeChat, setChatInput,
-    filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey,
-  }), [mode, loading, load, error, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey, setView, setSelConcept, setQuery, setFilesScope, setFilesPath, openFilesScope, openConcept, openChat, closeChat])
+    retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey,
+  }), [mode, loading, load, error, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey, setView, setSelConcept, setQuery, setFilesScope, setFilesPath, openFilesScope, openConcept, openChat, closeChat])
 
   const nav = useMemo<StoreNav>(
     () => ({ view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, chatOpen }),

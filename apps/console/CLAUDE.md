@@ -42,9 +42,16 @@ via their pre-hooks.
 - **Entry** — `src/main.tsx` mounts `<ThemeModeProvider><StoreProvider><App/>`.
   The persisted theme is applied *before* first paint to avoid a light flash.
 - **State** — `src/store.tsx` holds all app state and actions (`route`,
-  `resolveConflict`, `send`, view/selection setters) in one context. Callbacks
-  read the freshest values through refs so they don't re-subscribe. State is
-  in-memory only — reloads reset it.
+  `resolveConflict`, `send`, view/selection setters) in **three** contexts, split
+  by how often each changes: `data` (engine answers + every action, and every
+  action has a stable identity), `nav` (view and selection), `input` (the search
+  box and the chat composer — changes per keystroke). `useStoreData()` /
+  `useStoreNav()` / `useStoreInput()` are the narrow hooks; `useStore()` merges
+  all three and re-renders on any of them — it has no production callers left,
+  only test mocks, and new code should not add one. Callbacks read the freshest
+  values through refs so they don't re-subscribe. State is in-memory only —
+  reloads reset it. See the subscribe-narrowly gotcha below before adding a
+  consumer.
 - **Views** — `src/views/` (Canvas, Overview, Sources, Triage, Conflicts,
   Concepts, Files). `App.tsx` is the shell: topbar + subbar + routed view, plus
   the Triage S/R/D keyboard handler. The canvas view stays full-height inside
@@ -107,6 +114,22 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   `src/theme.ts`. An unregistered hex renders fine in light mode and silently
   fails to adapt in dark mode. Prefer the `C.*` variable refs for new code;
   if you must write a hex, add it to `HEX_VARS`.
+- **Subscribing to the wrong store context fails silently.** Every view root is
+  `React.memo`'d with no props, so the only thing that re-renders it is a context
+  it actually subscribes to. A component that reads query-derived data without
+  calling `useStoreInput()` does not throw, does not warn, and does not
+  re-render — it just quietly stops updating. That shipped: `Triage` read the
+  query through a store callback closed over a ref, subscribed to `data` + `nav`
+  only, and the Queue's search box stopped filtering entirely. The
+  render-count test could not see it, because "did not re-render" was what it
+  was asserting. Two rules follow: **derive from values you subscribed to, never
+  from a ref inside a stable callback** (which is why `filterSignals` is an
+  exported pure function taking `query`, not a `store.filtered(tab)` method —
+  the argument is what forces the caller to have subscribed); and any view in
+  `SEARCHABLE_VIEWS` (`shell-navigation.ts`) must be in the case table in
+  `render-hygiene.test.tsx`, which types a query that matches nothing and
+  asserts the list actually empties. That suite deliberately holds both halves:
+  the sidebar must NOT repaint on a keystroke, and the active view MUST.
 - **Prefer `C.*` / `css()` over raw styles** so both themes and the
   reduced-motion / focus-visible rules keep working.
 - **`css()` is a simple `;`/`:` splitter** — no nested rules, no `url(...)` with

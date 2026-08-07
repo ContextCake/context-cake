@@ -15,6 +15,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { StoreProvider } from './store'
+import { SEARCHABLE_VIEWS, type ViewId } from './shell-navigation'
+import { Concepts } from './views/Concepts'
+import { Conflicts } from './views/Conflicts'
+import { Files } from './views/Files'
+import { Sources } from './views/Sources'
+import { Triage } from './views/Triage'
 
 type AnyComponent = (props: Record<string, unknown>) => unknown
 
@@ -127,4 +133,69 @@ describe('render hygiene', () => {
     expect((renders.SparkleIcon ?? 0) - headerBefore).toBe(5)
     expect((renders.SettingsIcon ?? 0) - sidebarBefore).toBe(0)
   })
+})
+
+/**
+ * The other half of the render budget, and the half that shipped broken.
+ *
+ * The suite above measures what must NOT repaint. On its own it is satisfiable
+ * by a component that never repaints at all: `Triage` subscribed to the data and
+ * nav contexts only, read the query indirectly through a `filtered()` callback
+ * with an empty dependency array, and so sat out every keystroke — the Queue
+ * silently stopped filtering and the negative assertion stayed green, because it
+ * only ever rendered the sidebar and the header.
+ *
+ * So this pairs it: for every view the shell offers a search box, typing a query
+ * nothing can match has to actually empty the list. The case table is checked
+ * against SEARCHABLE_VIEWS itself, so adding a searchable view without teaching
+ * it to react to a keystroke fails here rather than in the field.
+ */
+const NO_MATCH = 'zzzzznomatchzzzzz'
+
+/** `rows` names the list this view filters — the thing a query has to shrink. */
+const SEARCH_CASES: { view: ViewId; Component: ComponentType; rows: string }[] = [
+  // Signal cards; the decision panel beside them uses h2.
+  { view: 'triage', Component: Triage, rows: 'h3' },
+  { view: 'concepts', Component: Concepts, rows: '.cc-navigator-detail > div > button.cc-h-bd-strong' },
+  { view: 'conflicts', Component: Conflicts, rows: '.cc-conflict-list > button[role="option"]' },
+  { view: 'sources', Component: Sources, rows: 'button[role="option"]' },
+  { view: 'files', Component: Files, rows: '[role="treeitem"]' },
+]
+
+async function mountView(view: ViewId, Component: ComponentType) {
+  window.location.hash = `#/${view}`
+  await act(async () => root.render(
+    <StoreProvider>
+      <Header onToggleSidebar={() => {}} onAsk={() => {}} />
+      <Component />
+    </StoreProvider>,
+  ))
+  // The demo bundle resolves through a promise chain; let it land.
+  await act(async () => { await Promise.resolve() })
+  await act(async () => { await Promise.resolve() })
+}
+
+describe('a search keystroke reaches the view', () => {
+  it('covers every view the shell offers a search box for', () => {
+    expect(new Set(SEARCH_CASES.map((entry) => entry.view))).toEqual(SEARCHABLE_VIEWS)
+  })
+
+  for (const { view, Component, rows } of SEARCH_CASES) {
+    it(`filters ${view} down to nothing on a query that matches nothing`, async () => {
+      await mountView(view, Component)
+      const input = container.querySelector<HTMLInputElement>('input[data-context-search]')
+      expect(input, `${view} is searchable but the toolbar rendered no search field`).toBeTruthy()
+
+      const before = container.querySelectorAll(rows).length
+      // A view with nothing in it cannot demonstrate filtering, and a selector
+      // that has drifted off its rows would silently pass every assertion below.
+      expect(before, `${view} rendered no rows to filter — the fixture or the selector is wrong`).toBeGreaterThan(0)
+      const textBefore = container.textContent
+
+      typeInto(input!, NO_MATCH)
+
+      expect(container.querySelectorAll(rows).length).toBe(0)
+      expect(container.textContent).not.toBe(textBefore)
+    })
+  }
 })

@@ -595,4 +595,135 @@ grep -q '"boundAlias":"github.com/octo"' <<<"$CRED" && pass "the alias (a name, 
 grep -q '"boundIndexed":true' <<<"$CRED" && pass "the credentialed layer actually indexed" || fail "credentialed layer did not index ($CRED)"
 grep -q '"unboundState":"missing-token"' <<<"$CRED" && pass "setTokens re-indexes and reports the now-missing credential" || fail "setTokens did not invalidate ($CRED)"
 
-[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection + graph-cache freshness + /api/status)" || { echo "service test FAILED"; exit 1; }
+echo "a /api/graph payload and its generation describe the same instant"
+# The field report this gates: "a source I added shows 0 concepts forever."
+# buildGraph read its source rows before awaiting the resolve and computed
+# `generation` after it, so a source whose index landed during that await
+# arrived in the number while its rows still said "indexing, 0 concepts". The
+# console stored that generation, the next /api/status computed the identical
+# one, `moved` stayed false, and the refetch that would have shown the landed
+# source was never issued. The payload latched.
+#
+# Driven in-process because the window has to be entered on purpose. A remote
+# layer is held at its very first API call until the /api/graph request lands,
+# which puts every one of its remaining round trips inside the resolve — that
+# loop yields to the event loop every 25 concepts, and the local layer is sized
+# to give it far more turns than the remote layer needs to finish.
+cat > "$TMP/pinned-generation.mjs" <<'EOF'
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const { createEngineService } = await import(pathToFileURL(process.env.SERVICE_MJS).href);
+
+const dir = process.argv[2];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// One attempt: a local layer of `concepts` documents plus a gated remote one.
+async function attempt(concepts) {
+  const fastRoot = path.join(dir, `pin-fast-${concepts}`);
+  fs.mkdirSync(fastRoot, { recursive: true });
+  for (let i = 0; i < concepts; i++) {
+    fs.writeFileSync(
+      path.join(fastRoot, `n${i}.md`),
+      `---\ntype: note\ntitle: N${i}\nupdated: 2026-07-01\n---\n\n# N${i}\n\n## Body {#body}\n\nbody ${i}\n`,
+    );
+  }
+
+  // Stands in for api.github.com. The repo-metadata call — the adapter's first
+  // — blocks until this test releases it.
+  let release = () => {};
+  const gate = new Promise((r) => { release = r; });
+  const api = http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    const json = (body) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    if (url.pathname === "/repos/o/r") { await gate; return json({ default_branch: "main", pushed_at: "2026-07-20T12:00:00Z" }); }
+    if (url.pathname === "/repos/o/r/git/trees/main") return json({ truncated: false, tree: [{ path: "README.md", type: "blob", size: 40 }] });
+    if (url.pathname === "/repos/o/r/commits") return json([{ commit: { committer: { date: "2026-06-01T00:00:00Z" } } }]);
+    if (url.pathname === "/repos/o/r/contents/README.md") {
+      const body = "# Remote\n\n## Body\n\nremote body.\n";
+      res.writeHead(200, { "content-type": "text/plain", "content-length": Buffer.byteLength(body) });
+      return res.end(body);
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ message: "Not Found" }));
+  });
+  await new Promise((r) => api.listen(0, "127.0.0.1", r));
+
+  const manifestPath = path.join(dir, `pin-manifest-${concepts}.json`);
+  fs.writeFileSync(manifestPath, JSON.stringify({ layers: [
+    { name: "fast", level: 1, path: fastRoot },
+    { name: "remote", level: 2, source: "github", repo: "o/r", apiBase: `http://127.0.0.1:${api.address().port}`, paths: ["README.md"] },
+  ] }));
+
+  const svc = createEngineService({ manifestPath, allowMutations: false });
+  let armed = false;
+  const server = http.createServer(async (req, res) => {
+    // Released before the request is handled, so the pin cannot see it: a
+    // socket read needs a poll-phase turn, and buildGraph reaches its await
+    // inside this one.
+    if (armed && req.url.startsWith("/api/graph")) { armed = false; release(); }
+    if (await svc.handleRequest(req, res)) return;
+    res.writeHead(404); res.end();
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const get = async (p) => (await fetch(base + p)).json();
+
+  // /api/status only — asking /api/graph here would warm the resolve memo and
+  // there would be no await left to land inside.
+  let staged = false;
+  for (let i = 0; i < 200 && !staged; i++) {
+    const s = await get("/api/status");
+    const fast = s.sources.find((x) => x.name === "fast");
+    const remote = s.sources.find((x) => x.name === "remote");
+    staged = fast?.status === "ok" && remote?.status === "indexing";
+    if (!staged) await sleep(50);
+  }
+
+  armed = true;
+  const g = await get("/api/graph");
+  const s = await get("/api/status");
+  const gr = g.sources.find((x) => x.name === "remote");
+  const sr = s.sources.find((x) => x.name === "remote");
+  svc.close(); server.close(); api.close();
+  release();
+  return {
+    concepts, staged,
+    // The remote layer was still unread when the rows were built, and had
+    // landed by the time the response was read: the response spans the window.
+    windowHit: staged && gr.status === "indexing" && gr.conceptCount === 0 && sr.status === "ok" && sr.conceptCount > 0,
+    moved: g.generation !== s.generation,
+    rowProgressStatus: gr.indexing.status,
+    rowProgressPhase: gr.indexing.phase,
+    topLevelIndexing: g.indexing === true && g.indexingSources.includes("remote"),
+    observed: { graph: [gr.status, gr.conceptCount], status: [sr.status, sr.conceptCount] },
+  };
+}
+
+let out = null;
+// A second, larger attempt only if the first could not enter the window — a
+// bigger local corpus buys the resolve more event-loop turns to land in.
+for (const concepts of [1500, 4500]) {
+  out = await attempt(concepts);
+  if (out.windowHit) break;
+}
+console.log(JSON.stringify(out));
+EOF
+PIN="$(node "$TMP/pinned-generation.mjs" "$TMP" 2>&1 | tail -1)"
+if grep -q '"windowHit":true' <<<"$PIN"; then
+  pass "the window was entered: the remote layer landed during the graph build"
+  grep -q '"moved":true' <<<"$PIN" \
+    && pass "the generation names the payload returned, not the state that landed during it" \
+    || fail "LATCHED: /api/graph returned a stale payload under a generation /api/status already agrees with, so a client would never refetch ($PIN)"
+  grep -q '"rowProgressStatus":"indexing"' <<<"$PIN" \
+    && pass "a source row's progress agrees with its own status" \
+    || fail "a single source row reports status indexing and progress ready at once ($PIN)"
+  grep -q '"topLevelIndexing":true' <<<"$PIN" \
+    && pass "the top-level indexing flag agrees with the rows below it" \
+    || fail "the payload names a source as indexing while claiming nothing is ($PIN)"
+else
+  fail "could not enter the window this assertion needs — the remote layer did not land during the graph build, so nothing below was actually gated ($PIN)"
+fi
+
+[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection + graph-cache freshness + /api/status + pinned generation)" || { echo "service test FAILED"; exit 1; }

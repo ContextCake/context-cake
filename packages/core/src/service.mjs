@@ -897,6 +897,30 @@ export function createEngineService({
     };
   }
 
+  /**
+   * One observation of one source, taken at a single instant.
+   *
+   * Every field a payload reports about a source, and every field the
+   * generation counter is computed from, has to be read here rather than off
+   * the live entry — because /api/graph awaits a resolve in the middle of
+   * building its payload, and index state moves during that await. Reading the
+   * rows before it and the generation after it shipped a payload from time T
+   * stamped with a generation from T+D: the client stored that number, the next
+   * /api/status computed the same one, and the refetch that would have shown
+   * the source that landed mid-build never happened. The source sat at zero
+   * concepts until something else moved.
+   */
+  function pinEntry({ source, entry }) {
+    return {
+      source, // the adapter, which is stable; the live `entry` is deliberately absent
+      snap: entry.snap,
+      status: entry.status === "ready" ? "ok" : entry.status,
+      error: entry.error,
+      progress: indexProgress(entry),
+      health: typeof source.health === "function" ? source.health() : null,
+    };
+  }
+
   // ---- request dispatch ------------------------------------------------------
 
   async function handleRequest(req, res) {
@@ -1002,13 +1026,13 @@ export function createEngineService({
     // Answer from whatever is indexed right now. A source that is still
     // working reports its progress; one that failed reports why. Neither
     // blocks this response.
-    const perSource = entries.map(({ source, entry }) => ({
-      source,
-      entry,
-      snap: entry.snap,
-      status: entry.status === "ready" ? "ok" : entry.status,
-      error: entry.error,
-    }));
+    const perSource = entries.map(pinEntry);
+
+    // Read before the await below, from the same instant as the rows, so the
+    // number a client stores names the payload it actually received. A source
+    // that lands during the resolve therefore moves the generation on the very
+    // next status poll instead of arriving already accounted for.
+    const generationAtPin = bumpGeneration(perSource);
 
     // Resolve over every source that produced a snapshot, from the snapshot,
     // so nothing is read twice and one slow or bad source can't blank the
@@ -1019,16 +1043,17 @@ export function createEngineService({
     const contributing = perSource.filter((p) => p.snap);
     const { concepts, resolvedTokens, latestPerSource } = await resolvedIndex(contributing);
 
-    const sourcesOut = perSource.map(({ source: s, entry, snap, status, error }) => {
+    const sourcesOut = perSource.map(({ source: s, snap, status, error, progress, health }) => {
       const meta = layerMeta.get(s.name) ?? {};
       const kind = s.quarantinedKind ?? meta.source ?? "okf-local";
-      // Whether the listing threw is not evidence a remote source is healthy:
-      // remote adapters answer [] instead of throwing precisely so one down
-      // repo can't fail a resolve. So an unreachable GitHub layer lists cleanly
-      // with zero concepts — the same row an empty repo produces. health() is
-      // the adapter's own account of whether its last request actually worked,
-      // and it is the only thing that tells those two rows apart.
-      const health = typeof s.health === "function" ? s.health() : null;
+      // `health` was read with the rest of this row (see pinEntry): whether the
+      // listing threw is not evidence a remote source is healthy — remote
+      // adapters answer [] instead of throwing precisely so one down repo can't
+      // fail a resolve. So an unreachable GitHub layer lists cleanly with zero
+      // concepts — the same row an empty repo produces. health() is the
+      // adapter's own account of whether its last request actually worked, and
+      // it is the only thing that tells those two rows apart.
+      //
       // Scope matters: an "index" failure means the whole repo is unreachable
       // — everything this source would contribute is stale or missing. A
       // "content" failure means exactly one file didn't read; every other
@@ -1077,7 +1102,7 @@ export function createEngineService({
         // pathological folder cannot turn a graph response into a log file.
         warnings: warningMessages.length,
         warningMessages: warningMessages.slice(0, 10),
-        indexing: indexProgress(entry),
+        indexing: progress,
         // Enough for "last synced X, failed Y ago" without a second request.
         // Null on sources that keep no health (local bundles, MCP children).
         lastErrorAt: health?.lastErrorAt ?? null,
@@ -1088,7 +1113,7 @@ export function createEngineService({
     // Summed off the snapshots, which already counted every document they read.
     // Nothing here recomputes a token.
     const sourceTokens = sourcesOut.reduce((n, s) => n + s.tokens, 0);
-    const pending = perSource.filter((p) => p.entry.status === "indexing").map((p) => p.source.name);
+    const pending = perSource.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
     return {
       manifest: { path: MANIFEST },
       tokenizer: TOKENIZER,
@@ -1098,7 +1123,9 @@ export function createEngineService({
       indexingSources: pending,
       // The same counter GET /api/status reports, so a client that polls the
       // cheap route can tell whether the payload it already holds is current.
-      generation: bumpGeneration(entries),
+      // Pinned above, with the rows — recomputing it here would name a state
+      // this payload does not contain.
+      generation: generationAtPin,
       totals: { sourceTokens, resolvedTokens, concepts: concepts.length, sources: sourcesOut.length },
       sources: sourcesOut,
       concepts,
@@ -1212,16 +1239,18 @@ export function createEngineService({
    * stamp, which covers every presentation field a layer contributes (location,
    * origin, live, auth alias) without enumerating them, and the credential
    * epoch, which changes no layer JSON at all.
+   *
+   * Takes pinned observations (pinEntry), never live entries: the counter has
+   * to describe the same instant its caller's payload describes.
    */
-  function bumpGeneration(entries) {
+  function bumpGeneration(pinned) {
     const parts = [manifestStamp(), `t${tokenState.epoch}`];
-    for (const { source, entry } of entries) {
-      const health = typeof source.health === "function" ? source.health() : null;
+    for (const { source, snap, progress, error, health } of pinned) {
       parts.push([
-        source.name, source.level, entry.snap?.gen ?? 0,
-        entry.status, entry.phase, entry.loaded, entry.total ?? "",
-        entry.refreshing === true ? "refreshing" : "",
-        entry.error ?? "",
+        source.name, source.level, snap?.gen ?? 0,
+        progress.status, progress.phase, progress.loaded, progress.total ?? "",
+        progress.refreshing ? "refreshing" : "",
+        error ?? "",
         health ? `${health.ok}:${health.lastErrorAt ?? ""}:${health.lastSuccessAt ?? ""}` : "",
       ].join("~"));
     }
@@ -1245,9 +1274,8 @@ export function createEngineService({
   function statusApi() {
     const { manifest, entries } = ensureIndexes();
     const layerMeta = new Map((manifest.layers ?? []).map((l) => [l.name, l]));
-    const sources = entries.map(({ source, entry }) => {
-      const health = typeof source.health === "function" ? source.health() : null;
-      const status = entry.status === "ready" ? "ok" : entry.status;
+    const pinned = entries.map(pinEntry);
+    const sources = pinned.map(({ source, snap, status, error, progress, health }) => {
       // Same four states, and the same degraded rule, as /api/graph — a client
       // that renders from this route must not disagree with one that renders
       // from that one.
@@ -1257,22 +1285,22 @@ export function createEngineService({
         level: source.level,
         kind: source.quarantinedKind ?? layerMeta.get(source.name)?.source ?? "okf-local",
         status: degraded ? "degraded" : status,
-        phase: entry.phase,
-        loaded: entry.loaded,
-        total: entry.total,
-        conceptCount: entry.snap?.ids.length ?? 0,
+        phase: progress.phase,
+        loaded: progress.loaded,
+        total: progress.total,
+        conceptCount: snap?.ids.length ?? 0,
         // Same additive signal /api/graph carries: serving a snapshot AND
         // re-reading behind it. Never a reason to show a source as unready.
-        refreshing: entry.refreshing === true,
-        error: degraded ? health.lastError : entry.error ?? null,
+        refreshing: progress.refreshing,
+        error: degraded ? health.lastError : error ?? null,
       };
     });
     // A source with nothing to serve yet. A source refreshing behind a good
     // snapshot is deliberately NOT here: it has an answer, so a client has
     // nothing to wait for and no reason to hold a spinner up in front of it.
-    const pending = entries.filter((e) => e.entry.status === "indexing").map((e) => e.source.name);
+    const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
     return {
-      generation: bumpGeneration(entries),
+      generation: bumpGeneration(pinned),
       indexing: pending.length > 0,
       indexingSources: pending,
       sources,
@@ -1385,8 +1413,12 @@ export function createEngineService({
   async function resolveAllApi(waitMs = 0) {
     if (waitMs > 0) await awaitIndexes(waitMs);
     const { entries } = ensureIndexes();
-    const healthy = entries.filter((e) => e.entry.snap).map((e) => snapshotView(e.source, e.entry.snap));
-    const allIds = [...new Set(entries.flatMap((e) => e.entry.snap?.ids ?? []))].sort();
+    // Pinned for the same reason /api/graph pins: the loop below spans many
+    // event-loop turns, and `indexingSources` has to name the state these
+    // concepts were resolved from, not whatever landed while it ran.
+    const pinned = entries.map(pinEntry);
+    const healthy = pinned.filter((p) => p.snap).map((p) => snapshotView(p.source, p.snap));
+    const allIds = [...new Set(pinned.flatMap((p) => p.snap?.ids ?? []))].sort();
     const concepts = [];
     const errors = [];
     let sinceYield = 0;
@@ -1400,7 +1432,7 @@ export function createEngineService({
         errors.push({ concept: id, error: err.message });
       }
     }
-    const pending = entries.filter((e) => e.entry.status === "indexing").map((e) => e.source.name);
+    const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
     return { concepts, errors, indexing: pending.length > 0, indexingSources: pending };
   }
 

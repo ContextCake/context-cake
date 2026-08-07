@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     query: '',
     scope: null as string | null,
     path: null as string | null,
+    reloadKey: 0,
   },
 }))
 
@@ -38,6 +39,7 @@ vi.mock('../store', async () => {
         sources: mocks.store.sources,
         concepts: mocks.store.concepts,
         reload: mocks.reload,
+        reloadKey: mocks.store.reloadKey,
         query: mocks.store.query,
         filesScope,
         filesPath,
@@ -116,6 +118,7 @@ beforeEach(() => {
   mocks.store.query = ''
   mocks.store.scope = null
   mocks.store.path = null
+  mocks.store.reloadKey = 0
   vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview')
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
   mocks.apiFetch.mockImplementation(async (url: string) => {
@@ -290,6 +293,22 @@ const NESTED = {
   }],
 }
 
+/**
+ * One file `depth` folders down, with the `rel` that reaches it. Nothing bounds
+ * nesting — the engine's walk caps files, not depth — so a docs monorepo or a
+ * foldered vault gets here on its own.
+ */
+function deepLayer(depth: number) {
+  const rel = `${Array.from({ length: depth }, (_, i) => `level-${i + 1}`).join('/')}/buried.md`
+  const listing = {
+    layers: [{
+      layer: 'vault', kind: 'files', root: '/vault', fileCount: 1, truncated: false,
+      files: [{ path: `vault/${rel}`, name: 'buried.md', rel, ext: '.md', kind: 'text', markdown: true }],
+    }],
+  }
+  return { rel, listing }
+}
+
 function press(target: Element, key: string) {
   target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
 }
@@ -310,6 +329,35 @@ describe('Files navigator tree', () => {
     expect(tree.style.height).toBe(`${5001 * 28}px`)
     expect(rows().length).toBeGreaterThan(0)
     expect(rows().length).toBeLessThan(500)
+  })
+
+  it('keeps a row 20 folders deep readable instead of indenting its name to nothing', async () => {
+    const DEPTH = 20
+    const { rel, listing } = deepLayer(DEPTH)
+    mocks.store.query = 'buried' // a filter opens every folder, which is how you reach a deep row
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json(listing)
+      return json({ ...MEETING, path: `vault/${rel}`, rel })
+    })
+    await act(async () => root.render(<Files />))
+
+    const leaf = row(`vault/${rel}`)
+    expect(leaf.querySelector('.cc-tree-name')?.textContent).toBe('buried.md')
+
+    // The navigator column is minmax(220px, 300px) and .cc-tree-scroll adds
+    // 12px of horizontal padding, so a row is 208px wide at its narrowest.
+    // jsdom lays nothing out, so assert the one number that decides whether a
+    // name gets any width at all: the indent has to leave room for the twisty,
+    // the gap, the row's right padding and the name's own 4ch floor. Unclamped,
+    // depth 21 asks for 281px of a 208px row and the name renders at zero.
+    const NARROWEST_ROW = 220 - 12
+    const CHROME = 12 + 6 + 8 // leaf icon, gap, right padding
+    const NAME_FLOOR = 4 * 6.7 // .cc-tree-name min-width: 4ch, 11px JetBrains Mono
+    expect(Number.parseFloat(leaf.style.paddingLeft)).toBeLessThanOrEqual(NARROWEST_ROW - CHROME - NAME_FLOOR)
+
+    // The picture flattens past the cap; the tree's own account of itself does
+    // not. Screen readers read depth off aria-level, and it is still the truth.
+    expect(leaf.getAttribute('aria-level')).toBe(String(DEPTH + 2))
   })
 
   it('collapses and expands a folder', async () => {

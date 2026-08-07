@@ -25,9 +25,33 @@ function src(over: Partial<Source>): Source {
   }
 }
 
+/** The store's own state, so a test can move it the way a real reload would. */
+let store: { mode: 'live' | 'demo'; sources: Source[]; reloadKey: number }
+
 function mount(sources: Source[], mode: 'live' | 'demo' = 'live', onAddSource?: () => void) {
-  mocks.useStore.mockReturnValue({ mode, sources, reload: mocks.reload, openFilesScope: mocks.openFilesScope })
+  store = { mode, sources, reloadKey: 0 }
+  mocks.useStore.mockImplementation(() => ({
+    mode: store.mode, sources: store.sources, reloadKey: store.reloadKey,
+    reload: mocks.reload, openFilesScope: mocks.openFilesScope,
+  }))
   return act(async () => root.render(<Sources onAddSource={onAddSource} />))
+}
+
+/**
+ * What the store does once a write's `reload()` lands: fresh rows from
+ * /api/graph and a bumped `reloadKey`. Re-rendering in place rather than
+ * remounting is the whole point — a remount refetches the listing by itself and
+ * would hide the staleness these tests exist to catch.
+ */
+function afterWrite(sources: Source[]) {
+  store = { ...store, sources, reloadKey: store.reloadKey + 1 }
+  return act(async () => root.render(<Sources />))
+}
+
+/** A change this app did not make, arriving through the poll: rows move, `reloadKey` does not. */
+function afterPoll(sources: Source[]) {
+  store = { ...store, sources }
+  return act(async () => root.render(<Sources />))
 }
 
 function button(label: string): HTMLButtonElement {
@@ -371,6 +395,78 @@ describe('Sources → Files', () => {
     // resolves the root; the renderer never names an absolute path.
     expect(revealFile).toHaveBeenCalledWith('notes', '')
     delete (window as unknown as { __CC_DESKTOP?: unknown }).__CC_DESKTOP
+  })
+})
+
+describe('Sources: the file listing follows the source', () => {
+  const entry = (over: Record<string, unknown> = {}) => ({
+    layer: 'notes', kind: 'files', root: '/Users/me/vault', fileCount: 3014, truncated: false, files: [], ...over,
+  })
+
+  /** `/api/files` answers from `listed`, which a test moves the way the engine would. */
+  function serve(listed: () => unknown[]) {
+    mocks.apiFetch.mockImplementation(async (url: string) => (url === '/api/files' ? ok({ layers: listed() }) : ok()))
+  }
+
+  it('refetches after a rename, instead of losing the files under the old name', async () => {
+    let listed = [entry()]
+    serve(() => listed)
+    await mount([src({ name: 'notes' })])
+    expect(container.textContent).toContain('3014 files')
+
+    await act(async () => buttonByAria('Rename, re-level or repoint notes').click())
+    await enter('#src-edit-name', 'notes-2')
+    await act(async () => button('Save').click())
+    // The engine keys the listing by layer name, so the same folder comes back
+    // under the new one.
+    listed = [entry({ layer: 'notes-2' })]
+    await afterWrite([src({ name: 'notes-2' })])
+
+    // Keyed on the source count, none of this moved: the map was still keyed by
+    // `notes`, so a source with 3,014 files read "None on this machine" and its
+    // way into the navigator disappeared.
+    expect(container.textContent).toContain('3014 files')
+    expect(container.textContent).toContain('/Users/me/vault')
+    expect(container.textContent).not.toContain('None on this machine')
+    expect(container.querySelector('button[aria-label="Browse the files in notes-2"]')).toBeTruthy()
+  })
+
+  it('refetches after a repoint, instead of quoting the folder it no longer reads', async () => {
+    let listed = [entry({ fileCount: 3 })]
+    serve(() => listed)
+    await mount([src({ name: 'notes' })])
+    expect(container.textContent).toContain('/Users/me/vault')
+
+    await act(async () => buttonByAria('Rename, re-level or repoint notes').click())
+    await enter('#src-edit-path', '/Volumes/Work/notes')
+    await act(async () => button('Save').click())
+    listed = [entry({ root: '/Volumes/Work/notes', fileCount: 7 })]
+    // Nothing in `sources` changed here — same name, same level, same count.
+    // The move is only visible in the listing, which is why `reloadKey` and not
+    // the rows is what has to drive the refetch.
+    await afterWrite([src({ name: 'notes' })])
+
+    expect(container.textContent).toContain('/Volumes/Work/notes')
+    expect(container.textContent).toContain('7 files')
+    expect(container.textContent).not.toContain('/Users/me/vault')
+
+    // And the editor prefills from the listing, so reopening it offers the new
+    // folder rather than the one the save just moved away from.
+    await act(async () => buttonByAria('Rename, re-level or repoint notes').click())
+    expect(container.querySelector<HTMLInputElement>('#src-edit-path')!.value).toBe('/Volumes/Work/notes')
+  })
+
+  it('refetches for a source added outside this app, which never calls reload()', async () => {
+    let listed = [entry({ fileCount: 3 })]
+    serve(() => listed)
+    await mount([src({ name: 'notes' })])
+
+    listed = [entry({ fileCount: 3 }), entry({ layer: 'scratch', root: '/Users/me/scratch', fileCount: 9 })]
+    await afterPoll([src({ name: 'notes' }), src({ name: 'scratch', level: 2, layer: 'team' })])
+
+    await act(async () => sourceButton('scratch').click())
+    expect(container.textContent).toContain('9 files')
+    expect(container.textContent).toContain('/Users/me/scratch')
   })
 })
 

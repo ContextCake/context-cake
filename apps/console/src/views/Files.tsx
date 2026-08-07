@@ -17,7 +17,7 @@ import type { Concept } from '../data'
 import { buildTree, FileTree } from '../components/FileTree'
 import { Markdown } from '../components/Markdown'
 import { useDetailSurface } from '../components/useDetailSurface'
-import { readLayerFile, useLayerFiles } from '../layer-files'
+import { filesRevalidation, readLayerFile, useLayerFiles } from '../layer-files'
 import { useReveal } from '../reveal'
 import { useStore } from '../store'
 import type { FileContent, LayerFile } from '../types'
@@ -95,7 +95,7 @@ function conceptForFile(file: FileContent | null, concepts: Concept[]): { concep
 }
 
 export function Files() {
-  const { mode, concepts, sources, reload, query, filesScope, filesPath, setFilesScope, setFilesPath, openConcept } = useStore()
+  const { mode, concepts, sources, reload, reloadKey, query, filesScope, filesPath, setFilesScope, setFilesPath, openConcept } = useStore()
   const [file, setFile] = useState<FileContent | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('rendered')
@@ -121,7 +121,7 @@ export function Files() {
 
   // The listing is cheap even mid-index, so it loads on its own and doesn't
   // wait for the cascade. It re-runs when the source set changes.
-  const { layers, error: listError } = useLayerFiles(mode, sources.length)
+  const { layers, error: listError } = useLayerFiles(mode, filesRevalidation(sources, reloadKey))
 
   // Which source each layer belongs to, for the layer-coloured root rows. The
   // hues are product semantics (personal amber / team teal / company indigo),

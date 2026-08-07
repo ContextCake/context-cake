@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { C, css, lc, MONO, conceptTypeStyle } from '../theme'
 import { layerName } from '../data'
 import type { Concept } from '../data'
-import { useLayerFiles } from '../layer-files'
+import { filesRevalidation, useLayerFiles } from '../layer-files'
 import { useStore } from '../store'
 import { LayerChip } from './LayerChip'
 
@@ -24,8 +24,8 @@ const contributorKey = (layer: string, conceptId: string) => JSON.stringify([lay
  * link, and so no affordance that opens on an error.
  */
 function useFileByContributor(): Map<string, string> {
-  const { mode, sources } = useStore()
-  const { layers } = useLayerFiles(mode, sources.length)
+  const { mode, sources, reloadKey } = useStore()
+  const { layers } = useLayerFiles(mode, filesRevalidation(sources, reloadKey))
   return useMemo(() => {
     const best = new Map<string, { path: string; rank: number }>()
     for (const entry of layers ?? []) {

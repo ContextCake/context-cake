@@ -139,6 +139,12 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   `synced` — "synced · 0 concepts" over a still-reading vault is the exact lie
   this pass exists to remove. `indexing.refreshing` is the opposite case:
   serving good data while re-reading, so it gets a note, never a spinner.
+- **The file listing revalidates on `filesRevalidation()`, never on
+  `sources.length`.** Three views read `/api/files` (Sources, Files,
+  ConceptDetail) and all three must key the refetch the same way. A rename and a
+  repoint both leave the source count untouched, so a count-keyed effect went on
+  answering for the old layer name and the old root until something remounted —
+  a renamed 3,000-file source rendering "None on this machine".
 - **`warnings` is the true count; `warningMessages` is capped at 10.** Render
   the count from `warnings`.
 - **`src/markdown.ts` parses to typed data and has no dependencies.** It never

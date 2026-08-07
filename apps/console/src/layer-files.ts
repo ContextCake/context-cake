@@ -51,6 +51,24 @@ export async function readLayerFile(mode: Mode, path: string): Promise<FileConte
   return data as FileContent
 }
 
+/**
+ * The `revalidate` value every caller passes — one function so all three ask
+ * the same question, because getting it wrong is invisible until you rename
+ * something.
+ *
+ * The source *count* is not it. A rename and a repoint both leave it identical,
+ * so the listing kept answering for the old layer name and the old root until
+ * something remounted the view: a renamed folder read "None on this machine"
+ * with its Browse button gone, and a repointed one went on quoting the folder
+ * it no longer reads. The names cover add/remove/rename — including one made
+ * outside this app, which arrives through the poll rather than through a write
+ * — and `reloadKey` covers a repoint, where the name is the one thing that did
+ * not change. NUL-joined so "a b" + "c" can never collide with "a" + "b c".
+ */
+export function filesRevalidation(sources: readonly { name: string }[], reloadKey: number): string {
+  return [String(reloadKey), ...sources.map((source) => source.name)].join('\u0000')
+}
+
 export interface LayerFilesState {
   /** Null until the first answer lands — "unknown", never "empty". */
   layers: LayerFiles[] | null
@@ -58,11 +76,12 @@ export interface LayerFilesState {
 }
 
 /**
- * `revalidate` re-runs the walk when it changes; pass whatever identifies the
- * current source set. The listing is cheap even mid-index, so this deliberately
- * does not wait on the cascade. The demo snapshot is already in the bundle, so
- * it is the initial state rather than something to wait a frame for — the tree
- * must not flash its loading skeleton over data the page shipped with.
+ * `revalidate` re-runs the walk when it changes; pass `filesRevalidation(…)`
+ * rather than something hand-rolled. The listing is cheap even mid-index, so
+ * this deliberately does not wait on the cascade. The demo snapshot is already
+ * in the bundle, so it is the initial state rather than something to wait a
+ * frame for — the tree must not flash its loading skeleton over data the page
+ * shipped with.
  */
 export function useLayerFiles(mode: Mode, revalidate: unknown): LayerFilesState {
   const [state, setState] = useState<LayerFilesState>(

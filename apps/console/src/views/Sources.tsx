@@ -12,7 +12,7 @@ import { apiFetch, progressLabel, progressPercent } from '../api'
 import { LayerChip } from '../components/LayerChip'
 import { LevelStepper } from '../components/SetupWizard'
 import { useDetailSurface } from '../components/useDetailSurface'
-import { useLayerFiles } from '../layer-files'
+import { filesRevalidation, useLayerFiles } from '../layer-files'
 import { useReveal } from '../reveal'
 import { useStore } from '../store'
 import type { Source } from '../data'
@@ -190,11 +190,11 @@ function filesSummary(source: Source, entry: LayerFiles | undefined, known: bool
 }
 
 export function Sources({ onAddSource }: { onAddSource?: () => void }) {
-  const { mode, sources, reload, query, openFilesScope } = useStore()
+  const { mode, sources, reload, reloadKey, query, openFilesScope } = useStore()
   const live = mode === 'live'
   // The same listing the Files view builds its tree from: a source's file count
   // and root path are already in that payload, and were being thrown away.
-  const { layers: fileLayers } = useLayerFiles(mode, sources.length)
+  const { layers: fileLayers } = useLayerFiles(mode, filesRevalidation(sources, reloadKey))
   const filesByLayer = useMemo(() => {
     const map = new Map<string, LayerFiles>()
     for (const entry of fileLayers ?? []) map.set(entry.layer, entry)

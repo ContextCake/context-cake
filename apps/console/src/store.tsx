@@ -216,6 +216,14 @@ export interface Store {
   resolveSafeConflicts: () => Promise<void>
   send: (text?: string) => void
   reload: () => void
+  /**
+   * Bumped by every `reload()`. Exposed because a write can change what a
+   * secondary read returns without changing anything visible in `sources` —
+   * repointing a source keeps its name, level and count and moves only the
+   * folder underneath it. Anything deriving from a separate endpoint keys its
+   * refetch on this (see `filesRevalidation` in `layer-files.ts`).
+   */
+  reloadKey: number
 }
 
 const StoreContext = createContext<Store | null>(null)
@@ -807,8 +815,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
     setFilesScope, setFilesPath, openFilesScope, openConcept,
     openChat, closeChat, setChatInput,
-    filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload,
-  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, setView, setQuery, setFilesScope, setFilesPath, openFilesScope, openConcept, openChat, closeChat])
+    filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey,
+  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey, setView, setQuery, setFilesScope, setFilesPath, openFilesScope, openConcept, openChat, closeChat])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

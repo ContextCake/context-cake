@@ -294,8 +294,17 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
         </div>
       </div>
 
-      {/* legend */}
-      <div style={css(`position:absolute; left:20px; bottom:20px; display:flex; flex-direction:column; gap:8px; padding:12px 14px; background:var(--cc-raised); border:1px solid ${C.line}; border-radius:11px; box-shadow:0 4px 16px var(--cc-shadow);`)}>
+      {/*
+        legend — the one blurred surface in the app with moving content behind
+        it. It floats over the pan/zoom viewport, so concept nodes and their
+        conflict edges slide underneath as the user drags; going opaque here
+        turned a card the graph reads through into a hole punched in it. That is
+        the opposite of the chrome panels, which sit in normal flow over a static
+        page gradient. Users who want it gone have the reduce-transparency
+        preference, which resolves --cc-header-bg to the opaque raised surface
+        and kills backdrop-filter app-wide (see styles.css).
+      */}
+      <div style={css(`position:absolute; left:20px; bottom:20px; display:flex; flex-direction:column; gap:8px; padding:12px 14px; background:var(--cc-header-bg); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid ${C.line}; border-radius:11px; box-shadow:0 4px 16px var(--cc-shadow);`)}>
         <div style={css(`font-size:10px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:${C.caption};`)}>The cascade — higher lanes win</div>
         <div style={css('display:flex; align-items:center; gap:8px;')}>
           <svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" stroke="var(--cc-edge-conflict)" strokeWidth="1.8" strokeDasharray="5 5" /></svg>

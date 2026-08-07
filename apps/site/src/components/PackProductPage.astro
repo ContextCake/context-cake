@@ -270,20 +270,20 @@ const {
 	.status i { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--pack-accent); }
 	h1, h2, h3, p { letter-spacing: 0; }
 	h1 {
-		max-width: 15ch;
+		max-width: 16ch;
 		margin: 0;
-		font-size: clamp(2.4rem, 4.4vw, 4.35rem);
-		line-height: 0.98;
-		letter-spacing: -0.035em;
+		font-size: clamp(2.2rem, 3.6vw, 3.6rem);
+		line-height: 1.08;
+		letter-spacing: -0.03em;
 		text-wrap: balance;
 	}
 	.promise {
 		max-width: 28ch;
 		margin: 1.1rem 0 0;
 		color: var(--cc-text);
-		font-size: clamp(1.2rem, 1.8vw, 1.55rem);
+		font-size: clamp(1.1rem, 1.5vw, 1.35rem);
 		font-weight: 600;
-		line-height: 1.35;
+		line-height: 1.4;
 		text-wrap: balance;
 	}
 	.lede { max-width: 62ch; margin: 0.8rem 0 0; color: var(--cc-text-body); font-size: 1.03rem; line-height: 1.65; }
@@ -396,7 +396,7 @@ const {
 	@media (max-width: 640px) {
 		.pack-product { padding-inline: 1rem; }
 		.product-hero { padding-top: 1.25rem; }
-		h1 { font-size: 2.45rem; }
+		h1 { font-size: clamp(1.8rem, 5.5vw, 2.2rem); }
 		.value-list, .workflow-list { grid-template-columns: 1fr; }
 		.workflow-list li + li { padding-left: 0; border-left: 0; }
 		.product-nav { margin-inline: -1rem; overflow-x: auto; padding-inline: 1rem; }

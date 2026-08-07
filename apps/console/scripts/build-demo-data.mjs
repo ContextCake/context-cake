@@ -3,22 +3,30 @@
 //
 // Enumerate every concept in the demo bundle and resolve it through the REAL
 // engine, then assemble a graph summary shaped exactly like the playground
-// server's GET /api/graph. Emits one JSON file the console imports at build time:
+// server's GET /api/graph. Emits two JSON files the console imports at build time:
 //
 //   apps/console/src/generated/demo-cascade.json  →  { graph, concepts }
+//   apps/console/src/generated/demo-files.json    →  { layers, files }
 //
-// so DemoSource and LiveSource return identical shapes (types.ts). The directory
-// is gitignored: generated, never committed, never hand-edited. Wired as the
-// console `predev` / `prebuild` / `pretypecheck` npm script.
+// so DemoSource and LiveSource return identical shapes (types.ts), and the Files
+// navigator has the same tree in the public Web Demo that it has over a real
+// folder. The directory is gitignored: generated, never committed, never
+// hand-edited. Wired as the console `predev` / `prebuild` / `pretypecheck` npm
+// script.
 //
-// Engine use is READ-ONLY — we shell out to `resolver.mjs` exactly as the docs
-// show (`node resolver.mjs --manifest … --concept …`). No engine file is
-// imported or modified; this can never affect `npm test`.
+// Engine use is READ-ONLY, and both halves come from the engine itself: the
+// cascade by shelling out to `resolver.mjs` exactly as the docs show
+// (`node resolver.mjs --manifest … --concept …`), the file tree by calling the
+// very functions service.mjs mounts at GET /api/files and GET /api/file. Those
+// have no CLI, and reimplementing the walk here would mean the demo tree could
+// drift from the live one without anything failing. Nothing is written back and
+// no engine file is modified, so this can never affect `npm test`.
 
 import { execFileSync } from 'node:child_process'
 import { readdirSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { layerRootMap, listFilesApi, readFileApi } from '../../../packages/core/src/layer-files.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url)) // apps/console/scripts
 const consoleRoot = resolve(scriptDir, '..') // apps/console/
@@ -28,6 +36,7 @@ const manifestDir = dirname(manifestPath)
 const resolverPath = join(repoRoot, 'packages', 'core', 'src', 'resolver.mjs')
 const outDir = join(consoleRoot, 'src', 'generated')
 const outFile = join(outDir, 'demo-cascade.json')
+const filesOutFile = join(outDir, 'demo-files.json')
 
 /** Recursively collect every `*.md` under `dir` (Node ≥ 18, no deps). */
 function walkMarkdown(dir) {
@@ -114,16 +123,37 @@ const sources = layers.map((l) => ({
 }))
 
 const graph = {
-  manifest: { path: manifestPath },
+  // Repo-relative for the same reason `layer.root` is below: this bundle is
+  // inlined into the public Web Demo's JS, and the absolute path is the build
+  // machine's — a developer's home directory and repo layout, shipped.
+  manifest: { path: relative(repoRoot, manifestPath) },
   tokenizer: 'demo',
   totals: { sourceTokens: 0, resolvedTokens: 0, concepts: concepts.length, sources: sources.length },
   sources,
   concepts: graphConcepts,
 }
 
+// The file tree behind those layers, from the engine's own file APIs. The demo
+// serves it read-only: the listing and every document's text, no write route.
+const roots = layerRootMap(manifest, manifestDir)
+const listing = await listFilesApi(roots)
+const files = {}
+for (const layer of listing.layers) {
+  for (const entry of layer.files) files[entry.path] = await readFileApi(entry.path, roots)
+  // The absolute root is the build machine's, and this bundle ships to the
+  // public Web Demo. The repo-relative path is the same folder said honestly,
+  // without a stranger's home directory in it.
+  layer.root = relative(repoRoot, layer.root)
+}
+
 mkdirSync(outDir, { recursive: true })
 writeFileSync(outFile, JSON.stringify({ graph, concepts }, null, 2) + '\n')
+const filesJson = JSON.stringify({ layers: listing.layers, files }, null, 2) + '\n'
+writeFileSync(filesOutFile, filesJson)
 
 console.log(
   `[console build-demo-data] wrote ${concepts.length} concept(s), ${sources.length} source(s) → ${relative(repoRoot, outFile)}`,
+)
+console.log(
+  `[console build-demo-data] wrote ${Object.keys(files).length} file(s), ${Math.round(filesJson.length / 1024)} KB → ${relative(repoRoot, filesOutFile)}`,
 )

@@ -25,6 +25,9 @@ export const TRUSTED_IPC_ROLES = Object.freeze({
   'contextcake:cli-status': Object.freeze(['main']),
   'contextcake:cli-install': Object.freeze(['main']),
   'contextcake:choose-folder': Object.freeze(['main']),
+  // Only the main window browses files, and the payload is a layer name plus a
+  // relative path — never a path the renderer chose (see reveal.mjs).
+  'contextcake:reveal-file': Object.freeze(['main']),
   'windows:open-settings': Object.freeze(['main']),
   'data:reload-requested': Object.freeze(['settings']),
 })

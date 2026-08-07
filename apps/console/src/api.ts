@@ -403,6 +403,7 @@ function adaptSection(s: ResolvedSection, levels: Map<string, number>): ConceptS
   const winner = layerOf(s.sourceLayer, levels.get(s.sourceLayer) ?? 0)
   const dissents: Dissent[] = (s.conflicts ?? []).map((c) => ({
     layer: layerOf(c.layer, levels.get(c.layer) ?? 0),
+    sourceLayer: c.layer,
     value: c.content,
     updated: c.updated,
   }))
@@ -410,6 +411,7 @@ function adaptSection(s: ResolvedSection, levels: Map<string, number>): ConceptS
     name: sectionName(s),
     key: s.key,
     winner,
+    sourceLayer: s.sourceLayer,
     value: s.content,
     updated: s.sourceUpdated,
     suppressed: s.suppressed === true,

@@ -96,7 +96,7 @@ declare global {
         set(patch: Partial<DeviceUiState>): Promise<DeviceUiState>
       }
       commands?: {
-        onInvoke(cb: (command: 'command-palette' | 'search' | 'ask' | 'settings' | 'toggle-sidebar' | `destination:${1 | 2 | 3 | 4 | 5}`) => void): () => void
+        onInvoke(cb: (command: 'command-palette' | 'search' | 'ask' | 'settings' | 'toggle-sidebar' | 'view:files' | `destination:${1 | 2 | 3 | 4 | 5}`) => void): () => void
       }
       windows?: {
         openSettings(pane?: DeviceUiState['settingsPane']): Promise<{ opened: boolean; existing: boolean }>
@@ -108,6 +108,13 @@ declare global {
       }
       /** Open the native macOS directory picker. Null means the user canceled. */
       chooseFolder?: () => Promise<string | null>
+      /**
+       * Show a file in Finder. Takes a source name and a path INSIDE that
+       * source — never an absolute path. The main process resolves it against
+       * the manifest and refuses anything that escapes the source's folder,
+       * answering `{ ok: false, error }` rather than throwing.
+       */
+      revealFile?: (layer: string, rel: string) => Promise<{ ok: boolean; error?: string }>
       /** Fixed native operations for ContextCake's own command-line tool. */
       cli: {
         getStatus: () => Promise<CliResult>

@@ -1000,7 +1000,7 @@ export function createEngineService({
         if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
         if (req.method === "POST") { json(res, 200, await addSourceApi(await readBody(req))); return true; }
         if (req.method === "DELETE") { json(res, 200, removeSourceApi(url.searchParams.getAll("name"))); return true; }
-        json(res, 200, patchSourceApi(await readBody(req)));
+        json(res, 200, await patchSourceApi(await readBody(req)));
         return true;
       }
       if (p === "/api/sources/sync" && req.method === "POST") {
@@ -1781,12 +1781,52 @@ export function createEngineService({
     return dir;
   }
 
-  function patchSourceApi(rawBody) {
+  /**
+   * Which layers may have their folder repointed, and why the rest may not.
+   * A remote source has no folder to speak of, and a clone-backed layer's path
+   * is owned by Sync (gitCloneOrPull writes CACHE_DIR/<slug>, never layer.path)
+   * — repointing it would leave a source that reads one folder and syncs
+   * another, which is worse than refusing.
+   */
+  function pathPatchRefusal(layer) {
+    const kind = layer.source ?? "okf-local";
+    if (kind === "mcp") return "An MCP source is reached by command, not by folder. Remove it and add it again to point at a different server.";
+    if (kind === "github") return "A GitHub source is read from its repository, not from a folder on this machine. Remove it and add it again to point at a different repo.";
+    if (layer.origin) return "This source is a clone of " + layer.origin + ". Its folder is managed by Sync — remove it and add it again to point somewhere else.";
+    if (kind !== "okf-local" && kind !== "files") return `A "${kind}" source has no editable folder path.`;
+    return null;
+  }
+
+  async function patchSourceApi(rawBody) {
     const b = parseJson(rawBody);
+    // A path change is validated before the manifest is touched, with the same
+    // cheap probe the add path uses — folder-missing and not-a-folder fail the
+    // request, size never does. The kind is re-checked inside the mutation
+    // below; this read only decides which extensions the probe looks for.
+    let nextPath;
+    let probed = null;
+    if (b.path !== undefined) {
+      // Typed before it is coerced: String(["/etc"]) is "/etc", so an array
+      // would otherwise walk straight through the trim and the probe.
+      if (typeof b.path !== "string") throw httpError(400, "Give this source a folder path");
+      const layer = getManifestProfileLayers(readManifest()).find((candidate) => candidate.name === b.name);
+      if (!layer) throw httpError(404, `No source named "${b.name}"`);
+      const refusal = pathPatchRefusal(layer);
+      if (refusal) throw httpError(400, refusal);
+      nextPath = expandHome(b.path.trim());
+      if (!nextPath) throw httpError(400, "Give this source a folder path");
+      const kind = layer.source ?? "okf-local";
+      probed = await probeFolder(path.resolve(MANIFEST_DIR, nextPath), kind === "files" ? FILES_EXTENSIONS : [".md"]);
+    }
     mutateContextManifest(MANIFEST, (manifest) => {
       const layers = getManifestProfileLayers(manifest);
       const layer = layers.find((candidate) => candidate.name === b.name);
       if (!layer) throw httpError(404, `No source named "${b.name}"`);
+      if (nextPath !== undefined) {
+        const refusal = pathPatchRefusal(layer);
+        if (refusal) throw httpError(400, refusal);
+        layer.path = nextPath;
+      }
       if (b.level !== undefined && Number.isFinite(+b.level)) layer.level = +b.level;
       if (b.newName && b.newName !== b.name) {
         if (!/^[a-zA-Z0-9 _-]{1,40}$/.test(b.newName)) throw httpError(400, "Invalid new name");
@@ -1795,7 +1835,14 @@ export function createEngineService({
       }
     }, { allowMissing: false, allowTransitional: true });
     reload();
-    return { ok: true };
+    // A new folder is a new content IDENTITY, so adoptIndexes finds no entry to
+    // carry over and the source re-indexes from scratch. That is the correct
+    // outcome, not a shortcoming of adoption: the snapshot it would have
+    // carried is an index of a folder this source no longer reads, and serving
+    // it would answer with documents the user just pointed away from. The
+    // client is told to expect a re-index rather than left to infer it from a
+    // row that flipped back to "indexing".
+    return { ok: true, ...(probed ? { reindexing: true, hasDocuments: probed.found, scanComplete: probed.complete } : {}) };
   }
 
   async function syncSourceApi(name) {

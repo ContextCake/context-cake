@@ -11,7 +11,7 @@ import {
 } from './api'
 import type { GraphSummary, SourceStatus } from './types'
 import type { LayerId, RouteId } from './theme'
-import { dispatchNavigationGuard, isViewId, parseHash, type ViewId } from './shell-navigation'
+import { dispatchNavigationGuard, filesHash, isViewId, parseHash, type ViewId } from './shell-navigation'
 
 export type { ViewId } from './shell-navigation'
 export type TriageTab = 'review' | 'captured' | 'ignored'
@@ -20,10 +20,10 @@ const BROWSER_LAST_VIEW_KEY = 'contextcake.lastView'
 const BROWSER_KNOWLEDGE_VIEW_KEY = 'contextcake.knowledgeView'
 const BROWSER_REVIEW_VIEW_KEY = 'contextcake.reviewView'
 
-function initialRoute(): { view: ViewId; concept?: string } {
+function initialRoute(): { view: ViewId; concept?: string; layer?: string; file?: string } {
   if (typeof window === 'undefined') return { view: 'overview' }
   const explicit = parseHash(window.location.hash)
-  if (explicit.view) return { view: explicit.view, concept: explicit.concept }
+  if (explicit.view) return { view: explicit.view, concept: explicit.concept, layer: explicit.layer, file: explicit.file }
   const desktop = window.__CC_DESKTOP?.uiState?.initial.lastView
   if (isViewId(desktop)) return { view: desktop }
   try {
@@ -167,6 +167,10 @@ export interface Store {
   selSignal: string | null
   selConflict: string
   selConcept: string
+  /** Files navigator: the one source it is scoped to, or null for every source. */
+  filesScope: string | null
+  /** The open file as the engine names it (`<layer>/<rel>`), or null. */
+  filesPath: string | null
   query: string
   chatOpen: boolean
   chatBusy: boolean
@@ -188,6 +192,17 @@ export interface Store {
   setSelSignal: (id: string | null) => void
   setSelConflict: (id: string) => void
   setSelConcept: (id: string) => void
+  /** Narrow the navigator to one source, or clear it. Leaves the open file alone. */
+  setFilesScope: (layer: string | null) => void
+  setFilesPath: (path: string | null) => void
+  /**
+   * Go to Files scoped to a source — the "Browse files" action and its palette
+   * twin. `file` (an engine `<layer>/<rel>` path) opens one specific file, for
+   * the cross-link from a concept's contributor.
+   */
+  openFilesScope: (layer: string | null, file?: string | null) => void
+  /** Go to Concepts on one concept — the cross-link from the file behind it. */
+  openConcept: (id: string) => void
   setQuery: (q: string) => void
   openChat: () => void
   closeChat: () => void
@@ -201,6 +216,14 @@ export interface Store {
   resolveSafeConflicts: () => Promise<void>
   send: (text?: string) => void
   reload: () => void
+  /**
+   * Bumped by every `reload()`. Exposed because a write can change what a
+   * secondary read returns without changing anything visible in `sources` —
+   * repointing a source keeps its name, level and count and moves only the
+   * folder underneath it. Anything deriving from a separate endpoint keys its
+   * refetch on this (see `filesRevalidation` in `layer-files.ts`).
+   */
+  reloadKey: number
 }
 
 const StoreContext = createContext<Store | null>(null)
@@ -245,6 +268,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // split without turning itself into a deep link. An explicit row selection
   // switches the route to the deep-link form.
   const [conceptRouteMode, setConceptRouteMode] = useState<'bare' | 'deep'>(initial.concept ? 'deep' : 'bare')
+  const [filesScope, setFilesScopeState] = useState<string | null>(initial.layer ?? null)
+  const [filesPath, setFilesPathState] = useState<string | null>(initial.file ?? null)
   const setSelConcept = useCallback((id: string) => {
     setConceptRouteMode('deep')
     setSelConceptState(id)
@@ -524,6 +549,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const selSignalRef = useRef(selSignal); selSignalRef.current = selSignal
   const selConflictRef = useRef(selConflict); selConflictRef.current = selConflict
   const selConceptRef = useRef(selConcept); selConceptRef.current = selConcept
+  const conceptRouteModeRef = useRef(conceptRouteMode); conceptRouteModeRef.current = conceptRouteMode
+  const filesScopeRef = useRef(filesScope); filesScopeRef.current = filesScope
+  const filesPathRef = useRef(filesPath); filesPathRef.current = filesPath
   const chatBusyRef = useRef(chatBusy); chatBusyRef.current = chatBusy
   const chatInputRef = useRef(chatInput); chatInputRef.current = chatInput
   const conceptsRef = useRef(concepts); conceptsRef.current = concepts
@@ -540,6 +568,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setViewState(next)
   }, [view])
 
+  const setFilesScope = useCallback((layer: string | null) => setFilesScopeState(layer), [])
+  const setFilesPath = useCallback((path: string | null) => setFilesPathState(path), [])
+
+  /**
+   * "Browse files in <source>". Runs the navigation guard itself rather than
+   * going through setView, which would ask a second time — and drops an open
+   * file that belongs to a different source, so the navigator and the editor
+   * never disagree about which source you are looking at.
+   *
+   * `file` is the engine's own `<layer>/<rel>` path, for arriving at one
+   * specific file (a concept's "open file" link). Passing one from another
+   * source is a caller bug, so it is ignored rather than silently changing the
+   * scope out from under the navigator.
+   */
+  const openFilesScope = useCallback((layer: string | null, file?: string | null) => {
+    if (!dispatchNavigationGuard()) return
+    setFilesScopeState(layer)
+    const wanted = file && (!layer || file.startsWith(`${layer}/`)) ? file : null
+    if (wanted) setFilesPathState(wanted)
+    else setFilesPathState((current) => (layer && current && !current.startsWith(`${layer}/`) ? null : current))
+    setViewState('files')
+  }, [])
+
+  /**
+   * "Open the concept behind this file" — the mirror of openFilesScope, and
+   * guarded once for the same reason: setView would ask about unsaved changes,
+   * and then setSelConcept would have already moved the selection whether the
+   * user said yes or not.
+   */
+  const openConcept = useCallback((id: string) => {
+    if (!dispatchNavigationGuard()) return
+    setConceptRouteMode('deep')
+    setSelConceptState(id)
+    setViewState('concepts')
+  }, [])
+
   useEffect(() => {
     window.__CC_DESKTOP?.uiState?.set({
       lastView: view,
@@ -555,6 +619,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [view])
 
+  /**
+   * The hash that describes what is on screen right now — the one place that
+   * knows how each view addresses itself. Read through refs so the popstate
+   * handler (which only re-subscribes on `view`) can call it without ever
+   * restoring a stale URL.
+   */
+  const currentHash = useCallback((): string => {
+    if (view === 'files') return filesHash(filesScopeRef.current, filesPathRef.current)
+    if (view === 'concepts' && selConceptRef.current && conceptRouteModeRef.current === 'deep') {
+      return `#/concepts/${encodeURIComponent(selConceptRef.current)}`
+    }
+    return `#/${view}`
+  }, [view])
+
   // URL hash ⇄ state: reflect view/selected-concept for deep links, restore on
   // load (above), and support back/forward. pushState on view change (a real
   // navigation), replaceState within a view (selection tweak) to avoid spam.
@@ -563,24 +641,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // leave the URL alone — rewriting it here would permanently clobber the
     // deep link before the data arrives to honor it.
     if (pendingConceptRef.current) return
-    const target = view === 'concepts' && selConcept && conceptRouteMode === 'deep'
-      ? `#/concepts/${encodeURIComponent(selConcept)}`
-      : `#/${view}`
+    const target = currentHash()
     if (window.location.hash === target) { prevViewRef.current = view; return }
     const viewChanged = prevViewRef.current !== view
     prevViewRef.current = view
     if (viewChanged) window.history.pushState(null, '', target)
     else window.history.replaceState(null, '', target)
-  }, [conceptRouteMode, view, selConcept])
+  }, [conceptRouteMode, currentHash, view, selConcept, filesScope, filesPath])
 
   useEffect(() => {
     const onPop = () => {
       const p = parseHash(window.location.hash)
-      if (p.view && p.view !== view) {
+      if (!p.view) return
+      // What the entry would OPEN, not merely which view it names. Two adjacent
+      // #/files entries share a view and differ in the document, and an unsaved
+      // draft belongs to the document — gating the guard on the view alone let
+      // Back walk between two Files URLs and discard typed text with no prompt
+      // at all. Nothing prompts unless something is dirty: the guard is a
+      // cancelable event and the editor only listens while it holds edits.
+      const movesFile = p.view === 'files' && (p.file ?? null) !== filesPathRef.current
+      if (p.view !== view || movesFile) {
         if (!dispatchNavigationGuard()) {
-          const current = view === 'concepts' && selConceptRef.current
-            ? `#/concepts/${encodeURIComponent(selConceptRef.current)}` : `#/${view}`
-          window.history.replaceState(null, '', current)
+          // Put the screen the user is still on back on top of the stack —
+          // pushState, and the *whole* URL (scope and open file included), not
+          // `#/${view}`. The popstate has already moved the session onto the
+          // NEIGHBOURING entry, so replacing "the current entry" would rewrite
+          // the page they came from: Back would then lead back here instead of
+          // where they actually were, and a reload would land on a URL that no
+          // longer describes the screen.
+          window.history.pushState(null, '', currentHash())
           return
         }
         setViewState(p.view)
@@ -592,10 +681,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setConceptRouteMode(p.concept ? 'deep' : 'bare')
         setSelConceptState(p.concept ?? conceptsRef.current[0]?.id ?? '')
       }
+      // Back/Forward across the Files route restores exactly what the hash
+      // says, scope included — a bare #/files really means "every source".
+      if (p.view === 'files') {
+        setFilesScopeState(p.layer ?? null)
+        setFilesPathState(p.file ?? null)
+      }
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [view])
+  }, [currentHash, view])
 
   const filtered = useCallback((tab: TriageTab): Signal[] => {
     const route = TAB_TO_ROUTE[tab]
@@ -740,13 +835,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<Store>(() => ({
     mode, loading, load, error,
-    view, triageTab, selSignal, selConflict, selConcept, query,
+    view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, query,
     chatOpen, chatBusy, chatInput, chatMessages,
     concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
+    setFilesScope, setFilesPath, openFilesScope, openConcept,
     openChat, closeChat, setChatInput,
-    filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload,
-  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, setView, setQuery, openChat, closeChat])
+    filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey,
+  }), [mode, loading, load, error, view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, query, chatOpen, chatBusy, chatInput, chatMessages, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, filtered, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey, setView, setQuery, setFilesScope, setFilesPath, openFilesScope, openConcept, openChat, closeChat])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

@@ -386,6 +386,69 @@ code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"ki
 code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=keep")" "remove the user folder source"
 [ -f "$TMP/keepme/keep.md" ] && pass "a user folder is never touched by remove" || fail "user folder deleted on remove"
 
+# ---- repointing a source at a different folder (PATCH path) -------------------
+# The one field the app used to answer with "remove the source and add it again".
+# What matters here is that the source really reads the NEW folder afterwards
+# (not just that the manifest string changed), that a bad path leaves the
+# manifest exactly as it was, and that name/level survive a path-only patch.
+echo "editable source path (PATCH path)"
+mkdir -p "$TMP/from-here" "$TMP/to-here"
+printf '# Old Home\n\n## Body\n\nthe folder it was added with.\n' > "$TMP/from-here/old-home.md"
+printf '# New Home\n\n## Body\n\nthe folder it was repointed to.\n' > "$TMP/to-here/new-home.md"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"movable\",\"level\":2,\"path\":\"$TMP/from-here\"}" "$BASE/api/sources")" "add the source that will be repointed"
+curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000" >/dev/null
+curl -s "${AUTH[@]}" "$BASE/api/resolve?concept=old-home" | grep -q 'the folder it was added with' && pass "the source serves its original folder" || fail "original folder not served"
+
+MOVE="$(curl -s -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"movable\",\"path\":\"$TMP/to-here\"}" "$BASE/api/sources")"
+[ "$(JQ 'JSON.stringify([d.ok, d.reindexing, d.hasDocuments])' <<<"$MOVE")" = '[true,true,true]' ] && pass "the path patch reports a re-index and a folder with documents" || fail "path patch response ($MOVE)"
+curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000" >/dev/null
+curl -s "${AUTH[@]}" "$BASE/api/resolve?concept=new-home" | grep -q 'the folder it was repointed to' && pass "the source re-indexes against the new folder" || fail "new folder not indexed"
+[ "$(curl -s "${AUTH[@]}" "$BASE/api/resolve?concept=old-home" | JQ 'JSON.stringify(d.contributors ?? [])')" = "[]" ] && pass "the old folder's concepts stop resolving" || fail "old folder still resolving after the move"
+ROW="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ 'JSON.stringify((({name,level,conceptCount}) => ({name,level,conceptCount}))(d.sources.find((s) => s.name === "movable") ?? {}))')"
+[ "$ROW" = '{"name":"movable","level":2,"conceptCount":1}' ] && pass "name and level survive a path-only patch" || fail "path patch disturbed name/level ($ROW)"
+
+code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"movable\",\"path\":\"$TMP/does-not-exist\"}" "$BASE/api/sources")" "a missing folder fails the patch"
+code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"movable\",\"path\":\"$TMP/to-here/new-home.md\"}" "$BASE/api/sources")" "a file instead of a folder fails the patch"
+code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"movable","path":"   "}' "$BASE/api/sources")" "an empty path fails the patch"
+# An array reaching String() would collapse to its single element and sail
+# through the trim and the probe, so the type is checked before the coercion.
+code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"movable\",\"path\":[\"$TMP/to-here\"]}" "$BASE/api/sources")" "a path that is not a string fails the patch"
+grep -q "$TMP/to-here" "$TMP/manifest.json" && pass "a refused path patch leaves the manifest on the last good folder" || fail "manifest mutated by a refused path patch"
+code 404 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"no-such-source\",\"path\":\"$TMP/to-here\"}" "$BASE/api/sources")" "an unknown source name is a 404, not a new layer"
+
+# Kinds with no folder to repoint. Each answers with the reason rather than a
+# generic refusal, because "remove and add it again" is still the right advice
+# for exactly these.
+PR="$(curl -s -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"gr\",\"path\":\"$TMP/to-here\"}" "$BASE/api/sources")"
+code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"gr\",\"path\":\"$TMP/to-here\"}" "$BASE/api/sources")" "a github source refuses a path patch"
+grep -q 'repository' <<<"$PR" && pass "the github refusal names the repository" || fail "github refusal copy ($PR)"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"mcp\",\"name\":\"mv-mcp\",\"level\":0,\"command\":\"node\",\"args\":[\"$TMP/flaky.mjs\"],\"trusted\":true}" "$BASE/api/sources")" "add an mcp source to patch"
+PR="$(curl -s -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"mv-mcp\",\"path\":\"$TMP/to-here\"}" "$BASE/api/sources")"
+code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"mv-mcp\",\"path\":\"$TMP/to-here\"}" "$BASE/api/sources")" "an mcp source refuses a path patch"
+grep -q 'command' <<<"$PR" && pass "the mcp refusal names the command" || fail "mcp refusal copy ($PR)"
+code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"mv-mcp","newName":"mv-mcp2","level":1}' "$BASE/api/sources")" "rename/re-level still works on a kind that refuses paths"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=mv-mcp2")" "cleanup the mcp source"
+
+# A clone-backed layer reads layer.path but SYNCS into .cache/repos/<slug>.
+# Repointing it would leave a source that reads one folder and pulls into
+# another, so it is refused even though its kind is okf-local.
+mkdir -p "$CLONE"
+printf -- '---\ntype: note\ntitle: C\n---\n\n# C\n\n## S {#s}\n\nclone doc.\n' > "$CLONE/c.md"
+node -e '
+  const fs = require("node:fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  (m.profiles?.default?.layers ?? m.layers).push(
+    { name: "cl3", level: 1, path: ".cache/repos/github.com__o__gh1", origin: "https://github.com/o/gh1.git", ref: null },
+  );
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$TMP/manifest.json"
+PR="$(curl -s -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"cl3\",\"path\":\"$TMP/to-here\"}" "$BASE/api/sources")"
+code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"cl3\",\"path\":\"$TMP/to-here\"}" "$BASE/api/sources")" "a clone-backed source refuses a path patch"
+grep -q 'Sync' <<<"$PR" && pass "the clone refusal points at Sync" || fail "clone refusal copy ($PR)"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=cl3")" "cleanup the clone-backed layer"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=movable")" "cleanup the repointed source"
+[ -f "$TMP/to-here/new-home.md" ] && pass "repointing never touches either folder" || fail "path patch touched user files"
+
 echo "allowMutations: false (token unset)"
 code 200 "$(C "$BASE2/api/graph")" "reads work with no header when token unset"
 code 405 "$(C -X POST -H 'content-type: application/json' -d '{}' "$BASE2/api/sources")" "POST /api/sources returns 405"

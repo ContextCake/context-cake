@@ -42,6 +42,10 @@ export function buildMenu(getWindow, openSettings) {
         { label: 'Go to Home', accelerator: 'CmdOrCtrl+1', click: () => invoke('destination:1') },
         { label: 'Go to Cascade', accelerator: 'CmdOrCtrl+2', click: () => invoke('destination:2') },
         { label: 'Go to Knowledge', accelerator: 'CmdOrCtrl+3', click: () => invoke('destination:3') },
+        // The source navigator. ⌘3 restores whichever Knowledge subview was
+        // last open; this one always lands on Files, and the renderer binds
+        // the same chord so the browser build behaves identically.
+        { label: 'Go to Files', accelerator: 'CmdOrCtrl+Shift+F', click: () => invoke('view:files') },
         { label: 'Go to Sources', accelerator: 'CmdOrCtrl+4', click: () => invoke('destination:4') },
         { label: 'Go to Review', accelerator: 'CmdOrCtrl+5', click: () => invoke('destination:5') },
         { type: 'separator' },

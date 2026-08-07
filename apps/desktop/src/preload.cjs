@@ -57,6 +57,10 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
     onReloadRequested: (cb) => subscribe('data:reload-requested', cb),
   },
   chooseFolder: () => ipcRenderer.invoke('contextcake:choose-folder'),
+  // Show a file in Finder. Deliberately a source name plus a path INSIDE that
+  // source — this bridge cannot carry an absolute path, so the main process is
+  // the only thing that ever decides where on disk Finder is pointed.
+  revealFile: (layer, rel) => ipcRenderer.invoke('contextcake:reveal-file', { layer: String(layer ?? ''), rel: String(rel ?? '') }),
   cli: {
     getStatus: () => ipcRenderer.invoke('contextcake:cli-status'),
     install: () => ipcRenderer.invoke('contextcake:cli-install'),

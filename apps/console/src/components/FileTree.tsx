@@ -469,16 +469,25 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
     )
   }
 
-  // The active row is rendered in its own slot, always, and is deliberately
-  // left out of the windowed slice. That is what keeps focus alive: React
-  // reconciles the slice and this slot separately, so a row that crossed
-  // between them — which is exactly what happens when the window scrolls past
-  // the focused row — would be unmounted and remounted, and the browser drops
-  // focus to <body> when the old node leaves the document. Keeping it in one
-  // fixed slot means it is never unmounted while it holds focus. Rows are
-  // absolutely positioned by index, so render order is not visual order.
-  const slice: React.ReactNode[] = []
-  for (let i = first; i < last; i += 1) if (i !== activeIndex) slice.push(renderRow(i))
+  // The active row is rendered even when it lies outside the window — that is
+  // what keeps focus alive when the wheel carries the window past the row the
+  // keyboard is on — but it is SPLICED IN AT ITS OWN INDEX, never appended.
+  // Rows are absolutely positioned, so appending looked right and read wrong: a
+  // screen reader's browse mode walks a flattened role="tree" in DOM order, and
+  // the focused row was emitted last, out of sequence with the aria-posinset it
+  // claims.
+  //
+  // Splicing is safe for focus precisely because every row is keyed by its id
+  // and emitted in ascending index order. React only re-inserts a keyed child
+  // that has to move BACKWARDS past one of its siblings; scrolling, expanding
+  // and filtering all add and remove at the edges and leave the survivors in
+  // the same relative order, so the focused node is never detached and
+  // re-attached. (An earlier fixed trailing slot bought the same guarantee by
+  // giving up DOM order — it did not need to.)
+  const rendered: React.ReactNode[] = []
+  if (activeIndex >= 0 && activeIndex < first) rendered.push(renderRow(activeIndex))
+  for (let i = first; i < last; i += 1) rendered.push(renderRow(i))
+  if (activeIndex >= last) rendered.push(renderRow(activeIndex))
 
   return (
     <div
@@ -493,8 +502,7 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
         style={{ height: total * ROW_HEIGHT }}
         onKeyDown={onKeyDown}
       >
-        {slice}
-        {activeIndex >= 0 && renderRow(activeIndex)}
+        {rendered}
       </div>
     </div>
   )

@@ -468,6 +468,36 @@ describe('Files navigator tree', () => {
     expect(rows().filter((r) => /note-03\d{3}\.md$/.test(r.title)).length).toBeGreaterThan(10)
   })
 
+  it('emits rows in visual order, so browse mode reads the focused row in its place', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json({ layers: [flatLayer('vault', 5000)] })
+      return json({ ...MEETING, path: 'vault/note-00000.md', rel: 'note-00000.md' })
+    })
+    await act(async () => root.render(<Files />))
+    await act(async () => row('vault').focus())
+    await act(async () => press(active()!, 'ArrowDown'))
+    expect(active()?.title).toBe('vault/note-00000.md')
+
+    // Rows are absolutely positioned, so the picture says nothing about whether
+    // the accessibility tree agrees with it — and sequential reading of a
+    // flattened role="tree" follows DOM order, not `top`.
+    const tops = () => rows().map((r) => Number.parseFloat(r.style.top))
+    const ascending = (values: number[]) => values.every((v, i) => i === 0 || v > values[i - 1])
+
+    expect(ascending(tops())).toBe(true)
+    expect(rows().at(-1)?.title).not.toBe(active()?.title)
+
+    // And once the window has moved past the focused row: still in the DOM —
+    // that is the focus guarantee — and now first, which is where it belongs.
+    const scroller = container.querySelector<HTMLElement>('.cc-tree-scroll')!
+    Object.defineProperty(scroller, 'scrollTop', { value: 90_000, configurable: true, writable: true })
+    await act(async () => scroller.dispatchEvent(new Event('scroll')))
+
+    expect(document.activeElement).not.toBe(document.body)
+    expect(rows()[0].title).toBe('vault/note-00000.md')
+    expect(ascending(tops())).toBe(true)
+  })
+
   it('opens a file on arrival without reorganizing the tree, but a deep link reveals its own', async () => {
     const nested = {
       layers: [{

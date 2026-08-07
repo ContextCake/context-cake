@@ -310,6 +310,27 @@ describe('store load state', () => {
       expect(probe().dataset.count).toBe('2')
     })
 
+    // `graph.generation` is optional on the wire. An engine that serves
+    // /api/status without it left the gate un-advanced on every pass, so
+    // `moved` was permanently true and a settled, idle app pulled the whole
+    // corpus back every five seconds, forever.
+    it('does not re-read the corpus every idle poll when the graph carries no generation', async () => {
+      const bare = graphPayload([], 1, 3) as Partial<ReturnType<typeof graphPayload>>
+      delete bare.generation
+      mocks.graph.mockResolvedValue(bare)
+      mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 7, indexing: false, conceptCount: 3 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      const afterBootstrap = mocks.resolveAll.mock.calls.length
+
+      // Four idle cadences with nothing moving on the engine at all.
+      await act(async () => { await vi.advanceTimersByTimeAsync(21_000) })
+      expect(mocks.status.mock.calls.length).toBeGreaterThanOrEqual(4)
+      expect(mocks.resolveAll.mock.calls.length).toBeLessThanOrEqual(afterBootstrap + 1)
+      expect(probe().dataset.count).toBe('1')
+    })
+
     it('reports a refreshing source as work in flight without holding up its data', async () => {
       mocks.graph.mockResolvedValue(graphPayload([]))
       mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })

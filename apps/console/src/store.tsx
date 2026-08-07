@@ -335,8 +335,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setTasks((prev) => (prev.length === 0 && next.length === 0 ? prev : next))
     }
 
-    /** The heavy pass: graph + resolve-all + resolution history. Throws. */
-    const readAll = async (): Promise<boolean> => {
+    /**
+     * The heavy pass: graph + resolve-all + resolution history. Throws.
+     *
+     * `fallbackGeneration` is the number the status poll that triggered this
+     * read just saw. It is only used when the graph payload carries none of its
+     * own — see the gate at the end.
+     */
+    const readAll = async (fallbackGeneration?: number): Promise<boolean> => {
       const g = await source.graph()
       if (cancelled) return false
       setSources(adaptSources(g))
@@ -389,7 +395,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // This is the ONLY place the gate advances, and it is past every await:
       // a read that threw leaves the gate where it was, so the next poll owes
       // the same refetch instead of inheriting a success it never had.
-      generation = g.generation
+      //
+      // `graph.generation` is optional on the wire, and an engine that omits it
+      // used to leave this at undefined on every pass — `moved` stayed
+      // permanently true and a settled app re-read the whole corpus every idle
+      // poll. The status route's number is the authority in that case: both
+      // routes report the same counter, and it is the one the gate compares
+      // against.
+      generation = g.generation ?? fallbackGeneration ?? generation
       signature = graphSignature(g)
       refetchOwed = false
       return Boolean(indexing)
@@ -431,7 +444,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               // excludes document content, so a pure edit never reopens the
               // gate. readAll commits it, once it has actually landed.
               refetchOwed = true
-              active = (await readAll()) || active
+              active = (await readAll(status.generation)) || active
             } else {
               generation = status.generation
               signature = nextSignature

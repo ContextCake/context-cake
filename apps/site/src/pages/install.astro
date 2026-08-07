@@ -571,6 +571,14 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		font-size: 0.75rem;
 		font-weight: 700;
 	}
+	/* The steps grid must never be widened by unbreakable code-block content —
+	 * the block scrolls inside its own box instead (min-width: 0 beats the
+	 * grid item's default min-width: auto, which floors at min-content). */
+	.step-copy,
+	.step-proof,
+	.result-preview {
+		min-width: 0;
+	}
 	.step-copy h3 {
 		margin: 0 0 0.65rem;
 		font-size: 1.45rem;
@@ -731,6 +739,12 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		gap: 1.4rem 3rem;
 		padding: 2.5rem 0;
 		border-top: 1px solid var(--cc-border);
+	}
+	/* Same rule as the steps grid: items must not floor the track at the
+	 * min-content of a nested code block (.cli-alternative wraps one). */
+	.source-route > *,
+	.resolver-proof > * {
+		min-width: 0;
 	}
 	.route-heading { grid-row: span 3; }
 	.route-heading h3,

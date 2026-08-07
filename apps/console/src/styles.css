@@ -194,7 +194,6 @@ button { font-family: inherit; }
   border: 0;
   border-radius: var(--cc-radius-xl);
   box-shadow: var(--cc-panel-shadow);
-  backdrop-filter: blur(18px);
 }
 
 /* ---- Left sidebar ---------------------------------------------------------- */
@@ -872,7 +871,6 @@ button { font-family: inherit; }
   padding: 22px 14px 18px;
   background: var(--cc-header-bg);
   border-right: 1px solid var(--cc-line);
-  backdrop-filter: blur(18px);
 }
 
 .cc-settings-back,
@@ -1345,13 +1343,18 @@ button { font-family: inherit; }
   .cc-menu-btn { display: inline-grid; }
 }
 
+/* No backdrop-filter here, or on the subbar or the Settings sidebar. All three
+   sit over the page background in normal flow: nothing scrolls behind them and
+   nothing shows through but a static gradient, so the blur was a full-window
+   compositing pass per frame that bought a difference nobody can see. The one
+   place it earns its cost is the app sidebar over the window's macOS vibrancy —
+   there, real desktop content is behind the glass. */
 .cc-soft-panel,
 .cc-soft-card {
   border: 0 !important;
   border-radius: var(--cc-radius-xl) !important;
   background: var(--cc-surface) !important;
   box-shadow: var(--cc-panel-shadow);
-  backdrop-filter: blur(18px);
 }
 
 .cc-soft-card {

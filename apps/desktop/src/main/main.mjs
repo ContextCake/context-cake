@@ -130,12 +130,19 @@ function sendToRenderer(channel, payload) {
 function desktopPreferencesSnapshot(settings = readSettings()) {
   const theme = ['system', 'light', 'dark'].includes(settings.theme) ? settings.theme : 'system'
   const density = ['comfortable', 'compact'].includes(settings.density) ? settings.density : 'comfortable'
+  // Reduce transparency follows this Mac's Accessibility setting until the user
+  // says otherwise in ContextCake's own Settings; `reducedTransparencyPreference`
+  // is what they chose (null = still following), `reducedTransparency` is what
+  // the renderer should actually do.
+  const chosenTransparency = typeof settings.reducedTransparency === 'boolean' ? settings.reducedTransparency : null
   return {
     theme,
     density,
     updateCheck: settings.updateCheck !== false,
     anonymousMetrics: typeof settings.anonymousMetrics === 'boolean' ? settings.anonymousMetrics : null,
-    reducedTransparency: nativeTheme.prefersReducedTransparency === true,
+    reducedTransparency: chosenTransparency ?? nativeTheme.prefersReducedTransparency === true,
+    reducedTransparencyPreference: chosenTransparency,
+    systemReducedTransparency: nativeTheme.prefersReducedTransparency === true,
     highContrast: nativeTheme.shouldUseHighContrastColors === true,
   }
 }
@@ -550,10 +557,13 @@ handleTrustedIpc('preferences:set', (candidate) => {
   const changed = changedPreferencePatch(current, candidate)
   if (Object.keys(changed).length === 0) return desktopPreferencesSnapshot(current)
 
-  const { anonymousMetrics, ...synced } = changed
+  // Device-local preferences never enter account sync state: one is a privacy
+  // choice and the other describes this Mac's display, not the user's taste.
+  const { anonymousMetrics, reducedTransparency, ...synced } = changed
   let next = current
   if (Object.keys(synced).length > 0) next = writeSettings(synced)
   if (anonymousMetrics !== undefined) next = writeLocalSettings({ anonymousMetrics })
+  if (reducedTransparency !== undefined) next = writeLocalSettings({ reducedTransparency })
 
   const preferences = applyNativeAppearance(next)
   if (Object.hasOwn(changed, 'updateCheck')) initUpdater()
@@ -624,6 +634,8 @@ function rendererArguments(preferences, uiState, role) {
     `--cc-update-check=${preferences.updateCheck ? '1' : '0'}`,
     `--cc-anonymous-metrics=${preferences.anonymousMetrics === null ? '' : preferences.anonymousMetrics ? '1' : '0'}`,
     `--cc-reduced-transparency=${preferences.reducedTransparency ? '1' : '0'}`,
+    `--cc-reduced-transparency-preference=${preferences.reducedTransparencyPreference === null ? '' : preferences.reducedTransparencyPreference ? '1' : '0'}`,
+    `--cc-system-reduced-transparency=${preferences.systemReducedTransparency ? '1' : '0'}`,
     `--cc-high-contrast=${preferences.highContrast ? '1' : '0'}`,
     `--cc-native-vibrancy=${process.platform === 'darwin' && role === 'main' ? '1' : '0'}`,
     `--cc-ui-state=${encodeURIComponent(JSON.stringify(uiState))}`,

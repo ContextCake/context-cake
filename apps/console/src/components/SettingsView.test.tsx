@@ -14,20 +14,45 @@ type TestPreferences = {
   updateCheck: boolean
   anonymousMetrics: boolean | null
   reducedTransparency: boolean
+  reducedTransparencyPreference: boolean | null
+  systemReducedTransparency: boolean
   highContrast: boolean
 }
 
 function preferences(overrides: Partial<TestPreferences> = {}) {
   let current: TestPreferences = {
     theme: 'system', density: 'comfortable', updateCheck: true,
-    anonymousMetrics: true, reducedTransparency: false, highContrast: false,
+    anonymousMetrics: true, reducedTransparency: false,
+    reducedTransparencyPreference: null, systemReducedTransparency: false,
+    highContrast: false,
     ...overrides,
   }
+  // Mirrors the main process: a patch carries the *choice*, and the effective
+  // value is recomputed from it. A mock that just merged the patch would let a
+  // renderer bug that confuses the two pass.
   const set = vi.fn().mockImplementation(async (patch: Partial<TestPreferences>) => {
-    current = { ...current, ...patch }
+    const next = { ...current, ...patch }
+    if ('reducedTransparency' in patch) {
+      const choice = (patch.reducedTransparency ?? null) as boolean | null
+      next.reducedTransparencyPreference = choice
+      next.reducedTransparency = choice ?? current.systemReducedTransparency
+    }
+    current = next
     return current
   })
   return { initial: current, get: vi.fn().mockImplementation(async () => current), set, onChanged: vi.fn(() => () => {}) }
+}
+
+function withDesktopPreferences(overrides: Partial<TestPreferences> = {}) {
+  const bridge = preferences(overrides)
+  window.__CC_DESKTOP = {
+    getApiToken: vi.fn().mockResolvedValue('token'),
+    version: '0.0.0-test',
+    authState: { signedIn: false, available: false },
+    preferences: bridge,
+    cli: { getStatus: vi.fn(), install: vi.fn() },
+  } as unknown as typeof window.__CC_DESKTOP
+  return bridge
 }
 
 function button(label: string): HTMLButtonElement {
@@ -38,6 +63,15 @@ function button(label: string): HTMLButtonElement {
 
 function findButton(label: string): HTMLButtonElement | undefined {
   return Array.from(container.querySelectorAll('button')).find((item) => item.textContent?.trim() === label)
+}
+
+/** Scoped by the segmented group's accessible name — "System" is a Theme option too. */
+function groupButton(group: string, label: string): HTMLButtonElement {
+  const scope = container.querySelector<HTMLElement>(`[role="group"][aria-label="${group}"]`)
+  if (!scope) throw new Error(`Segmented group not found: ${group}`)
+  const match = Array.from(scope.querySelectorAll('button')).find((item) => item.textContent?.trim() === label)
+  if (!match) throw new Error(`Button not found in ${group}: ${label}`)
+  return match
 }
 
 /** A build packaged with CC_ACCOUNTS=1. The default build ships without them. */
@@ -207,6 +241,68 @@ describe('SettingsView', () => {
     expect(document.documentElement.dataset.theme).toBe('light')
     await act(async () => button('Dark').click())
     expect(document.documentElement.dataset.theme).toBe('dark')
+  })
+
+  it('lets a Mac user override Reduce Transparency and hand the choice back', async () => {
+    // This Mac says "reduce": that is what makes System distinguishable from
+    // Off. With a Mac that says no, every wrong fallback still renders `false`
+    // and the test proves nothing.
+    const bridge = withDesktopPreferences({ systemReducedTransparency: true, reducedTransparency: true })
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+    await act(async () => {})
+
+    // Following this Mac, which asks for reduced transparency.
+    expect(container.textContent).toContain('which is currently on')
+    expect(groupButton('Reduce transparency', 'System').getAttribute('aria-pressed')).toBe('true')
+    expect(document.documentElement.dataset.reducedTransparency).toBe('true')
+
+    // Off is the override that disagrees with the Mac — the whole reason the
+    // control exists, and it must take effect without waiting for a round trip.
+    await act(async () => groupButton('Reduce transparency', 'Off').click())
+    expect(bridge.set).toHaveBeenCalledWith({ reducedTransparency: false })
+    expect(document.documentElement.dataset.reducedTransparency).toBe('false')
+
+    await act(async () => groupButton('Reduce transparency', 'On').click())
+    expect(bridge.set).toHaveBeenCalledWith({ reducedTransparency: true })
+    expect(document.documentElement.dataset.reducedTransparency).toBe('true')
+
+    // Back to System resolves against the Mac's value, not the last override:
+    // it lands on true because the Mac says so, not because On was just picked.
+    await act(async () => groupButton('Reduce transparency', 'Off').click())
+    await act(async () => groupButton('Reduce transparency', 'System').click())
+    expect(bridge.set).toHaveBeenCalledWith({ reducedTransparency: null })
+    expect(document.documentElement.dataset.reducedTransparency).toBe('true')
+  })
+
+  it('starts from an override the app already stored, not from this Mac\'s setting', async () => {
+    withDesktopPreferences({
+      reducedTransparencyPreference: true, reducedTransparency: true, systemReducedTransparency: false,
+    })
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+    await act(async () => {})
+
+    expect(groupButton('Reduce transparency', 'On').getAttribute('aria-pressed')).toBe('true')
+    expect(document.documentElement.dataset.reducedTransparency).toBe('true')
+  })
+
+  it('offers no transparency control outside the Mac app', async () => {
+    // The browser and demo surfaces have nowhere to persist it; a control that
+    // forgets on reload is worse than no control.
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="demo" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(container.textContent).not.toContain('Reduce transparency')
   })
 
   it('explains anonymous metrics and lets desktop users opt out', async () => {

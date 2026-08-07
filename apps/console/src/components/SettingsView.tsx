@@ -29,7 +29,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
   const [updatesEnabled, setUpdatesEnabled] = useState(() => isUpdateCheckEnabled(appMode))
   const [metricsEnabled, setMetricsEnabled] = useState<boolean | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
-  const { preference: theme, density, setPreference: setTheme, setDensity } = useThemeMode()
+  const { preference: theme, density, setPreference: setTheme, setDensity, transparency, systemReducedTransparency, setTransparency } = useThemeMode()
   const accountsAvailable = window.__CC_DESKTOP?.authState?.available === true && Boolean(window.__CC_AUTH)
   const integrationsAvailable = Boolean(window.__CC_INTEGRATIONS)
 
@@ -134,6 +134,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
               <div className="cc-settings-group">
                 <div className="cc-settings-row"><div><strong>Theme</strong><span>{desktop ? 'System follows the current appearance of this Mac.' : 'System follows your browser and operating system.'}</span></div><SegmentedControl label="Theme" value={theme} onChange={setTheme} options={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} /></div>
                 <div className="cc-settings-row"><div><strong>Density</strong><span>Comfortable gives controls more room. Compact fits more knowledge on screen.</span></div><SegmentedControl label="Density" value={density} onChange={setDensity} options={[{ value: 'comfortable', label: 'Comfortable' }, { value: 'compact', label: 'Compact' }]} /></div>
+                {desktop && <div className="cc-settings-row"><div><strong>Reduce transparency</strong><span>Turns off the translucent sidebar material. System follows Accessibility on this Mac, which is currently {systemReducedTransparency ? 'on' : 'off'}.</span></div><SegmentedControl label="Reduce transparency" value={transparency} onChange={setTransparency} options={[{ value: 'system', label: 'System' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]} /></div>}
               </div>
             </section>
             <section className="cc-settings-section" aria-labelledby="cc-settings-application">

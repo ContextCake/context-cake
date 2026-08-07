@@ -35,7 +35,12 @@ type DesktopPreferences = {
   density: Density
   updateCheck: boolean
   anonymousMetrics: boolean | null
+  /** What the renderer should do: the user's choice, or the OS setting. */
   reducedTransparency: boolean
+  /** What the user chose. null = still following this Mac's setting. */
+  reducedTransparencyPreference: boolean | null
+  /** What this Mac's Accessibility setting says, regardless of the override. */
+  systemReducedTransparency: boolean
   highContrast: boolean
 }
 
@@ -88,7 +93,9 @@ declare global {
       preferences?: {
         initial: DesktopPreferences
         get(): Promise<DesktopPreferences>
-        set(patch: Partial<Pick<DesktopPreferences, 'theme' | 'density' | 'updateCheck' | 'anonymousMetrics'>>): Promise<DesktopPreferences>
+        set(patch: Partial<Pick<DesktopPreferences, 'theme' | 'density' | 'updateCheck' | 'anonymousMetrics'>>
+          /** null is a real value: hand the choice back to this Mac's setting. */
+          & { reducedTransparency?: boolean | null }): Promise<DesktopPreferences>
         onChanged(cb: (preferences: DesktopPreferences) => void): () => void
       }
       uiState?: {

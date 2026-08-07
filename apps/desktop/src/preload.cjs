@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
       updateCheck: arg('cc-update-check') !== '0',
       anonymousMetrics: arg('cc-anonymous-metrics') === '' ? null : arg('cc-anonymous-metrics') === '1',
       reducedTransparency: arg('cc-reduced-transparency') === '1',
+      // '' = still following this Mac's Accessibility setting.
+      reducedTransparencyPreference: arg('cc-reduced-transparency-preference') === '' ? null : arg('cc-reduced-transparency-preference') === '1',
+      systemReducedTransparency: arg('cc-system-reduced-transparency') === '1',
       highContrast: arg('cc-high-contrast') === '1',
     },
     get: () => ipcRenderer.invoke('preferences:get'),

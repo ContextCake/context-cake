@@ -200,7 +200,26 @@ async function machineScale() {
   return { msPerMB, scale: Math.min(8, Math.max(1, msPerMB / REFERENCE_MS_PER_MB)) }
 }
 
-const { msPerMB, scale } = await machineScale()
+// Raw throughput is not the whole difference, and CI proved it in two runs:
+// the runner calibrated at only 1.38x slower, yet its healthy p95 came in at
+// 65ms once and 41ms the next time — a 1.6x spread on identical hardware, from
+// contention this measurement cannot see. Scaling by throughput alone put the
+// ceiling at 69ms, which clears the worse of those two by 4ms. That is a gate
+// that passes today and flakes next week.
+//
+// So absorb variance in proportion to how far the machine is from the
+// reference. A machine that calibrates at 1.0 is the quiet dev box these
+// thresholds were measured on and keeps the sharp ceiling; the further from
+// that, the more likely it is a shared runner whose noise has to be tolerated.
+// This costs sensitivity exactly where sensitivity was already poor — CI cannot
+// see a 35ms stall through its own 24ms of jitter either way — and none where
+// the gate is actually sharp.
+// The 8x cap belongs on the FINAL scale, not the throughput ratio: applying the
+// variance factor after a ratio already capped at 8 would let the ceiling reach
+// 18.5x, which is not a gate.
+const VARIANCE_FACTOR = 2.5
+const { msPerMB, scale: rawScale } = await machineScale()
+const scale = Math.min(8, 1 + (rawScale - 1) * VARIANCE_FACTOR)
 const calibration = `this machine encodes ${msPerMB.toFixed(0)} ms/MB vs ${REFERENCE_MS_PER_MB} on the reference, `
   + `so the ceilings are scaled ${scale.toFixed(2)}x`
 

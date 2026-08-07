@@ -50,6 +50,17 @@ const rowIndent = (depth: number) => INDENT_BASE + Math.min(depth, MAX_INDENT_DE
  * ARIA, a subtree file count, and the layer each row belongs to.
  */
 export interface TreeEntry {
+  /**
+   * This row's identity: the React key, the `indexById` key, and the key the
+   * DOM node is registered under. Two rows sharing one is not cosmetic — the
+   * tree duplicates some entries and loses others outright — so an id is NOT a
+   * path. `<layer>/<rel>` collides two ways, and both are reachable: a file
+   * beside a directory of the same name, and a layer literally named `a/b`
+   * beside a layer `a` that contains a `b/` folder (the manifest validator
+   * accepts such a name, and `/api/files` then lists it). An id therefore
+   * carries the layer's POSITION rather than its name, plus whether the row is
+   * a directory or a file. See `dirId`/`fileId`.
+   */
   id: string
   kind: 'dir' | 'file'
   name: string
@@ -70,6 +81,26 @@ export interface TreeEntry {
 const byName = (a: TreeEntry, b: TreeEntry) =>
   (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1)
 
+/** A directory's id: its layer's index, then the folder path inside it ('' = the layer root). */
+const dirId = (layerIndex: number, rel: string) => `d${layerIndex}:${rel}`
+/** A file's id. The `f` is what keeps a file from sharing an id with a sibling folder of the same name. */
+const fileId = (layerIndex: number, rel: string) => `f${layerIndex}:${rel}`
+
+/**
+ * The directory ids that hold a row, outermost first — the folders a deep link
+ * has to open to show its file. Derived from the id rather than the path, so a
+ * layer whose name contains a slash cannot be mis-split.
+ */
+export function ancestorsOfId(id: string): string[] {
+  const cut = id.indexOf(':')
+  if (cut === -1) return []
+  const layerIndex = id.slice(1, cut)
+  const parts = id.slice(cut + 1).split('/')
+  const out = [`d${layerIndex}:`]
+  for (let i = 1; i < parts.length; i += 1) out.push(`d${layerIndex}:${parts.slice(0, i).join('/')}`)
+  return out
+}
+
 /**
  * Layer listings → one pre-ordered entry list. Each layer contributes a root
  * row, and every `rel` with a slash in it becomes the directories it implies.
@@ -79,10 +110,10 @@ export function buildTree(layers: LayerFiles[]): TreeEntry[] {
   const roots: TreeEntry[] = []
   const children = new Map<string, TreeEntry[]>()
 
-  for (const layer of layers) {
-    const rootId = layer.layer
+  layers.forEach((layer, layerIndex) => {
+    const rootId = dirId(layerIndex, '')
     const root: TreeEntry = {
-      id: rootId, kind: 'dir', name: layer.layer, path: rootId, depth: 0,
+      id: rootId, kind: 'dir', name: layer.layer, path: layer.layer, depth: 0,
       parent: '', layer: layer.layer, pos: 0, size: 0, count: 0,
     }
     roots.push(root)
@@ -92,13 +123,15 @@ export function buildTree(layers: LayerFiles[]): TreeEntry[] {
     for (const file of layer.files) {
       const parts = file.rel.split('/')
       let parentId = rootId
+      let folder = ''
       root.count += 1
       for (let i = 0; i < parts.length - 1; i += 1) {
-        const id = `${parentId}/${parts[i]}`
+        folder = folder ? `${folder}/${parts[i]}` : parts[i]
+        const id = dirId(layerIndex, folder)
         let dir = dirs.get(id)
         if (!dir) {
           dir = {
-            id, kind: 'dir', name: parts[i], path: id, depth: i + 1,
+            id, kind: 'dir', name: parts[i], path: `${layer.layer}/${folder}`, depth: i + 1,
             parent: parentId, layer: layer.layer, pos: 0, size: 0, count: 0,
           }
           dirs.set(id, dir)
@@ -109,12 +142,12 @@ export function buildTree(layers: LayerFiles[]): TreeEntry[] {
         parentId = id
       }
       children.get(parentId)!.push({
-        id: file.path, kind: 'file', name: file.name, path: file.path,
+        id: fileId(layerIndex, file.rel), kind: 'file', name: file.name, path: file.path,
         depth: parts.length, parent: parentId, layer: layer.layer,
         pos: 0, size: 0, count: 0, file,
       })
     }
-  }
+  })
 
   // Pre-order emit. An explicit stack rather than recursion: a vault nests as
   // deep as the user's folders do, and this runs on every filter keystroke.
@@ -148,14 +181,6 @@ export function flattenTree(entries: TreeEntry[], isExpanded: (id: string) => bo
     out.push(entry)
     if (entry.kind === 'dir' && !isExpanded(entry.id)) collapsedAt = entry.depth
   }
-  return out
-}
-
-/** The directories a path sits inside, so a deep link can reveal its file. */
-export function ancestorsOf(path: string): string[] {
-  const parts = path.split('/')
-  const out: string[] = []
-  for (let i = 1; i < parts.length; i += 1) out.push(parts.slice(0, i).join('/'))
   return out
 }
 
@@ -256,9 +281,18 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
     return rootIds.has(id) || opened.has(id)
   }, [collapsed, expandAll, opened, rootIds])
 
+  // `reveal` names a file by its engine path; the folders to open are keyed by
+  // id. One pass to translate, so the effect below re-runs on the id and not on
+  // every rebuild of an identical tree.
+  const revealId = useMemo(() => {
+    if (!reveal) return null
+    for (const entry of entries) if (entry.kind === 'file' && entry.path === reveal) return entry.id
+    return null
+  }, [entries, reveal])
+
   useEffect(() => {
-    if (!reveal) return
-    const chain = ancestorsOf(reveal)
+    if (!revealId) return
+    const chain = ancestorsOfId(revealId)
     setOpened((prev) => {
       if (chain.every((id) => prev.has(id))) return prev
       const next = new Set(prev)
@@ -271,7 +305,7 @@ export function FileTree({ entries, expandAll, selected, reveal, onSelect, layer
       for (const id of chain) next.delete(id)
       return next
     })
-  }, [reveal])
+  }, [revealId])
 
   const visible = useMemo(() => flattenTree(entries, isExpanded), [entries, isExpanded])
   const indexById = useMemo(() => {

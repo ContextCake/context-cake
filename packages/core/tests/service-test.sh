@@ -410,6 +410,9 @@ ROW="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ 'JSON.stringify((({name,level
 code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"movable\",\"path\":\"$TMP/does-not-exist\"}" "$BASE/api/sources")" "a missing folder fails the patch"
 code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"movable\",\"path\":\"$TMP/to-here/new-home.md\"}" "$BASE/api/sources")" "a file instead of a folder fails the patch"
 code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"movable","path":"   "}' "$BASE/api/sources")" "an empty path fails the patch"
+# An array reaching String() would collapse to its single element and sail
+# through the trim and the probe, so the type is checked before the coercion.
+code 400 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"movable\",\"path\":[\"$TMP/to-here\"]}" "$BASE/api/sources")" "a path that is not a string fails the patch"
 grep -q "$TMP/to-here" "$TMP/manifest.json" && pass "a refused path patch leaves the manifest on the last good folder" || fail "manifest mutated by a refused path patch"
 code 404 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d "{\"name\":\"no-such-source\",\"path\":\"$TMP/to-here\"}" "$BASE/api/sources")" "an unknown source name is a 404, not a new layer"
 

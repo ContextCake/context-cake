@@ -1806,11 +1806,14 @@ export function createEngineService({
     let nextPath;
     let probed = null;
     if (b.path !== undefined) {
+      // Typed before it is coerced: String(["/etc"]) is "/etc", so an array
+      // would otherwise walk straight through the trim and the probe.
+      if (typeof b.path !== "string") throw httpError(400, "Give this source a folder path");
       const layer = getManifestProfileLayers(readManifest()).find((candidate) => candidate.name === b.name);
       if (!layer) throw httpError(404, `No source named "${b.name}"`);
       const refusal = pathPatchRefusal(layer);
       if (refusal) throw httpError(400, refusal);
-      nextPath = expandHome(String(b.path).trim());
+      nextPath = expandHome(b.path.trim());
       if (!nextPath) throw httpError(400, "Give this source a folder path");
       const kind = layer.source ?? "okf-local";
       probed = await probeFolder(path.resolve(MANIFEST_DIR, nextPath), kind === "files" ? FILES_EXTENSIONS : [".md"]);

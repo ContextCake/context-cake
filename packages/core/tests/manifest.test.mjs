@@ -237,6 +237,54 @@ test("quarantined reads drop only the malformed layer, and only when one layer e
   assert.deepEqual(getManifestProfileLayers(v2.manifest), [good]);
 });
 
+// Quarantine is a read-path tolerance for a broken LAYER, and nothing else. A
+// reserved key is the one thing it must not become a second, softer schema for:
+// rebuilding profiles with plain assignment let `profiles.__proto__` set the
+// prototype of the new container instead of landing as an own key, so the
+// re-validation walked Object.entries and never saw it — the app loaded a
+// manifest the CLI and MCP paths reject.
+test("a quarantined read rejects every reserved key the strict read rejects", (t) => {
+  const directory = temporaryDirectory(t);
+  const writeRaw = (json) => {
+    const file = path.join(directory, `${crypto.randomUUID()}.json`);
+    fs.writeFileSync(file, json);
+    return file;
+  };
+  const parity = (file, pattern) => {
+    let strictError;
+    try { readContextManifest(file); } catch (error) { strictError = error; }
+    assert.match(strictError?.message ?? "(accepted)", pattern);
+    let quarantinedError;
+    try { readContextManifestQuarantined(file); } catch (error) { quarantinedError = error; }
+    assert.equal(
+      quarantinedError?.message ?? "(accepted)",
+      strictError.message,
+      "the quarantined read must reject exactly what the strict read rejects",
+    );
+  };
+
+  // Each of these carries one independently-invalid layer, which is what gets
+  // the manifest as far as the partition path — a reserved key on its own
+  // quarantines nothing and has always thrown.
+  parity(writeRaw(JSON.stringify({
+    layers: [
+      { name: "seed", level: 1, source: "files", path: "seed" },
+      { name: "bad", level: 0, source: "notarealkind", constructor: { hijacked: true } },
+    ],
+  })), /reserved key constructor/);
+
+  const smuggledProfile = writeRaw(`{
+    "profiles": {
+      "default": { "label": "Default", "layers": [{ "name": "bad", "level": 1, "source": "notarealkind" }] },
+      "__proto__": { "label": "Smuggled", "layers": [{ "name": "ghost", "level": 9, "source": "files", "path": "ghost" }] }
+    }
+  }`);
+  parity(smuggledProfile, /reserved key __proto__/);
+  // And the smuggled profile never reached a prototype on the way through.
+  assert.equal({}.label, undefined);
+  assert.equal(Object.prototype.layers, undefined);
+});
+
 test("inactive Pack drift warns while selecting the affected profile fails closed", () => {
   const manifest = {
     profiles: {

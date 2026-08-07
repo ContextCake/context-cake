@@ -166,6 +166,14 @@ export function readContextManifestQuarantined(manifestPath, { allowMissing = tr
 // the ones that do not, returning a copy that holds only the former. Pure: the
 // caller's manifest object is never mutated.
 function quarantineInvalidLayers(manifest) {
+  // Reserved keys are checked here, before anything is copied, so the two read
+  // paths cannot disagree about them. Rebuilding profiles with plain assignment
+  // meant a profile literally named __proto__ set the prototype of the new
+  // container instead of becoming an own key: Object.entries no longer saw it,
+  // the re-validation below passed, and the quarantined read accepted a
+  // manifest the strict read rejects. Throwing lands the caller on `firstError`
+  // — the authoritative strict message — which is exactly what parity means.
+  assertSafeKeys(manifest);
   const mode = classifyManifest(manifest); // throws on a non-object manifest, as before
   const cleaned = { ...manifest };
   const quarantined = [];
@@ -185,12 +193,20 @@ function quarantineInvalidLayers(manifest) {
   }
   if (mode === "v2" || mode === "transitional") {
     assertObject(manifest.profiles, "ContextCake manifest profiles");
-    cleaned.profiles = {};
+    // defineProperty rather than assignment: a reserved id can never reach here
+    // (assertSafeKeys above), and this is what keeps that true if it ever does
+    // — every id lands as an own key, so nothing can be smuggled past the
+    // Object.entries re-validation by way of the prototype.
+    const profiles = {};
     for (const [id, profile] of Object.entries(manifest.profiles)) {
       assertObject(profile, `Profile ${id}`);
       const profileId = mode === "v2" ? id : `profiles.${id}`;
-      cleaned.profiles[id] = { ...profile, layers: partition(profileId, profile.layers, `profile ${id}`, mode === "transitional") };
+      Object.defineProperty(profiles, id, {
+        value: { ...profile, layers: partition(profileId, profile.layers, `profile ${id}`, mode === "transitional") },
+        writable: true, enumerable: true, configurable: true,
+      });
     }
+    cleaned.profiles = profiles;
   }
   return { manifest: cleaned, quarantined };
 }

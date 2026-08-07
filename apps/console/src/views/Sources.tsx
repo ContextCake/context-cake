@@ -7,7 +7,7 @@
 // Demo mode shows the same rows read-only.
 import { useEffect, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
-import { apiFetch } from '../api'
+import { apiFetch, progressLabel, progressPercent } from '../api'
 import { LayerChip } from '../components/LayerChip'
 import { LevelStepper } from '../components/SetupWizard'
 import { useDetailSurface } from '../components/useDetailSurface'
@@ -27,6 +27,61 @@ async function callApi(path: string, init: RequestInit = {}): Promise<Record<str
 
 const statusColor = (s: Source['status']) =>
   s === 'error' ? C.amberStrokeE : s === 'degraded' ? C.amberStroke : s === 'serving' ? C.tealStrokeE : s === 'empty' ? C.lineStrong : C.blueStroke
+
+/** 'synced' and 'indexing' share a hue, so the dot alone never carries the state —
+ *  the row text and the status word beside it do. */
+
+/**
+ * What a row says under the name. A source mid-index has no concept count worth
+ * quoting — "0 concepts" next to a green "synced" was the app claiming to be
+ * finished with work it had barely started.
+ */
+function rowSummary(s: Source): string {
+  const base = `${s.sourceKind} · level ${s.level}`
+  if (s.status === 'indexing') return `${base} · ${progressLabel(s.indexing)}`
+  const count = `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'}`
+  return `${base} · ${count}${s.indexing?.refreshing ? ' · refreshing' : ''}`
+}
+
+/**
+ * The progress block on the detail panel. Two shapes, because the engine
+ * distinguishes two situations: nothing to serve yet (a real wait, with a bar),
+ * and a good answer being refreshed behind the scenes (a note, no bar — holding
+ * a spinner in front of data the user already has is the lie in the other
+ * direction).
+ */
+function ProgressBlock({ source }: { source: Source }) {
+  const progress = source.indexing
+  if (source.status === 'indexing') {
+    const percent = progressPercent(progress)
+    return (
+      <div style={css(`display:flex; flex-direction:column; gap:8px; padding:10px 12px; border-radius:8px; background:${C.blueFill}; border:1px solid ${C.blueSoft};`)}>
+        <div style={css(`display:flex; align-items:baseline; justify-content:space-between; gap:10px; font-size:12px; font-weight:600; color:${C.blueText};`)}>
+          <span>{progressLabel(progress)}</span>
+          {percent != null && <span style={css(`font-family:${MONO}; font-size:11px;`)}>{percent}%</span>}
+        </div>
+        <div
+          role="progressbar"
+          aria-label={`Indexing ${source.name}`}
+          aria-valuetext={progressLabel(progress)}
+          {...(percent == null ? {} : { 'aria-valuenow': percent, 'aria-valuemin': 0, 'aria-valuemax': 100 })}
+          style={css(`height:5px; border-radius:999px; background:${C.track}; overflow:hidden;`)}
+        >
+          <div style={css(`height:100%; width:${percent ?? 30}%; border-radius:999px; background:${C.blueStroke}; transition:width 220ms var(--cc-ease-out);`)} />
+        </div>
+        <span style={css(`font-size:11.5px; line-height:1.5; color:${C.blueText2};`)}>
+          Concepts from this source appear as they land. You can keep working while it reads.
+        </span>
+      </div>
+    )
+  }
+  if (!progress?.refreshing) return null
+  return (
+    <p role="status" style={css(`margin:0; font-size:11.5px; line-height:1.5; color:${C.caption};`)}>
+      Serving {source.conceptCount} concept{source.conceptCount === 1 ? '' : 's'} and refreshing in the background.
+    </p>
+  )
+}
 
 /** ISO timestamps read better as local time; unparseable values pass through. */
 function fmtTime(iso: string): string {
@@ -239,7 +294,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
             buttons?.[next]?.focus()
           }}>
             <span aria-hidden="true" style={{ background: statusColor(source.status) }} />
-            <span><strong>{source.name}</strong><small>{source.sourceKind} · level {source.level} · {source.conceptCount} concept{source.conceptCount === 1 ? '' : 's'}</small></span>
+            <span><strong>{source.name}</strong><small>{rowSummary(source)}</small></span>
             <em>{source.status}</em>
           </button>)}
         </div>
@@ -251,7 +306,9 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
           const removing = isOpen && panel?.kind === 'remove'
           return <section ref={detail.panelRef} {...detail.panelProps} className="cc-source-detail" data-open={detailOpen || undefined} aria-label={`Source ${s.name} detail`}>
             <button type="button" className="cc-detail-close" onClick={closeDetail}>Close</button>
-            <div className="cc-source-detail-head"><div><div className="cc-source-title"><span aria-hidden="true" style={{ background: statusColor(s.status) }} /><h2>{s.name}</h2>{s.live && <LiveMarker />}</div><div className="cc-source-chips"><LayerChip id={s.layer} /><span>level {s.level}</span><span>{s.sourceKind}</span><span>{s.conceptCount} concept{s.conceptCount === 1 ? '' : 's'}</span></div></div><strong>{s.status}</strong></div>
+            <div className="cc-source-detail-head"><div><div className="cc-source-title"><span aria-hidden="true" style={{ background: statusColor(s.status) }} /><h2>{s.name}</h2>{s.live && <LiveMarker />}</div><div className="cc-source-chips"><LayerChip id={s.layer} /><span>level {s.level}</span><span>{s.sourceKind}</span><span>{s.status === 'indexing' ? progressLabel(s.indexing) : `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'}`}</span>{(s.warnings ?? 0) > 0 && <span title={`${s.warnings} thing${s.warnings === 1 ? '' : 's'} this source could not read`}>{s.warnings} warning{s.warnings === 1 ? '' : 's'}</span>}</div></div><strong>{s.status}</strong></div>
+
+            <ProgressBlock source={s} />
 
             <dl className="cc-source-metadata">
               <div><dt>Last success</dt><dd>{s.lastSuccessAt ? fmtTime(s.lastSuccessAt) : 'Not yet'}</dd></div>
@@ -270,14 +327,21 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                 rather than the error one: nothing is broken, and the row stays
                 green — but a folder quietly missing from the cascade is the kind
                 of thing you only find out about if it is written down. */}
-            {(s.warningMessages?.length ?? 0) > 0 && (
-              <div role="status" style={css(`padding:8px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.55; color:${C.amberText}; overflow-wrap:anywhere;`)}>
-                <strong style={css('display:block; margin-bottom:4px;')}>Indexed with {s.warningMessages!.length} thing{s.warningMessages!.length === 1 ? '' : 's'} left out</strong>
-                <ul style={css('margin:0; padding-left:16px;')}>
-                  {s.warningMessages!.map((message) => <li key={message}>{message}</li>)}
-                </ul>
-              </div>
-            )}
+            {(s.warnings ?? s.warningMessages?.length ?? 0) > 0 && (() => {
+              const total = s.warnings ?? s.warningMessages!.length
+              const shown = s.warningMessages ?? []
+              return (
+                <div role="status" style={css(`padding:8px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStroke}; font-size:11.5px; line-height:1.55; color:${C.amberText}; overflow-wrap:anywhere;`)}>
+                  <strong style={css('display:block; margin-bottom:4px;')}>Indexed with {total} thing{total === 1 ? '' : 's'} left out</strong>
+                  <ul style={css('margin:0; padding-left:16px;')}>
+                    {shown.map((message) => <li key={message}>{message}</li>)}
+                  </ul>
+                  {total > shown.length && (
+                    <span style={css('display:block; margin-top:4px;')}>and {total - shown.length} more — the engine caps this list at {shown.length}.</span>
+                  )}
+                </div>
+              )
+            })()}
 
             <CredentialWarning source={s} />
 

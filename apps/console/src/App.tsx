@@ -66,7 +66,7 @@ function ErrorState({ kind, message, reload }: { kind: LiveErrorKind; message: s
 }
 
 export function App() {
-  const { view, setView, chatOpen, openChat, closeChat, route, loading, load, error, reload, mode, sources, loadErrors } = useStore()
+  const { view, setView, chatOpen, openChat, closeChat, route, loading, load, error, reload, retryNow, mode, sources, loadErrors } = useStore()
   // Undefined = not yet decided by the auto-trigger effect below; true/false
   // once the user (or the trigger) has taken an explicit stance. Kept separate
   // from `needsSetup` so the wizard's own Success step stays visible even
@@ -85,7 +85,11 @@ export function App() {
   const browserViews = useRef(readBrowserGroupedViews())
   const knowledgeView = useRef<'concepts' | 'files'>(window.__CC_DESKTOP?.uiState?.initial.knowledgeView ?? browserViews.current.knowledgeView)
   const reviewView = useRef<'triage' | 'conflicts'>(window.__CC_DESKTOP?.uiState?.initial.reviewView ?? browserViews.current.reviewView)
-  const backgroundCounts = useRef({ indexing: 0, failures: 0 })
+  const backgroundCounts = useRef({ indexing: 0, failures: 0, names: '' })
+  const refreshNotice = useRef<string | null>(null)
+  // Dismissal is per-failure, not forever: a new failure message re-surfaces
+  // the banner, and so does the same one after a recovery.
+  const [dismissedRefreshError, setDismissedRefreshError] = useState<string | null>(null)
   if (view === 'concepts' || view === 'files') knowledgeView.current = view
   if (view === 'triage' || view === 'conflicts') reviewView.current = view
 
@@ -199,19 +203,35 @@ export function App() {
     })
   }
 
+  // Announce transitions, not ticks. A live region that re-read a progress
+  // counter every 900ms would make the app unusable with a screen reader; the
+  // per-task progressbar in the activity popover is where the numbers live.
   useEffect(() => {
     const indexing = load.indexingSources.length
     const failures = loadErrors.length
     const previous = backgroundCounts.current
-    if (indexing > 0) {
-      setBackgroundAnnouncement(`Indexing ${indexing} source${indexing === 1 ? '' : 's'}.`)
-    } else if (previous.indexing > 0) {
+    const names = load.indexingSources.join(', ')
+    if (indexing > 0 && names !== previous.names) {
+      setBackgroundAnnouncement(`Indexing ${indexing} source${indexing === 1 ? '' : 's'}: ${names}.`)
+    } else if (indexing === 0 && previous.indexing > 0) {
       setBackgroundAnnouncement(`Indexing complete.${failures > 0 ? ` ${failures} concept${failures === 1 ? '' : 's'} failed to resolve.` : ''}`)
     } else if (failures > previous.failures) {
       setBackgroundAnnouncement(`${failures} concept${failures === 1 ? '' : 's'} failed to resolve.`)
     }
-    backgroundCounts.current = { indexing, failures }
-  }, [load.indexingSources.length, loadErrors.length])
+    backgroundCounts.current = { indexing, failures, names }
+  }, [load.indexingSources, loadErrors.length])
+
+  // A failing background refresh is announced once per distinct failure, and
+  // once again when it recovers. Silence here is what made the old give-up
+  // indistinguishable from a working page.
+  useEffect(() => {
+    const message = load.refreshError?.message ?? null
+    if (message === refreshNotice.current) return
+    refreshNotice.current = message
+    setBackgroundAnnouncement(message
+      ? 'Live refresh is failing. Retrying — the page is showing the last good data.'
+      : 'Live refresh recovered.')
+  }, [load.refreshError])
 
   // Mobile off-canvas nav drawer (inert on desktop, where the sidebar is static).
   useEffect(() => {
@@ -329,6 +349,23 @@ export function App() {
             <div className="sr-only" aria-live="polite">
               {backgroundAnnouncement}
             </div>
+            {load.refreshError && load.refreshError.message !== dismissedRefreshError && (
+              <div role="status" style={css(`display:flex; align-items:center; gap:10px; padding:8px 16px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; font-size:12px; color:${C.amberText};`)}>
+                <span aria-hidden="true">⚠</span>
+                <span style={css('flex:1 1 auto; min-width:0; overflow-wrap:anywhere;')}>
+                  Live refresh failing — retrying. Showing the last good data
+                  {load.lastRefreshAt ? ` from ${new Date(load.lastRefreshAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}.
+                  {' '}{load.refreshError.message}
+                </span>
+                <button type="button" className="cc-activity-action" onClick={retryNow}>Retry now</button>
+                <button
+                  type="button"
+                  className="cc-activity-action"
+                  aria-label="Dismiss the live refresh warning"
+                  onClick={() => setDismissedRefreshError(load.refreshError?.message ?? null)}
+                >Dismiss</button>
+              </div>
+            )}
             {loadErrors.length > 0 && (
               <div role="status" style={css(`display:flex; align-items:center; gap:8px; padding:8px 16px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; font-size:12px; color:${C.amberText};`)}>
                 <span aria-hidden="true">⚠</span>

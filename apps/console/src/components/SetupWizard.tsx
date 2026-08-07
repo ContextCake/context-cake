@@ -10,8 +10,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { useStore } from '../store'
-import { apiFetch } from '../api'
-import type { GraphSummary } from '../types'
+import { apiFetch, progressLabel } from '../api'
+import type { GraphSummary, SourceStatus, StatusSummary } from '../types'
 
 type StepId = 'welcome' | 'personal' | 'team' | 'company' | 'source' | 'review' | 'success'
 const FIRST_RUN_STEPS: StepId[] = ['welcome', 'personal', 'team', 'company', 'review', 'success']
@@ -47,6 +47,45 @@ export class SourceApiError extends Error {
     this.name = 'SourceApiError'
     this.status = status
   }
+}
+
+/**
+ * GET /api/status, quietly. Null when the route is unavailable or unreachable —
+ * "I could not tell" is a distinct answer from "it is not there", and the two
+ * lead to different things being said to the user.
+ */
+async function fetchStatus(timeoutMs = 4_000): Promise<StatusSummary | null> {
+  try {
+    const res = await apiFetch('/api/status', { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return null
+    const payload = await res.json() as Partial<StatusSummary>
+    // A payload without a source list tells us nothing; treat it as "could not
+    // tell" rather than letting a shape surprise break the add flow.
+    return Array.isArray(payload?.sources) ? payload as StatusSummary : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Did the add land? true / false / null (could not tell).
+ *
+ * The POST answering slowly, or not at all, says nothing about whether the
+ * source is in the manifest — and reporting failure for a source that is
+ * sitting right there sends the user into a retry that can only 409. Ask the
+ * cheap route instead of guessing in either direction.
+ */
+async function sourceLanded(name: string, attempts = 4, gapMs = 350): Promise<boolean | null> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, gapMs))
+    const status = await fetchStatus()
+    // No usable answer at all — waiting will not turn that into one.
+    if (!status) return null
+    if (status.sources.some((s) => s.name === name)) return true
+  }
+  // The engine answered, repeatedly, and the source is not in it. The manifest
+  // write completes before the POST would have returned, so a second is plenty.
+  return false
 }
 
 async function postSource(body: Record<string, unknown>): Promise<AddResult> {
@@ -520,6 +559,39 @@ function McpFields({
   )
 }
 
+/**
+ * The engine's own answer about a source this wizard just added, live. This is
+ * what makes "Source added" a claim the app has checked rather than an
+ * assumption it made from a 200 on the POST.
+ */
+function LiveSourceStatus({
+  name, watched,
+}: {
+  name: string
+  watched: Record<string, SourceStatus | null> | null | undefined
+}) {
+  const line = (tone: 'work' | 'ok' | 'warn', text: string) => (
+    <span
+      role="status"
+      style={css(`display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; color:${tone === 'warn' ? C.amberText : tone === 'ok' ? C.tealText : C.blueText};`)}
+    >
+      <span aria-hidden="true" style={css(`width:6px; height:6px; border-radius:999px; background:${tone === 'warn' ? C.amberStrokeE : tone === 'ok' ? C.tealStroke : C.blueStroke};${tone === 'work' ? ' animation:ccPulse 1.4s ease-in-out infinite;' : ''}`)} />
+      {text}
+    </span>
+  )
+  if (watched === undefined) return line('work', 'Checking with the engine…')
+  // An engine without /api/status still added the source; it just cannot say
+  // more. Silence beats inventing a state we did not verify.
+  if (watched === null) return null
+  const status = watched[name]
+  if (status === undefined) return line('work', 'Checking with the engine…')
+  if (status === null) return line('warn', 'Not in the cascade — the add did not stick.')
+  if (status.status === 'error') return line('warn', status.error ?? 'This source failed to read.')
+  if (status.status === 'indexing') return line('work', progressLabel(status))
+  if (status.status === 'degraded') return line('warn', status.error ?? 'Serving, but its last request failed.')
+  return line('ok', `Ready · ${status.conceptCount} concept${status.conceptCount === 1 ? '' : 's'}`)
+}
+
 // ---- Wizard -----------------------------------------------------------------
 
 export function SetupWizard({
@@ -563,6 +635,9 @@ export function SetupWizard({
   const [successConcept, setSuccessConcept] = useState<string | null>(null)
   const [successIndexing, setSuccessIndexing] = useState(false)
   const [successBusy, setSuccessBusy] = useState(false)
+  // undefined = not asked yet; null = the engine cannot report live status;
+  // otherwise one row per added source, or null for one that never appeared.
+  const [watched, setWatched] = useState<Record<string, SourceStatus | null> | null | undefined>(undefined)
 
   // Payloads this wizard already sent. A retry after a lost response can 409
   // ("already exists") even though the add landed — for an identical resend
@@ -596,19 +671,36 @@ export function SetupWizard({
   ): Promise<boolean> => {
     const built = buildPayload(draft)
     if ('error' in built) { setErr(built.error); return false }
+    const name = String(built.body.name)
     const key = JSON.stringify(built.body)
     const isRetry = attemptedRef.current.has(key)
     setBusy(true)
     setErr(null)
     try {
+      // Who was already in the cascade before we sent. A 409 for a name in this
+      // set is a genuine clash with someone else's source; a 409 for a name that
+      // was not is our own add arriving twice. `null` = the engine could not
+      // tell us, so we fall back to the retry heuristic below.
+      const before = await fetchStatus(2_500)
+      const existedBefore = before ? before.sources.some((s) => s.name === name) : null
       attemptedRef.current.add(key)
       let result: AddResult = {}
       try {
         result = await postSource(built.body)
       } catch (e) {
-        // The earlier identical attempt landed server-side (response lost):
-        // the source exists, which is what the user asked for.
-        if (!(isRetry && e instanceof SourceApiError && e.status === 409)) throw e
+        const apiError = e instanceof SourceApiError
+        const conflict = apiError && e.status === 409
+        // A definite non-conflict answer from the server is final.
+        if (apiError && !conflict) throw e
+        if (conflict && (existedBefore === true || (existedBefore === null && !isRetry))) throw e
+        // Everything left here is "we do not know what happened" — a lost
+        // response, a timeout, or a 409 for a name that was not there before.
+        // Ask, rather than declaring success as this used to.
+        const landed = await sourceLanded(name)
+        if (landed === false) {
+          throw new Error(`${e instanceof Error ? e.message : String(e)} — “${name}” is not in the cascade, so nothing was added.`)
+        }
+        if (landed === null && !(conflict && isRetry)) throw e
       }
       setAdded((prev) => [...prev, {
         kind: built.kind,
@@ -642,36 +734,61 @@ export function SetupWizard({
 
   const skipCompany = () => { setMcpErr(null); goNext() }
 
-  /** Reload the app and fetch one sample concept for the success step. */
-  const completeSetup = async () => {
-    setSuccessBusy(true)
+  /**
+   * Finish: land on the success step immediately and let it fill itself in.
+   *
+   * This used to await /api/graph (up to 20 seconds) behind a "Resolving…"
+   * button — a blocking wait in front of work the user has no reason to wait
+   * for. The sample concept is a nicety; the source's own live status, polled
+   * below, is the thing that actually answers "did that work?".
+   */
+  const completeSetup = () => {
     reload()
-    try {
-      // A tighter deadline than apiFetch's default: "Resolving…" must never
-      // outlive the user's patience — on timeout we land on the success step
-      // without a sample concept rather than spinning forever.
-      const res = await apiFetch('/api/graph', {
-        headers: { accept: 'application/json' },
-        signal: AbortSignal.timeout(20_000),
-      })
-      if (res.ok) {
-        const graph = (await res.json()) as GraphSummary
-        setSuccessConcept(graph.concepts[0]?.id ?? null)
-        setSuccessIndexing(Boolean(graph.indexing))
-      }
-    } catch {
-      setSuccessConcept(null)
-      setSuccessIndexing(false)
-    } finally {
+    goNext()
+    setSuccessBusy(true)
+    void (async () => {
+      try {
+        const res = await apiFetch('/api/graph', {
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(20_000),
+        })
+        if (res.ok) {
+          const graph = (await res.json()) as GraphSummary
+          setSuccessConcept(graph.concepts[0]?.id ?? null)
+          setSuccessIndexing(Boolean(graph.indexing))
+        }
+      } catch { /* the live status cards below report what actually happened */ }
       setSuccessBusy(false)
-      goNext()
-    }
+    })()
   }
 
   const submitAdd = async () => {
     if (addDraft.kind === 'mcp' && !addDraft.trusted) return
-    if (await submitDraft(addDraft, setAddErr, setAddBusy)) await completeSetup()
+    if (await submitDraft(addDraft, setAddErr, setAddBusy)) completeSetup()
   }
+
+  // Watch the sources this wizard just added until they stop working. This is
+  // the confirmation the flow was missing: the old success step declared "Source
+  // added" off the POST alone and never looked again, so a source that failed to
+  // index, or never appeared at all, still got a green screen.
+  useEffect(() => {
+    if (step !== 'success' || added.length === 0) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const names = new Set(added.map((a) => a.name))
+    const tick = async () => {
+      const status = await fetchStatus()
+      if (cancelled) return
+      if (!status) { setWatched(null); return }
+      const rows = status.sources.filter((s) => names.has(s.name))
+      setWatched(Object.fromEntries([...names].map((n) => [n, rows.find((s) => s.name === n) ?? null])))
+      if (rows.some((s) => s.status === 'indexing' || s.refreshing)) {
+        timer = setTimeout(() => void tick(), 900)
+      }
+    }
+    void tick()
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
+  }, [added, step])
 
   const setAddKind = (kind: SourceKind) => {
     setAddDraft((d) => withDerivedName({
@@ -934,9 +1051,7 @@ export function SetupWizard({
             footer={(
               <>
                 <button type="button" style={btnGhost()} onClick={goBack}>Back</button>
-                <button type="button" style={successBusy ? btnDisabled() : btnPrimary()} disabled={successBusy} onClick={completeSetup}>
-                  {successBusy ? 'Resolving…' : 'Finish'}
-                </button>
+                <button type="button" style={btnPrimary()} onClick={completeSetup}>Finish</button>
               </>
             )}
           >
@@ -973,15 +1088,16 @@ export function SetupWizard({
               </div>
             )}
           >
-            {added.length > 0 && isAdding && (
+            {added.length > 0 && (
               <ul style={css('margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px;')}>
                 {added.map((a) => (
                   <li
                     key={a.name}
-                    style={css(`display:flex; flex-direction:column; gap:2px; padding:10px 12px; border-radius:9px; background:${C.surface}; border:1px solid ${C.line};`)}
+                    style={css(`display:flex; flex-direction:column; gap:4px; padding:10px 12px; border-radius:9px; background:${C.surface}; border:1px solid ${C.line};`)}
                   >
                     <span style={css(`font-family:${MONO}; font-size:12px; font-weight:600; color:${C.ink};`)}>{a.name} · level {a.level} · {kindLabel(a.kind)}</span>
                     <span style={css(`font-size:11.5px; color:${C.caption};`)}>{a.detail}</span>
+                    <LiveSourceStatus name={a.name} watched={watched} />
                   </li>
                 ))}
               </ul>
@@ -990,6 +1106,8 @@ export function SetupWizard({
               <div style={css(`padding:12px 14px; border-radius:10px; background:${C.tealFill}; border:1px solid ${C.tealStroke}; font-size:13px; color:${C.tealText};`)}>
                 Your agent can now read: <strong style={css(`font-family:${MONO};`)}>{successConcept}</strong>
               </div>
+            ) : successBusy ? (
+              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Reading the cascade — you can close this any time.</p>
             ) : successIndexing ? (
               <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Setup complete — your sources are still indexing in the background. Concepts will appear here automatically.</p>
             ) : (

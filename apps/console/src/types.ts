@@ -23,7 +23,8 @@ export interface SectionConflict {
 /** One resolved section: the winning value plus provenance and any dissent. */
 export interface ResolvedSection {
   key: string
-  heading: string
+  /** Null for a document with no heading at all — a plain note in a files layer. */
+  heading: string | null
   content: string
   sourceLayer: string
   sourceUpdated: string | null
@@ -56,6 +57,38 @@ export interface IndexProgress {
   loaded: number
   total: number | null
   elapsedMs: number
+  /** Serving a good snapshot AND re-reading behind it — never a blocking wait. */
+  refreshing?: boolean
+}
+
+/** One source row from GET /api/status — progress and health, no concepts. */
+export interface SourceStatus {
+  name: string
+  level: number
+  kind: string
+  /** 'ok' | 'indexing' | 'degraded' | 'error' — the same four /api/graph reports. */
+  status: string
+  /** 'queued' | 'scanning' | 'loading' | 'ready' | 'error' */
+  phase: string
+  loaded: number
+  total: number | null
+  conceptCount: number
+  /** Ready and re-reading behind a good snapshot. Distinct from `status: indexing`. */
+  refreshing: boolean
+  error: string | null
+}
+
+/**
+ * GET /api/status — the cheap route (O(sources), sub-millisecond even on a
+ * large vault). `generation` moves whenever the /api/graph payload would
+ * differ, which is what lets a client poll here and refetch the heavy payloads
+ * only when they actually changed.
+ */
+export interface StatusSummary {
+  generation: number
+  indexing: boolean
+  indexingSources: string[]
+  sources: SourceStatus[]
 }
 
 /** A source (layer) row in the graph summary. */
@@ -115,6 +148,8 @@ export interface GraphSummary {
   /** True while any source is still being read; the payload is partial. */
   indexing?: boolean
   indexingSources?: string[]
+  /** The same counter GET /api/status reports — absent on an older engine. */
+  generation?: number
   totals: { sourceTokens: number; resolvedTokens: number; concepts: number; sources: number }
   sources: GraphSource[]
   concepts: GraphConcept[]

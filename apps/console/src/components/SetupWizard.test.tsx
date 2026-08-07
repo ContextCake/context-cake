@@ -6,7 +6,10 @@ import { deriveSourceName, parseCommandLine, SetupWizard } from './SetupWizard'
 
 const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), reload: vi.fn() }))
 
-vi.mock('../api', () => ({ apiFetch: mocks.apiFetch }))
+vi.mock('../api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api')>()),
+  apiFetch: mocks.apiFetch,
+}))
 vi.mock('../store', () => ({ useStore: () => ({ reload: mocks.reload }) }))
 
 let container: HTMLDivElement
@@ -197,6 +200,110 @@ describe('SetupWizard first run', () => {
     // Retry got 409 because the first attempt actually landed → proceed.
     expect(container.querySelector('#wiz-personal-path')).toBeNull()
     expect(container.textContent).toContain('Add a team source')
+  })
+
+  // The confirmation the flow never had. "Source added" used to follow from the
+  // POST alone: a lost response was assumed to have landed, and a source that
+  // never appeared still got a success screen.
+  it('checks the cascade before reporting a lost POST as success', async () => {
+    const statusSources: Array<{ name: string }> = []
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/sources' && init?.method === 'POST') {
+        // It landed server-side; only the response was lost.
+        statusSources.push({ name: 'vault' })
+        throw new DOMException('The operation timed out', 'TimeoutError')
+      }
+      if (url === '/api/status') {
+        return new Response(JSON.stringify({ generation: 1, indexing: false, indexingSources: [], sources: statusSources }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/vault')
+    await act(async () => button('Next').click())
+
+    // The engine says the source is there, so the add did what the user asked.
+    expect(container.querySelector('#wiz-personal-path')).toBeNull()
+    expect(container.textContent).toContain('Add a team source')
+  })
+
+  it('refuses to report success for a source that never appeared', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/sources' && init?.method === 'POST') {
+        throw new DOMException('The operation timed out', 'TimeoutError')
+      }
+      if (url === '/api/status') {
+        // The engine is answering, and this source is not in it.
+        return new Response(JSON.stringify({ generation: 1, indexing: false, indexingSources: [], sources: [] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/vault')
+    await act(async () => {
+      button('Next').click()
+      // The landed check polls the cheap route a few times before concluding.
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+    })
+
+    expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
+    expect(container.textContent).toContain('is not in the cascade, so nothing was added')
+  })
+
+  it('still calls a first-attempt 409 a real clash when the name was already there', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/sources' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ error: 'A source named "vault" already exists' }), {
+          status: 409, headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url === '/api/status') {
+        return new Response(JSON.stringify({ generation: 1, indexing: false, indexingSources: [], sources: [{ name: 'vault' }] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/vault')
+    await act(async () => button('Next').click())
+
+    expect(container.textContent).toContain('A source named "vault" already exists')
+    expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
+  })
+
+  it('reports each added source\'s live engine status on the success step', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/status') {
+        return new Response(JSON.stringify({
+          generation: 3, indexing: true, indexingSources: ['vault'],
+          sources: [{ name: 'vault', level: 3, kind: 'files', status: 'indexing', phase: 'loading', loaded: 1240, total: 3000, conceptCount: 0, refreshing: false, error: null }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify(url === '/api/graph' ? { concepts: [] } : {}), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    })
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    await enter('#wiz-add-path', '/tmp/vault')
+    await act(async () => button('Add source').click())
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+
+    expect(container.textContent).toContain('Source added')
+    expect(container.textContent).toContain('Reading — 1,240 / 3,000')
+    // Done is available while the source is still being read.
+    expect(button('Done').disabled).toBe(false)
   })
 
   it('surfaces server-side folder validation inline at the add step', async () => {

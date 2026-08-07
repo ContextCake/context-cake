@@ -92,6 +92,26 @@ export function mergeConcepts(contributors) {
     }
   }
 
+  // Frontmatter still resolves by precedence, exactly as before. The additive
+  // conflict list gives inspection surfaces the values that lost without
+  // changing the effective object or treating a singly-defined field as a
+  // disagreement. `updated` and `override` are resolver mechanics, not domain
+  // facts a person should reconcile.
+  const frontmatterConflicts = [];
+  const frontmatterKeys = new Set(active.flatMap((c) => Object.keys(c.frontmatter)));
+  for (const key of frontmatterKeys) {
+    if (key === "updated" || key === "override") continue;
+    const definitions = active
+      .filter((c) => Object.prototype.hasOwnProperty.call(c.frontmatter, key))
+      .map((c) => ({ layer: c.layer, level: c.level, updated: c.updated, value: c.frontmatter[key] }));
+    if (definitions.length < 2) continue;
+    const signatures = new Set(definitions.map((item) => stableValue(item.value)));
+    if (signatures.size < 2) continue;
+    const winnerLayer = frontmatterProvenance[key];
+    const winner = definitions.find((item) => item.layer === winnerLayer);
+    frontmatterConflicts.push({ key, winner, contributions: definitions });
+  }
+
   // Per-section winner: highest level wins (vertical precedence). Display order
   // follows first appearance in precedence order, so a higher layer's section
   // ordering leads. Dissenters are collected per section for honest-conflict output.
@@ -147,7 +167,20 @@ export function mergeConcepts(contributors) {
     };
   });
 
-  return { frontmatter, frontmatterProvenance, sections };
+  return {
+    frontmatter,
+    frontmatterProvenance,
+    ...(frontmatterConflicts.length ? { frontmatterConflicts } : {}),
+    sections,
+  };
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (value && typeof value === "object") {
+    return JSON.stringify(Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))));
+  }
+  return JSON.stringify(value);
 }
 
 // Higher level wins; equal level keeps the first contributor seen. Contributors

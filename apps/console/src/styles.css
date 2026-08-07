@@ -1226,6 +1226,43 @@ button { font-family: inherit; }
 .cc-sources-empty h2 { margin: 0 0 7px; font-size: 15px; font-weight: 600; }
 .cc-sources-empty p { margin: 0 0 14px; color: var(--cc-caption); font-size: 12px; line-height: 1.5; }
 
+/* ---- Source navigator (Files tree) ---------------------------------------
+   Rows are absolutely positioned by index so the list can be windowed; the
+   height here and ROW_HEIGHT in components/FileTree.tsx are the same number
+   and have to stay that way. */
+.cc-tree-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 6px 10px; }
+.cc-tree { position: relative; width: 100%; }
+.cc-tree-row {
+  position: absolute; left: 0; right: 0; height: 28px; box-sizing: border-box;
+  display: flex; align-items: center; gap: 6px; padding-right: 8px;
+  border-radius: 7px; background: transparent; color: var(--cc-body);
+  cursor: pointer; font-size: 11.5px; line-height: 1.3; white-space: nowrap; user-select: none;
+  transition: background 150ms var(--cc-ease-out), color 150ms var(--cc-ease-out);
+}
+.cc-tree-row:hover { background: var(--cc-neutral-fill); }
+.cc-tree-row:active { background: var(--cc-line-soft); }
+.cc-tree-row[data-kind="file"] { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; }
+.cc-tree-row[data-kind="dir"] { color: var(--cc-ink); font-weight: 500; }
+.cc-tree-row[data-root="true"] { font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; font-size: 10.5px; }
+/* Selection carries a fill, a left rule, and aria-selected — never colour alone. */
+.cc-tree-row[aria-selected="true"] {
+  background: var(--cc-teal-fill); color: var(--cc-teal-text);
+  box-shadow: inset 2px 0 var(--cc-teal-stroke-e);
+}
+.cc-tree-twisty { flex: 0 0 auto; color: var(--cc-faint); transition: transform 160ms var(--cc-ease-out); }
+.cc-tree-row[aria-expanded="true"] > .cc-tree-twisty { transform: rotate(90deg); }
+.cc-tree-leaf { flex: 0 0 auto; width: 12px; height: 12px; }
+.cc-tree-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px; }
+.cc-tree-name { overflow: hidden; text-overflow: ellipsis; }
+.cc-tree-count { margin-left: auto; padding-left: 8px; color: var(--cc-faint); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+.cc-files-scope { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 8px 6px; border-bottom: 1px solid var(--cc-line); }
+.cc-scope-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 3px 3px 9px; border: 1px solid var(--cc-teal-stroke); border-radius: 999px; background: var(--cc-teal-fill); color: var(--cc-teal-text); font-size: 11px; font-weight: 600; }
+.cc-scope-chip > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.cc-scope-chip > button { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 13px; line-height: 1; }
+.cc-scope-chip > button:hover { background: var(--cc-teal-fill2); }
+.cc-scope-meta { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cc-caption); font-size: 10.5px; }
+
 @container (max-width: 839px) {
   .cc-sources-split { display: block; }
   .cc-source-navigator { height: 100%; border-right: 0; }

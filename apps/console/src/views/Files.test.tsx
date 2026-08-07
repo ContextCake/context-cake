@@ -4,12 +4,35 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Files } from './Files'
 
-const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), reload: vi.fn(), store: { mode: 'live', sources: [] as unknown[] } }))
+const mocks = vi.hoisted(() => ({
+  apiFetch: vi.fn(),
+  reload: vi.fn(),
+  store: { mode: 'live', sources: [] as unknown[], query: '', scope: null as string | null, path: null as string | null },
+}))
 
 vi.mock('../api', () => ({ apiFetch: mocks.apiFetch }))
-vi.mock('../store', () => ({
-  useStore: () => ({ mode: mocks.store.mode, sources: mocks.store.sources, reload: mocks.reload }),
-}))
+// Scope and selection live in the store now (they are the URL), so the mock has
+// to be a real state holder — a frozen object would make every selection a no-op
+// and quietly pass tests that assert nothing moved.
+vi.mock('../store', async () => {
+  const { useState } = await import('react')
+  return {
+    useStore: () => {
+      const [filesScope, setFilesScope] = useState<string | null>(mocks.store.scope)
+      const [filesPath, setFilesPath] = useState<string | null>(mocks.store.path)
+      return {
+        mode: mocks.store.mode,
+        sources: mocks.store.sources,
+        reload: mocks.reload,
+        query: mocks.store.query,
+        filesScope,
+        filesPath,
+        setFilesScope,
+        setFilesPath,
+      }
+    },
+  }
+})
 
 let container: HTMLDivElement
 let root: Root
@@ -28,6 +51,17 @@ const FILES = {
       ],
     },
   ],
+}
+
+/** One tree row, by the engine path it carries in `title`. */
+function row(path: string): HTMLElement {
+  const match = container.querySelector<HTMLElement>(`[role="treeitem"][title="${path}"]`)
+  if (!match) throw new Error(`Tree row not found: ${path}`)
+  return match
+}
+
+function rows(): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('[role="treeitem"]'))
 }
 
 const MEETING = {
@@ -62,6 +96,9 @@ beforeEach(() => {
   mocks.reload.mockReset()
   mocks.store.mode = 'live'
   mocks.store.sources = []
+  mocks.store.query = ''
+  mocks.store.scope = null
+  mocks.store.path = null
   vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview')
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
   mocks.apiFetch.mockImplementation(async (url: string) => {
@@ -159,7 +196,7 @@ describe('Files view', () => {
       })
     })
     await act(async () => root.render(<Files />))
-    await act(async () => button('logo.png').click())
+    await act(async () => row('personal/logo.png').click())
 
     expect(mocks.apiFetch).toHaveBeenCalledWith('/api/file/raw?path=personal%2Flogo.png')
     await act(async () => {
@@ -180,7 +217,7 @@ describe('Files view', () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
       setter?.call(editor, 'unsaved')
       editor.dispatchEvent(new Event('input', { bubbles: true }))
-      button('logo.png').click()
+      row('personal/logo.png').click()
     })
 
     expect(window.confirm).toHaveBeenCalled()
@@ -215,6 +252,252 @@ describe('Files view', () => {
     mocks.apiFetch.mockImplementation(async () => json({ layers: [] }))
     await act(async () => root.render(<Files />))
 
-    expect(container.textContent).toContain('No file-backed sources yet')
+    expect(container.textContent).toContain('No source keeps files on this machine')
+  })
+})
+
+// ---- the source navigator ---------------------------------------------------
+
+/** A layer whose files sit flat at the root, so every one of them is visible. */
+function flatLayer(layer: string, count: number) {
+  return {
+    layer, kind: 'files', root: `/vault/${layer}`, fileCount: count, truncated: false,
+    files: Array.from({ length: count }, (_, i) => {
+      const rel = `note-${String(i).padStart(5, '0')}.md`
+      return { path: `${layer}/${rel}`, name: rel, rel, ext: '.md', kind: 'text', markdown: true }
+    }),
+  }
+}
+
+/** A layer with real nesting, for the collapse/expand contract. */
+const NESTED = {
+  layers: [{
+    layer: 'vault', kind: 'files', root: '/vault', fileCount: 3, truncated: false,
+    files: [
+      { path: 'vault/README.md', name: 'README.md', rel: 'README.md', ext: '.md', kind: 'text', markdown: true },
+      { path: 'vault/Projects/alpha.md', name: 'alpha.md', rel: 'Projects/alpha.md', ext: '.md', kind: 'text', markdown: true },
+      { path: 'vault/Projects/deep/beta.md', name: 'beta.md', rel: 'Projects/deep/beta.md', ext: '.md', kind: 'text', markdown: true },
+    ],
+  }],
+}
+
+function press(target: Element, key: string) {
+  target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+}
+
+const active = () => document.activeElement as HTMLElement | null
+
+describe('Files navigator tree', () => {
+  it('renders a 5,000-file source without putting 5,000 rows in the DOM', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json({ layers: [flatLayer('vault', 5000)] })
+      return json({ ...MEETING, path: 'vault/note-00000.md', rel: 'note-00000.md' })
+    })
+    await act(async () => root.render(<Files />))
+
+    // 5,000 files plus the layer root: the scrollable height claims all of it,
+    // while the DOM holds only the window.
+    const tree = container.querySelector<HTMLElement>('[role="tree"]')!
+    expect(tree.style.height).toBe(`${5001 * 28}px`)
+    expect(rows().length).toBeGreaterThan(0)
+    expect(rows().length).toBeLessThan(500)
+  })
+
+  it('collapses and expands a folder', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json(NESTED)
+      return json({ ...MEETING, path: 'vault/README.md', rel: 'README.md' })
+    })
+    await act(async () => root.render(<Files />))
+
+    // Folders start closed; the layer root does not.
+    expect(row('vault/Projects').getAttribute('aria-expanded')).toBe('false')
+    expect(container.querySelector('[title="vault/Projects/alpha.md"]')).toBeNull()
+
+    await act(async () => row('vault/Projects').click())
+    expect(row('vault/Projects').getAttribute('aria-expanded')).toBe('true')
+    expect(row('vault/Projects/alpha.md')).toBeTruthy()
+    // One level only — the nested folder is its own decision.
+    expect(container.querySelector('[title="vault/Projects/deep/beta.md"]')).toBeNull()
+
+    await act(async () => row('vault/Projects').click())
+    expect(container.querySelector('[title="vault/Projects/alpha.md"]')).toBeNull()
+  })
+
+  it('is a keyboard tree: arrows move, expand, collapse, and reach the parent', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json(NESTED)
+      return json({ ...MEETING, path: 'vault/README.md', rel: 'README.md' })
+    })
+    await act(async () => root.render(<Files />))
+
+    const start = row('vault')
+    expect(start.getAttribute('tabindex')).toBe('0') // exactly one tab stop
+    expect(rows().filter((r) => r.getAttribute('tabindex') === '0')).toHaveLength(1)
+
+    await act(async () => press(start, 'ArrowDown'))
+    expect(active()?.title).toBe('vault/Projects')
+
+    await act(async () => press(active()!, 'ArrowRight')) // expands
+    expect(row('vault/Projects').getAttribute('aria-expanded')).toBe('true')
+    await act(async () => press(active()!, 'ArrowRight')) // now moves to first child
+    expect(active()?.title).toBe('vault/Projects/deep')
+
+    await act(async () => press(active()!, 'ArrowLeft')) // collapsed already → parent
+    expect(active()?.title).toBe('vault/Projects')
+    await act(async () => press(active()!, 'ArrowLeft')) // expanded → collapse
+    expect(row('vault/Projects').getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => press(active()!, 'End'))
+    expect(active()?.title).toBe('vault/README.md')
+    await act(async () => press(active()!, 'Enter'))
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/file?path=vault%2FREADME.md', expect.anything())
+  })
+
+  it('keeps keyboard focus alive across the virtualization boundary', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json({ layers: [flatLayer('vault', 5000)] })
+      return json({ ...MEETING, path: 'vault/note-00000.md', rel: 'note-00000.md' })
+    })
+    await act(async () => root.render(<Files />))
+
+    await act(async () => row('vault').focus())
+    for (let i = 0; i < 60; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- one keystroke at a time is the point
+      await act(async () => press(active()!, 'ArrowDown'))
+    }
+
+    // Row 60 is far outside the first window. Focus is on it, it is in the DOM,
+    // and the DOM is still small — the row is rendered *because* it has focus.
+    expect(active()?.getAttribute('role')).toBe('treeitem')
+    expect(active()?.title).toBe('vault/note-00059.md')
+    expect(document.activeElement).not.toBe(document.body)
+    expect(rows().length).toBeLessThan(500)
+    expect(rows().filter((r) => r.getAttribute('tabindex') === '0')).toHaveLength(1)
+
+    // And back up: still focused, still one tab stop, still bounded.
+    for (let i = 0; i < 60; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- ditto
+      await act(async () => press(active()!, 'ArrowUp'))
+    }
+    expect(active()?.title).toBe('vault')
+    expect(rows().length).toBeLessThan(500)
+  })
+
+  it('keeps a focused row mounted when the list is scrolled past it', async () => {
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json({ layers: [flatLayer('vault', 5000)] })
+      return json({ ...MEETING, path: 'vault/note-00000.md', rel: 'note-00000.md' })
+    })
+    await act(async () => root.render(<Files />))
+    await act(async () => row('vault').focus())
+    await act(async () => press(active()!, 'ArrowDown'))
+    const focused = active()!
+    expect(focused.title).toBe('vault/note-00000.md')
+
+    // The wheel, not the keyboard: nothing moved the focused row, the window
+    // moved out from under it. Without the always-render rule for the active
+    // row, this unmounts the focused node and focus falls back to <body>.
+    const scroller = container.querySelector<HTMLElement>('.cc-tree-scroll')!
+    Object.defineProperty(scroller, 'scrollTop', { value: 90_000, configurable: true, writable: true })
+    await act(async () => scroller.dispatchEvent(new Event('scroll')))
+
+    expect(rows().length).toBeLessThan(60)
+    expect(rows().map((r) => r.title)).toContain('vault/note-00000.md')
+    expect(document.activeElement).toBe(focused)
+    expect(document.activeElement).not.toBe(document.body)
+    // The window really did move — the focused row is stranded thousands of
+    // rows behind it, not merely still in view.
+    expect(rows().filter((r) => /note-03\d{3}\.md$/.test(r.title)).length).toBeGreaterThan(10)
+  })
+
+  it('opens a file on arrival without reorganizing the tree, but a deep link reveals its own', async () => {
+    const nested = {
+      layers: [{
+        layer: 'vault', kind: 'files', root: '/vault', fileCount: 3, truncated: false,
+        files: [
+          { path: 'vault/Projects/alpha.md', name: 'alpha.md', rel: 'Projects/alpha.md', ext: '.md', kind: 'text', markdown: true },
+          { path: 'vault/Projects/deep/beta.md', name: 'beta.md', rel: 'Projects/deep/beta.md', ext: '.md', kind: 'text', markdown: true },
+        ],
+      }],
+    }
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json(nested)
+      return json({ ...MEETING, path: 'vault/Projects/alpha.md', rel: 'Projects/alpha.md' })
+    })
+    await act(async () => root.render(<Files />))
+
+    // A file is open — the detail pane is never blank — but the folder
+    // overview is intact: nothing the user did not ask for got expanded.
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/file?path=vault%2FProjects%2Falpha.md', expect.anything())
+    expect(row('vault/Projects').getAttribute('aria-expanded')).toBe('false')
+    expect(rows()).toHaveLength(2)
+
+    // The same file named in the URL is a request, and does reveal itself.
+    // A fresh key remounts, so the deep-linked path is the arriving state.
+    mocks.store.path = 'vault/Projects/deep/beta.md'
+    await act(async () => root.render(<Files key="deep-link" />))
+    expect(row('vault/Projects').getAttribute('aria-expanded')).toBe('true')
+    expect(row('vault/Projects/deep').getAttribute('aria-expanded')).toBe('true')
+    expect(row('vault/Projects/deep/beta.md').getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('scopes to one source and clears back to every source', async () => {
+    mocks.store.sources = [
+      { name: 'vault', layer: 'personal', sourceKind: 'files' },
+      { name: 'team-docs', layer: 'team', sourceKind: 'files' },
+    ]
+    mocks.store.scope = 'vault'
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json({ layers: [flatLayer('vault', 3), flatLayer('team-docs', 3)] })
+      return json({ ...MEETING, path: 'vault/note-00000.md', rel: 'note-00000.md' })
+    })
+    await act(async () => root.render(<Files />))
+
+    expect(row('vault')).toBeTruthy()
+    expect(container.querySelector('[title="team-docs"]')).toBeNull()
+    expect(container.textContent).toContain('/vault/vault') // the root path, in the chip
+
+    const clear = container.querySelector<HTMLButtonElement>('.cc-scope-chip button')!
+    expect(clear.getAttribute('aria-label')).toContain('every source')
+    await act(async () => clear.click())
+
+    expect(row('team-docs')).toBeTruthy()
+    expect(container.querySelector('.cc-scope-chip')).toBeNull()
+  })
+
+  it('explains a scoped source that keeps nothing on this machine', async () => {
+    mocks.store.sources = [
+      { name: 'vault', layer: 'personal', sourceKind: 'files' },
+      { name: 'company-graph', layer: 'company', sourceKind: 'mcp' },
+    ]
+    mocks.store.scope = 'company-graph'
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json({ layers: [flatLayer('vault', 3)] })
+      return json(MEETING)
+    })
+    await act(async () => root.render(<Files />))
+
+    expect(container.textContent).toContain('company-graph keeps no files here')
+    expect(container.textContent).toContain('remote knowledge graph over MCP')
+    expect(container.querySelector('[role="tree"]')).toBeNull()
+  })
+
+  it('opens every folder while a search is active, and says so when nothing matches', async () => {
+    mocks.store.query = 'beta'
+    mocks.apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/files') return json(NESTED)
+      return json({ ...MEETING, path: 'vault/Projects/deep/beta.md', rel: 'Projects/deep/beta.md' })
+    })
+    await act(async () => root.render(<Files />))
+
+    // A filtered tree is useless closed: the match is four levels down.
+    expect(row('vault/Projects/deep/beta.md')).toBeTruthy()
+    expect(container.querySelector('[title="vault/README.md"]')).toBeNull()
+
+    mocks.store.query = 'zzzz'
+    mocks.store.sources = [{ name: 'vault', layer: 'personal', sourceKind: 'files' }]
+    await act(async () => root.render(<Files />))
+    expect(container.textContent).toContain('Nothing matches that')
   })
 })

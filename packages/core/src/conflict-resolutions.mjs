@@ -9,6 +9,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 const SCHEMA_VERSION = 1;
+const SUPPORTED_SCHEMA_VERSIONS = new Set([1, 2]);
 
 /**
  * A deliberately narrow equivalence rule for the magic wand.
@@ -56,7 +57,7 @@ export function createConflictResolutionLog(manifestPath) {
       if (!line.trim()) continue;
       try {
         const record = JSON.parse(line);
-        if (record?.schemaVersion !== SCHEMA_VERSION || typeof record.id !== "string") {
+        if (!SUPPORTED_SCHEMA_VERSIONS.has(record?.schemaVersion) || typeof record.id !== "string") {
           throw new Error("unsupported record");
         }
         records.push(record);
@@ -69,7 +70,7 @@ export function createConflictResolutionLog(manifestPath) {
 
   async function append(record) {
     await prepare();
-    const saved = { schemaVersion: SCHEMA_VERSION, ...record };
+    const saved = { schemaVersion: record.schemaVersion ?? SCHEMA_VERSION, ...record };
     appendTail = appendTail.then(() => fsp.appendFile(file, `${JSON.stringify(saved)}\n`, { encoding: "utf8", mode: 0o600 }));
     await appendTail;
     return saved;
@@ -80,4 +81,82 @@ export function createConflictResolutionLog(manifestPath) {
   }
 
   return { file, prepare, list, append, find };
+}
+
+export function createDiscrepancyTransactionJournal(manifestPath) {
+  const dir = path.join(path.dirname(path.resolve(manifestPath)), ".contextcake");
+  const file = path.join(dir, "discrepancy-transactions.ndjson");
+  let appendTail = Promise.resolve();
+
+  async function append(record) {
+    await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+    appendTail = appendTail.then(() => fsp.appendFile(file, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 }));
+    await appendTail;
+    return record;
+  }
+
+  async function list() {
+    let text;
+    try { text = await fsp.readFile(file, "utf8"); }
+    catch (error) { if (error.code === "ENOENT") return []; throw error; }
+    return text.split("\n").filter(Boolean).map((line, index) => {
+      try { return JSON.parse(line); }
+      catch { throw new Error(`Discrepancy transaction journal is unreadable at line ${index + 1}`); }
+    });
+  }
+
+  async function recover(allowedRoots = [], committedTransactionIds = []) {
+    const records = await list();
+    const final = new Set(records.filter((r) => r.state === "committed" || r.state === "rolled_back").map((r) => r.id));
+    const committedDecisions = new Set(committedTransactionIds);
+    const pending = records.filter((r) => r.state === "prepared" && !final.has(r.id));
+    const recovered = [];
+    const failures = [];
+    for (const tx of pending) {
+      try {
+        // A decision is appended only after every replacement succeeds. If the
+        // process died before the journal's final marker, that durable decision
+        // proves the write committed; rolling it back would make history lie.
+        if (committedDecisions.has(tx.id)) {
+          for (const target of tx.targets ?? []) {
+            if (!insideAnyRoot(target.path, allowedRoots)
+              || !insideAnyRoot(target.staged, allowedRoots)
+              || !insideAnyRoot(target.backup, allowedRoots)) {
+              throw new Error("journal target is outside the selected source roots");
+            }
+            await fsp.unlink(target.staged).catch(() => {});
+            await fsp.unlink(target.backup).catch(() => {});
+          }
+          await append({ id: tx.id, state: "committed", recoveredAt: new Date().toISOString(), reason: "decision log confirmed commit" });
+          continue;
+        }
+        for (const target of tx.targets ?? []) {
+          if (!insideAnyRoot(target.path, allowedRoots) || !insideAnyRoot(target.backup, allowedRoots)) {
+            throw new Error("journal target is outside the selected source roots");
+          }
+          await fsp.copyFile(target.backup, target.path);
+          await fsp.unlink(target.staged).catch(() => {});
+          await fsp.unlink(target.backup).catch(() => {});
+        }
+        await append({ id: tx.id, state: "rolled_back", recoveredAt: new Date().toISOString(), reason: "startup recovery" });
+        recovered.push(tx.id);
+      } catch (error) {
+        await append({ id: tx.id, state: "recovery_required", failedAt: new Date().toISOString(), error: error.message });
+        failures.push(`${tx.id}: ${error.message}`);
+      }
+    }
+    if (failures.length) throw new Error(`Recovery is required for ${failures.join("; ")}`);
+    return recovered;
+  }
+
+  return { file, append, list, recover };
+}
+
+function insideAnyRoot(target, roots) {
+  const resolved = path.resolve(String(target));
+  return roots.some((root) => {
+    const base = path.resolve(root);
+    const rel = path.relative(base, resolved);
+    return rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+  });
 }

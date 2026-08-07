@@ -201,6 +201,47 @@ grep -q 'AGREED.' "$TMP/m2/merge-me.md" && pass "changed decision reused the sav
 [ "$(curl -s "${AUTH[@]}" "$BASE/api/conflict-resolutions" | JQ 'String(d.resolutions.length)')" = "2" ] && pass "changed decision appends instead of rewriting history" || fail "changed decision did not append"
 code 405 "$(C -X POST -H 'content-type: application/json' -d '{}' "$BASE2/api/conflict-resolutions")" "resolution respects the service mutation gate"
 
+echo "professional discrepancy API: revision guard, acknowledgement, and transactional choice"
+printf -- '---\ntype: decision\ntitle: Governed\nowner: Platform\n---\n\n# Governed\n\n## Pick {#pick}\n\nteam answer\n' > "$TMP/bundle/governed.md"
+printf -- '---\ntype: decision\ntitle: Governed\nowner: Architecture\n---\n\n# Governed\n\n## Pick {#pick}\n\ncompany answer\n' > "$TMP/m2/governed.md"
+DID=""
+for _ in $(seq 1 60); do
+  DSET="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?wait=15000")"
+  DID="$(JQ 'd.discrepancies.find((x) => x.originalKind === "section_content" && x.conceptId === "governed")?.id ?? ""' <<<"$DSET")"
+  [ -n "$DID" ] && break
+  sleep 0.1
+done
+DREV="$(JQ 'd.discrepancies.find((x) => x.originalKind === "section_content" && x.conceptId === "governed")?.revision ?? ""' <<<"$DSET")"
+[ -n "$DID" ] && [ -n "$DREV" ] && pass "unified API detects the section discrepancy" || fail "section discrepancy missing ($DSET)"
+code 409 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"discrepancyId\":\"$DID\",\"revision\":\"stale\",\"action\":\"choose_contribution\",\"selectedSource\":\"t\"}" "$BASE/api/discrepancy-decisions")" "stale discrepancy revision is refused"
+DDEC="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"discrepancyId\":\"$DID\",\"revision\":\"$DREV\",\"action\":\"choose_contribution\",\"selectedSource\":\"t\"}" "$BASE/api/discrepancy-decisions")"
+[ "$(JQ '`${d.decision.schemaVersion}:${d.decision.transactionState}`' <<<"$DDEC")" = "2:committed" ] && pass "new endpoint records a committed schema-v2 decision" || fail "v2 decision failed ($DDEC)"
+grep -q 'team answer' "$TMP/m2/governed.md" && pass "transactional choice reached every writable contributor" || fail "transactional choice missed a contributor"
+code 405 "$(C -X POST -H 'content-type: application/json' -d '{}' "$BASE2/api/discrepancy-decisions")" "discrepancy decisions respect the mutation gate"
+
+printf -- '# Scoped\n\n## Pick {#pick}\n\nlocal scope\n' > "$TMP/bundle/scoped.md"
+printf -- '# Scoped\n\n## Pick {#pick}\n\nteam scope\n' > "$TMP/m2/scoped.md"
+SID=""
+for _ in $(seq 1 60); do
+  SSET="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?wait=15000")"
+  SID="$(JQ 'd.discrepancies.find((x) => x.originalKind === "section_content" && x.conceptId === "scoped")?.id ?? ""' <<<"$SSET")"
+  [ -n "$SID" ] && break
+  sleep 0.1
+done
+SREV="$(JQ 'd.discrepancies.find((x) => x.originalKind === "section_content" && x.conceptId === "scoped")?.revision ?? ""' <<<"$SSET")"
+SACK="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"discrepancyId\":\"$SID\",\"revision\":\"$SREV\",\"action\":\"acknowledge\",\"reasonCode\":\"different_scopes\"}" "$BASE/api/discrepancy-decisions")"
+[ "$(JQ 'd.decision.transactionState' <<<"$SACK")" = "not_required" ] && pass "acknowledgement records a reason without a file transaction" || fail "acknowledgement failed ($SACK)"
+grep -q 'team scope' "$TMP/m2/scoped.md" && pass "acknowledgement leaves source content unchanged" || fail "acknowledgement mutated source content"
+printf -- '# Scoped\n\n## Pick {#pick}\n\nteam scope changed\n' > "$TMP/m2/scoped.md"
+SSTATUS=""
+for _ in $(seq 1 60); do
+  SOPEN="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?wait=15000")"
+  SSTATUS="$(JQ 'd.discrepancies.find((x) => x.conceptId === "scoped")?.status ?? ""' <<<"$SOPEN")"
+  [ "$SSTATUS" = "reopened" ] && break
+  sleep 0.1
+done
+[ "$SSTATUS" = "reopened" ] && pass "acknowledged discrepancy reopens when a fingerprint changes" || fail "acknowledgement did not reopen ($SOPEN)"
+
 printf -- '# Format only\n\n## Pick {#pick}\n\nUse **Postgres** for writes.\n' > "$TMP/bundle/format-only.md"
 printf -- '# Format only\n\n## Pick {#pick}\n\nUse postgres for writes\n' > "$TMP/m2/format-only.mdx"
 AUTO="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"format-only","sectionKey":"pick","selectedLayer":"t","method":"automatic"}' "$BASE/api/conflict-resolutions")"

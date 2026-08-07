@@ -12,6 +12,8 @@ import path from "node:path";
 import readline from "node:readline";
 import { isNewerDay } from "./conflict-policy.mjs";
 import { resolveConcept } from "./resolver.mjs";
+import { createConflictResolutionLog } from "./conflict-resolutions.mjs";
+import { fingerprint } from "./discrepancies.mjs";
 import { searchConcepts, searchCaptures } from "./search.mjs";
 import { buildSources } from "./sources/index.mjs";
 import { isTraversal } from "./sources/okf-local.mjs";
@@ -59,6 +61,7 @@ if ((args.capture || args.telemetry) && !liveLayer) {
 }
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
+const discrepancyDecisions = runtime ? createConflictResolutionLog(runtime.manifestPath) : null;
 const serverInfo = { name: "contextcake", version: "0.5.0" };
 const serverInstructions = [
   "Consult ContextCake before answering project-specific questions.",
@@ -478,8 +481,32 @@ async function readFileTool({ concept_id, layer }) {
 
   const resolved = await resolveConcept(id, layers);
   if (!resolved) throw new Error(`Concept not found in any layer: ${id}`);
+  await decorateDiscrepancyDisposition(resolved);
   emitTelemetry({ event: "read", concept: id, layer: resolved.contributors[0]?.layer ?? null });
   return { ...resolved, markdown: assembleMarkdown(resolved) };
+}
+
+async function decorateDiscrepancyDisposition(resolved) {
+  const decisions = discrepancyDecisions ? await discrepancyDecisions.list() : [];
+  for (const section of resolved.sections) {
+    if (!section.conflicts?.length) continue;
+    const discrepancyId = `section_content::${resolved.id}::${section.key}`;
+    const history = decisions.filter((row) => row.discrepancyId === discrepancyId || row.conflictId === `${resolved.id}::${section.key}`);
+    const latest = history.at(-1);
+    const contributions = [
+      { source: section.sourceLayer, fingerprint: fingerprint(section.content) },
+      ...section.conflicts.map((item) => ({ source: item.layer, fingerprint: fingerprint(item.content) })),
+    ];
+    const recorded = latest?.contributorFingerprints ?? [];
+    const unchanged = recorded.length === contributions.length
+      && recorded.map((item) => `${item.source}:${item.fingerprint}`).sort().every((value, index) => value === contributions.map((item) => `${item.source}:${item.fingerprint}`).sort()[index]);
+    section.discrepancy = {
+      id: discrepancyId,
+      status: latest?.action === "acknowledge" && unchanged ? "acknowledged" : latest ? "reopened" : "needs_review",
+      ...(latest?.id ? { decisionId: latest.id } : {}),
+      ...(latest?.reasonCode ? { reasonCode: latest.reasonCode } : {}),
+    };
+  }
 }
 
 async function listConcepts({ type } = {}) {

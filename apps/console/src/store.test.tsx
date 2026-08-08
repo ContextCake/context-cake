@@ -259,6 +259,11 @@ describe('store load state', () => {
       // Generation moves every tick (the engine counts documents into it), but
       // nothing that decides the payload changes until the snapshot lands.
       mocks.status
+        // Consumed by the WP-B bootstrap probe, immediately after readAll()
+        // commits — same generation and shape readAll() itself just saw, so
+        // the probe is a no-op and the three progress-only ticks below still
+        // land on the recurring poll() exactly as before.
+        .mockResolvedValueOnce(statusPayload({ generation: 1, indexing: true, loaded: 0, total: 3000 }))
         .mockResolvedValueOnce(statusPayload({ generation: 2, indexing: true, loaded: 400, total: 3000 }))
         .mockResolvedValueOnce(statusPayload({ generation: 3, indexing: true, loaded: 900, total: 3000 }))
         .mockResolvedValueOnce(statusPayload({ generation: 4, indexing: true, loaded: 1800, total: 3000 }))
@@ -375,6 +380,35 @@ describe('store load state', () => {
       expect(mocks.status.mock.calls.length).toBeGreaterThan(whileVisible)
       visibility.mockRestore()
     })
+
+    // WP-B: a page that first renders hidden (an embedded webview can
+    // misreport visibility) never gets a recurring poll at all — schedule()
+    // is a no-op while hidden, and nothing resumes the loop until
+    // visibilitychange fires. Without a probe that ignores hidden(), a page
+    // that loaded mid-index would sit on that stuck snapshot forever with no
+    // way to notice the engine actually finished.
+    it('probes /api/status once at bootstrap even when the page starts hidden, and recovers a stuck initial snapshot', async () => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      try {
+        mocks.graph.mockResolvedValue(graphPayload(['personal']))
+        mocks.resolveAll
+          .mockResolvedValueOnce({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+          .mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+        // The engine actually finished by the time this page loaded — status
+        // disagrees with the graph's still-indexing snapshot from readAll().
+        mocks.status.mockResolvedValue(statusPayload({ generation: 9, indexing: false, conceptCount: 1 }))
+
+        await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+
+        // Exactly one status call: the bootstrap probe. schedule() is a
+        // no-op while hidden, so nothing else could have called it.
+        expect(mocks.status.mock.calls.length).toBe(1)
+        expect(probe().dataset.count).toBe('1')
+        expect(probe().dataset.indexing).toBe('')
+      } finally {
+        visibility.mockRestore()
+      }
+    })
   })
 
   it('does not treat an empty mid-index pass as a fatal error', async () => {
@@ -441,6 +475,19 @@ describe('store load state', () => {
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
     expect(probe().dataset.filesScope).toBe('')
     expect(probe().dataset.filesPath).toBe('')
+  })
+})
+
+describe('document title', () => {
+  it('names the current view, and updates when the view changes', async () => {
+    mocks.graph.mockResolvedValue(graphPayload([]))
+    mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: false })
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    expect(document.title).toBe('Home — ContextCake')
+
+    await click('to sources')
+    expect(document.title).toBe('Sources — ContextCake')
   })
 })
 

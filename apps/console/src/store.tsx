@@ -6,15 +6,15 @@ import {
   type Activity, type Concept, type Conflict, type Signal, type Source,
 } from './data'
 import {
-  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, createDataSource, LiveDataError, mergeSourceStatus,
+  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, computeLevelBuckets, createDataSource, LiveDataError, mergeSourceStatus,
   type Mode,
 } from './api'
 import type {
   DiscrepancyDecisionRequest, DiscrepancyRule, DiscrepancyRuleSuggestion,
-  GraphSummary, SourceStatus,
+  GraphSummary, SearchHit, SourceStatus, StatusSummary,
 } from './types'
 import type { LayerId, RouteId } from './theme'
-import { dispatchNavigationGuard, filesHash, isViewId, parseHash, type ViewId } from './shell-navigation'
+import { dispatchNavigationGuard, filesHash, isViewId, parseHash, titleForView, type ViewId } from './shell-navigation'
 
 export type { ViewId } from './shell-navigation'
 export type TriageTab = 'review' | 'captured' | 'ignored'
@@ -232,6 +232,15 @@ export interface StoreData {
   /** Go to Concepts on one concept — the cross-link from the file behind it. */
   openConcept: (id: string) => void
   setQuery: (q: string) => void
+  /**
+   * Full-text search over section content (GET /api/search), for Knowledge's
+   * search box. Live mode only — callers gate on `mode` themselves; calling
+   * this in demo mode is a caller bug, not handled here. Never throws: a
+   * missing route or any other failure (network, timeout, malformed body)
+   * resolves to `null`, the signal to fall back to the substring filter
+   * silently rather than break the list.
+   */
+  search: (query: string, limit?: number) => Promise<SearchHit[] | null>
   openChat: () => void
   closeChat: () => void
   setChatInput: (v: string) => void
@@ -470,10 +479,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // can finish between them; use the later answer so a stale graph never
       // leaves the banner running after the work has landed.
       applyIndexing(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
-      setConcepts(raw.map(adaptConcept))
+      // Rank-based level→lane buckets for this pass, computed once from every
+      // source in the graph and threaded through every adapter below — see
+      // computeLevelBuckets in api.ts for why a narrower computation (e.g. per
+      // concept) would bucket the same source differently depending on what
+      // happened to touch it.
+      const buckets = computeLevelBuckets(g.sources.map((s) => s.level))
+      setConcepts(raw.map((c) => adaptConcept(c, buckets)))
       const derivedConflicts = discrepancyPayload
-        ? adaptDiscrepancies(discrepancyPayload.discrepancies, discrepancyPayload.coverageComplete)
-        : adaptConflicts(raw, resolutionHistory)
+        ? adaptDiscrepancies(discrepancyPayload.discrepancies, discrepancyPayload.coverageComplete, buckets)
+        : adaptConflicts(raw, resolutionHistory, buckets)
       setConflicts(derivedConflicts)
       setDiscrepancyRules(rulePayload.rules)
       setDiscrepancyRuleSuggestions(rulePayload.suggestions)
@@ -509,6 +524,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return Boolean(indexing)
     }
 
+    /**
+     * One /api/status answer → task/indexing/source state, plus a heavy
+     * refetch when the part that decides the payload moved. Shared by the
+     * recurring `poll()` below and the one-off bootstrap probe further down,
+     * so the gate — "generation moved AND (content signature changed OR
+     * nothing in flight)" — is written in exactly one place rather than
+     * re-derived, loosely, wherever a status answer needs applying.
+     */
+    const applyStatus = async (status: StatusSummary): Promise<boolean> => {
+      statusAnswered = true
+      const rows: SourceStatus[] = status.sources ?? []
+      applyIndexing(status.indexingSources ?? [])
+      applyTasks(trackTasks(rows))
+      // Keep the per-source rows as current as the toolbar. Without this
+      // the Sources list holds whatever the last heavy refetch said —
+      // which, mid-index, is the phase the source started in.
+      setSources((prev) => mergeSourceStatus(prev, rows))
+      let active = Boolean(status.indexing) || rows.some((r) => r.refreshing)
+      const nextSignature = contentSignature(rows)
+      // `generation` also moves for a progress counter. Refetch when the
+      // part that decides the payload moved — a snapshot landing, a
+      // source erroring, a refresh finishing — or, while the engine is
+      // quiet, on any generation change at all (the file-edit case).
+      const moved = status.generation !== generation
+      const worthRefetching = refetchOwed || (moved && (nextSignature !== signature || !active))
+      if (worthRefetching) {
+        // Committing the gate here — before the heavy read — is how a
+        // failed refetch used to hide: the next poll saw nothing moved,
+        // skipped the retry, and then took the success path below,
+        // clearing the banner over pre-edit concepts. Nothing recovers
+        // from that on its own, because contentSignature deliberately
+        // excludes document content, so a pure edit never reopens the
+        // gate. readAll commits it, once it has actually landed.
+        refetchOwed = true
+        active = (await readAll(status.generation)) || active
+      } else {
+        generation = status.generation
+        signature = nextSignature
+      }
+      return active
+    }
+
     /** One cheap poll. Refetches the heavy payloads only when they moved. */
     const poll = async () => {
       if (cancelled || running) return
@@ -519,38 +576,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const status = await source.status()
           if (cancelled) return
           if (status === null) hasStatusRoute = false
-          else {
-            statusAnswered = true
-            const rows: SourceStatus[] = status.sources ?? []
-            applyIndexing(status.indexingSources ?? [])
-            applyTasks(trackTasks(rows))
-            // Keep the per-source rows as current as the toolbar. Without this
-            // the Sources list holds whatever the last heavy refetch said —
-            // which, mid-index, is the phase the source started in.
-            setSources((prev) => mergeSourceStatus(prev, rows))
-            active = Boolean(status.indexing) || rows.some((r) => r.refreshing)
-            const nextSignature = contentSignature(rows)
-            // `generation` also moves for a progress counter. Refetch when the
-            // part that decides the payload moved — a snapshot landing, a
-            // source erroring, a refresh finishing — or, while the engine is
-            // quiet, on any generation change at all (the file-edit case).
-            const moved = status.generation !== generation
-            const worthRefetching = refetchOwed || (moved && (nextSignature !== signature || !active))
-            if (worthRefetching) {
-              // Committing the gate here — before the heavy read — is how a
-              // failed refetch used to hide: the next poll saw nothing moved,
-              // skipped the retry, and then took the success path below,
-              // clearing the banner over pre-edit concepts. Nothing recovers
-              // from that on its own, because contentSignature deliberately
-              // excludes document content, so a pure edit never reopens the
-              // gate. readAll commits it, once it has actually landed.
-              refetchOwed = true
-              active = (await readAll(status.generation)) || active
-            } else {
-              generation = status.generation
-              signature = nextSignature
-            }
-          }
+          else active = await applyStatus(status)
         }
         if (!hasStatusRoute) active = await readAll()
         if (cancelled) return
@@ -579,6 +605,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (cancelled) return
         setRefreshError(null)
         setLastRefreshAt(Date.now())
+        // A page that first renders with document.visibilityState === 'hidden'
+        // (embedded webviews can misreport this) never gets a recurring poll:
+        // schedule() below is a no-op while hidden, and nothing resumes the
+        // loop until visibilitychange fires. Left alone, a still-indexing
+        // snapshot from the readAll() above sits stuck with nobody checking
+        // whether the engine finished — so this one probe runs regardless of
+        // hidden(), through the exact gate `poll()` uses (applyStatus), so it
+        // only pays for a heavy refetch when that gate says one is owed.
+        // Demo mode never probes — there is no engine behind it to ask.
+        if (source.mode === 'live' && hasStatusRoute) {
+          try {
+            const status = await source.status()
+            if (!cancelled) {
+              if (status === null) hasStatusRoute = false
+              else await applyStatus(status)
+            }
+          } catch {
+            // Non-fatal: readAll() above already left a good snapshot up, and
+            // the recurring loop retries on its own once it gets to run.
+          }
+        }
         schedule(active ? ACTIVE_POLL_MS : IDLE_POLL_MS)
       } catch (e) {
         if (cancelled) return
@@ -679,6 +726,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSelConceptState(id)
     setViewState('concepts')
   }, [])
+
+  useEffect(() => {
+    document.title = titleForView(view)
+  }, [view])
 
   useEffect(() => {
     window.__CC_DESKTOP?.uiState?.set({
@@ -926,6 +977,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // `source.search` is on the DataSource interface, but several test harnesses
+  // stub a partial DataSource (see store.test.tsx) with no `search` at all —
+  // same reason `source.discrepancies` above is guarded rather than called
+  // directly. Any rejection (network, timeout, a malformed body) is caught
+  // here too: this is the one place that owns "never break the list",
+  // regardless of which layer the failure came from.
+  const search = useCallback(async (query: string, limit?: number): Promise<SearchHit[] | null> => {
+    if (!source.search) return null
+    try {
+      return await source.search(query, limit)
+    } catch {
+      return null
+    }
+  }, [source])
+
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
   const openChat = useCallback(() => setChatOpen(true), [])
   const closeChat = useCallback(() => setChatOpen(false), [])
@@ -945,7 +1011,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     mode, loading, load, error,
     concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError,
     discrepancyRules, discrepancyRuleSuggestions,
-    setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
+    setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery, search,
     setFilesScope, setFilesPath, openFilesScope, openConcept,
     openChat, closeChat, setChatInput,
     retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
@@ -955,7 +1021,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     resolvingConflict, resolutionError, discrepancyRules, discrepancyRuleSuggestions,
     retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
-    send, reload, reloadKey, setView, setSelConcept, setQuery, setFilesScope, setFilesPath,
+    send, reload, reloadKey, setView, setSelConcept, setQuery, search, setFilesScope, setFilesPath,
     openFilesScope, openConcept, openChat, closeChat])
 
   const nav = useMemo<StoreNav>(

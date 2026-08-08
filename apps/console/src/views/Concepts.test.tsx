@@ -1,0 +1,176 @@
+// @vitest-environment jsdom
+// The Knowledge: Concepts list and its detail panel — including the
+// zero-section dead end (F18): a concept with no sections used to render an
+// empty panel with no explanation and no way out.
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Concepts } from './Concepts'
+import type { Concept } from '../data'
+
+const mocks = vi.hoisted(() => ({ useStore: vi.fn(), useLayerFiles: vi.fn() }))
+vi.mock('../store', () => ({ useStore: mocks.useStore, useStoreData: mocks.useStore, useStoreNav: mocks.useStore, useStoreInput: mocks.useStore }))
+vi.mock('../layer-files', () => ({
+  filesRevalidation: () => 'rev',
+  useLayerFiles: mocks.useLayerFiles,
+}))
+
+let container: HTMLDivElement
+let root: Root
+
+function storeWith(concepts: Concept[], selConcept: string, openFilesScope = vi.fn()) {
+  return {
+    mode: 'demo', sources: [], reloadKey: 0,
+    query: '', concepts, selConcept,
+    setSelConcept: vi.fn(), openFilesScope,
+  }
+}
+
+function populated(): Concept {
+  return {
+    id: 'decisions/primary-db', title: 'Primary database', type: 'decision',
+    layers: ['personal'], contributorLayers: ['personal'],
+    sections: [{ name: 'Choice', winner: 'personal', sourceLayer: 'personal', value: 'SingleStore.', updated: '2026-01-01' }],
+  }
+}
+
+function empty(): Concept {
+  return {
+    id: 'decisions/empty-note', title: 'Empty note', type: 'note',
+    layers: ['personal'], contributorLayers: ['personal'], sections: [],
+  }
+}
+
+function button(label: string): HTMLButtonElement | undefined {
+  return Array.from(container.querySelectorAll('button')).find((item) => item.textContent === label)
+}
+
+beforeEach(() => {
+  ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  mocks.useLayerFiles.mockReturnValue({ layers: [] })
+})
+
+afterEach(async () => {
+  await act(async () => root.unmount())
+  container.remove()
+})
+
+describe('a concept with no sections', () => {
+  it('shows a quiet note and an Open file affordance instead of an empty panel', async () => {
+    mocks.useStore.mockReturnValue(storeWith([empty()], 'decisions/empty-note'))
+    mocks.useLayerFiles.mockReturnValue({
+      layers: [{
+        layer: 'personal', kind: 'files', root: '/vault', fileCount: 1, truncated: false,
+        files: [{ path: 'personal/decisions/empty-note.md', name: 'empty-note.md', rel: 'decisions/empty-note.md', ext: '.md', kind: 'text', markdown: true }],
+      }],
+    })
+    await act(async () => root.render(<Concepts />))
+
+    expect(container.textContent).toContain('This concept has no sections — the file may be empty.')
+    expect(button('Open file')).toBeTruthy()
+  })
+
+  it('falls back to a Files-tab affordance when no file is listed for the winning contributor', async () => {
+    const openFilesScope = vi.fn()
+    mocks.useStore.mockReturnValue(storeWith([empty()], 'decisions/empty-note', openFilesScope))
+    await act(async () => root.render(<Concepts />))
+
+    const browse = button('Browse personal in Files')
+    expect(browse).toBeTruthy()
+    await act(async () => browse?.click())
+    expect(openFilesScope).toHaveBeenCalledWith('personal')
+  })
+
+  it('marks the concept "empty" in the list so it is triageable without opening it', async () => {
+    mocks.useStore.mockReturnValue(storeWith([populated(), empty()], 'decisions/primary-db'))
+    await act(async () => root.render(<Concepts />))
+
+    const rows = Array.from(container.querySelectorAll('.cc-navigator-detail > div > button'))
+    const emptyRow = rows.find((row) => row.textContent?.includes('Empty note'))
+    const populatedRow = rows.find((row) => row.textContent?.includes('Primary database'))
+    expect(emptyRow?.textContent).toContain('empty')
+    expect(populatedRow?.textContent).not.toContain('empty')
+  })
+})
+
+// WP-G: Knowledge search calls the engine's full-text /api/search in live
+// mode, debounced, while the instant title/id substring filter (above) keeps
+// serving the result until the engine answers or fails.
+describe('Knowledge search (live mode)', () => {
+  function liveStoreWith(concepts: Concept[], query: string, search = vi.fn()) {
+    return {
+      mode: 'live', sources: [], reloadKey: 0,
+      query, concepts, selConcept: concepts[0]?.id ?? '',
+      setSelConcept: vi.fn(), openFilesScope: vi.fn(), search,
+    }
+  }
+
+  function rows(): HTMLButtonElement[] {
+    return Array.from(container.querySelectorAll('.cc-navigator-detail > div > button'))
+  }
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('debounces the query before calling the engine search', async () => {
+    const search = vi.fn().mockResolvedValue([])
+    mocks.useStore.mockReturnValue(liveStoreWith([populated()], 'singlestore', search))
+    await act(async () => root.render(<Concepts />))
+
+    expect(search).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(249) })
+    expect(search).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(search).toHaveBeenCalledTimes(1)
+    expect(search).toHaveBeenCalledWith('singlestore')
+  })
+
+  it('narrows and reorders the list to the engine hits once they land', async () => {
+    const a = populated()
+    const b: Concept = { ...populated(), id: 'decisions/other', title: 'Other decision' }
+    const search = vi.fn().mockResolvedValue([{ id: b.id, title: b.title, score: 5, layers: ['personal'], snippet: '' }])
+    mocks.useStore.mockReturnValue(liveStoreWith([a, b], 'other', search))
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+
+    const list = rows()
+    expect(list).toHaveLength(1)
+    expect(list[0].textContent).toContain(b.title)
+  })
+
+  it('shows a content-search hint, not the title-only one, when the engine finds nothing', async () => {
+    const search = vi.fn().mockResolvedValue([])
+    mocks.useStore.mockReturnValue(liveStoreWith([populated()], 'nomatch', search))
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+
+    expect(container.textContent).toContain('No matches in titles or content.')
+  })
+
+  it('falls back to the substring filter silently when the engine call fails', async () => {
+    // The store's search() action never throws — a failed engine call
+    // resolves to null, which is exactly what this exercises.
+    const search = vi.fn().mockResolvedValue(null)
+    mocks.useStore.mockReturnValue(liveStoreWith([populated()], 'primary', search))
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+
+    // Substring match on the title still renders; no error, no empty state.
+    expect(rows()).toHaveLength(1)
+    expect(container.textContent).toContain('Primary database')
+  })
+
+  it('never calls the engine search in demo mode', async () => {
+    const search = vi.fn()
+    mocks.useStore.mockReturnValue({ ...liveStoreWith([populated()], 'primary', search), mode: 'demo' })
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+
+    expect(search).not.toHaveBeenCalled()
+    // Demo mode still gets the plain substring result.
+    expect(rows()).toHaveLength(1)
+  })
+})

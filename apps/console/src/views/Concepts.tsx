@@ -4,13 +4,45 @@ import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
 import { useDetailSurface } from '../components/useDetailSurface'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
+import type { Concept } from '../data'
+import type { SearchHit } from '../types'
+
+/** How long a keystroke waits before it becomes an /api/search request. */
+const SEARCH_DEBOUNCE_MS = 250
 
 function ConceptsInner() {
-  const { setSelConcept, concepts } = useStoreData()
+  const { setSelConcept, concepts, mode, search } = useStoreData()
   const { selConcept } = useStoreNav()
   const { query } = useStoreInput()
   const q = query.trim().toLowerCase()
-  const list = concepts.filter((c) => !q || `${c.title} ${c.id}`.toLowerCase().includes(q))
+  const substringList = concepts.filter((c) => !q || `${c.title} ${c.id}`.toLowerCase().includes(q))
+
+  // Engine full-text search (live mode only). `null` means "no answer to show
+  // yet" — either nothing has been typed, the debounced request is still in
+  // flight, or the engine failed/is too old — and the substring filter above
+  // is what renders in every one of those cases. A non-null array (possibly
+  // empty) is the engine's own answer and takes over the list.
+  const [engineHits, setEngineHits] = useState<SearchHit[] | null>(null)
+  useEffect(() => {
+    if (mode !== 'live' || !q) { setEngineHits(null); return }
+    let cancelled = false
+    const timer = setTimeout(() => {
+      void search(query.trim()).then((hits) => { if (!cancelled) setEngineHits(hits) })
+    }, SEARCH_DEBOUNCE_MS)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [mode, q, query, search])
+
+  // A hit for a concept not in the loaded list is skipped rather than
+  // rendered as a dead row — resolve-all supplies the full set, so this only
+  // happens for a concept still resolving in the background.
+  const usingEngine = mode === 'live' && q !== '' && engineHits !== null
+  const list = usingEngine
+    ? engineHits.reduce<Concept[]>((acc, hit) => {
+        const match = concepts.find((c) => c.id === hit.id)
+        if (match) acc.push(match)
+        return acc
+      }, [])
+    : substringList
   const selCpt = concepts.find((c) => c.id === selConcept) || null
   const [detailOpen, setDetailOpen] = useState(Boolean(selConcept))
   const selectedButton = useRef<HTMLButtonElement | null>(null)
@@ -22,7 +54,14 @@ function ConceptsInner() {
   }, [])
 
   if (concepts.length === 0) return <div className="cc-ui-empty"><strong>No concepts yet</strong><p>Add or index a source to build the resolved cascade.</p></div>
-  if (list.length === 0) return <div className="cc-ui-empty"><strong>No matching concepts</strong><p>Try a title, concept ID, or type.</p></div>
+  if (list.length === 0) {
+    return (
+      <div className="cc-ui-empty">
+        <strong>No matching concepts</strong>
+        <p>{usingEngine ? 'No matches in titles or content.' : 'Try a title, concept ID, or type.'}</p>
+      </div>
+    )
+  }
 
   return (
     <div ref={detail.containerRef} className="cc-navigator-detail" style={css('display:grid; grid-template-columns:minmax(240px,280px) minmax(0,1fr); gap:12px; align-items:start;')}>
@@ -41,6 +80,9 @@ function ConceptsInner() {
                 <span style={conceptTypeStyle(c.type)}>{c.type}</span>
                 {c.conflict && <span title="has conflict" style={css('width:7px; height:7px; border-radius:999px; background:#C77D2A;')} />}
                 {c.draft && <span style={css(`font-size:10px; font-family:${MONO}; color:#7A5A28;`)}>draft</span>}
+                {/* No sections to read — a dead end worth flagging here so it's
+                    triageable from the list, not only discovered by opening it. */}
+                {c.sections.length === 0 && <span title="This concept has no sections" style={css(`font-size:10px; font-family:${MONO}; color:#8A8A82;`)}>empty</span>}
               </div>
               <div style={css('font-weight:600; font-size:13.5px; margin-top:7px;')}>{c.title}</div>
               <code style={css(`display:block; font-family:${MONO}; font-size:11px; color:#8A8A82; margin-top:3px;`)}>{c.id}</code>

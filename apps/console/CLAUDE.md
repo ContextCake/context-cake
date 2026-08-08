@@ -42,16 +42,20 @@ via their pre-hooks.
 - **Entry** — `src/main.tsx` mounts `<ThemeModeProvider><StoreProvider><App/>`.
   The persisted theme is applied *before* first paint to avoid a light flash.
 - **State** — `src/store.tsx` holds all app state and actions (`route`,
-  `resolveConflict`, `send`, view/selection setters) in **three** contexts, split
+  `resolveConflict`, `send`, view/selection setters) in **four** contexts, split
   by how often each changes: `data` (engine answers + every action, and every
-  action has a stable identity), `nav` (view and selection), `input` (the search
-  box and the chat composer — changes per keystroke). `useStoreData()` /
-  `useStoreNav()` / `useStoreInput()` are the narrow hooks; `useStore()` merges
-  all three and re-renders on any of them — it has no production callers left,
-  only test mocks, and new code should not add one. Callbacks read the freshest
-  values through refs so they don't re-subscribe. State is in-memory only —
-  reloads reset it. See the subscribe-narrowly gotcha below before adding a
-  consumer.
+  action has a stable identity), `nav` (view and selection), `input` (the toolbar
+  search box — changes per keystroke), `chat` (the Ask composer, its transcript
+  and its busy flag — changes per keystroke). `useStoreData()` / `useStoreNav()`
+  / `useStoreInput()` / `useStoreChat()` are the narrow hooks; `useStore()`
+  merges all four and re-renders on any of them — it has no production callers
+  left, only test mocks, and new code should not add one. The two typing
+  surfaces are deliberately separate contexts: every searchable view reads
+  `query`, only `ChatPanel` reads the composer, and while they shared one
+  context a question typed into the Ask slide-over repainted the view under it
+  per character. Callbacks read the freshest values through refs so they don't
+  re-subscribe. State is in-memory only — reloads reset it. See the
+  subscribe-narrowly gotcha below before adding a consumer.
 - **Views** — `src/views/` (Canvas, Overview, Sources, Triage, Conflicts,
   Concepts, Files). `App.tsx` is the shell: topbar + subbar + routed view, plus
   the Triage S/R/D keyboard handler. The canvas view stays full-height inside
@@ -101,7 +105,9 @@ via their pre-hooks.
   triage/activity fixtures. Live errors are typed (`LiveDataError`) and
   rendered honestly — never a silent fallback to demo.
 - **Chat** — `src/components/ChatPanel.tsx` + `store.send()` call
-  `window.claude.complete` when present and fall back to canned answers.
+  `window.claude.complete` when present and fall back to canned answers. The
+  panel is the only `useStoreChat()` consumer, and should stay that way: the
+  hook re-renders its caller for every character typed into the composer.
 
 Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
 `src/styles.css` (shell/theme variables), `src/views/Canvas.tsx` (pan/zoom layout),
@@ -129,7 +135,11 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   `SEARCHABLE_VIEWS` (`shell-navigation.ts`) must be in the case table in
   `render-hygiene.test.tsx`, which types a query that matches nothing and
   asserts the list actually empties. That suite deliberately holds both halves:
-  the sidebar must NOT repaint on a keystroke, and the active view MUST.
+  the sidebar must NOT repaint on a search keystroke, and the active view MUST.
+  It holds the same pair for the composer with the Ask panel open over a view —
+  the view must NOT repaint, and the composer must still hold what was typed.
+  Views render no icons, so that case counts renders through `LayerChip`, which
+  `Concepts` renders inline and unmemoized on every row.
 - **Prefer `C.*` / `css()` over raw styles** so both themes and the
   reduced-motion / focus-visible rules keep working.
 - **`css()` is a simple `;`/`:` splitter** — no nested rules, no `url(...)` with

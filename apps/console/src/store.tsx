@@ -175,7 +175,7 @@ function asLiveDataError(e: unknown): LiveDataError {
 }
 
 /**
- * The store is three contexts, not one, and the split is by how often each
+ * The store is four contexts, not one, and the split is by how often each
  * changes rather than by subject.
  *
  * A single context value memoized over ~25 dependencies meant one keystroke in
@@ -185,13 +185,19 @@ function asLiveDataError(e: unknown): LiveDataError {
  *
  *   data  — engine answers and every action. Changes when the cascade changes.
  *   nav   — where the user is. Changes on navigation and selection.
- *   input — the search box and the chat composer. Changes per keystroke.
+ *   input — the toolbar search box. Changes per keystroke.
+ *   chat  — the Ask composer and its transcript. Changes per keystroke.
+ *
+ * The two typing surfaces are separate contexts because they have disjoint
+ * audiences: every searchable view reads `query`, and only the Ask panel reads
+ * the composer. Sharing one context meant a question typed into a panel
+ * floating OVER a view repainted the view for every character of it.
  *
  * Actions all live in `data` and are all stable identities, so a memoized child
  * that takes one as a prop keeps its memo.
  *
- * `useStore()` still hands back all three merged, for consumers that genuinely
- * read across them; it re-renders on any of the three, which is the cost of
+ * `useStore()` still hands back all four merged, for consumers that genuinely
+ * read across them; it re-renders on any of the four, which is the cost of
  * that convenience. Prefer the narrow hooks in anything on a hot path.
  */
 export interface StoreData {
@@ -267,19 +273,32 @@ export interface StoreNav {
   chatOpen: boolean
 }
 
-/** The two things a user types into. Changes per keystroke — subscribe narrowly. */
+/**
+ * The toolbar search box. Changes per keystroke — subscribe narrowly, and only
+ * where a query actually filters something on screen.
+ */
 export interface StoreInput {
   query: string
+}
+
+/**
+ * The Ask panel: what is being typed, what has been said, and whether an answer
+ * is in flight. Read by the panel and nothing else — which is the whole point
+ * of it being its own context, since the panel renders over a view that must
+ * not repaint while a question is being typed into it.
+ */
+export interface StoreChat {
   chatBusy: boolean
   chatInput: string
   chatMessages: ChatMessage[]
 }
 
-export type Store = StoreData & StoreNav & StoreInput
+export type Store = StoreData & StoreNav & StoreInput & StoreChat
 
 const StoreDataContext = createContext<StoreData | null>(null)
 const StoreNavContext = createContext<StoreNav | null>(null)
 const StoreInputContext = createContext<StoreInput | null>(null)
+const StoreChatContext = createContext<StoreChat | null>(null)
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const source = useMemo(() => createDataSource(), [])
@@ -898,15 +917,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, chatOpen],
   )
 
-  const input = useMemo<StoreInput>(
-    () => ({ query, chatBusy, chatInput, chatMessages }),
-    [query, chatBusy, chatInput, chatMessages],
+  const input = useMemo<StoreInput>(() => ({ query }), [query])
+
+  const chat = useMemo<StoreChat>(
+    () => ({ chatBusy, chatInput, chatMessages }),
+    [chatBusy, chatInput, chatMessages],
   )
 
   return (
     <StoreDataContext.Provider value={data}>
       <StoreNavContext.Provider value={nav}>
-        <StoreInputContext.Provider value={input}>{children}</StoreInputContext.Provider>
+        <StoreInputContext.Provider value={input}>
+          <StoreChatContext.Provider value={chat}>{children}</StoreChatContext.Provider>
+        </StoreInputContext.Provider>
       </StoreNavContext.Provider>
     </StoreDataContext.Provider>
   )
@@ -927,19 +950,30 @@ export function useStoreNav(): StoreNav {
   return required(useContext(StoreNavContext), 'useStoreNav')
 }
 
-/** Search box and chat composer. Re-renders per keystroke — subscribe last. */
+/** The toolbar search box. Re-renders per keystroke — subscribe last. */
 export function useStoreInput(): StoreInput {
   return required(useContext(StoreInputContext), 'useStoreInput')
 }
 
 /**
- * All three at once. Convenient, and correspondingly expensive: a consumer of
- * this re-renders on every keystroke whether or not it reads `query`. Reach for
- * the narrow hooks in anything that renders more than a few nodes.
+ * The Ask panel's own state. Re-renders per keystroke in the composer, so this
+ * belongs to the panel — a view that reaches for it signs itself up to repaint
+ * while someone types a question over the top of it.
+ */
+export function useStoreChat(): StoreChat {
+  return required(useContext(StoreChatContext), 'useStoreChat')
+}
+
+/**
+ * All four at once. Convenient, and correspondingly expensive: a consumer of
+ * this re-renders on every keystroke in either typing surface, whether or not
+ * it reads either one. Reach for the narrow hooks in anything that renders more
+ * than a few nodes.
  */
 export function useStore(): Store {
   const data = useStoreData()
   const nav = useStoreNav()
   const input = useStoreInput()
-  return useMemo(() => ({ ...data, ...nav, ...input }), [data, nav, input])
+  const chat = useStoreChat()
+  return useMemo(() => ({ ...data, ...nav, ...input, ...chat }), [data, nav, input, chat])
 }

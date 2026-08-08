@@ -30,7 +30,7 @@ import { probeDocs, MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createMcpSource } from "./sources/mcp.mjs";
 import { mergeConcepts, resolveConcept } from "./resolver.mjs";
-import { searchConcepts } from "./search.mjs";
+import { searchConcepts, tokenizeQuery } from "./search.mjs";
 import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
 import { resolveSettings, walkLimitsFrom, validateSettingsPatch, settingsCatalog } from "./settings.mjs";
 import {
@@ -388,7 +388,7 @@ export function createEngineService({
   // key built from the current (name, level, generation) triple cannot outlive
   // what it describes.
   let graphMemo = null;      // { key, promise } — the O(corpus) half of /api/graph
-  // { key, hits: Map<"query\0limit", Promise<hits>> } — GET /api/search. One
+  // { key, hits: Map<"query limit", Promise<hits>> } — GET /api/search. One
   // query against unchanged content answers from the map; the whole map is
   // replaced (not merged) the instant `key` moves, same as graphMemo, because
   // a stale hit list is worse than a slow one. A promise lives in the map
@@ -695,7 +695,15 @@ export function createEngineService({
         entry.snap = snap;
         entry.status = "ready";
         entry.phase = "ready";
-        entry.lastSuccessAt = new Date().toISOString();
+        // A pass resolving is not proof the source was actually reachable —
+        // sources/github.mjs (and any adapter with health()) warn-and-continue
+        // on an API failure, returning [] rather than throwing, so the promise
+        // above still fulfills against a down repo. Only stamp our own record
+        // of success when the adapter's health() agrees the underlying read
+        // worked; a source with no health() of its own (okf-local, files) has
+        // no such signal to defer to, so it stamps unconditionally as before.
+        const health = typeof source.health === "function" ? source.health() : null;
+        if (!health || health.ok !== false) entry.lastSuccessAt = new Date().toISOString();
       })
       .catch((err) => {
         if (indexes.get(entry.key) !== entry) return;
@@ -1023,7 +1031,7 @@ export function createEngineService({
       if (p === "/api/status") { json(res, 200, statusApi()); return true; }
       if (p === "/api/resolve") { json(res, 200, await resolveOne(url.searchParams.get("concept"))); return true; }
       if (p === "/api/resolve-all") { json(res, 200, await resolveAllApi(waitParam(url))); return true; }
-      if (p === "/api/search") { json(res, 200, await searchApi(url)); return true; }
+      if (p === "/api/search") { json(res, 200, await searchApi(url, waitParam(url))); return true; }
       if (p === "/api/discrepancies" && req.method === "GET") {
         json(res, 200, await discrepanciesApi(waitParam(url)));
         return true;
@@ -1233,15 +1241,17 @@ export function createEngineService({
         // Enough for "last synced X, failed Y ago" without a second request.
         // lastErrorAt is null on sources that keep no health of their own
         // (local bundles, MCP children) — there is nothing to have failed.
-        // lastSuccessAt falls back to the index's own record of its last
-        // successful pass only for those same healthless sources — an
-        // adapter WITH health() (github) reports null there for exactly one
-        // reason, that it has never actually finished a successful index, and
-        // `??` would otherwise paper over that with the index's "the pass
-        // resolved" bookkeeping, which is true even when the pass resolved by
-        // warning and returning [] against an unreachable repo.
+        // lastSuccessAt prefers health()'s own record, but openSources()
+        // builds a fresh adapter on every manifest change, so a source that
+        // hasn't issued a request on THIS instance yet (its index entry was
+        // adopted, not re-read) reports null from health() even though it is
+        // serving a perfectly good snapshot. The entry's own lastSuccessAt is
+        // the fallback for exactly that case, and it is trustworthy now that
+        // startIndex only stamps it when health() (if the adapter has one)
+        // agreed the pass was a real success — never for a warn-and-continue
+        // that resolved by returning [] against an unreachable repo.
         lastErrorAt: health?.lastErrorAt ?? null,
-        lastSuccessAt: health ? (health.lastSuccessAt ?? null) : (lastSuccessAt ?? null),
+        lastSuccessAt: health?.lastSuccessAt ?? lastSuccessAt ?? null,
       };
     });
 
@@ -1469,7 +1479,7 @@ export function createEngineService({
   // adapter-shaped view over already-loaded snapshot concepts (searchSnapshotView)
   // instead of the live sources array, which is the one substitution that
   // keeps the ranking byte-identical while removing the disk/MCP reads.
-  async function searchApi(url) {
+  async function searchApi(url, waitMs = 0) {
     const query = url.searchParams.get("q");
     if (typeof query !== "string" || !query.trim()) throw httpError(400, "Provide ?q=<query>");
     let limit = 10;
@@ -1479,11 +1489,25 @@ export function createEngineService({
       if (!Number.isFinite(n) || n <= 0) throw httpError(400, "limit must be a positive number");
       limit = Math.min(Math.floor(n), 50);
     }
+    if (waitMs > 0) await awaitIndexes(waitMs);
     // Answer from whatever is indexed right now, same as buildGraph: a source
     // still on its first pass has no snapshot yet and simply contributes
-    // nothing, rather than failing the request or blocking on it.
+    // nothing, rather than failing the request or blocking on it. This route
+    // has no rows to carry that signal on, so it says so directly, with the
+    // same fields and meaning /api/graph and /api/resolve-all use — otherwise
+    // a search box on a big vault reads "no results" indistinguishably from a
+    // genuinely empty vault for the whole first index.
     const { entries } = ensureIndexes();
-    const contributing = entries.map(pinEntry).filter((p) => p.snap);
+    const pinned = entries.map(pinEntry);
+    const contributing = pinned.filter((p) => p.snap);
+    const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
+    const indexing = pending.length > 0;
+    // A query with no searchable token (all punctuation, e.g. "!!!") is a
+    // search that legitimately finds nothing — searchConcepts throws on it
+    // instead, because the MCP tools it also backs treat that as caller
+    // misuse. A search box gets the same honest empty answer any other
+    // no-match query gets, not a 500.
+    if (tokenizeQuery(query).length === 0) return { hits: [], indexing, indexingSources: pending };
     const key = contributingKey(contributing);
     if (!searchMemo || searchMemo.key !== key) searchMemo = { key, hits: new Map() };
     const cacheKey = `${query} ${limit}`;
@@ -1501,7 +1525,7 @@ export function createEngineService({
       searchMemo.hits.set(cacheKey, promise);
     }
     const hits = await promise;
-    return { hits };
+    return { hits, indexing, indexingSources: pending };
   }
 
   function decorateResolvedDispositions(resolved, decisions) {

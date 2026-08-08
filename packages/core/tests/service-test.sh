@@ -941,4 +941,226 @@ else
   fail "could not enter the window this assertion needs — the remote layer did not land during the graph build, so nothing below was actually gated ($PIN)"
 fi
 
-[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection + graph-cache freshness + /api/status + pinned generation + quarantine repair)" || { echo "service test FAILED"; exit 1; }
+echo "lastSuccessAt: a fresh adapter must not disown a healthy entry's real timestamp"
+# openSources() rebuilds every adapter on any manifest change (fresh `index`,
+# fresh health()), while the background index entry it hands the new adapter
+# to is carried over untouched when nothing about the layer itself changed.
+# Before the fix, /api/graph read lastSuccessAt from health() alone, so a
+# healthy remote source flipped to "never read" the moment an unrelated
+# source was added — with zero new requests and the source still serving 3
+# concepts fine. Driven against local fake GitHub APIs (not api.github.com)
+# so both directions are deterministic with or without network access:
+#   - a repo that always answers 200 (the "good" layer)
+#   - a repo whose apiBase is a port nothing listens on (the "down" layer,
+#     ECONNREFUSED — instant and network-independent, unlike a probe that
+#     depends on a real unreachable slug behaving the same online and off)
+cat > "$TMP/lastsuccessat.mjs" <<'EOF'
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const { createEngineService } = await import(pathToFileURL(process.env.SERVICE_MJS).href);
+
+const dir = process.argv[2];
+
+let apiCalls = 0;
+const FILE = "# Doc\n\n## Body\n\nfixture body.\n";
+const api = http.createServer((req, res) => {
+  apiCalls++;
+  const url = new URL(req.url, "http://localhost");
+  const json = (body) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+  if (url.pathname === "/repos/acme/good") return json({ default_branch: "main", pushed_at: "2026-07-01T00:00:00Z" });
+  if (url.pathname === "/repos/acme/good/git/trees/main") {
+    return json({ truncated: false, tree: [{ path: "README.md", type: "blob", size: FILE.length }] });
+  }
+  if (url.pathname === "/repos/acme/good/commits") return json([{ commit: { committer: { date: "2026-06-15T00:00:00Z" } } }]);
+  if (url.pathname === "/repos/acme/good/contents/README.md") {
+    res.writeHead(200, { "content-type": "text/plain", "content-length": Buffer.byteLength(FILE) });
+    return res.end(FILE);
+  }
+  res.writeHead(404, { "content-type": "application/json" });
+  res.end(JSON.stringify({ message: "Not Found" }));
+});
+await new Promise((r) => api.listen(0, "127.0.0.1", r));
+const apiBase = `http://127.0.0.1:${api.address().port}`;
+
+// A port nothing listens on: an instant, deterministic connection refusal
+// standing in for an unreachable repo, without depending on real network
+// access (a sandboxed test run has none).
+const deadServer = http.createServer();
+await new Promise((r) => deadServer.listen(0, "127.0.0.1", r));
+const deadApiBase = `http://127.0.0.1:${deadServer.address().port}`;
+await new Promise((r) => deadServer.close(r));
+
+const manifestPath = path.join(dir, "lastsuccessat-manifest.json");
+fs.writeFileSync(manifestPath, JSON.stringify({ layers: [
+  { name: "gh-good", level: 1, source: "github", repo: "acme/good", apiBase, paths: ["README.md"] },
+  { name: "gh-down", level: 1, source: "github", repo: "acme/down", apiBase: deadApiBase, paths: ["README.md"] },
+] }));
+
+const svc = createEngineService({ manifestPath });
+const server = http.createServer(async (req, res) => {
+  if (await svc.handleRequest(req, res)) return;
+  res.writeHead(404); res.end();
+});
+await new Promise((r) => server.listen(0, "127.0.0.1", r));
+const base = `http://127.0.0.1:${server.address().port}`;
+const graph = async () => (await fetch(base + "/api/graph?wait=8000")).json();
+
+const g1 = await graph();
+const good1 = g1.sources.find((s) => s.name === "gh-good");
+const down1 = g1.sources.find((s) => s.name === "gh-down");
+const callsAfterFirstRead = apiCalls;
+
+// The unrelated manifest change the finding is about: adding a local layer
+// that has nothing to do with either GitHub layer.
+const localDir = path.join(dir, "lastsuccessat-unrelated");
+fs.mkdirSync(localDir, { recursive: true });
+fs.writeFileSync(path.join(localDir, "n.md"), "# N\n\n## Body\n\nlocal.\n");
+await fetch(base + "/api/sources", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ kind: "files", name: "unrelated", level: 3, path: localDir }),
+});
+
+const g2 = await graph();
+const good2 = g2.sources.find((s) => s.name === "gh-good");
+const down2 = g2.sources.find((s) => s.name === "gh-down");
+
+svc.close(); server.close(); api.close();
+// good1's lastSuccessAt can legitimately differ from good2's by a few ms even
+// with ZERO new requests: good1 may read it from the still-live first adapter's
+// own health() (index.at, stamped mid-pass when the tree fetch resolved),
+// while good2's fresh post-rebuild adapter has never read anything and falls
+// back to the entry's own stamp (set once the whole pass finished loading and
+// tokenizing every concept, a little later in the same pass). Both are real
+// timestamps from the one successful read — the bug this pins is the fresh
+// adapter's health() clobbering that fallback with a bare null, not a few
+// milliseconds of skew between two honest clocks on the same event.
+const closeInTime = good1?.lastSuccessAt != null && good2?.lastSuccessAt != null
+  && Math.abs(new Date(good2.lastSuccessAt) - new Date(good1.lastSuccessAt)) < 5000;
+console.log(JSON.stringify({
+  goodFirstOk: good1?.status === "ok",
+  goodFirstIso: typeof good1?.lastSuccessAt === "string" && new Date(good1.lastSuccessAt).toISOString() === good1.lastSuccessAt,
+  downFirstDegraded: down1?.status === "degraded",
+  downFirstNullSuccess: down1?.lastSuccessAt === null,
+  downFirstHasErrorAt: typeof down1?.lastErrorAt === "string",
+  callsAfterFirstRead,
+  callsAfterUnrelatedAdd: apiCalls,
+  goodKeptTimestamp: closeInTime,
+  downStillNull: down2?.lastSuccessAt === null,
+}));
+EOF
+LSA="$(node "$TMP/lastsuccessat.mjs" "$TMP" 2>&1 | tail -1)"
+grep -q '"goodFirstOk":true' <<<"$LSA" && pass "a reachable github layer reads ok" || fail "reachable github layer did not read ok ($LSA)"
+grep -q '"goodFirstIso":true' <<<"$LSA" && pass "a reachable github layer stamps a real ISO lastSuccessAt" || fail "reachable github layer did not stamp lastSuccessAt ($LSA)"
+grep -q '"downFirstDegraded":true' <<<"$LSA" && pass "an unreachable github layer (dead port) reads degraded" || fail "unreachable github layer not degraded ($LSA)"
+grep -q '"downFirstNullSuccess":true' <<<"$LSA" && pass "an unreachable github layer never fabricates a lastSuccessAt on its first pass" || fail "unreachable github layer fabricated lastSuccessAt ($LSA)"
+grep -q '"downFirstHasErrorAt":true' <<<"$LSA" && pass "an unreachable github layer reports lastErrorAt" || fail "unreachable github layer missing lastErrorAt ($LSA)"
+grep -q '"goodKeptTimestamp":true' <<<"$LSA" \
+  && pass "a healthy github source still reports a real lastSuccessAt across an unrelated manifest change" \
+  || fail "REGRESSION: an unrelated manifest change made a healthy github source read 'never read' ($LSA)"
+CALLS_BEFORE="$(JQ 'd.callsAfterFirstRead' <<<"$LSA" 2>/dev/null)"
+[ "$(node -e '
+  const d = JSON.parse(process.argv[1]);
+  process.stdout.write(String(d.callsAfterUnrelatedAdd === d.callsAfterFirstRead));
+' "$LSA")" = "true" ] && pass "the unrelated manifest change made zero new requests to the github fixture" || fail "an unrelated manifest change re-read a github layer that did not change ($LSA)"
+grep -q '"downStillNull":true' <<<"$LSA" && pass "an unreachable github source still reports null lastSuccessAt after an unrelated manifest change" || fail "unreachable github source's lastSuccessAt changed after an unrelated change ($LSA)"
+
+echo "/api/search: partial-index honesty and a token-free query"
+# /api/search used to answer from whatever snapshots happened to exist yet,
+# with no signal that the index was incomplete, and to ignore ?wait= entirely
+# — the one route in this file that did not follow the rule /api/graph and
+# /api/resolve-all already follow (CLAUDE.md: aggregate reads report
+# indexing/indexingSources, and ?wait= is how a caller asks for a settled
+# answer). Driven with an MCP source gated on a marker file so "still on its
+# first pass" is deterministic rather than a race against a real disk walk.
+cat > "$TMP/search-blocked.mjs" <<EOF
+import readline from "node:readline";
+import fs from "node:fs";
+const RELEASE = $(node -e 'console.log(JSON.stringify(process.argv[1]))' "$TMP/search-blocked-release");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const write = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+rl.on("line", async (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  if (msg.method === "initialize") return write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "blocked", version: "0" } } });
+  if (msg.method === "notifications/initialized") return;
+  if (msg.method === "tools/list") return write({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "list_nodes" }, { name: "get_node" }] } });
+  if (msg.method === "tools/call") {
+    const { name } = msg.params ?? {};
+    if (name === "list_nodes") {
+      while (!fs.existsSync(RELEASE)) await sleep(30);
+      return write({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify({ nodes: ["needle"] }) }] } });
+    }
+    if (name === "get_node") {
+      return write({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify({ node: "needle", title: "Needle", kind: "note", facts: [{ topic: "Body", text: "a very particular searchable needle term.", lastTouched: "2026-06-01" }] }) }] } });
+    }
+  }
+});
+EOF
+cat > "$TMP/search-partial.mjs" <<'EOF'
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const { createEngineService } = await import(pathToFileURL(process.env.SERVICE_MJS).href);
+
+const dir = process.argv[2];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const RELEASE = path.join(dir, "search-blocked-release");
+const childPath = path.join(dir, "search-blocked.mjs");
+
+const manifestPath = path.join(dir, "search-blocked-manifest.json");
+fs.writeFileSync(manifestPath, JSON.stringify({
+  layers: [{ name: "blocked", level: 1, source: "mcp", command: "node", args: [childPath] }],
+}));
+
+const svc = createEngineService({ manifestPath });
+const server = http.createServer(async (req, res) => {
+  if (await svc.handleRequest(req, res)) return;
+  res.writeHead(404); res.end();
+});
+await new Promise((r) => server.listen(0, "127.0.0.1", r));
+const base = `http://127.0.0.1:${server.address().port}`;
+const getJson = async (p) => { const r = await fetch(base + p); return { status: r.status, body: await r.json() }; };
+
+// The first pass is already in flight the instant ensureIndexes runs inside
+// this very request, so the first call both starts it and observes it
+// mid-flight — deterministic, not a race.
+const early = await getJson("/api/search?q=needle");
+
+const waited = getJson("/api/search?q=needle&wait=15000");
+await sleep(400);
+fs.writeFileSync(RELEASE, "go");
+const late = await waited;
+
+const punctuation = await getJson("/api/search?q=" + encodeURIComponent("!!!"));
+
+svc.close(); server.close();
+console.log(JSON.stringify({
+  earlyStatus: early.status,
+  earlyHits: early.body.hits?.length ?? -1,
+  earlyIndexing: early.body.indexing,
+  earlyIndexingSources: early.body.indexingSources,
+  lateStatus: late.status,
+  lateHitsFound: (late.body.hits ?? []).some((h) => h.id === "needle"),
+  lateIndexing: late.body.indexing,
+  punctuationStatus: punctuation.status,
+  punctuationHits: punctuation.body.hits,
+  punctuationIndexing: punctuation.body.indexing,
+}));
+EOF
+SRCH="$(node "$TMP/search-partial.mjs" "$TMP" 2>&1 | tail -1)"
+grep -q '"earlyStatus":200' <<<"$SRCH" && pass "a search mid-first-index still answers 200" || fail "search mid-index did not answer 200 ($SRCH)"
+grep -q '"earlyHits":0' <<<"$SRCH" && pass "a search against an unindexed source answers no hits, not a crash" || fail "search mid-index hit count wrong ($SRCH)"
+grep -q '"earlyIndexing":true' <<<"$SRCH" && pass "search reports indexing:true while its only source is still on its first pass" || fail "search hid a partial index ($SRCH)"
+grep -q '"earlyIndexingSources":\["blocked"\]' <<<"$SRCH" && pass "search names the still-indexing source" || fail "search did not name the pending source ($SRCH)"
+grep -q '"lateStatus":200' <<<"$SRCH" && pass "?wait= eventually answers 200" || fail "waited search did not answer 200 ($SRCH)"
+grep -q '"lateHitsFound":true' <<<"$SRCH" && pass "?wait= holds for the index to settle, then returns the real hit" || fail "?wait= on /api/search did not wait for the index ($SRCH)"
+grep -q '"lateIndexing":false' <<<"$SRCH" && pass "once settled, search reports indexing:false" || fail "search still claimed indexing after ?wait= settled ($SRCH)"
+grep -q '"punctuationStatus":200' <<<"$SRCH" && pass "a query with no searchable token answers 200, not 500" || fail "a token-free query still 500s ($SRCH)"
+grep -q '"punctuationHits":\[\]' <<<"$SRCH" && pass "a token-free query answers an empty hit list" || fail "a token-free query did not answer an empty hit list ($SRCH)"
+
+[ "$FAILED" = 0 ] && echo "service test passed (bearer gate + allowMutations + fall-through + CRUD reload + console mount + github-rest + v2 reads + mcp health + clone cleanup + section guard + credential injection + graph-cache freshness + /api/status + pinned generation + quarantine repair + lastSuccessAt correctness + partial-index search)" || { echo "service test FAILED"; exit 1; }

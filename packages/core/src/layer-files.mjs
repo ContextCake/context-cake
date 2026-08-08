@@ -91,7 +91,20 @@ async function walkAll(root, limits) {
   while (stack.length > 0) {
     const dir = stack.pop();
     let dirents;
-    try { dirents = await fsp.readdir(dir, { withFileTypes: true }); } catch { continue; }
+    try {
+      dirents = await fsp.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      // The layer ROOT failing to read is a different fact from an ordinary
+      // subdirectory vanishing mid-walk — same distinction okf-local's
+      // walkDocs draws for the indexer. Losing the root means there is
+      // nothing left behind this layer at all, not the empty-folder answer a
+      // deleted folder used to get, indistinguishable from one that was
+      // simply never populated.
+      if (dir === root && (err.code === "ENOENT" || err.code === "ENOTDIR")) {
+        throw new Error(`Layer folder no longer exists: ${root}`);
+      }
+      continue;
+    }
     for (const dirent of dirents) {
       if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
       if (++scanned > maxEntries) { truncated = true; break; }
@@ -110,19 +123,33 @@ async function walkAll(root, limits) {
 export async function listFilesApi(roots, limits) {
   const layers = [];
   for (const [layer, { root, kind }] of roots) {
-    const { files, truncated } = await walkAll(root, limits);
-    layers.push({
-      layer,
-      kind,
-      root,
-      fileCount: files.length,
-      truncated,
-      files: files.map((abs) => {
-        const rel = toPosix(path.relative(root, abs));
-        const ext = path.extname(abs).toLowerCase();
-        return { path: `${layer}/${rel}`, name: path.basename(abs), rel, ext, kind: fileKind(ext), markdown: MARKDOWN_EXT.has(ext) };
-      }),
-    });
+    try {
+      const { files, truncated } = await walkAll(root, limits);
+      layers.push({
+        layer,
+        kind,
+        root,
+        fileCount: files.length,
+        truncated,
+        // Additive, and null on the common path: a layer whose folder is
+        // genuinely empty (or a subfolder that merely vanished mid-walk, which
+        // walkAll already skips over) is not an error and says so.
+        error: null,
+        files: files.map((abs) => {
+          const rel = toPosix(path.relative(root, abs));
+          const ext = path.extname(abs).toLowerCase();
+          return { path: `${layer}/${rel}`, name: path.basename(abs), rel, ext, kind: fileKind(ext), markdown: MARKDOWN_EXT.has(ext) };
+        }),
+      });
+    } catch (err) {
+      // Read around, never crash the whole listing: one layer whose folder
+      // moved or was deleted must not blank every other layer's files. The row
+      // still appears — with `error` set and `fileCount: 0` — rather than
+      // silently taking on the empty-folder shape a genuinely empty layer
+      // reports, which used to read as "add a note and it appears here" for a
+      // folder that no longer exists.
+      layers.push({ layer, kind, root, fileCount: 0, truncated: false, error: err.message, files: [] });
+    }
   }
   return { layers };
 }

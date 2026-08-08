@@ -19,6 +19,11 @@ const REASONS: { value: AcknowledgementReason; label: string }[] = [
   { value: 'source_specific_authority', label: 'Source-specific authority' },
   { value: 'other', label: 'Other' },
 ]
+// Broken-link-only: acknowledging why a link target doesn't exist yet is a
+// distinct reason from the general four above. The engine's allowedReasons
+// set (service.mjs) already accepts this value — verified before adding it
+// here, since the UI must never offer a reason the API would 400.
+const TARGET_MISSING_REASON: { value: AcknowledgementReason; label: string } = { value: 'target_missing', label: 'Target not created yet' }
 
 function formatDate(value?: string | null) {
   if (!value) return 'Date not recorded'
@@ -140,17 +145,32 @@ function DecisionPanel({ conflict, onClose }: { conflict: Conflict; onClose: () 
   const { mode, decideDiscrepancy, setDiscrepancyPriority, resolvingConflict, resolutionError, openFilesScope } = useStoreData()
   const [action, setAction] = useState<'choose_contribution' | 'compose' | 'acknowledge'>('choose_contribution')
   const [selectedSource, setSelectedSource] = useState(conflict.effectiveSource ?? conflict.contributions[0]?.sourceLayer ?? '')
-  const [content, setContent] = useState(conflict.contributions[0]?.value ?? '')
+  // Starts EMPTY, never pre-filled with an existing contributor's value. A
+  // compose field seeded with the old answer let a caret-position edit submit
+  // old+new concatenated as the "reconciled" content — real on-disk
+  // corruption in QA. "Start from <source>" below is the only way old content
+  // enters this field, and it is an explicit click, never automatic.
+  const [content, setContent] = useState('')
   const [reasonCode, setReasonCode] = useState<AcknowledgementReason | ''>('')
   const [note, setNote] = useState('')
   const [preview, setPreview] = useState(false)
   const busy = resolvingConflict === conflict.id
   const cannotWrite = conflict.kind === 'broken_link'
+  // The engine 400s a compose against an array-typed frontmatter value (a
+  // list field) — service.mjs rejects it outright. Disable the disposition
+  // here instead of round-tripping into that error.
+  const composeDisabled = conflict.kind === 'frontmatter_value' && conflict.isList === true
+  const isFrontmatterValue = conflict.kind === 'frontmatter_value'
+  const winningSource = conflict.effectiveSource ?? conflict.contributions[0]?.sourceLayer ?? null
+  const winningValue = conflict.contributions.find((item) => item.sourceLayer === winningSource)?.value
+  const reasonOptions = conflict.kind === 'broken_link'
+    ? [...REASONS.slice(0, -1), TARGET_MISSING_REASON, REASONS[REASONS.length - 1]]
+    : REASONS
 
   useEffect(() => {
     setAction('choose_contribution')
     setSelectedSource(conflict.effectiveSource ?? conflict.contributions[0]?.sourceLayer ?? '')
-    setContent(conflict.contributions[0]?.value ?? '')
+    setContent('')
     setReasonCode('')
     setNote('')
     setPreview(false)
@@ -171,12 +191,29 @@ function DecisionPanel({ conflict, onClose }: { conflict: Conflict; onClose: () 
       {resolutionError && <div className="cc-conflict-error" role="alert"><strong>Decision not applied.</strong> {resolutionError.message}</div>}
       <fieldset>
         <legend>Choose a safe disposition</legend>
-        <label><input type="radio" checked={action === 'choose_contribution'} disabled={cannotWrite} onChange={() => setAction('choose_contribution')} /> <span><strong>Use this answer everywhere</strong><small>Propagate one existing answer to every writable contributor.</small></span></label>
+        <label><input type="radio" name="cc-disposition" checked={action === 'choose_contribution'} disabled={cannotWrite} onChange={() => setAction('choose_contribution')} /> <span><strong>Use this answer everywhere</strong><small>Propagate one existing answer to every writable contributor.</small></span></label>
         {action === 'choose_contribution' && <select aria-label="Answer to use" value={selectedSource} onChange={(event) => setSelectedSource(event.target.value)}>{conflict.contributions.map((item) => <option key={item.sourceLayer} value={item.sourceLayer}>{item.sourceLayer}</option>)}</select>}
-        <label><input type="radio" checked={action === 'compose'} disabled={cannotWrite} onChange={() => setAction('compose')} /> <span><strong>Write a reconciled answer</strong><small>Compose a new Markdown value and propagate it to writable contributors.</small></span></label>
-        {action === 'compose' && <div className="cc-compose"><textarea aria-label="Reconciled Markdown" value={content} onChange={(event) => setContent(event.target.value)} /><button type="button" onClick={() => setPreview((value) => !value)}>{preview ? 'Edit Markdown' : 'Preview Markdown'}</button>{preview && <Markdown className="cc-compose-preview" source={content} />}</div>}
-        <label><input type="radio" checked={action === 'acknowledge'} onChange={() => setAction('acknowledge')} /> <span><strong>Keep the scoped difference</strong><small>Write no source content; record why the difference is intentional.</small></span></label>
-        {action === 'acknowledge' && <div className="cc-acknowledge"><select aria-label="Acknowledgement reason" value={reasonCode} onChange={(event) => setReasonCode(event.target.value as AcknowledgementReason)}><option value="">Choose a required reason…</option>{REASONS.map((reason) => <option key={reason.value} value={reason.value}>{reason.label}</option>)}</select><textarea aria-label="Optional local note" placeholder="Optional local note (never learned into a rule)" value={note} onChange={(event) => setNote(event.target.value)} /></div>}
+        <label><input type="radio" name="cc-disposition" checked={action === 'compose'} disabled={cannotWrite || composeDisabled} onChange={() => setAction('compose')} /> <span><strong>Write a reconciled answer</strong><small>{isFrontmatterValue ? 'Compose a new value and propagate it to writable contributors.' : 'Compose a new Markdown value and propagate it to writable contributors.'}</small></span></label>
+        {composeDisabled && <p className="cc-callout">This field is a list — pick an existing answer or edit the file directly.</p>}
+        {action === 'compose' && (
+          <div className="cc-compose">
+            <textarea
+              aria-label={isFrontmatterValue ? 'Reconciled value' : 'Reconciled Markdown'}
+              placeholder="Write the reconciled answer — it replaces every writable contributor's value"
+              value={content}
+              onChange={(event) => setContent(event.target.value)}
+            />
+            <div className="cc-compose-actions">
+              {winningSource && typeof winningValue === 'string' && !content && (
+                <button type="button" onClick={() => setContent(winningValue)}>Start from {winningSource}</button>
+              )}
+              {!isFrontmatterValue && <button type="button" onClick={() => setPreview((value) => !value)}>{preview ? 'Edit Markdown' : 'Preview Markdown'}</button>}
+            </div>
+            {!isFrontmatterValue && preview && <Markdown className="cc-compose-preview" source={content} />}
+          </div>
+        )}
+        <label><input type="radio" name="cc-disposition" checked={action === 'acknowledge'} onChange={() => setAction('acknowledge')} /> <span><strong>Keep the scoped difference</strong><small>Write no source content; record why the difference is intentional.</small></span></label>
+        {action === 'acknowledge' && <div className="cc-acknowledge"><select aria-label="Acknowledgement reason" value={reasonCode} onChange={(event) => setReasonCode(event.target.value as AcknowledgementReason)}><option value="">Choose a required reason…</option>{reasonOptions.map((reason) => <option key={reason.value} value={reason.value}>{reason.label}</option>)}</select><textarea aria-label="Optional local note" placeholder="Optional local note (never learned into a rule)" value={note} onChange={(event) => setNote(event.target.value)} /></div>}
       </fieldset>
       {cannotWrite && <p className="cc-callout">Broken links require a source edit. Open the contributing file, or acknowledge why this link is intentionally unresolved.</p>}
       {!!conflict.affectedLinks?.length && (
@@ -187,7 +224,7 @@ function DecisionPanel({ conflict, onClose }: { conflict: Conflict; onClose: () 
       )}
       <label className="cc-priority-assign"><span>Review priority</span><select aria-label="Assign priority" value={conflict.priority ?? 'unassigned'} onChange={(event) => void setDiscrepancyPriority(conflict.id, event.target.value)}><option value="unassigned">Unassigned</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></label>
       <div className="cc-decision-actions">
-        <button type="button" className="cc-button-primary" disabled={busy || (action === 'acknowledge' && !reasonCode) || (action === 'compose' && !content.trim()) || (action === 'choose_contribution' && cannotWrite)} onClick={() => void submit()}>
+        <button type="button" className="cc-button-primary" disabled={busy || (action === 'acknowledge' && !reasonCode) || (action === 'compose' && (composeDisabled || !content.trim())) || (action === 'choose_contribution' && cannotWrite)} onClick={() => void submit()}>
           {busy ? 'Applying…' : mode === 'demo' ? action === 'choose_contribution' ? `Simulate using ${selectedSource}` : action === 'compose' ? 'Simulate reconciled answer' : 'Simulate acknowledgement' : action === 'choose_contribution' ? `Use ${selectedSource} everywhere` : action === 'compose' ? 'Write reconciled answer' : 'Acknowledge difference'}
         </button>
         {conflict.contributions.map((item) => <button type="button" key={item.sourceLayer} onClick={() => openFilesScope(item.sourceLayer)}>Open {item.sourceLayer} files</button>)}
@@ -215,7 +252,7 @@ function Rules() {
 }
 
 function ConflictsInner() {
-  const { mode, conflicts, setSelConflict } = useStoreData()
+  const { mode, conflicts, setSelConflict, setQuery } = useStoreData()
   const { selConflict } = useStoreNav()
   const { query } = useStoreInput()
   const [status, setStatus] = useState('actionable')
@@ -237,7 +274,7 @@ function ConflictsInner() {
     const statusMatch = status === 'all' || (status === 'actionable' ? ['needs_review', 'reopened'].includes(displayStatus) : status === 'automated' ? ['auto_ready', 'blocked'].includes(displayStatus) : displayStatus === status)
     return statusMatch && (kind === 'all' || item.kind === kind)
       && (owner === 'all' || (item.owner ?? 'Unassigned') === owner)
-      && (source === 'all' || item.contributions.some((entry) => entry.sourceLayer === source))
+      && (source === 'all' || item.effectiveSource === source || item.contributions.some((entry) => entry.sourceLayer === source))
       && (priority === 'all' || (item.priority ?? 'unassigned') === priority)
       && (!newerOnly || item.contributions.some((entry) => entry.fresherDissent))
       && (!normalizedQuery || [item.concept, item.title, item.section, item.owner, item.kind, ...item.contributions.flatMap((entry) => [entry.sourceLayer, entry.value])].some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery)))
@@ -270,7 +307,9 @@ function ConflictsInner() {
       <div ref={detail.containerRef} className="cc-conflict-layout cc-navigator-detail">
         <div ref={listRef} className="cc-conflict-list" role="listbox" aria-label="Discrepancies" onKeyDown={onListKeyDown}>
           {visible.map((item) => { const selectedRow = item.id === selected?.id; const displayStatus = item.discrepancyStatus ?? 'needs_review'; return <button type="button" role="option" aria-selected={selectedRow} tabIndex={selectedRow ? 0 : -1} key={item.id} className="cc-conflict-row" data-selected={selectedRow} onClick={(event) => { selectedButton.current = event.currentTarget; setSelConflict(item.id); setDetailOpen(true) }}><span className="cc-conflict-row-top"><span className="cc-kind-pill">{KIND_LABEL[item.kind ?? 'section_content']}</span><span className="cc-conflict-row-status">{STATUS_LABEL[displayStatus]}</span></span><span className="cc-conflict-row-title">{item.section}</span><code>{item.concept}</code><span className="cc-conflict-row-foot"><span>{item.owner ?? 'Unassigned'} · {item.priority ?? 'unassigned'} priority</span><span>{item.contributions.length} sources</span></span></button> })}
-          {!visible.length && <div className="cc-conflict-empty"><strong>No discrepancies in this view</strong><p>Adjust the filters or return to Needs review.</p></div>}
+          {!visible.length && (normalizedQuery
+            ? <div className="cc-conflict-empty"><strong>No matches for &quot;{query.trim()}&quot; in this status.</strong><p>The search keeps filtering across status tabs until cleared.</p><button type="button" onClick={() => setQuery('')}>Clear search</button></div>
+            : <div className="cc-conflict-empty"><strong>No discrepancies in this view</strong><p>Adjust the filters or return to Needs review.</p></div>)}
         </div>
         {selected && <section ref={detail.panelRef} {...detail.panelProps} className="cc-conflict-detail cc-navigator-detail-panel" data-open={detailOpen || undefined} aria-label={`${selected.title} discrepancy detail`}><button type="button" className="cc-detail-close" onClick={() => { setDetailOpen(false); requestAnimationFrame(() => selectedButton.current?.focus({ preventScroll: true })) }}>Close</button><div className="cc-discrepancy-path"><code>{selected.concept}</code><span>{selected.section}</span></div><div className="cc-discrepancy-title"><div><span className="cc-kind-pill">{KIND_LABEL[selected.kind ?? 'section_content']}</span><h2>Why this needs attention</h2></div><span className="cc-status-large">{STATUS_LABEL[selected.discrepancyStatus ?? 'needs_review']}</span></div><p className="cc-discrepancy-explanation">{selected.kind === 'broken_link' ? `The effective content links to ${selected.target}, but no settled source currently provides that concept.` : selected.kind === 'frontmatter_value' ? `Multiple contributors author different values for “${selected.section}”.` : selected.kind === 'changed_after_decision' ? 'A contributor changed after the previous decision, so the discrepancy reopened automatically.' : `Multiple contributors give materially different answers for “${selected.section}”.`}</p><div className="cc-evidence-grid"><div><span>Effective source</span><strong>{selected.effectiveSource ?? 'None'}</strong></div><div><span>Why it won</span><strong>{selected.winnerReason}</strong></div><div><span>Owner</span><strong>{selected.owner ?? 'Unassigned'}</strong></div><div><span>Source health</span><strong>{selected.sourceHealth?.every((item) => item?.status === 'ok') ? 'All healthy' : 'Needs attention'}</strong></div></div>{selected.ruleConflict && <div className="cc-conflict-error" role="alert"><strong>Rule conflict.</strong> Matching rules disagree, so no automatic action will run.</div>}{selected.matchingRules?.map((rule) => <div className="cc-rule-match" key={rule.id}>Matched {rule.scope} {rule.mode} rule <code>{rule.id}</code> from {rule.evidenceDecisionIds.length} decisions.</div>)}<section><h3>Compare every answer</h3><div className="cc-answer-stack">{selected.contributions.map((choice) => <SourceAnswer key={choice.sourceLayer} choice={choice} effective={selected.contributions.find((item) => item.sourceLayer === selected.effectiveSource)?.value ?? selected.contributions[0]?.value ?? ''} isEffective={choice.sourceLayer === selected.effectiveSource} />)}</div></section>{!['resolved', 'acknowledged'].includes(selected.discrepancyStatus ?? '') && <DecisionPanel conflict={selected} onClose={() => setDetailOpen(false)} />}<section><h3>Decision history</h3>{mode === 'demo' && <p className="cc-muted">Simulation history resets on reload.</p>}<History conflict={selected} /></section></section>}
       </div>

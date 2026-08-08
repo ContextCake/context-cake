@@ -8,7 +8,8 @@
 //   GET  /api/files                 → { layers: [{ layer, kind, root, fileCount, files[] }] }
 //   GET  /api/file?path=<l>/<rel>   → { path, layer, rel, ext, kind, editable, text? }
 //   GET  /api/file/raw?path=…       → the bytes (images/PDF preview)
-//   PUT  /api/file                  → { path, text, modified? } overwrite an existing text file
+//   PUT  /api/file                  → { path, text, modified } overwrite an existing text file
+//                                      (modified required unless force: true)
 //   PUT  /api/section               → write one resolved section across layers
 //
 // Every path is resolved against its layer root and checked with
@@ -185,8 +186,18 @@ export async function writeFileApi(rawBody, roots) {
   let stat;
   try { stat = await fsp.stat(abs); } catch { throw httpError(404, `Refusing to create new files: ${apiPath}`); }
   if (!stat.isFile()) throw httpError(400, `Not a file: ${apiPath}`);
-  if (body.modified !== undefined && body.modified !== stat.mtime.toISOString()) {
-    throw httpError(409, `This file changed on disk after you opened it. Reopen ${apiPath} and merge your edit.`);
+  // `modified` used to be optional, which meant a client that forgot to send
+  // it silently skipped the stale-editor check below and overwrote whatever
+  // changed on disk since it last read the file. It is required now — the
+  // caller must either name the version it read (from GET /api/file) or say
+  // out loud that it means to overwrite regardless.
+  if (body.force !== true) {
+    if (body.modified === undefined) {
+      throw httpError(400, `Provide modified: the file's last-read modified timestamp (from GET /api/file), or force: true to overwrite deliberately.`);
+    }
+    if (body.modified !== stat.mtime.toISOString()) {
+      throw httpError(409, `This file changed on disk after you opened it. Reopen ${apiPath} and merge your edit.`);
+    }
   }
   await fsp.writeFile(abs, body.text, "utf8");
   const after = await fsp.stat(abs);

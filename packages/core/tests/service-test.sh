@@ -126,13 +126,40 @@ code 401 "$(C -H 'Authorization: Bearer      ' "$BASE/api/graph")" "all-whitespa
 G="$(curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const g=JSON.parse(s);process.stdout.write(`${g.tokenizer}:${g.totals.sources}:${g.totals.sourceTokens>0}`)})')"
 [ "$G" = "o200k_base:1:true" ] && pass "graph payload intact behind auth" || fail "graph payload ($G)"
 # A source with no health of its own (a local bundle) reports plain "ok" and
-# null health fields — "degraded" is reserved for an adapter that says so.
-H="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s).sources[0];process.stdout.write(`${x.status}:${x.error}:${x.lastErrorAt}:${x.lastSuccessAt}`)})')"
-[ "$H" = "ok:null:null:null" ] && pass "healthless source reports plain ok" || fail "local source health shape ($H)"
+# no error — "degraded" is reserved for an adapter that says so. lastSuccessAt
+# still gets set, from the index's own record of its last successful pass
+# rather than from health() (which this source has none of).
+H="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s).sources[0];process.stdout.write(`${x.status}:${x.error}:${x.lastErrorAt}:${x.lastSuccessAt!==null}`)})')"
+[ "$H" = "ok:null:null:true" ] && pass "healthless source reports plain ok, with its own lastSuccessAt" || fail "local source health shape ($H)"
 code 401 "$(C "$BASE/api/resolve?concept=note")" "resolve without header rejected"
 code 200 "$(C "${AUTH[@]}" "$BASE/api/resolve?concept=note")" "resolve with Bearer accepted"
 code 401 "$(C "$BASE/api/host-only")" "unknown /api/* path still gated without token"
 code 401 "$(C "$BASE/api/files")" "layer file API gated without token"
+
+echo "GET /api/search (F4)"
+code 401 "$(C "$BASE/api/search?q=hello")" "search without header rejected"
+code 400 "$(C "${AUTH[@]}" "$BASE/api/search")" "search with no q is refused"
+code 400 "$(C "${AUTH[@]}" "$BASE/api/search?q=")" "search with an empty q is refused"
+SR="$(curl -s "${AUTH[@]}" "$BASE/api/search?q=hello")"
+[ "$(JQ 'String(d.hits.length > 0 && d.hits[0].id === "note")' <<<"$SR")" = "true" ] && pass "search finds the seeded concept" || fail "search hit ($SR)"
+[ "$(JQ 'String(Array.isArray(d.hits[0].layers))' <<<"$SR")" = "true" ] && pass "hits carry the shape searchConcepts returns" || fail "search hit shape ($SR)"
+code 200 "$(C "${AUTH[@]}" "$BASE/api/search?q=hello&limit=1")" "search honors an explicit limit"
+code 400 "$(C "${AUTH[@]}" "$BASE/api/search?q=hello&limit=-1")" "a non-positive limit is refused"
+
+echo "hidden-entry skips are counted, never indexed (F17)"
+mkdir -p "$TMP/hidden/.obsidian" "$TMP/hidden/.git"
+printf '# Visible\n\n## Body\n\nvisible content.\n' > "$TMP/hidden/visible.md"
+printf '# Should never index\n\n## Body\n\nhidden content.\n' > "$TMP/hidden/.obsidian/workspace.md"
+code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"hidden\",\"level\":1,\"path\":\"$TMP/hidden\"}" "$BASE/api/sources")" "add a source with dot-dirs beside real content"
+HID=""
+for _ in $(seq 1 60); do
+  HID="$(curl -s "${AUTH[@]}" "$BASE/api/status")"
+  [ "$(JQ 'd.sources.find((s) => s.name === "hidden")?.status ?? ""' <<<"$HID")" = "ok" ] && break
+  sleep 0.1
+done
+[ "$(JQ 'String(d.sources.find((s) => s.name === "hidden")?.conceptCount)' <<<"$HID")" = "1" ] && pass "only the visible document is indexed" || fail "hidden folder indexed wrong count ($HID)"
+[ "$(JQ 'String(d.sources.find((s) => s.name === "hidden")?.skippedHidden >= 2)' <<<"$HID")" = "true" ] && pass "/api/status counts the skipped dot-dirs" || fail "skippedHidden missing or wrong ($HID)"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=hidden")" "cleanup hidden-entry source"
 
 echo "console mount is static UI, not gated data"
 curl -s "$BASE/console/" | grep -q CONSOLE_OK && pass "/console/ serves without auth" || fail "/console/ without auth"

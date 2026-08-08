@@ -30,6 +30,7 @@ import { probeDocs, MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createMcpSource } from "./sources/mcp.mjs";
 import { mergeConcepts, resolveConcept } from "./resolver.mjs";
+import { searchConcepts } from "./search.mjs";
 import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
 import { resolveSettings, walkLimitsFrom, validateSettingsPatch, settingsCatalog } from "./settings.mjs";
 import {
@@ -148,7 +149,7 @@ async function snapshotSource(source, entry, signal = null) {
   // `notes` rides along the same way: what a walk had to leave out — a document
   // over the size cap, a subtree it lacks permission to read — belongs on the
   // snapshot, because the row the user sees is built from the snapshot.
-  const notes = { skipped: [], unreadable: [] };
+  const notes = { skipped: [], unreadable: [], hidden: 0 };
   const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds({ signal, notes }) : [];
   throwIfAborted();
   entry.phase = "loading";
@@ -178,7 +179,7 @@ async function snapshotSource(source, entry, signal = null) {
   // buildGraph key a memo on live state instead of on invalidation events.
   return {
     ids, concepts, tokens, tokensById, gen: ++SNAPSHOT_SEQ,
-    skipped: notes.skipped, unreadable: notes.unreadable,
+    skipped: notes.skipped, unreadable: notes.unreadable, hidden: notes.hidden,
   };
 }
 
@@ -616,7 +617,9 @@ export function createEngineService({
    * instead of cancelling, and the entry owes exactly one follow-up when this
    * pass lands (see scheduleFollowUp for when it actually runs).
    */
-  function startIndex(source, key, settings, { validity = null, previousSnap = null, passes = 1 } = {}) {
+  function startIndex(source, key, settings, {
+    validity = null, previousSnap = null, previousSuccessAt = null, passes = 1,
+  } = {}) {
     const controller = new AbortController();
     const refreshing = previousSnap !== null;
     const entry = {
@@ -626,6 +629,10 @@ export function createEngineService({
       loaded: 0,
       total: null,
       snap: previousSnap,
+      // Carried across a refresh/rename the same way `snap` is, so a source
+      // with no health() of its own does not forget its last real success the
+      // moment a follow-up pass starts.
+      lastSuccessAt: previousSuccessAt,
       validity,
       // Whether a pass is in flight, tracked separately from `status` — which
       // now says "ready" through a background refresh — because every decision
@@ -657,6 +664,7 @@ export function createEngineService({
         entry.snap = snap;
         entry.status = "ready";
         entry.phase = "ready";
+        entry.lastSuccessAt = new Date().toISOString();
       })
       .catch((err) => {
         if (indexes.get(entry.key) !== entry) return;
@@ -733,6 +741,7 @@ export function createEngineService({
     indexes.set(key, startIndex(open.sources[i], key, open.settings, {
       validity: open.validities[i],
       previousSnap: entry.snap,
+      previousSuccessAt: entry.lastSuccessAt,
       passes: entry.passes + 1,
     }));
   }
@@ -811,6 +820,7 @@ export function createEngineService({
       indexes.set(key, startIndex(source, key, open.settings, {
         validity: open.validities[i],
         previousSnap: previous?.snap ?? null,
+        previousSuccessAt: previous?.lastSuccessAt ?? null,
         passes: (previous?.passes ?? 0) + 1,
       }));
     });
@@ -938,6 +948,12 @@ export function createEngineService({
       error: entry.error,
       progress: indexProgress(entry),
       health: typeof source.health === "function" ? source.health() : null,
+      // The index's own record of the last successful pass, kept for sources
+      // with no health() of their own (okf-local, files): without it a local
+      // layer's lastSuccessAt read null forever, even after every index since
+      // boot succeeded, because health (the field graph/status prefer first)
+      // never exists for those adapters.
+      lastSuccessAt: entry.lastSuccessAt,
     };
   }
 
@@ -976,6 +992,7 @@ export function createEngineService({
       if (p === "/api/status") { json(res, 200, statusApi()); return true; }
       if (p === "/api/resolve") { json(res, 200, await resolveOne(url.searchParams.get("concept"))); return true; }
       if (p === "/api/resolve-all") { json(res, 200, await resolveAllApi(waitParam(url))); return true; }
+      if (p === "/api/search") { json(res, 200, await searchApi(url)); return true; }
       if (p === "/api/discrepancies" && req.method === "GET") {
         json(res, 200, await discrepanciesApi(waitParam(url)));
         return true;
@@ -1115,7 +1132,7 @@ export function createEngineService({
     const contributing = perSource.filter((p) => p.snap);
     const { concepts, resolvedTokens, latestPerSource } = await resolvedIndex(contributing);
 
-    const sourcesOut = perSource.map(({ source: s, snap, status, error, progress, health }) => {
+    const sourcesOut = perSource.map(({ source: s, snap, status, error, progress, health, lastSuccessAt }) => {
       const meta = layerMeta.get(s.name) ?? {};
       const kind = s.quarantinedKind ?? meta.source ?? "okf-local";
       // `health` was read with the rest of this row (see pinEntry): whether the
@@ -1180,10 +1197,16 @@ export function createEngineService({
         warnings: warningMessages.length,
         warningMessages: warningMessages.slice(0, 10),
         indexing: progress,
+        // Dotfiles/dot-dirs skipped by the walk — a count, not a listing.
+        skippedHidden: snap?.hidden ?? 0,
         // Enough for "last synced X, failed Y ago" without a second request.
-        // Null on sources that keep no health (local bundles, MCP children).
+        // lastErrorAt is null on sources that keep no health of their own
+        // (local bundles, MCP children) — there is nothing to have failed.
+        // lastSuccessAt falls back to the index's own record of its last
+        // successful pass for those same sources, so a local layer that has
+        // never failed still reports when it was last read.
         lastErrorAt: health?.lastErrorAt ?? null,
-        lastSuccessAt: health?.lastSuccessAt ?? null,
+        lastSuccessAt: health?.lastSuccessAt ?? lastSuccessAt ?? null,
       };
     });
 
@@ -1371,6 +1394,10 @@ export function createEngineService({
         // re-reading behind it. Never a reason to show a source as unready.
         refreshing: progress.refreshing,
         error: degraded ? health.lastError : error ?? null,
+        // Dotfiles/dot-dirs are still skipped silently — this only makes the
+        // count visible, never what is inside them. Additive, and already
+        // computed by the walk, so it costs nothing on this cheap route.
+        skippedHidden: snap?.hidden ?? 0,
       };
     });
     // A source with nothing to serve yet. A source refreshing behind a good
@@ -1395,6 +1422,24 @@ export function createEngineService({
     if (!resolved) throw httpError(404, `Concept not found in any source: ${conceptId}`);
     decorateResolvedDispositions(resolved, await conflictResolutionLog.list());
     return resolved;
+  }
+
+  // Same live-sources read as resolveOne — search.mjs is the ranking module
+  // the retrieval eval scores, so this route only ever calls it, never
+  // reimplements any part of it.
+  async function searchApi(url) {
+    const query = url.searchParams.get("q");
+    if (typeof query !== "string" || !query.trim()) throw httpError(400, "Provide ?q=<query>");
+    let limit = 10;
+    const rawLimit = url.searchParams.get("limit");
+    if (rawLimit !== null) {
+      const n = Number(rawLimit);
+      if (!Number.isFinite(n) || n <= 0) throw httpError(400, "limit must be a positive number");
+      limit = Math.min(Math.floor(n), 50);
+    }
+    const { sources } = openSources();
+    const hits = await searchConcepts(sources, { query, limit });
+    return { hits };
   }
 
   function decorateResolvedDispositions(resolved, decisions) {
@@ -1783,7 +1828,10 @@ export function createEngineService({
     if (!discrepancy || body.revision !== discrepancy.revision) {
       throw httpError(409, "This discrepancy changed after you opened it. Reload before deciding it.");
     }
-    const allowedReasons = new Set(["different_scopes", "temporary_migration", "source_specific_authority", "other"]);
+    // target_missing is broken-link-shaped: acknowledging why a link target
+    // will never resolve (the concept was retired, renamed elsewhere, etc.)
+    // needs a reason distinct from a genuine scoped disagreement.
+    const allowedReasons = new Set(["different_scopes", "temporary_migration", "source_specific_authority", "target_missing", "other"]);
     if (action === "acknowledge" && !allowedReasons.has(reasonCode)) throw httpError(400, "Choose why this scoped difference should remain");
     const chosen = action === "choose_contribution"
       ? discrepancy.contributions.find((item) => item.source === selectedSource)
@@ -1828,6 +1876,14 @@ export function createEngineService({
       return { ok: true, decision: await conflictResolutionLog.append(decision), written: [] };
     }
     if (originalKind === "broken_link") throw httpError(409, "Open the source file to repair this link, or acknowledge the scoped difference.");
+    // renderScalar's scalar branch would rewrite a YAML list as a quoted
+    // string, silently downgrading the field's type in every writable layer —
+    // compose only ever produces a string, so a list-typed field has no safe
+    // reconciled answer to write.
+    if (originalKind === "frontmatter_value" && action === "compose"
+      && discrepancy.contributions.some((item) => Array.isArray(item.value))) {
+      throw httpError(400, "This field is a list; compose isn't available for list values — use \"Use this answer everywhere\" or edit the file directly.");
+    }
 
     const value = action === "compose" ? content : chosen.value;
     const writableSources = discrepancy.contributions.map((item) => item.source).filter((source) => fileRoots().has(source));

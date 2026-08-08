@@ -103,6 +103,47 @@ test("conflicting matching rules disable automation and surface the ambiguity", 
   assert.equal(item.status, "needs_review");
 });
 
+test("a resolved section_content decision emits exactly one record, under its canonical id", () => {
+  // schemaVersion-2, non-acknowledge, committed decision carrying BOTH the
+  // canonical discrepancyId and the legacy conflictId. decisionMap indexes it
+  // under both keys, so the resolved-record reconstruction must dedupe by
+  // canonical id or this becomes two rows for one resolution (F12).
+  const decisions = [{
+    schemaVersion: 2, id: "d1",
+    discrepancyId: "section_content::decisions/settled::choice",
+    conflictId: "decisions/settled::choice",
+    action: "choose_contribution", transactionState: "committed",
+    conceptId: "decisions/settled", title: "Settled", conceptType: "decision",
+    sectionKey: "choice", sectionHeading: "Choice", owner: "Platform",
+    chosen: { layer: "team", content: "Use Postgres.", updated: "2026-08-01" },
+    contributions: [
+      { layer: "team", level: 2, content: "Use Postgres.", updated: "2026-08-01" },
+      { layer: "company", level: 0, content: "Use MySQL.", updated: "2026-07-01" },
+    ],
+  }];
+  // No current conflict for this concept — buildDiscrepancies' first pass
+  // produces nothing for it, so the decision is only visible through the
+  // resolved-record reconstruction loop this test targets.
+  const settled = { ...concept, id: "decisions/settled", sections: [], frontmatterConflicts: [] };
+  const result = buildDiscrepancies([settled], { decisions, coverageComplete: false });
+  const rows = result.discrepancies.filter((item) => item.conceptId === "decisions/settled");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, "section_content::decisions/settled::choice");
+  assert.equal(rows[0].legacyId, "decisions/settled::choice");
+  assert.equal(rows[0].status, "resolved");
+});
+
+test("active-discrepancy decoration still finds a decision by its legacy id", () => {
+  // finalize() looks a discrepancy's history up by discrepancyId first, then
+  // falls back to legacyId — the same fallback the dedupe above must not break.
+  const decisions = [{
+    schemaVersion: 2, id: "d1", conflictId: "decisions/db::choice", action: "acknowledge", reasonCode: "other",
+  }];
+  const result = buildDiscrepancies([concept], { decisions, coverageComplete: false });
+  const section = result.discrepancies.find((item) => item.originalKind === "section_content");
+  assert.equal(section.status, "acknowledged");
+});
+
 test("serialized shared rules contain structural metadata only", () => {
   const text = serializeRuleDocument([{
     id: "r1", scope: "local", mode: "automatic", enabled: true,

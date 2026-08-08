@@ -55,15 +55,36 @@ describe('computeFitScale', () => {
 })
 
 describe('clampZoom', () => {
-  // The manual zoom/wheel clamp used to floor at 0.4, so zooming out after a
-  // Fit that landed below 0.4 snapped the view back up — the opposite of
-  // "zoom out". It now shares computeFitScale's epsilon floor.
-  it('allows a scale well below the old 0.4 floor', () => {
-    expect(clampZoom(0.05)).toBeCloseTo(0.05, 5)
+  // Manual zoom (wheel / +/- buttons) has its own floor, separate from
+  // computeFitScale's near-zero epsilon: letting a manual zoom-out reach that
+  // epsilon meant landing on a scale where nothing is visible and there was
+  // no obvious way back.
+  it('floors a manual zoom at 0.1, not the near-zero Fit epsilon', () => {
+    expect(clampZoom(0.05)).toBe(0.1)
+    expect(clampZoom(0.001)).toBe(0.1)
+  })
+
+  it('leaves a scale above the manual floor untouched', () => {
+    expect(clampZoom(0.3)).toBeCloseTo(0.3, 5)
   })
 
   it('still clamps at the top end', () => {
     expect(clampZoom(50)).toBe(2)
+  })
+})
+
+describe('Fit vs manual-zoom floors', () => {
+  // Fit is driven by content size, not user input, and must still be able to
+  // show a huge cascade in full — even at a scale the manual floor above
+  // would refuse. Fit reaches this by calling setViewT() directly with
+  // computeFitScale's result (see CanvasInner.fit()) rather than routing it
+  // through clampZoom, so a legitimately tiny fitted scale is never snapped
+  // back up; clampZoom only ever sees the *next* manual zoom action.
+  it('lets Fit compute a scale below the manual floor', () => {
+    const result = computeFitScale(2000, 1200, 2_000_000, 1_000_000)
+    expect(result).not.toBeNull()
+    expect(result!.scale).toBeLessThan(0.1)
+    expect(result!.scale).toBeGreaterThan(0)
   })
 })
 
@@ -95,6 +116,17 @@ describe('capConceptsPerLane', () => {
     const input = many('personal', 5)
     const result = capConceptsPerLane(input, 3)
     expect(result.concepts.map((c) => c.id)).toEqual(['personal-0', 'personal-1', 'personal-2'])
+  })
+
+  it('does not crash on a concept with an empty layers array', () => {
+    // primaryLayer(c) is undefined for `layers: []` (sort()[0] of an empty
+    // array), so indexing straight into the byLane record and calling .push
+    // on the result used to throw and unmount the whole Cascade view.
+    const orphan: Concept = { ...concept('orphan', 'personal'), layers: [] }
+    let result: ReturnType<typeof capConceptsPerLane> | undefined
+    expect(() => { result = capConceptsPerLane([orphan]) }).not.toThrow()
+    expect(result!.concepts.map((c) => c.id)).toEqual(['orphan'])
+    expect(result!.laneCounts.company).toEqual({ shown: 1, total: 1 })
   })
 })
 

@@ -7,6 +7,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Concepts } from './Concepts'
 import type { Concept } from '../data'
+import type { SearchHit } from '../types'
 
 const mocks = vi.hoisted(() => ({ useStore: vi.fn(), useLayerFiles: vi.fn() }))
 vi.mock('../store', () => ({ useStore: mocks.useStore, useStoreData: mocks.useStore, useStoreNav: mocks.useStore, useStoreInput: mocks.useStore }))
@@ -172,5 +173,60 @@ describe('Knowledge search (live mode)', () => {
     expect(search).not.toHaveBeenCalled()
     // Demo mode still gets the plain substring result.
     expect(rows()).toHaveLength(1)
+  })
+
+  // FIX 1: the engine has no prefix matching (BM25F over whole stemmed
+  // tokens), so a mid-word query the engine misses must not blank a list the
+  // substring filter would still populate.
+  it('keeps a substring match visible when the engine answers empty on a partial word', async () => {
+    const search = vi.fn().mockResolvedValue([])
+    mocks.useStore.mockReturnValue(liveStoreWith([populated()], 'prim', search))
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+
+    expect(search).toHaveBeenCalledWith('prim')
+    expect(rows()).toHaveLength(1)
+    expect(container.textContent).toContain('Primary database')
+    expect(container.textContent).not.toContain('No matching concepts')
+  })
+
+  // FIX 2: engineHits from the PREVIOUS query must not survive a query
+  // change — only the substring filter (recomputed synchronously) should
+  // render until the new debounced answer lands.
+  it('clears stale engine hits as soon as the query changes, before the new answer lands', async () => {
+    const a = populated()
+    const b: Concept = { ...populated(), id: 'decisions/other', title: 'Other decision' }
+    let resolveSecond: (hits: SearchHit[]) => void = () => {}
+    const search = vi.fn()
+      .mockResolvedValueOnce([{ id: a.id, title: a.title, score: 5, layers: ['personal'], snippet: '' }])
+      .mockImplementationOnce(() => new Promise<SearchHit[]>((resolve) => { resolveSecond = resolve }))
+    const store = liveStoreWith([a, b], 'primary', search)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(rows().map((r) => r.textContent)).toEqual([expect.stringContaining('Primary database')])
+
+    // Point the mocked store at a new query — `Concepts` is a props-less
+    // `memo`, so a second `root.render()` call would bail out without ever
+    // re-invoking it (verified: an external value change alone never
+    // reaches a props-less memoized component here — only the component's
+    // OWN state can force it to read the store hooks again). Dispatching the
+    // close-detail event it already listens for triggers exactly that kind
+    // of internal state update, forcing it to re-render and read the new
+    // query — the same thing a real query keystroke does via context in the
+    // live app.
+    mocks.useStore.mockReturnValue({ ...store, query: 'other' })
+    await act(async () => { window.dispatchEvent(new Event('contextcake:close-detail')) })
+
+    // `a`'s stale hit from the first search must be gone immediately — well
+    // before the new debounced search resolves. (The detail panel on the
+    // right keeps showing whatever is still selected — that's unrelated to
+    // this bug, so the assertion is scoped to the list rows.)
+    const list = rows().map((r) => r.textContent ?? '')
+    expect(list.some((text) => text.includes('Primary database'))).toBe(false)
+    expect(list.some((text) => text.includes('Other decision'))).toBe(true)
+
+    resolveSecond([])
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
   })
 })

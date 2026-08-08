@@ -22,7 +22,17 @@ const MAX_NODES_PER_LANE = 250
 // Not a floor: Fit must be able to reach whatever scale the content actually
 // needs. 0.2 as a floor meant a large cascade's "Fit" button silently stopped
 // fitting — this is only here to keep the transform away from exactly zero.
-const MIN_SCALE = 0.001
+// Only computeFitScale uses this; clampZoom (manual zoom) uses its own,
+// higher floor below.
+const FIT_MIN_SCALE = 0.001
+// Floor for a MANUAL zoom (wheel or the +/- controls). Letting manual zoom
+// share FIT_MIN_SCALE meant a wheel zoom-out could land on a scale where
+// nothing is visible and there was no obvious way back. Fit can still land
+// below this — fit() sets the view directly from computeFitScale and never
+// runs the result through clampZoom, so a legitimately small fitted scale is
+// never snapped back up by this floor; it only applies to the next manual
+// zoom action the user actually takes.
+const MIN_MANUAL_SCALE = 0.1
 const MAX_SCALE = 2
 
 const NUM = new Intl.NumberFormat()
@@ -38,13 +48,13 @@ const primaryLayer = (c: Concept): LayerId =>
  *  `null` while the element is not yet laid out (see the caller's guard). */
 export function computeFitScale(cw: number, ch: number, worldW: number, worldH: number) {
   if (cw < 40 || ch < 40) return null
-  const scale = Math.max(MIN_SCALE, Math.min(1, (cw - 48) / worldW, (ch - 48) / worldH))
+  const scale = Math.max(FIT_MIN_SCALE, Math.min(1, (cw - 48) / worldW, (ch - 48) / worldH))
   return { scale, tx: (cw - worldW * scale) / 2, ty: Math.max(24, (ch - worldH * scale) / 2) }
 }
 
 /** Clamp a manual zoom (wheel or +/− button) to the app's zoom range. */
 export function clampZoom(scale: number): number {
-  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale))
+  return Math.min(MAX_SCALE, Math.max(MIN_MANUAL_SCALE, scale))
 }
 
 export interface LaneCapResult {
@@ -63,7 +73,13 @@ export interface LaneCapResult {
  */
 export function capConceptsPerLane(concepts: Concept[], max = MAX_NODES_PER_LANE): LaneCapResult {
   const byLane: Record<LayerId, Concept[]> = { company: [], team: [], personal: [] }
-  for (const c of concepts) byLane[primaryLayer(c)].push(c)
+  // primaryLayer(c) is undefined for a concept with an empty `layers` array
+  // (sort()[0] of []) despite its declared LayerId return type — a chaos
+  // input computeLayout already tolerates (it lays such a concept out off
+  // canvas via laneIndex's -1). Here it indexed straight into `byLane` and
+  // called .push on the resulting undefined, unmounting the whole view.
+  // Falling back to the company lane matches that existing tolerance.
+  for (const c of concepts) (byLane[primaryLayer(c)] ?? byLane.company).push(c)
   const laneCounts = {} as Record<LayerId, { shown: number; total: number }>
   const out: Concept[] = []
   for (const id of LANE_ORDER) {

@@ -359,25 +359,72 @@ describe('store load state', () => {
       expect(probe().dataset.count).toBe('1')
     })
 
-    it('stops polling while the window is hidden and resumes when it comes back', async () => {
-      mocks.graph.mockResolvedValue(graphPayload(['personal']))
-      mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
-      mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: true, loaded: 10, total: 3000 }))
+    it('stops polling while the window is hidden when nothing is active, and resumes when it comes back', async () => {
+      // The cost optimization this pins: a hidden tab with nothing in flight
+      // must stay silent, exactly as before FIX 3 — only a hidden tab with
+      // real work active gets the new slower-but-still-polling behavior
+      // (see the next test).
+      mocks.graph.mockResolvedValue(graphPayload([]))
+      mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: false, conceptCount: 1 }))
 
       await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
-      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(11_000) })
       const whileVisible = mocks.status.mock.calls.length
       expect(whileVisible).toBeGreaterThan(0)
 
       const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
       await act(async () => document.dispatchEvent(new Event('visibilitychange')))
-      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
       expect(mocks.status.mock.calls.length).toBe(whileVisible)
 
       visibility.mockReturnValue('visible')
       await act(async () => document.dispatchEvent(new Event('visibilitychange')))
       await act(async () => { await vi.advanceTimersByTimeAsync(50) })
       expect(mocks.status.mock.calls.length).toBeGreaterThan(whileVisible)
+      visibility.mockRestore()
+    })
+
+    // FIX 3(a): schedule() used to be a flat no-op while hidden, so a
+    // backgrounded tab that was still indexing when it went hidden (or that
+    // started out hidden — see the WP-B bootstrap-probe test below) had
+    // nothing left to resume it, possibly forever. Real work in flight now
+    // keeps the loop polling through a hidden window, just at
+    // HIDDEN_ACTIVE_POLL_MS instead of the visible ACTIVE_POLL_MS cadence.
+    it('keeps polling, slower, while hidden when work is active — and recovers once the engine finishes', async () => {
+      mocks.graph.mockResolvedValue(graphPayload(['personal']))
+      mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: true, loaded: 10, total: 3000 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      expect(probe().dataset.indexing).toBe('personal')
+
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+      const whileHiddenStart = mocks.status.mock.calls.length
+
+      // Well past the visible cadence (900ms) but short of the hidden-active
+      // one: if hiding failed to slow the loop down, a poll would already
+      // have landed here.
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      expect(mocks.status.mock.calls.length).toBe(whileHiddenStart)
+
+      // The engine finishes indexing while the tab is still hidden.
+      mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 9, indexing: false, conceptCount: 1 }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+
+      expect(mocks.status.mock.calls.length).toBeGreaterThan(whileHiddenStart)
+      expect(probe().dataset.indexing).toBe('')
+      expect(probe().dataset.count).toBe('1')
+
+      // Once idle, the tab goes fully silent again — confirming the hidden
+      // polling wound back down rather than persisting after work finished.
+      const afterRecovery = mocks.status.mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+      expect(mocks.status.mock.calls.length).toBe(afterRecovery)
+
       visibility.mockRestore()
     })
 

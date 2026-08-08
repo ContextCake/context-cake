@@ -21,10 +21,14 @@ function ConceptsInner() {
   // yet" — either nothing has been typed, the debounced request is still in
   // flight, or the engine failed/is too old — and the substring filter above
   // is what renders in every one of those cases. A non-null array (possibly
-  // empty) is the engine's own answer and takes over the list.
+  // empty) is the engine's own answer. It is reset to `null` at the top of
+  // every run of this effect — not only when the query empties — so a query
+  // change immediately falls back to the substring list instead of rendering
+  // the PREVIOUS query's hits for the debounce window + round-trip.
   const [engineHits, setEngineHits] = useState<SearchHit[] | null>(null)
   useEffect(() => {
-    if (mode !== 'live' || !q) { setEngineHits(null); return }
+    setEngineHits(null)
+    if (mode !== 'live' || !q) return
     let cancelled = false
     const timer = setTimeout(() => {
       void search(query.trim()).then((hits) => { if (!cancelled) setEngineHits(hits) })
@@ -36,12 +40,28 @@ function ConceptsInner() {
   // rendered as a dead row — resolve-all supplies the full set, so this only
   // happens for a concept still resolving in the background.
   const usingEngine = mode === 'live' && q !== '' && engineHits !== null
+  // Union, not replace: the engine is BM25F over whole stemmed tokens with no
+  // prefix matching, so typing "primary" one keystroke at a time returns zero
+  // hits until the word completes ("prim"/"prima"/"primar" all miss; only
+  // "primary" hits) — letting the engine's answer wholesale replace the
+  // substring list blanked the list mid-word. Engine hits render first, in
+  // the engine's own rank order (a relevance signal the substring filter
+  // doesn't have); any concept the substring filter also matches but the
+  // engine didn't return follows, deduped by id. So the "no matches" empty
+  // state below is only reachable when both lists come back empty.
   const list = usingEngine
-    ? engineHits.reduce<Concept[]>((acc, hit) => {
-        const match = concepts.find((c) => c.id === hit.id)
-        if (match) acc.push(match)
-        return acc
-      }, [])
+    ? (() => {
+        const seen = new Set<string>()
+        const merged: Concept[] = []
+        for (const hit of engineHits) {
+          const match = concepts.find((c) => c.id === hit.id)
+          if (match && !seen.has(match.id)) { seen.add(match.id); merged.push(match) }
+        }
+        for (const c of substringList) {
+          if (!seen.has(c.id)) { seen.add(c.id); merged.push(c) }
+        }
+        return merged
+      })()
     : substringList
   const selCpt = concepts.find((c) => c.id === selConcept) || null
   const [detailOpen, setDetailOpen] = useState(Boolean(selConcept))

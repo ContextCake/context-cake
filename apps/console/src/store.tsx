@@ -147,6 +147,18 @@ const ACTIVE_POLL_MS = 900
 const IDLE_POLL_MS = 5_000
 /** Backoff ceiling. There is deliberately no failure count that stops the loop. */
 const MAX_BACKOFF_MS = 5_000
+/**
+ * Cadence for a HIDDEN tab while the engine reports work in flight (indexing
+ * or refreshing). A hidden tab still goes fully silent once nothing is
+ * active — that cost optimization stays exactly as before — but a hidden tab
+ * that landed on a still-indexing snapshot used to have nothing left to
+ * resume it until visibilitychange fired, which could be never (a
+ * backgrounded tab the user doesn't return to for minutes). /api/status
+ * answers in 2-4ms, so ~8x the active cadence is cheap enough to run
+ * unattended and still finishes a bounded indexing pass in single-digit
+ * seconds instead of stalling indefinitely.
+ */
+const HIDDEN_ACTIVE_POLL_MS = 7_000
 
 /**
  * The part of the engine's status that decides what /api/graph and
@@ -419,17 +431,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // thing that knows what is in flight — and the shell needs to say so from
     // the first paint, not from the first poll a second later.
     let statusAnswered = false
+    // The last `active` a poll/bootstrap pass computed. Read by onVisibility
+    // to decide whether hiding the tab should stop the loop or just slow it
+    // down — see schedule() below.
+    let activeState = false
 
     const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
     const clearTimer = () => { if (timer !== undefined) { clearTimeout(timer); timer = undefined } }
-    const schedule = (ms: number) => {
+    /**
+     * `active` says whether the engine reported work in flight on the pass
+     * that's scheduling this tick — not just "not hidden". A hidden window
+     * with nothing active has nobody to tell, and visibilitychange resumes
+     * the loop when that changes — that cost optimization is unchanged. But
+     * a hidden window with work ACTIVE keeps polling anyway, at
+     * HIDDEN_ACTIVE_POLL_MS: without this, a tab that went hidden (or was
+     * hidden from first paint — see bootstrap's probe) while the engine was
+     * still indexing had nothing left to resume it, possibly forever.
+     * Demo mode has no engine behind it and nothing that can change either
+     * way.
+     */
+    const schedule = (ms: number, active = false) => {
       clearTimer()
-      // A hidden window has nobody to tell; visibilitychange resumes the loop.
-      // Demo mode has no engine behind it and nothing that can change.
-      if (cancelled || hidden() || source.mode === 'demo') return
-      // Re-checked on fire, not only on schedule: a tick queued a moment before
-      // the window was hidden would otherwise still land.
-      timer = setTimeout(() => { if (!hidden()) void poll() }, ms)
+      if (cancelled || source.mode === 'demo') return
+      if (hidden()) {
+        if (!active) return
+        ms = Math.max(ms, HIDDEN_ACTIVE_POLL_MS)
+      }
+      // Re-checked on fire, not only on schedule: a tick queued a moment
+      // before the window was hidden would otherwise still land — unless
+      // this tick was itself scheduled to keep running while hidden.
+      timer = setTimeout(() => { if (!hidden() || active) void poll() }, ms)
     }
 
     const applyIndexing = (next: string[]) => {
@@ -583,7 +614,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         failures = 0
         setRefreshError(null)
         setLastRefreshAt(Date.now())
-        schedule(active ? ACTIVE_POLL_MS : IDLE_POLL_MS)
+        activeState = active
+        schedule(active ? ACTIVE_POLL_MS : IDLE_POLL_MS, active)
       } catch (e) {
         if (cancelled) return
         // Never give up, and never quietly retract what the page is saying.
@@ -592,7 +624,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // anyone to know — the exact impression this whole pass exists to fix.
         failures += 1
         setRefreshError(asLiveDataError(e))
-        schedule(Math.min(MAX_BACKOFF_MS, ACTIVE_POLL_MS * failures))
+        // A failure tells us nothing new about whether work is active, so a
+        // backoff retry keeps polling through a hidden tab exactly when the
+        // last successful pass said it should.
+        schedule(Math.min(MAX_BACKOFF_MS, ACTIVE_POLL_MS * failures), activeState)
       } finally {
         running = false
       }
@@ -601,32 +636,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const bootstrap = async () => {
       running = true
       try {
-        const active = await readAll()
+        let active = await readAll()
         if (cancelled) return
         setRefreshError(null)
         setLastRefreshAt(Date.now())
         // A page that first renders with document.visibilityState === 'hidden'
-        // (embedded webviews can misreport this) never gets a recurring poll:
-        // schedule() below is a no-op while hidden, and nothing resumes the
-        // loop until visibilitychange fires. Left alone, a still-indexing
-        // snapshot from the readAll() above sits stuck with nobody checking
-        // whether the engine finished — so this one probe runs regardless of
-        // hidden(), through the exact gate `poll()` uses (applyStatus), so it
-        // only pays for a heavy refetch when that gate says one is owed.
+        // (embedded webviews can misreport this) is exactly the case
+        // schedule()'s HIDDEN_ACTIVE_POLL_MS branch exists for: if the engine
+        // is still indexing at this instant — the common case on a large
+        // vault — a plain schedule(active) below would go silent forever
+        // while hidden, because active only reflects readAll()'s snapshot,
+        // taken before this probe. So this one extra probe runs regardless
+        // of hidden(), through the exact gate `poll()` uses (applyStatus),
+        // so it only pays for a heavy refetch when that gate says one is
+        // owed — and its OWN answer (not the earlier readAll()'s) is what
+        // schedule() below acts on, so work that started between the two
+        // calls is scheduled at ACTIVE_POLL_MS instead of IDLE_POLL_MS.
         // Demo mode never probes — there is no engine behind it to ask.
         if (source.mode === 'live' && hasStatusRoute) {
           try {
             const status = await source.status()
             if (!cancelled) {
               if (status === null) hasStatusRoute = false
-              else await applyStatus(status)
+              else active = await applyStatus(status)
             }
           } catch {
             // Non-fatal: readAll() above already left a good snapshot up, and
             // the recurring loop retries on its own once it gets to run.
           }
         }
-        schedule(active ? ACTIVE_POLL_MS : IDLE_POLL_MS)
+        activeState = active
+        schedule(active ? ACTIVE_POLL_MS : IDLE_POLL_MS, active)
       } catch (e) {
         if (cancelled) return
         // A failure on a background refresh must not blow away a working page;
@@ -639,15 +679,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         failures += 1
         setRefreshError(asLiveDataError(e))
-        schedule(Math.min(MAX_BACKOFF_MS, ACTIVE_POLL_MS * failures))
+        schedule(Math.min(MAX_BACKOFF_MS, ACTIVE_POLL_MS * failures), activeState)
       } finally {
         running = false
       }
     }
 
-    const onVisibility = () => { if (hidden()) clearTimer(); else schedule(0) }
+    const onVisibility = () => {
+      if (hidden()) {
+        // Nothing active: go fully silent, same as before — the whole point
+        // of the cost optimization. Something active: re-schedule rather
+        // than clear, so the loop drops straight to HIDDEN_ACTIVE_POLL_MS
+        // instead of continuing to fire at the visible cadence until its
+        // already-queued tick happens to land.
+        if (activeState) schedule(ACTIVE_POLL_MS, true)
+        else clearTimer()
+      } else {
+        schedule(0, activeState)
+      }
+    }
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
-    pollNowRef.current = () => { failures = 0; schedule(0) }
+    // An explicit user retry (the refresh-error banner) always fires
+    // immediately, hidden tab or not — it's a direct request, not the
+    // passive background loop the hidden-tab cadence rules are about.
+    pollNowRef.current = () => { failures = 0; schedule(0, true) }
 
     // A refresh must not replace an already-usable shell with a full-page
     // loader. Besides the visual regression, doing so unmounts the Files editor

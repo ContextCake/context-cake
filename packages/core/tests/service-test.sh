@@ -128,9 +128,11 @@ G="$(curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000" | node -e 'let s="";proce
 # A source with no health of its own (a local bundle) reports plain "ok" and
 # no error — "degraded" is reserved for an adapter that says so. lastSuccessAt
 # still gets set, from the index's own record of its last successful pass
-# rather than from health() (which this source has none of).
-H="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s).sources[0];process.stdout.write(`${x.status}:${x.error}:${x.lastErrorAt}:${x.lastSuccessAt!==null}`)})')"
-[ "$H" = "ok:null:null:true" ] && pass "healthless source reports plain ok, with its own lastSuccessAt" || fail "local source health shape ($H)"
+# rather than from health() (which this source has none of). Checked as a
+# genuine ISO timestamp, not just non-null, so a fallback that leaked some
+# other truthy value would still be caught.
+H="$(curl -s "${AUTH[@]}" "$BASE/api/graph" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s).sources[0];const iso=typeof x.lastSuccessAt==="string"&&new Date(x.lastSuccessAt).toISOString()===x.lastSuccessAt;process.stdout.write(`${x.status}:${x.error}:${x.lastErrorAt}:${iso}`)})')"
+[ "$H" = "ok:null:null:true" ] && pass "healthless source reports plain ok, with a precise ISO lastSuccessAt" || fail "local source health shape ($H)"
 code 401 "$(C "$BASE/api/resolve?concept=note")" "resolve without header rejected"
 code 200 "$(C "${AUTH[@]}" "$BASE/api/resolve?concept=note")" "resolve with Bearer accepted"
 code 401 "$(C "$BASE/api/host-only")" "unknown /api/* path still gated without token"
@@ -355,6 +357,13 @@ G="$(curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000")"
 ROW="$(JQ 'JSON.stringify((({kind,conceptCount,status}) => ({kind,conceptCount,status}))(d.sources.find((s) => s.name === "gr") ?? {}))' <<<"$G")"
 [ "$ROW" = '{"kind":"github","conceptCount":0,"status":"degraded"}' ] && pass "the REST layer's graph row appears (degraded offline/online: repo is unreachable)" || fail "github-rest graph row ($ROW)"
 [ "$(JQ 'String(d.sources.find((s) => s.name === "gr").lastErrorAt !== null)' <<<"$G")" = "true" ] && pass "health rides the row (lastErrorAt set)" || fail "lastErrorAt missing ($G)"
+# An adapter WITH health() (github) must never have its never-succeeded null
+# papered over by the index's own "the pass resolved" bookkeeping — that
+# bookkeeping is true even when the pass resolved by warning and returning []
+# against an unreachable repo. True whether this sandbox resolves the repo as
+# "degraded" or (offline) leaks through as "ok" above — either way the repo
+# was never actually read, so lastSuccessAt must stay null in both cases.
+[ "$(JQ 'JSON.stringify(d.sources.find((s) => s.name === "gr").lastSuccessAt)' <<<"$G")" = "null" ] && pass "an unreachable github source never fabricates a lastSuccessAt" || fail "github lastSuccessAt fabricated ($G)"
 SYNC="$(curl -s -X POST "${AUTH[@]}" "$BASE/api/sources/sync?name=gr")"
 code 502 "$(C -X POST "${AUTH[@]}" "$BASE/api/sources/sync?name=gr")" "sync reaches the REST branch and reports the real failure"
 JQ 'd.error' <<<"$SYNC" | grep -q 'Sync failed' && pass "sync failure names itself instead of a false green" || fail "sync error copy ($SYNC)"

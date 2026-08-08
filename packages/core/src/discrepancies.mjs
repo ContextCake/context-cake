@@ -102,7 +102,13 @@ export function buildDiscrepancies(concepts, {
     const latest = history.at(-1);
     if (latest?.schemaVersion !== 2 || latest.action === "acknowledge") continue;
     const canonicalId = latest.discrepancyId ?? id;
-    if (seenCanonical.has(canonicalId)) continue;
+    // A current finding always wins this projection (including a reopened
+    // finding after a later source edit) — decisionsById indexes the same
+    // decision under both discrepancyId and the legacy conflictId, so a
+    // decision whose legacy key merely doesn't collide with `currentIds` (the
+    // canonical id it resolves to does) must still be skipped here, or the
+    // live row above and this resolved-history row emit the same id twice.
+    if (seenCanonical.has(canonicalId) || currentIds.has(canonicalId)) continue;
     seenCanonical.add(canonicalId);
     const contributions = (latest.contributions ?? []).map((item) => contribution(
       item.layer, item.level, item.updated, item.content, item.layer === latest.chosen?.layer,

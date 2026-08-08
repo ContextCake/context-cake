@@ -244,6 +244,28 @@ function snapshotView(source, snap) {
   };
 }
 
+// The same idea, shaped for search.mjs's adapter contract instead of
+// resolveConcept's: searchConcepts walks listConceptIds() itself (it has no
+// other way to know what to score), so this view answers that from the
+// snapshot's own id list rather than reopening the source it was read from.
+function searchSnapshotView(source, snap) {
+  return {
+    name: source.name,
+    level: source.level,
+    async listConceptIds() { return snap.ids; },
+    async loadConcept(id) { return snap.concepts.get(id) ?? null; },
+  };
+}
+
+// The identity a memoized read is keyed on: which sources contributed, and
+// which generation of each. A snapshot is immutable once assigned, so this
+// string changes exactly when an answer built from these sources would —
+// shared by every reader of the background index that memoizes on it
+// (buildResolvedIndex, search) rather than each re-deriving its own key.
+function contributingKey(contributing) {
+  return JSON.stringify(contributing.map((p) => [p.source.name, p.source.level, p.snap.gen]));
+}
+
 // The watcher must filter exactly what the walk filters, or a file the index
 // would never read still costs a full re-index. This is walkDocs' skip rule
 // (dot-entries and node_modules), applied to the path fs.watch reports.
@@ -366,6 +388,14 @@ export function createEngineService({
   // key built from the current (name, level, generation) triple cannot outlive
   // what it describes.
   let graphMemo = null;      // { key, promise } — the O(corpus) half of /api/graph
+  // { key, hits: Map<"query\0limit", Promise<hits>> } — GET /api/search. One
+  // query against unchanged content answers from the map; the whole map is
+  // replaced (not merged) the instant `key` moves, same as graphMemo, because
+  // a stale hit list is worse than a slow one. A promise lives in the map
+  // before it settles, so two requests for the same query while a build is in
+  // flight join it instead of running the corpus scan twice.
+  let searchMemo = null;
+  const SEARCH_MEMO_CAP = 200; // distinct queries per content generation before the map is dropped, not the search
   let conceptTokens = new Map(); // concept id -> { sig, tokens } for merged concepts
   // Monotonic counter behind /api/status. Bumped whenever the signature of what
   // the heavy routes would return changes, so a client can poll cheaply and
@@ -520,6 +550,7 @@ export function createEngineService({
     for (const entry of indexes.values()) entry.cancel?.();
     indexes = new Map();
     graphMemo = null;
+    searchMemo = null;
     conceptTokens = new Map();
     if (prev) for (const s of prev.sources) s.close?.();
   }
@@ -1203,10 +1234,14 @@ export function createEngineService({
         // lastErrorAt is null on sources that keep no health of their own
         // (local bundles, MCP children) — there is nothing to have failed.
         // lastSuccessAt falls back to the index's own record of its last
-        // successful pass for those same sources, so a local layer that has
-        // never failed still reports when it was last read.
+        // successful pass only for those same healthless sources — an
+        // adapter WITH health() (github) reports null there for exactly one
+        // reason, that it has never actually finished a successful index, and
+        // `??` would otherwise paper over that with the index's "the pass
+        // resolved" bookkeeping, which is true even when the pass resolved by
+        // warning and returning [] against an unreachable repo.
         lastErrorAt: health?.lastErrorAt ?? null,
-        lastSuccessAt: health?.lastSuccessAt ?? lastSuccessAt ?? null,
+        lastSuccessAt: health ? (health.lastSuccessAt ?? null) : (lastSuccessAt ?? null),
       };
     });
 
@@ -1250,7 +1285,7 @@ export function createEngineService({
    * throw this away.
    */
   async function resolvedIndex(contributing) {
-    const key = JSON.stringify(contributing.map((p) => [p.source.name, p.source.level, p.snap.gen]));
+    const key = contributingKey(contributing);
     if (!graphMemo || graphMemo.key !== key) {
       // Shared by every caller that arrives during a cold build: the console
       // polls this route while indexing, and a second request must join the
@@ -1424,9 +1459,16 @@ export function createEngineService({
     return resolved;
   }
 
-  // Same live-sources read as resolveOne — search.mjs is the ranking module
-  // the retrieval eval scores, so this route only ever calls it, never
-  // reimplements any part of it.
+  // Unlike resolveOne, this reads the background index rather than live
+  // sources: a naive per-request implementation re-walked every layer's disk
+  // (or MCP graph) and rebuilt a BM25 index over the whole corpus on every
+  // keystroke the console debounced through here — the same shape of cost the
+  // engine already refuses to pay per request for /api/graph and countTokens.
+  // search.mjs is still the only ranking module the retrieval eval scores, so
+  // this route never reimplements any part of it: it hands searchConcepts an
+  // adapter-shaped view over already-loaded snapshot concepts (searchSnapshotView)
+  // instead of the live sources array, which is the one substitution that
+  // keeps the ranking byte-identical while removing the disk/MCP reads.
   async function searchApi(url) {
     const query = url.searchParams.get("q");
     if (typeof query !== "string" || !query.trim()) throw httpError(400, "Provide ?q=<query>");
@@ -1437,8 +1479,28 @@ export function createEngineService({
       if (!Number.isFinite(n) || n <= 0) throw httpError(400, "limit must be a positive number");
       limit = Math.min(Math.floor(n), 50);
     }
-    const { sources } = openSources();
-    const hits = await searchConcepts(sources, { query, limit });
+    // Answer from whatever is indexed right now, same as buildGraph: a source
+    // still on its first pass has no snapshot yet and simply contributes
+    // nothing, rather than failing the request or blocking on it.
+    const { entries } = ensureIndexes();
+    const contributing = entries.map(pinEntry).filter((p) => p.snap);
+    const key = contributingKey(contributing);
+    if (!searchMemo || searchMemo.key !== key) searchMemo = { key, hits: new Map() };
+    const cacheKey = `${query} ${limit}`;
+    let promise = searchMemo.hits.get(cacheKey);
+    if (!promise) {
+      const views = contributing.map((p) => searchSnapshotView(p.source, p.snap));
+      promise = searchConcepts(views, { query, limit }).catch((err) => {
+        if (searchMemo?.hits.get(cacheKey) === promise) searchMemo.hits.delete(cacheKey);
+        throw err;
+      });
+      // A safety valve against unbounded growth under sustained distinct
+      // queries against unchanged content — not expected in normal debounced
+      // typing (repeats dominate), but nothing here ever evicts on its own.
+      if (searchMemo.hits.size >= SEARCH_MEMO_CAP) searchMemo.hits.clear();
+      searchMemo.hits.set(cacheKey, promise);
+    }
+    const hits = await promise;
     return { hits };
   }
 
@@ -1876,13 +1938,15 @@ export function createEngineService({
       return { ok: true, decision: await conflictResolutionLog.append(decision), written: [] };
     }
     if (originalKind === "broken_link") throw httpError(409, "Open the source file to repair this link, or acknowledge the scoped difference.");
-    // renderScalar's scalar branch would rewrite a YAML list as a quoted
-    // string, silently downgrading the field's type in every writable layer —
-    // compose only ever produces a string, so a list-typed field has no safe
-    // reconciled answer to write.
+    // renderScalar's scalar branch would rewrite a YAML list OR map as a
+    // quoted string (a plain object stringifies to "[object Object]" through
+    // the same String(value) call an array would otherwise skip) — silently
+    // downgrading the field's type in every writable layer. Compose only ever
+    // produces a string, so a structured-value field has no safe reconciled
+    // answer to write.
     if (originalKind === "frontmatter_value" && action === "compose"
-      && discrepancy.contributions.some((item) => Array.isArray(item.value))) {
-      throw httpError(400, "This field is a list; compose isn't available for list values — use \"Use this answer everywhere\" or edit the file directly.");
+      && discrepancy.contributions.some((item) => typeof item.value === "object" && item.value !== null)) {
+      throw httpError(400, "This field holds a structured value (list or map); compose isn't available for it — use \"Use this answer everywhere\" or edit the file directly.");
     }
 
     const value = action === "compose" ? content : chosen.value;

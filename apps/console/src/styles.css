@@ -1828,9 +1828,11 @@ textarea:focus-visible,
 .cc-discrepancy-answer summary, .cc-discrepancy-history summary { color: var(--cc-teal-text); font-size: 11px; cursor: pointer; }
 .cc-discrepancy-original { margin-top: 10px; padding: 12px; border-radius: 8px; background: var(--cc-raised); color: var(--cc-body); font-size: 12px; overflow-wrap: anywhere; }
 .cc-word-diff { margin: 11px 0 0; color: var(--cc-body); font-size: 12px; line-height: 1.55; }
-.cc-word-diff mark { padding: 1px 2px; border-radius: 3px; background: var(--cc-amber-fill2); color: var(--cc-ink); }
+.cc-word-diff mark { padding: 1px 2px; border-radius: 3px; background: var(--cc-teal-fill); color: var(--cc-teal-text); }
+.cc-word-diff del { padding: 1px 2px; border-radius: 3px; background: var(--cc-amber-fill2); color: var(--cc-amber-text); }
 .cc-line-diff { margin: 11px 0 0; overflow-x: auto; padding: 10px; border-radius: 8px; background: var(--cc-code-bg); color: var(--cc-code-fg); font-size: 11px; line-height: 1.55; }
 .cc-line-diff [data-change="added"] { background: var(--cc-teal-fill); color: var(--cc-teal-text); }
+.cc-line-diff [data-change="removed"] { background: var(--cc-amber-fill2); color: var(--cc-amber-text); }
 .cc-diff-same, .cc-muted { color: var(--cc-caption); font-size: 11.5px; }
 .cc-decision-panel { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--cc-line); }
 .cc-decision-panel fieldset { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }

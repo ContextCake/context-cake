@@ -214,6 +214,7 @@ done
 DREV="$(JQ 'd.discrepancies.find((x) => x.originalKind === "section_content" && x.conceptId === "governed")?.revision ?? ""' <<<"$DSET")"
 [ -n "$DID" ] && [ -n "$DREV" ] && pass "unified API detects the section discrepancy" || fail "section discrepancy missing ($DSET)"
 code 409 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"discrepancyId\":\"$DID\",\"revision\":\"stale\",\"action\":\"choose_contribution\",\"selectedSource\":\"t\"}" "$BASE/api/discrepancy-decisions")" "stale discrepancy revision is refused"
+code 400 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"discrepancyId\":\"$DID\",\"revision\":\"$DREV\",\"action\":\"choose_contribution\",\"selectedSource\":\"t\",\"ruleId\":\"spoofed-rule\"}" "$BASE/api/discrepancy-decisions")" "manual callers cannot claim automatic rule authority"
 DDEC="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"discrepancyId\":\"$DID\",\"revision\":\"$DREV\",\"action\":\"choose_contribution\",\"selectedSource\":\"t\"}" "$BASE/api/discrepancy-decisions")"
 [ "$(JQ '`${d.decision.schemaVersion}:${d.decision.transactionState}`' <<<"$DDEC")" = "2:committed" ] && pass "new endpoint records a committed schema-v2 decision" || fail "v2 decision failed ($DDEC)"
 grep -q 'team answer' "$TMP/m2/governed.md" && pass "transactional choice reached every writable contributor" || fail "transactional choice missed a contributor"

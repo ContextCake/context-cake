@@ -1700,8 +1700,21 @@ export function createEngineService({
         ? { discrepancyId: discrepancy.id, revision: discrepancy.revision, action: "choose_contribution", selectedSource: rule.action.source, ruleId: rule.id }
         : { discrepancyId: discrepancy.id, revision: discrepancy.revision, action: "acknowledge", reasonCode: rule.action.reasonCode, ruleId: rule.id };
       await withManifestLockAsync(MANIFEST, async () => {
+        // Rule state can change while this job waits for the manifest lock.
+        // Re-read everything under the lock so disabling a rule, introducing
+        // an ambiguity, or changing a source generation always wins over a
+        // previously scheduled action.
+        const currentPayload = await discrepanciesApi(15_000);
+        if (!currentPayload.coverageComplete || currentPayload.indexing) return;
+        const current = currentPayload.discrepancies.find((item) => item.id === discrepancy.id);
+        if (!current || current.revision !== discrepancy.revision || current.status !== "auto_ready" || current.ruleConflict) return;
+        const currentMatches = current.matchingRules.filter((item) => item.mode === "automatic");
+        if (currentMatches.length !== 1 || currentMatches[0].id !== rule.id
+          || JSON.stringify(currentMatches[0].action) !== JSON.stringify(rule.action)) return;
+        if (!current.sourceHealth.every((health) => health && health.status === "ok")) return;
+        if (rule.action.type === "prefer_source" && !current.contributions.every((item) => fileRoots().has(item.source))) return;
         try {
-          await decideDiscrepancyApi(JSON.stringify(request));
+          await applyDiscrepancyDecision(current, request, { methodOverride: "automatic" });
         } catch (error) {
           // The failure record participates in the same serialization boundary
           // as successful decisions. Otherwise a manual decision can commit
@@ -1740,6 +1753,9 @@ export function createEngineService({
     await ensureDiscrepancyRecovery();
     const body = parseJson(rawBody);
     const { discrepancyId, action, selectedSource, content, reasonCode, note, ruleId } = body;
+    if (ruleId !== undefined && methodOverride !== "automatic") {
+      throw httpError(400, "Rule authority is reserved for approved background actions");
+    }
     if (typeof discrepancyId !== "string" || !discrepancyId) throw httpError(400, "Provide discrepancyId");
     if (!["choose_contribution", "compose", "acknowledge"].includes(action)) throw httpError(400, "Unsupported discrepancy action");
     // A file watcher may have invalidated the index between the review GET and
@@ -1761,6 +1777,9 @@ export function createEngineService({
   async function applyDiscrepancyDecision(discrepancy, body, { methodOverride = null, reasonOverride = null } = {}) {
     await ensureDiscrepancyRecovery();
     const { action, selectedSource, content, reasonCode, note, ruleId } = body;
+    if (ruleId !== undefined && methodOverride !== "automatic") {
+      throw httpError(400, "Rule authority is reserved for approved background actions");
+    }
     if (!discrepancy || body.revision !== discrepancy.revision) {
       throw httpError(409, "This discrepancy changed after you opened it. Reload before deciding it.");
     }
@@ -1788,7 +1807,7 @@ export function createEngineService({
       contributions: discrepancy.contributions.map((item) => ({ layer: item.source, level: item.level, content: item.value, updated: item.updated })),
       contributorFingerprints: discrepancy.contributions.map((item) => ({ source: item.source, fingerprint: item.fingerprint })),
       chosen: chosen ? { layer: chosen.source, level: chosen.level, content: chosen.value, updated: chosen.updated } : null,
-      method: methodOverride ?? (ruleId ? "automatic" : "manual"), actor: "local-user", decidedAt: now,
+      method: methodOverride ?? "manual", actor: "local-user", decidedAt: now,
       reason: reasonOverride ?? (action === "acknowledge" ? reasonCode : action === "compose" ? "You wrote a reconciled answer." : `You chose the ${selectedSource} answer.`),
       ...(reasonCode ? { reasonCode } : {}), ...(typeof note === "string" && note.trim() ? { note: note.trim() } : {}),
       ...(ruleId ? { ruleId } : {}), transactionId,

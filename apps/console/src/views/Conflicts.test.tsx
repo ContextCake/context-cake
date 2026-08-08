@@ -78,6 +78,18 @@ const safeConflict: Conflict = {
   ],
 }
 
+const codeConflict: Conflict = {
+  ...freshConflict,
+  id: 'interfaces/client::example',
+  concept: 'interfaces/client',
+  sectionKey: 'example',
+  section: 'Example',
+  contributions: [
+    { layer: 'personal', sourceLayer: 'personal', value: 'const port = 3000;\nstart(port);', updated: '2026-05-12' },
+    { layer: 'team', sourceLayer: 'team', value: 'const port = 8080;\nstart(port);', updated: '2026-06-01' },
+  ],
+}
+
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   container = document.createElement('div')
@@ -105,6 +117,22 @@ describe('Discrepancy Center', () => {
     await act(async () => root.render(<Conflicts />))
 
     expect(Array.from(container.querySelectorAll('.cc-discrepancy-answer')).some((answer) => answer.textContent?.includes('Newer dissent'))).toBe(false)
+  })
+
+  it('shows both removed and added prose instead of hiding reordered or deleted words', async () => {
+    mocks.useStore.mockReturnValue(storeWith([freshConflict], freshConflict.id))
+    await act(async () => root.render(<Conflicts />))
+
+    expect(container.querySelector('.cc-word-diff del')?.textContent).toContain('SingleStore')
+    expect(container.querySelector('.cc-word-diff mark')?.textContent).toContain('Postgres')
+  })
+
+  it('shows removed and added lines for structured content', async () => {
+    mocks.useStore.mockReturnValue(storeWith([codeConflict], codeConflict.id))
+    await act(async () => root.render(<Conflicts />))
+
+    expect(container.querySelector('.cc-line-diff [data-change="removed"]')?.textContent).toContain('3000')
+    expect(container.querySelector('.cc-line-diff [data-change="added"]')?.textContent).toContain('8080')
   })
 
   it('labels every demo action as a simulation and never offers automatic execution', async () => {

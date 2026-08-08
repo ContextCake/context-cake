@@ -30,20 +30,54 @@ function valueKind(value: string) {
   return /```|^\s*[{[]|\n\s*[-+]?\s*["'][^\n]+:|\n.*[;{}]$/m.test(value) ? 'structured' : 'prose'
 }
 
+type DiffOperation = { type: 'same' | 'removed' | 'added'; value: string }
+
+function sequenceDiff(left: string[], right: string[]): DiffOperation[] {
+  // Bound quadratic work for unusually large answers. The fallback remains
+  // honest and complete—it shows both originals as removed/added—without
+  // letting a pathological document freeze the review surface.
+  if (left.length * right.length > 120_000) {
+    return [
+      ...left.map((value) => ({ type: 'removed' as const, value })),
+      ...right.map((value) => ({ type: 'added' as const, value })),
+    ]
+  }
+  const width = right.length + 1
+  const table = new Uint32Array((left.length + 1) * width)
+  for (let i = 1; i <= left.length; i += 1) {
+    for (let j = 1; j <= right.length; j += 1) {
+      table[i * width + j] = left[i - 1] === right[j - 1]
+        ? table[(i - 1) * width + j - 1] + 1
+        : Math.max(table[(i - 1) * width + j], table[i * width + j - 1])
+    }
+  }
+  const operations: DiffOperation[] = []
+  let i = left.length
+  let j = right.length
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && left[i - 1] === right[j - 1]) {
+      operations.push({ type: 'same', value: left[i - 1] }); i -= 1; j -= 1
+    } else if (j > 0 && (i === 0 || table[i * width + j - 1] >= table[(i - 1) * width + j])) {
+      operations.push({ type: 'added', value: right[j - 1] }); j -= 1
+    } else {
+      operations.push({ type: 'removed', value: left[i - 1] }); i -= 1
+    }
+  }
+  return operations.reverse()
+}
+
 function wordDiff(base: string, alternative: string) {
-  const left = base.split(/(\s+)/)
-  const right = alternative.split(/(\s+)/)
-  const common = new Set(left.filter((token) => token.trim() && right.includes(token)))
-  return right.map((token, index) => common.has(token) || !token.trim()
-    ? <span key={index}>{token}</span>
-    : <mark key={index}>{token}</mark>)
+  return sequenceDiff(base.split(/(\s+)/), alternative.split(/(\s+)/)).map((operation, index) => (
+    operation.type === 'removed' ? <del key={index}>{operation.value}</del>
+      : operation.type === 'added' ? <mark key={index}>{operation.value}</mark>
+        : <span key={index}>{operation.value}</span>
+  ))
 }
 
 function lineDiff(base: string, alternative: string) {
-  const current = new Set(base.split('\n'))
-  return alternative.split('\n').map((line, index) => (
-    <div key={index} data-change={current.has(line) ? 'same' : 'added'}>
-      <span aria-hidden="true">{current.has(line) ? '  ' : '+ '}</span>{line || ' '}
+  return sequenceDiff(base.split('\n'), alternative.split('\n')).map((operation, index) => (
+    <div key={index} data-change={operation.type}>
+      <span aria-hidden="true">{operation.type === 'removed' ? '- ' : operation.type === 'added' ? '+ ' : '  '}</span>{operation.value || ' '}
     </div>
   ))
 }

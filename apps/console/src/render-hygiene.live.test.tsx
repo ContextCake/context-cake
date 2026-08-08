@@ -15,9 +15,11 @@
 import { act, type ComponentType } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { App } from './App'
 import { Header } from './components/Header'
 import { ChatPanel } from './components/ChatPanel'
 import { StoreProvider, useStoreData } from './store'
+import { ThemeModeProvider } from './theme-mode'
 import { Concepts } from './views/Concepts'
 
 type AnyComponent = (props: Record<string, unknown>) => unknown
@@ -37,15 +39,21 @@ vi.mock('./api', async () => {
   }
 })
 
-vi.mock('./components/LayerChip', async () => {
-  const actual = await vi.importActual<Record<string, ComponentType<never>>>('./components/LayerChip')
-  return {
-    LayerChip: (props: Record<string, unknown>) => {
-      renders.LayerChip = (renders.LayerChip ?? 0) + 1
-      return (actual.LayerChip as unknown as AnyComponent)(props)
-    },
+/** Render counter inside the memo boundary — see the note in render-hygiene.test.tsx. */
+async function counted(name: string, actual: Record<string, unknown>) {
+  const { memo } = await import('react')
+  const exported = actual[name]
+  const wasMemo = typeof exported !== 'function'
+  const Inner = (wasMemo ? (exported as { type: unknown }).type : exported) as AnyComponent
+  const Counted = (props: Record<string, unknown>) => {
+    renders[name] = (renders[name] ?? 0) + 1
+    return Inner(props)
   }
-})
+  return { ...actual, [name]: wasMemo ? memo(Counted as unknown as ComponentType) : Counted }
+}
+
+vi.mock('./views/Concepts', async () => counted('Concepts', await vi.importActual('./views/Concepts')))
+vi.mock('./App', async () => counted('App', await vi.importActual('./App')))
 
 let container: HTMLDivElement
 let root: Root
@@ -83,7 +91,9 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   container.remove()
-  window.location.hash = ''
+  vi.unstubAllGlobals()
+  window.history.replaceState(null, '', '/')
+  document.documentElement.removeAttribute('data-theme')
 })
 
 describe('the render budget holds in live mode too', () => {
@@ -107,24 +117,55 @@ describe('the render budget holds in live mode too', () => {
     const conceptId = container.querySelector('.cc-navigator-detail > div > button.cc-h-bd-strong code')?.textContent
     expect(conceptId, 'the view rendered no concept rows — live mode served nothing').toBeTruthy()
 
-    const chipsBefore = renders.LayerChip ?? 0
+    const viewBefore = renders.Concepts ?? 0
     const probeBefore = renders.probe ?? 0
-    expect(chipsBefore, 'the view rendered no layer chips — the probe is counting nothing').toBeGreaterThan(0)
+    expect(viewBefore, 'the view never rendered — the probe is counting nothing').toBeGreaterThan(0)
     expect(probeBefore, 'the data probe never rendered').toBeGreaterThan(0)
 
     // A question typed over the top of a view touches neither the view nor the
     // shell that hosts it.
     for (const text of ['w', 'wh', 'wha', 'what']) typeInto(composer!, text)
     expect(composer!.value).toBe('what')
-    expect((renders.LayerChip ?? 0) - chipsBefore).toBe(0)
+    expect((renders.Concepts ?? 0) - viewBefore).toBe(0)
     expect((renders.probe ?? 0) - probeBefore).toBe(0)
 
     // And a search keystroke reaches the view it filters — without repainting
     // the shell, which is the property the original context split bought.
-    const chipsBeforeSearch = renders.LayerChip ?? 0
+    const viewBeforeSearch = renders.Concepts ?? 0
     const probeBeforeSearch = renders.probe ?? 0
     typeInto(search!, conceptId!)
-    expect(renders.LayerChip ?? 0).toBeGreaterThan(chipsBeforeSearch)
+    expect(renders.Concepts ?? 0).toBeGreaterThan(viewBeforeSearch)
     expect((renders.probe ?? 0) - probeBeforeSearch).toBe(0)
+  })
+
+  /**
+   * The probe above stands in for `App`'s data subscription, which is what this
+   * bug traveled through — but it is a stand-in, and it cannot see a NEW
+   * subscription added to the real App. Adding `useStoreChat()` there would
+   * repaint the shell's own inline JSX on every character and leave the suite
+   * green, because every child it renders is memoized and would bail.
+   *
+   * So this mounts the real thing and opens the panel the way a user does.
+   */
+  it('does not re-render the shell itself while a question is typed into it', async () => {
+    window.history.replaceState(null, '', '/#/concepts')
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0))
+    await act(async () => root.render(
+      <ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>,
+    ))
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+
+    const ask = container.querySelector<HTMLButtonElement>('.cc-toolbar-ask')
+    expect(ask, 'the toolbar rendered no Ask button').toBeTruthy()
+    await act(async () => { ask!.click() })
+    const composer = container.querySelector<HTMLTextAreaElement>('.cc-ask-panel textarea')
+    expect(composer, 'clicking Ask opened no composer').toBeTruthy()
+
+    const before = renders.App ?? 0
+    expect(before, 'the shell never rendered — the probe is counting nothing').toBeGreaterThan(0)
+    for (const text of ['w', 'wh', 'wha', 'what']) typeInto(composer!, text)
+    expect(composer!.value).toBe('what')
+    expect((renders.App ?? 0) - before).toBe(0)
   })
 })

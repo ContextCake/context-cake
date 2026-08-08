@@ -138,10 +138,19 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   `render-hygiene.test.tsx`, which types a query that matches nothing and
   asserts the list actually empties. That suite deliberately holds both halves:
   the sidebar must NOT repaint on a search keystroke, and the active view MUST.
-  It holds the same pair for the composer with the Ask panel open over a view —
-  the view must NOT repaint, and the composer must still hold what was typed.
-  Views render no icons, so that case counts renders through `LayerChip`, which
-  `Concepts` renders inline and unmemoized on every row.
+  It holds the same pair for the composer, table-driven over the same
+  `SEARCHABLE_VIEWS` gate, with the Ask panel open over each view: the view must
+  NOT repaint, and the composer must still hold what was typed.
+- **Count renders inside the memo boundary, not at a leaf.** Views render no
+  icons, so the chat cases needed a probe of their own, and the first one —
+  counting `LayerChip`, which `Concepts` renders per row — was blind by
+  construction: one `memo` between the view and the chip (match-highlighting,
+  virtualization) zeroes the probe, and zero is what the test asserts. `counted()`
+  in `render-hygiene.test.tsx` instead re-exports the view module with a counter
+  wrapping the view's own inner function (unwrapping `React.memo`), so the view's
+  hooks become the counter's hooks and every context it subscribes to is
+  observed. A wrapper AROUND the view counts the parent, which a context-driven
+  re-render never touches — the same reason `React.Profiler` reports zero here.
 - **A `data` value that changes identity per provider render defeats the whole
   split, and demo-mode tests cannot see it.** `App` subscribes to `data` and
   owns every memoized child, so `data` changing identity on every provider

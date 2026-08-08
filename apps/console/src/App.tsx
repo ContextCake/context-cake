@@ -67,9 +67,11 @@ function ErrorState({ kind, message, reload }: { kind: LiveErrorKind; message: s
 }
 
 export function App() {
-  // Deliberately three narrow subscriptions rather than `useStore()`: the shell
+  // Deliberately two narrow subscriptions rather than `useStore()`: the shell
   // owns every memoized child below, so an App render is a whole-tree render.
-  // Typing in the toolbar search must not cause one.
+  // Typing — in the toolbar search or the chat composer — must not cause one,
+  // which is also why `data` must not change identity per provider render (see
+  // NO_ACTIVITY in store.tsx).
   const { setView, openChat, closeChat, route, loading, load, error, reload, retryNow, mode, sources, loadErrors, openFilesScope } = useStoreData()
   const { view, chatOpen } = useStoreNav()
   // Undefined = not yet decided by the auto-trigger effect below; true/false

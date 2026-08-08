@@ -50,12 +50,13 @@ via their pre-hooks.
   / `useStoreInput()` / `useStoreChat()` are the narrow hooks; `useStore()`
   merges all four and re-renders on any of them — it has no production callers
   left, only test mocks, and new code should not add one. The two typing
-  surfaces are deliberately separate contexts: every searchable view reads
-  `query`, only `ChatPanel` reads the composer, and while they shared one
-  context a question typed into the Ask slide-over repainted the view under it
-  per character. Callbacks read the freshest values through refs so they don't
-  re-subscribe. State is in-memory only — reloads reset it. See the
-  subscribe-narrowly gotcha below before adding a consumer.
+  surfaces are deliberately separate contexts: `query` is read by the Header
+  that owns the field and by all five searchable views, the composer only by
+  `ChatPanel`, and while they shared one context a question typed into the Ask
+  slide-over repainted the view under it per character. Callbacks read the
+  freshest values through refs so they don't re-subscribe. State is in-memory
+  only — reloads reset it. See the subscribe-narrowly gotcha below before
+  adding a consumer.
 - **Views** — `src/views/` (Canvas, Overview, Sources, Triage, Conflicts,
   Concepts, Files). `App.tsx` is the shell: topbar + subbar + routed view, plus
   the Triage S/R/D keyboard handler. The canvas view stays full-height inside
@@ -106,8 +107,9 @@ via their pre-hooks.
   rendered honestly — never a silent fallback to demo.
 - **Chat** — `src/components/ChatPanel.tsx` + `store.send()` call
   `window.claude.complete` when present and fall back to canned answers. The
-  panel is the only `useStoreChat()` consumer, and should stay that way: the
-  hook re-renders its caller for every character typed into the composer.
+  panel is the only component that calls `useStoreChat()` (the other caller is
+  `useStore()` itself), and should stay that way: the hook re-renders its caller
+  for every character typed into the composer.
 
 Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
 `src/styles.css` (shell/theme variables), `src/views/Canvas.tsx` (pan/zoom layout),
@@ -140,6 +142,19 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   the view must NOT repaint, and the composer must still hold what was typed.
   Views render no icons, so that case counts renders through `LayerChip`, which
   `Concepts` renders inline and unmemoized on every row.
+- **A `data` value that changes identity per provider render defeats the whole
+  split, and demo-mode tests cannot see it.** `App` subscribes to `data` and
+  owns every memoized child, so `data` changing identity on every provider
+  render *is* a whole-tree repaint per keystroke. That shipped: `activity` was
+  `mode === 'demo' ? demoActivity : []`, and the inline `[]` — live mode only —
+  gave `data` a new identity every render. Both context splits measured zero in
+  `render-hygiene.test.tsx` and bought nothing in the Mac app, because
+  `createDataSource()` with no query string picks demo, the one mode that took
+  the stable branch. Hence `NO_ACTIVITY` in `store.tsx`, and
+  `render-hygiene.live.test.tsx`, which mounts the store with a source that
+  reports `mode: 'live'` while still answering from the demo bundle and pins the
+  same properties there. Anything added to the `data` memo's dependency list
+  must be stable across a render in **both** modes.
 - **Prefer `C.*` / `css()` over raw styles** so both themes and the
   reduced-motion / focus-visible rules keep working.
 - **`css()` is a simple `;`/`:` splitter** — no nested rules, no `url(...)` with

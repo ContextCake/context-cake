@@ -580,7 +580,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // quiet, on any generation change at all (the file-edit case).
       const moved = status.generation !== generation
       const worthRefetching = refetchOwed || (moved && (nextSignature !== signature || !active))
-      if (worthRefetching) {
+      if (worthRefetching && hidden()) {
+        // Owed, but deferred: a hidden tab has no one to show the corpus to,
+        // and CLAUDE.md clocks /api/resolve-all at 620ms/150MB on a 3,000-note
+        // vault — not a payload to issue on a timer nobody is watching. Mark
+        // it owed and leave `generation`/`signature` where they are so the
+        // gate stays open (worthRefetching stays true) on every status-only
+        // poll while still hidden, then land it in one shot: onVisibility's
+        // immediate poll() re-enters this same gate once visible, hidden()
+        // is now false, and the branch below actually runs readAll().
+        refetchOwed = true
+      } else if (worthRefetching) {
         // Committing the gate here — before the heavy read — is how a
         // failed refetch used to hide: the next poll saw nothing moved,
         // skipped the retry, and then took the success path below,
@@ -624,9 +634,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // anyone to know — the exact impression this whole pass exists to fix.
         failures += 1
         setRefreshError(asLiveDataError(e))
-        // A failure tells us nothing new about whether work is active, so a
-        // backoff retry keeps polling through a hidden tab exactly when the
-        // last successful pass said it should.
+        // A failure tells us nothing about whether work is still in flight —
+        // it is not evidence of "active", so it must not keep a HIDDEN tab
+        // polling forever off a stale `true` from the last successful pass.
+        // (Measured before this fix: 85 failed fetches in 10 simulated hidden
+        // minutes, no termination.) A VISIBLE tab is unaffected: schedule()
+        // always fires its next tick when the tab isn't hidden, regardless of
+        // `active` — only the hidden branch reads this value at all.
+        activeState = false
         schedule(Math.min(MAX_BACKOFF_MS, ACTIVE_POLL_MS * failures), activeState)
       } finally {
         running = false
@@ -679,6 +694,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         failures += 1
         setRefreshError(asLiveDataError(e))
+        // Same reasoning as poll()'s catch: a failure is not evidence of
+        // active work, so it must not keep a hidden tab polling forever.
+        activeState = false
         schedule(Math.min(MAX_BACKOFF_MS, ACTIVE_POLL_MS * failures), activeState)
       } finally {
         running = false

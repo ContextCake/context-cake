@@ -229,4 +229,86 @@ describe('Knowledge search (live mode)', () => {
     resolveSecond([])
     await act(async () => { await vi.advanceTimersByTimeAsync(250) })
   })
+
+  // FIX 5: the effect used to depend on both `q` (trimmed+lowercased) and
+  // `query` (raw), so a trailing space or a capitalization change — neither
+  // of which moves `q` — still re-ran it, and its setEngineHits(null) reset
+  // fired a second, identical search while dropping the list to substring
+  // order in between. Measured before the fix: 2 search calls for one
+  // meaningful query, with the ranked list blanked between them.
+  it('does not re-fire the search, or blank the ranked list, on a keystroke that leaves the normalized query unchanged', async () => {
+    const a = populated()
+    const b: Concept = { ...populated(), id: 'decisions/other', title: 'Other decision' }
+    // Engine ranks b above a — a different order than substring/insertion
+    // order — so a reset back to the substring list would be observable.
+    const search = vi.fn().mockResolvedValue([
+      { id: b.id, title: b.title, score: 5, layers: ['personal'], snippet: '' },
+      { id: a.id, title: a.title, score: 1, layers: ['personal'], snippet: '' },
+    ])
+    const store = liveStoreWith([a, b], 'alpha', search)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(search).toHaveBeenCalledTimes(1)
+    expect(rows().map((r) => r.textContent)).toEqual([
+      expect.stringContaining(b.title),
+      expect.stringContaining(a.title),
+    ])
+
+    for (const nextQuery of ['alpha ', 'ALPHA']) {
+      mocks.useStore.mockReturnValue({ ...store, query: nextQuery })
+      await act(async () => { window.dispatchEvent(new Event('contextcake:close-detail')) })
+      // Still the engine's ranked order, immediately — never reset to
+      // substring order (which would be empty here) in between.
+      expect(rows().map((r) => r.textContent)).toEqual([
+        expect.stringContaining(b.title),
+        expect.stringContaining(a.title),
+      ])
+      expect(search).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  // FIX 6: the union of engine hits + substring matches is right (it keeps
+  // partial words alive — see the FIX 1 test above), but when the engine
+  // answers precisely, its one ranked hit rendered visually indistinguishable
+  // from the substring-only rows beneath it.
+  describe('Top matches / Also contains divider', () => {
+    it('shows both labels when the engine half and the substring-only half are both non-empty', async () => {
+      const a = populated()
+      const b: Concept = { ...populated(), id: 'decisions/other-primary', title: 'Other primary' }
+      // The engine answers with only `a`; `b` reaches the list purely via the
+      // substring filter (its id/title also contain "primary").
+      const search = vi.fn().mockResolvedValue([{ id: a.id, title: a.title, score: 5, layers: ['personal'], snippet: '' }])
+      mocks.useStore.mockReturnValue(liveStoreWith([a, b], 'primary', search))
+      await act(async () => root.render(<Concepts />))
+      await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+
+      expect(rows()).toHaveLength(2)
+      expect(container.textContent).toContain('Top matches')
+      expect(container.textContent).toContain('Also contains')
+    })
+
+    it('hides both labels when the engine half is empty (substring-only)', async () => {
+      const search = vi.fn().mockResolvedValue([])
+      mocks.useStore.mockReturnValue(liveStoreWith([populated()], 'primary', search))
+      await act(async () => root.render(<Concepts />))
+      await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+
+      expect(rows()).toHaveLength(1)
+      expect(container.textContent).not.toContain('Top matches')
+      expect(container.textContent).not.toContain('Also contains')
+    })
+
+    it('hides both labels when the engine half already covers every row (nothing substring-only left)', async () => {
+      const a = populated()
+      const search = vi.fn().mockResolvedValue([{ id: a.id, title: a.title, score: 5, layers: ['personal'], snippet: '' }])
+      mocks.useStore.mockReturnValue(liveStoreWith([a], 'primary', search))
+      await act(async () => root.render(<Concepts />))
+      await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+
+      expect(rows()).toHaveLength(1)
+      expect(container.textContent).not.toContain('Top matches')
+      expect(container.textContent).not.toContain('Also contains')
+    })
+  })
 })

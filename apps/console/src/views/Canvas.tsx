@@ -18,21 +18,47 @@ const NODE_DY = 46, GHOST_DY = 62
 // stops being interactive well before it stops being legible. Cap what's
 // rendered rather than let the browser choke on it — Knowledge (unpaginated,
 // list-based) is where the rest is still reachable.
-const MAX_NODES_PER_LANE = 250
-// Not a floor: Fit must be able to reach whatever scale the content actually
-// needs. 0.2 as a floor meant a large cascade's "Fit" button silently stopped
-// fitting — this is only here to keep the transform away from exactly zero.
-// Only computeFitScale uses this; clampZoom (manual zoom) uses its own,
-// higher floor below.
-const FIT_MIN_SCALE = 0.001
-// Floor for a MANUAL zoom (wheel or the +/- controls). Letting manual zoom
-// share FIT_MIN_SCALE meant a wheel zoom-out could land on a scale where
-// nothing is visible and there was no obvious way back. Fit can still land
-// below this — fit() sets the view directly from computeFitScale and never
-// runs the result through clampZoom, so a legitimately small fitted scale is
-// never snapped back up by this floor; it only applies to the next manual
-// zoom action the user actually takes.
-const MIN_MANUAL_SCALE = 0.1
+//
+// The cap is sized so a fully-saturated lane's Fit never needs to drop below
+// MIN_SCALE on a normal desktop viewport (see MIN_SCALE below for both
+// numbers' arithmetic) — a smaller cap than the DOM could technically still
+// render, chosen for legibility rather than raw capacity. The "Showing N of
+// M · Browse everything in Knowledge" banner already tells the user this is
+// a partial view, which is what makes a smaller cap honest rather than a
+// silent loss.
+//
+// Worst case for layout is every concept landing in ONE lane: nodes that
+// share a primary lane always conflict (computeLayout never reuses a column
+// between two nodes with the same occupied-layer set), so N nodes in a
+// single lane cost N columns — there is no sharing to fall back on. That
+// makes worldW a function of N alone:
+//   worldW(N) = START_X + N*NODE_W + (N-1)*GAP_X + END_X = 134 + 242*N
+// Solving worldW(N) * MIN_SCALE <= (viewport width - 48) for the narrow end
+// of a normal desktop viewport (1280px, from the "~1280-1440px" range this
+// was measured against) gives N <= 24.9 — MAX_NODES_PER_LANE=25 lands at
+// scale 0.1992 (just under the floor); 24 lands at 0.2073, comfortably
+// above it at 1280px and with more room at 1440px. worldH is fixed at 648px
+// (3 lanes) regardless of N, so height is never the binding constraint here.
+export const MAX_NODES_PER_LANE = 24
+// The ONE floor shared by Fit and manual zoom (wheel / +/- controls). These
+// used to differ (Fit ~0, manual 0.1): a 3,000-concept vault's Fit landed at
+// scale 0.023 — cards rendered sub-pixel, the screenshot was a blank canvas
+// with one faint dashed line — and the first wheel notch in EITHER direction
+// then clamped up to the manual floor, magnifying the view 4x under the
+// cursor. Splitting the floors again would only resurrect that: the fix is
+// one shared number, low enough to still be a legible discrete card and no
+// lower.
+//
+// Derivation: a card narrower than ~40 screen px reads as a sliver, not a
+// rectangle — at MAX_NODES_PER_LANE's fully-saturated worst case, NODE_W
+// (214px) needs to render at >= ~40px for the card to be a visible,
+// color-coded shape (border + lane accent) rather than noise:
+//   40 / 214 ≈ 0.187, rounded up to 0.2 for a clean shared constant.
+// With the cap above, a saturated lane's Fit lands at ~0.207-0.234 (see its
+// derivation) — comfortably above 0.2, so in practice Fit never needs the
+// floor at all; it exists purely as the shared backstop both Fit and manual
+// zoom respect, so neither can ever clamp past the other.
+export const MIN_SCALE = 0.2
 const MAX_SCALE = 2
 
 const NUM = new Intl.NumberFormat()
@@ -48,13 +74,13 @@ const primaryLayer = (c: Concept): LayerId =>
  *  `null` while the element is not yet laid out (see the caller's guard). */
 export function computeFitScale(cw: number, ch: number, worldW: number, worldH: number) {
   if (cw < 40 || ch < 40) return null
-  const scale = Math.max(FIT_MIN_SCALE, Math.min(1, (cw - 48) / worldW, (ch - 48) / worldH))
+  const scale = Math.max(MIN_SCALE, Math.min(1, (cw - 48) / worldW, (ch - 48) / worldH))
   return { scale, tx: (cw - worldW * scale) / 2, ty: Math.max(24, (ch - worldH * scale) / 2) }
 }
 
 /** Clamp a manual zoom (wheel or +/− button) to the app's zoom range. */
 export function clampZoom(scale: number): number {
-  return Math.min(MAX_SCALE, Math.max(MIN_MANUAL_SCALE, scale))
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale))
 }
 
 export interface LaneCapResult {
@@ -89,6 +115,20 @@ export function capConceptsPerLane(concepts: Concept[], max = MAX_NODES_PER_LANE
     out.push(...shown)
   }
   return { concepts: out, shown: out.length, total: concepts.length, laneCounts }
+}
+
+/**
+ * Full per-lane concept counts — honest even while the canvas only renders
+ * the capped subset (capConceptsPerLane). Shares capConceptsPerLane's
+ * company fallback for a concept with an empty `layers` array (primaryLayer
+ * returns undefined there): without it, such a concept indexed a stray
+ * "undefined" key here — consuming a company slot in the capped render
+ * while never appearing in company's header total.
+ */
+export function countByLane(concepts: Concept[]): Record<LayerId, number> {
+  const counts: Record<LayerId, number> = { company: 0, team: 0, personal: 0 }
+  for (const c of concepts) counts[primaryLayer(c) ?? 'company'] += 1
+  return counts
 }
 
 interface NodePos { c: Concept; x: number; y: number; conflict: boolean }
@@ -153,11 +193,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   const { nodes, ghosts, worldW, worldH } = useMemo(() => computeLayout(capped.concepts), [capped.concepts])
   // Full counts, not the capped subset — the lane header's "N concepts" stays
   // an honest total even while the canvas itself only renders some of them.
-  const laneCounts = useMemo(() => {
-    const counts: Record<LayerId, number> = { company: 0, team: 0, personal: 0 }
-    for (const c of concepts) counts[primaryLayer(c)] += 1
-    return counts
-  }, [concepts])
+  const laneCounts = useMemo(() => countByLane(concepts), [concepts])
   // Real (source name, level) pairs behind each lane, for honest lane headers
   // (Fix F3): demo mode's sources are already the canonical company/team/
   // personal trio, so this reduces to the static labels there — the fallback

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Concept } from '../data'
-import { capConceptsPerLane, clampZoom, computeFitScale, computeLayout } from './Canvas'
+import { capConceptsPerLane, clampZoom, computeFitScale, computeLayout, countByLane, MAX_NODES_PER_LANE, MIN_SCALE } from './Canvas'
 
 function concept(id: string, layer: Concept['layers'][number], dissent?: Concept['layers'][number]): Concept {
   return {
@@ -37,34 +37,41 @@ describe('computeLayout', () => {
 })
 
 describe('computeFitScale', () => {
-  // The old floor (Math.max(0.2, ...)) overrode content-driven fit: a huge
-  // cascade needing a scale well under 0.2 to actually fit got clamped up to
-  // 0.2 anyway, so "Fit" stopped fitting. The floor is now a near-zero
-  // epsilon that only keeps the transform off exactly zero.
-  it('reaches a scale well below the old 0.2 floor for a huge world', () => {
+  // Fit and manual zoom used to have different floors (Fit ~0, manual 0.1):
+  // on a large cascade Fit would land far below what manual zoom could ever
+  // reach, so the first wheel notch after a Fit snapped the view back up —
+  // see "Fit and manual zoom share one floor" below for the exact repro this
+  // replaces. Fit and manual zoom now share MIN_SCALE, so a world too big to
+  // fit at that floor is *cropped*, not shrunk arbitrarily small.
+  it('floors at the shared MIN_SCALE for a world too large to fit otherwise', () => {
     const result = computeFitScale(2000, 1200, 200_000, 100_000)
     expect(result).not.toBeNull()
-    expect(result!.scale).toBeLessThan(0.2)
-    expect(result!.scale).toBeGreaterThan(0)
-    expect(result!.scale).toBeCloseTo((2000 - 48) / 200_000, 5)
+    expect(result!.scale).toBe(MIN_SCALE)
   })
 
   it('still guards a not-yet-laid-out element', () => {
     expect(computeFitScale(0, 0, 1000, 1000)).toBeNull()
   })
+
+  // The cap (MAX_NODES_PER_LANE) is sized precisely so this never has to
+  // happen for real content — see the arithmetic in Canvas.tsx — but a
+  // shrunk viewport can still push a fully-saturated lane under the floor,
+  // and computeFitScale must degrade to "cropped" rather than "sub-pixel"
+  // when it does.
+  it('crops rather than shrinking arbitrarily small when even the floor cannot fit', () => {
+    const result = computeFitScale(600, 400, 200_000, 100_000)
+    expect(result).not.toBeNull()
+    expect(result!.scale).toBe(MIN_SCALE)
+  })
 })
 
 describe('clampZoom', () => {
-  // Manual zoom (wheel / +/- buttons) has its own floor, separate from
-  // computeFitScale's near-zero epsilon: letting a manual zoom-out reach that
-  // epsilon meant landing on a scale where nothing is visible and there was
-  // no obvious way back.
-  it('floors a manual zoom at 0.1, not the near-zero Fit epsilon', () => {
-    expect(clampZoom(0.05)).toBe(0.1)
-    expect(clampZoom(0.001)).toBe(0.1)
+  it('floors a manual zoom at the shared MIN_SCALE', () => {
+    expect(clampZoom(0.05)).toBe(MIN_SCALE)
+    expect(clampZoom(0.001)).toBe(MIN_SCALE)
   })
 
-  it('leaves a scale above the manual floor untouched', () => {
+  it('leaves a scale above the floor untouched', () => {
     expect(clampZoom(0.3)).toBeCloseTo(0.3, 5)
   })
 
@@ -73,18 +80,47 @@ describe('clampZoom', () => {
   })
 })
 
-describe('Fit vs manual-zoom floors', () => {
-  // Fit is driven by content size, not user input, and must still be able to
-  // show a huge cascade in full — even at a scale the manual floor above
-  // would refuse. Fit reaches this by calling setViewT() directly with
-  // computeFitScale's result (see CanvasInner.fit()) rather than routing it
-  // through clampZoom, so a legitimately tiny fitted scale is never snapped
-  // back up; clampZoom only ever sees the *next* manual zoom action.
-  it('lets Fit compute a scale below the manual floor', () => {
-    const result = computeFitScale(2000, 1200, 2_000_000, 1_000_000)
-    expect(result).not.toBeNull()
-    expect(result!.scale).toBeLessThan(0.1)
-    expect(result!.scale).toBeGreaterThan(0)
+describe('Fit and manual zoom share one floor (regression)', () => {
+  // This is the bug two adversarial reviewers independently confirmed on the
+  // branch: FIT_MIN_SCALE (~0) and MIN_MANUAL_SCALE (0.1) disagreed, so a Fit
+  // on a large cascade (3,000 concepts capped to 750 under the old
+  // MAX_NODES_PER_LANE=250, on a 1440x800 canvas) landed at scale 0.02296 —
+  // sub-pixel cards, a blank-looking canvas — and the very next wheel notch,
+  // in EITHER direction, clamped up to 0.1: zooming OUT magnified the view
+  // 4.4x under the cursor. The commit that introduced the split floor also
+  // deleted the test that had pinned "zoom out must not zoom in"; this
+  // restores that guarantee against the new shared floor instead.
+  it('a Fit that would drop below the shared floor gets floored there, and the next zoom-out does not jump', () => {
+    // Reconstructs the exact regression's inputs: a single lane fully
+    // saturated at the OLD per-lane cap (250), via the real layout code
+    // rather than a hand-derived worldW, so this stays honest if NODE_W/GAP_X
+    // ever change.
+    const saturated = Array.from({ length: 250 }, (_, i) => concept(`personal-${i}`, 'personal'))
+    const { worldW, worldH } = computeLayout(saturated)
+
+    const fit = computeFitScale(1440, 800, worldW, worldH)!
+    expect(fit).not.toBeNull()
+    expect(fit.scale).toBe(MIN_SCALE) // floored, not sub-pixel
+
+    // The zoom() handler's "zoom out" factor (1/1.2) applied to the just-fitted
+    // scale, then run through the same clamp a wheel-out or the − button uses.
+    const zoomedOut = clampZoom(fit.scale * (1 / 1.2))
+    expect(zoomedOut).toBe(fit.scale) // floored again, at the SAME value — no jump
+  })
+
+  // The cap this branch ships with (MAX_NODES_PER_LANE) is chosen so this
+  // scenario above cannot actually occur for content the app renders: a
+  // fully-saturated lane fits comfortably above the floor on a normal
+  // desktop viewport, so Fit never needs flooring and the first zoom action
+  // after it is a plain, un-clamped zoom.
+  it('a fully-saturated lane at the current cap fits above the floor on a normal desktop viewport', () => {
+    const saturated = Array.from({ length: MAX_NODES_PER_LANE }, (_, i) => concept(`personal-${i}`, 'personal'))
+    const { worldW, worldH } = computeLayout(saturated)
+
+    for (const width of [1280, 1440]) {
+      const fit = computeFitScale(width, 800, worldW, worldH)!
+      expect(fit.scale).toBeGreaterThan(MIN_SCALE)
+    }
   })
 })
 
@@ -118,6 +154,12 @@ describe('capConceptsPerLane', () => {
     expect(result.concepts.map((c) => c.id)).toEqual(['personal-0', 'personal-1', 'personal-2'])
   })
 
+  it('defaults to MAX_NODES_PER_LANE when no max is given', () => {
+    const input = many('personal', MAX_NODES_PER_LANE + 5)
+    const result = capConceptsPerLane(input)
+    expect(result.laneCounts.personal).toEqual({ shown: MAX_NODES_PER_LANE, total: MAX_NODES_PER_LANE + 5 })
+  })
+
   it('does not crash on a concept with an empty layers array', () => {
     // primaryLayer(c) is undefined for `layers: []` (sort()[0] of an empty
     // array), so indexing straight into the byLane record and calling .push
@@ -127,6 +169,30 @@ describe('capConceptsPerLane', () => {
     expect(() => { result = capConceptsPerLane([orphan]) }).not.toThrow()
     expect(result!.concepts.map((c) => c.id)).toEqual(['orphan'])
     expect(result!.laneCounts.company).toEqual({ shown: 1, total: 1 })
+  })
+})
+
+describe('countByLane', () => {
+  it('counts each concept into its primary lane', () => {
+    const input = [
+      concept('p1', 'personal'), concept('p2', 'personal'),
+      concept('t1', 'team'),
+      concept('c1', 'company'),
+    ]
+    expect(countByLane(input)).toEqual({ personal: 2, team: 1, company: 1 })
+  })
+
+  // F7: capConceptsPerLane falls back a layerless concept (empty `layers`
+  // array — primaryLayer(c) is undefined there) into the company lane's
+  // rendered cards. Before this fix, this count used `counts[primaryLayer(c)]
+  // += 1` directly, which wrote a stray "undefined" key and left company's
+  // header total not counting a concept that nonetheless occupied one of its
+  // rendered slots — so the header undercounted what was actually on screen.
+  it('falls back a layerless concept to company, matching capConceptsPerLane\'s rendering fallback', () => {
+    const orphan: Concept = { ...concept('orphan', 'personal'), layers: [] }
+    const counts = countByLane([orphan, concept('c1', 'company')])
+    expect(counts).toEqual({ personal: 0, team: 0, company: 2 })
+    expect(Object.keys(counts)).not.toContain('undefined')
   })
 })
 

@@ -714,7 +714,10 @@ export function SetupWizard({
   const dialogRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    // Matches the defaultPrevented-first convention used everywhere else a
+    // shell-level and a dialog-level Escape handler could otherwise both act
+    // on the same keypress (see SettingsView's identical guard).
+    const onKey = (e: KeyboardEvent) => { if (!e.defaultPrevented && e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])

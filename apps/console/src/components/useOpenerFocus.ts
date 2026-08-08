@@ -18,12 +18,30 @@ const FOCUSABLE_SELECTOR = 'button, a[href], input, select, textarea, [tabindex]
  */
 export function useOpenerFocus(fallbackSelectors: readonly string[] = []) {
   const openerRef = useRef<HTMLElement | null>(null)
+  // Separate from openerRef because `null` there is itself a valid captured
+  // state (no focusable activeElement, or the wizard's no-trigger first-run
+  // open) that still means "run the fallback search". This flag is what
+  // makes restore() idempotent: a real-Chrome repro found Settings closing
+  // via Escape called restore() TWICE — the shell's own Escape handler closes
+  // it, and SettingsView's internal Escape handler (fixed alongside this to
+  // check event.defaultPrevented) fired too. The first call reads the real
+  // opener and schedules a focus() for it; the second, with openerRef already
+  // nulled, fell through to the generic fallback selectors and — because
+  // rAF preserves scheduling order — its focus() ran *after* the first and
+  // silently overrode the correct target with the wrong one (or, once the
+  // fallback matched nothing at all in the ADD Source case, left focus on
+  // <body>). Gating on `pendingRef` makes a second, spurious restore() a
+  // no-op instead of a second, competing guess.
+  const pendingRef = useRef(false)
 
   const capture = useCallback(() => {
     openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    pendingRef.current = true
   }, [])
 
   const restore = useCallback(() => {
+    if (!pendingRef.current) return
+    pendingRef.current = false
     const opener = openerRef.current
     openerRef.current = null
     window.requestAnimationFrame(() => {

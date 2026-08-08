@@ -211,6 +211,37 @@ describe('Mac-first application shell', () => {
     expect(document.activeElement).toBe(container.querySelector('.cc-toolbar-leading button'))
   })
 
+  // Real-Chrome regression: SettingsView has its own Escape handler
+  // (focus-trap Tab cycling lives there) alongside the shell's, and the
+  // shell's opener button (`.cc-settings-cta`) is also one of
+  // SETTINGS_FOCUS_FALLBACKS — so opening/closing Settings from that one
+  // button always "worked" even while the restore ran twice, masking the
+  // bug. Opening from an unrelated element (as ⌘, from anywhere does)
+  // exposes it: the second, stale restore fell through to the fallback
+  // selectors and stole focus back onto the sidebar's Settings button
+  // instead of leaving it on the real opener.
+  it('restores focus to the real opener after Escape, even when it is not a settings fallback', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <StoreProvider><App /></StoreProvider>
+      </ThemeModeProvider>,
+    ))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    await act(async () => button('Sources').click())
+    const opener = button('Browse files')
+    opener.focus()
+
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true, bubbles: true })))
+    expect(container.querySelector('.cc-settings-screen')).toBeTruthy()
+
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    expect(container.querySelector('.cc-settings-screen')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+  })
+
   it('does not open Settings over the Connect Agent dialog', async () => {
     window.__CC_DESKTOP = {
       getApiToken: async () => 'test',

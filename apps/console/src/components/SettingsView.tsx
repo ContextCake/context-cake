@@ -83,6 +83,12 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
     const root = rootRef.current
     focusables(root)[0]?.focus()
     const onKey = (event: KeyboardEvent) => {
+      // The shell's own Escape handler (App.tsx) already closes Settings and
+      // calls preventDefault() when settingsOpen — without this check, both
+      // handlers ran on every Escape press (confirmed in real Chrome), so
+      // onClose() fired twice and the focus-restore hook had to be made
+      // idempotent to tolerate it (see useOpenerFocus.ts).
+      if (event.defaultPrevented) return
       if (event.key === 'Escape') { event.preventDefault(); onClose?.(); return }
       if (event.key !== 'Tab') return
       const items = focusables(root)

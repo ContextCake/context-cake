@@ -1699,20 +1699,26 @@ export function createEngineService({
       const request = rule.action.type === "prefer_source"
         ? { discrepancyId: discrepancy.id, revision: discrepancy.revision, action: "choose_contribution", selectedSource: rule.action.source, ruleId: rule.id }
         : { discrepancyId: discrepancy.id, revision: discrepancy.revision, action: "acknowledge", reasonCode: rule.action.reasonCode, ruleId: rule.id };
-      try {
-        await withManifestLockAsync(MANIFEST, () => decideDiscrepancyApi(JSON.stringify(request)));
-        return;
-      } catch (error) {
-        await conflictResolutionLog.append({
-          schemaVersion: 2, id: randomUUID(), discrepancyId: discrepancy.id,
-          discrepancyKind: discrepancy.originalKind ?? discrepancy.kind, revision: discrepancy.revision,
-          action: request.action, method: "automatic", actor: "local-user", ruleId: rule.id,
-          transactionState: "blocked", reason: error.message, decidedAt: new Date().toISOString(),
-          contributorFingerprints: discrepancy.contributions.map((item) => ({ source: item.source, fingerprint: item.fingerprint })),
-          contributions: discrepancy.contributions.map((item) => ({ layer: item.source, level: item.level, content: item.value, updated: item.updated })),
-        });
-        return;
-      }
+      await withManifestLockAsync(MANIFEST, async () => {
+        try {
+          await decideDiscrepancyApi(JSON.stringify(request));
+        } catch (error) {
+          // The failure record participates in the same serialization boundary
+          // as successful decisions. Otherwise a manual decision can commit
+          // after this lock is released but before `blocked` is appended,
+          // leaving the failed automatic attempt as the misleading latest
+          // disposition for this revision.
+          await conflictResolutionLog.append({
+            schemaVersion: 2, id: randomUUID(), discrepancyId: discrepancy.id,
+            discrepancyKind: discrepancy.originalKind ?? discrepancy.kind, revision: discrepancy.revision,
+            action: request.action, method: "automatic", actor: "local-user", ruleId: rule.id,
+            transactionState: "blocked", reason: error.message, decidedAt: new Date().toISOString(),
+            contributorFingerprints: discrepancy.contributions.map((item) => ({ source: item.source, fingerprint: item.fingerprint })),
+            contributions: discrepancy.contributions.map((item) => ({ layer: item.source, level: item.level, content: item.value, updated: item.updated })),
+          });
+        }
+      });
+      return;
     }
   }
 

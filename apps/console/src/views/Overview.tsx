@@ -8,18 +8,18 @@ import { EmptyState, StatusBadge } from '../components/ui'
 function OverviewInner() {
   const { mode, setView, signals, conflicts, sources, concepts, activity, loadErrors } = useStoreData()
   const queue = signals.filter((signal) => signal.route === 'review_required')
-  const openConflicts = conflicts.filter((conflict) => conflict.status === 'open')
+  const openConflicts = conflicts.filter((conflict) => ['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'].includes(conflict.discrepancyStatus ?? (conflict.status === 'open' ? 'needs_review' : 'resolved')))
   const failedSources = sources.filter((source) => source.status === 'error' || source.status === 'degraded')
   const attention = [
     ...(queue.length ? [{ key: 'queue', label: `${queue.length} item${queue.length === 1 ? '' : 's'} waiting in Queue`, detail: 'Review captured knowledge before it is stored.', view: 'triage' as const, tone: 'attention' as const }] : []),
-    ...(openConflicts.length ? [{ key: 'conflicts', label: `${openConflicts.length} open conflict${openConflicts.length === 1 ? '' : 's'}`, detail: 'Compare the effective value with its dissent.', view: 'conflicts' as const, tone: 'attention' as const }] : []),
+    ...(openConflicts.length ? [{ key: 'conflicts', label: `${openConflicts.length} actionable discrepanc${openConflicts.length === 1 ? 'y' : 'ies'}`, detail: 'Compare evidence and record a governed decision.', view: 'conflicts' as const, tone: 'attention' as const }] : []),
     ...failedSources.map((source) => ({ key: `source-${source.name}`, label: `${source.name} is ${source.status}`, detail: source.error || 'Open Sources for status and recovery actions.', view: 'sources' as const, tone: 'attention' as const })),
     ...(loadErrors.length ? [{ key: 'resolution', label: `${loadErrors.length} partial resolution failure${loadErrors.length === 1 ? '' : 's'}`, detail: 'The rest of the cascade remains available.', view: 'concepts' as const, tone: 'attention' as const }] : []),
   ]
   const metrics = [
     { label: 'Sources', value: sources.length, view: 'sources' as const },
     { label: 'Concepts', value: concepts.length, view: 'concepts' as const },
-    { label: 'Open conflicts', value: openConflicts.length, view: 'conflicts' as const },
+    { label: 'Discrepancies', value: openConflicts.length, view: 'conflicts' as const },
     { label: 'Queue', value: queue.length, view: 'triage' as const },
   ]
 

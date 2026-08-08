@@ -83,22 +83,35 @@ the rest of the graph.
   markdown in `apps/playground/demo-layers/` and watch the cascade change on
   refresh.
 
-## Resolving conflicts
+## Reviewing discrepancies
 
-Surfacing a conflict is the default; resolving one is opt-in. Each conflicted
-section in the inspector has a **Resolve…** button that opens an N-way merge
-tool:
+Open **Review → Discrepancies** for the decision workflow. It starts with the
+resolver's section conflicts and also reports authored frontmatter
+disagreements, broken links when source coverage is settled, and contributors
+that changed after a prior decision.
 
-- Every layer's version of that section is shown side by side (winner
-  tagged), with its `updated` date.
-- Click **Use this value** to load any version into the editor, or compose a
-  reconciled value by hand.
-- **Apply resolution** writes your value into every layer that defines the
-  section, so they agree — the conflict clears and the cascade re-resolves.
-  The tool always shows exactly which layers it will write to first.
+Each item explains why it exists, why the effective value won, source health,
+owner, freshness, affected links, and every original value. Choose one explicit
+disposition:
 
-This mutates real files (same layer-root sandbox, text-only). It's the human
-deciding the canonical value — nothing is auto-merged.
+- **Use this answer everywhere** propagates an existing contribution to every
+  writable contributor.
+- **Write a reconciled answer** previews Markdown you compose before writing it.
+- **Keep the scoped difference** writes no source content and requires a reason.
+- **Open source files** hands unsupported, remote, and read-only values to the
+  file/source workflow.
+- **Leave open** records nothing.
+
+Live decisions re-check the revision, stage recoverable originals, write under
+the profile lock, and retain an append-only audit trail. The public Web Demo
+instead shows **Simulation—no files will change**; its history resets on reload,
+and automatic rules never run there.
+
+After three consistent manual decisions across three distinct discrepancies,
+ContextCake may suggest a structural rule. Approval creates a recommendation.
+Automatic use is a separate per-rule choice, and team promotion is separately
+previewed and confirmed. ContextCake does not infer permission from confidence
+and does not perform semantic contradiction detection.
 
 ## Files mode
 

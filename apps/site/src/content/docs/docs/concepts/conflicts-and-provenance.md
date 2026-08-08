@@ -1,12 +1,13 @@
 ---
-title: Conflicts & provenance
-description: Where layers disagree, the dissent rides along with dates — surfaced, not hidden.
+title: Discrepancies & provenance
+description: Where structurally aligned sources disagree, dissent and its disposition stay inspectable.
 ---
 
 ContextCake returns one primary answer per concept and is honest about dissent. Where
 layers disagree on a section, the higher layer's value is primary and the dissenting
 layers ride along as `conflicts` — each tagged with its layer and its last-updated
-date. The contradiction is **surfaced, not hidden**.
+date. The structural discrepancy is **surfaced, not hidden**. ContextCake does
+not infer semantic contradictions between unrelated entities or prose.
 
 ## What a resolved concept carries
 
@@ -18,7 +19,8 @@ levels:
 - **`frontmatterProvenance`** — for each frontmatter field, which layer the final value
   came from.
 - **`sections[]`** — each section carries `{ key, heading, content, sourceLayer,
-  sourceUpdated }`, plus an optional `conflicts[]` and an optional `suppressed: true`.
+  sourceUpdated }`, plus an optional `conflicts[]`, optional additive
+  `discrepancy` disposition metadata, and an optional `suppressed: true`.
 
 `sourceLayer` tells an agent which layer won a section; `frontmatterProvenance` does
 the same per field. Together they let an agent weight facts by trust level — knowing a
@@ -92,6 +94,12 @@ This is the core philosophy. ContextCake never silently picks a winner and drops
 rest. It gives a clean primary answer up top and puts the dissent, its source, and its
 date underneath. Nothing is hidden; you always see what the other layers said and when
 they last said it.
+
+The Discrepancy Center adds governed decisions without changing that resolver
+contract. It detects section content, authored frontmatter values, settled broken
+links, and changes after a decision. An acknowledged scoped difference remains in
+the resolved/MCP output with optional disposition metadata; existing consumers may
+ignore that additive field.
 
 ## Next
 

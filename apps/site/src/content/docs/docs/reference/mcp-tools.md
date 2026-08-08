@@ -15,7 +15,7 @@ The default server exposes six read-only tools:
 | Tool | What it does |
 |------|--------------|
 | `search` | Full-text search across all layers; returns one entry per concept with contributing layers |
-| `read_file` | Returns the resolved effective concept — section merge + provenance + per-section conflicts. Pass `layer` for a raw single-layer read. |
+| `read_file` | Returns the resolved effective concept — section merge, provenance, per-section conflicts, and optional discrepancy disposition metadata. Pass `layer` for a raw single-layer read. |
 | `list_concepts` | All effective concept IDs with their contributing layers |
 | `get_links` | Outgoing and incoming links, resolved against the effective graph |
 | `find_captures` | Search recent team captures (unreviewed session findings: investigations, decisions, gotchas, artifacts), ranked by relevance × recency; each hit carries author, age, kind, and review status. Optional `kinds` filter. |
@@ -77,6 +77,11 @@ Arguments: `concept_id` (string, required), `layer` (string, optional).
 
 The resolved response shape:
 
+When a section is contested, it may also include an additive `discrepancy`
+object with a stable ID, `needs_review`, `acknowledged`, or `reopened` status,
+and the applicable decision/reason identifiers. The original `conflicts[]`
+values remain present. Clients that do not understand the field can ignore it.
+
 ```json
 {
   "id": "decisions/primary-db",
@@ -137,7 +142,7 @@ Each entry in `sections[]`:
 | `suppressed` | Optional. `true` when a `{#anchor override=none}` tombstone hid an inherited section. Retained for audit; no conflicts are emitted. |
 
 Where layers disagree on a section, the higher layer's value is primary and the
-dissenters ride along in `conflicts` — the contradiction is surfaced, not hidden.
+dissenters ride along in `conflicts` — the structural disagreement is surfaced, not hidden.
 Freshness never changes the winner: precedence does. `fresherDissent` exists so
 an agent can notice that the value it is about to quote is older than a dissent
 and raise that with a human instead of silently trusting the cascade. Because

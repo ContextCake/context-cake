@@ -1,4 +1,4 @@
-import type { ConflictResolutionRecord } from './types'
+import type { ConflictResolutionRecord, DiscrepancyKind, DiscrepancyStatus, DiscrepancyRule } from './types'
 import type { LayerId, RouteId } from './theme'
 
 export interface Layer {
@@ -66,6 +66,19 @@ export interface Conflict {
   status: 'open' | 'resolved'; contributions: Contribution[]; winner: LayerId
   safe: boolean
   history: ConflictResolutionRecord[]
+  kind?: DiscrepancyKind
+  discrepancyStatus?: DiscrepancyStatus
+  revision?: string
+  owner?: string
+  priority?: string
+  winnerReason?: string
+  effectiveSource?: string | null
+  coverageComplete?: boolean
+  sourceHealth?: ({ source: string; status: string; error: string | null } | null)[]
+  matchingRules?: Pick<DiscrepancyRule, 'id' | 'scope' | 'mode' | 'action' | 'evidenceDecisionIds'>[]
+  ruleConflict?: boolean
+  target?: string
+  affectedLinks?: string[]
 }
 
 /** `sourceLayer` is the source's real name; `layer` is the lane it renders in. */

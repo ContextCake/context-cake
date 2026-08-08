@@ -226,7 +226,7 @@ export interface ConflictResolutionContribution {
 
 /** One append-only decision returned by GET /api/conflict-resolutions. */
 export interface ConflictResolutionRecord {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   id: string
   conflictId: string
   conceptId: string
@@ -234,12 +234,103 @@ export interface ConflictResolutionRecord {
   sectionKey: string
   sectionHeading: string
   contributions: ConflictResolutionContribution[]
-  chosen: ConflictResolutionContribution
+  chosen: ConflictResolutionContribution | null
   method: 'automatic' | 'manual'
   reason: string
   actor: 'local-user'
   decidedAt: string
   supersedes?: string
+  discrepancyId?: string
+  discrepancyKind?: DiscrepancyKind
+  revision?: string
+  action?: DiscrepancyAction
+  reasonCode?: AcknowledgementReason
+  note?: string
+  ruleId?: string
+  transactionId?: string
+  transactionState?: 'committed' | 'rolled_back' | 'recovery_required' | 'not_required' | 'blocked'
+  writtenTargets?: { layer: string; path: string }[]
+  contributorFingerprints?: { source: string; fingerprint: string }[]
+  supersededDecisionId?: string
+}
+
+export type DiscrepancyKind = 'section_content' | 'frontmatter_value' | 'broken_link' | 'changed_after_decision'
+export type DiscrepancyStatus = 'needs_review' | 'recommended' | 'auto_ready' | 'acknowledged' | 'resolved' | 'reopened' | 'blocked'
+export type DiscrepancyAction = 'choose_contribution' | 'compose' | 'acknowledge'
+export type AcknowledgementReason = 'different_scopes' | 'temporary_migration' | 'source_specific_authority' | 'other'
+
+export interface DiscrepancyContribution {
+  source: string
+  level: number
+  updated: string | null
+  value: unknown
+  fingerprint: string
+  effective: boolean
+}
+
+export interface DiscrepancyRule {
+  id: string
+  scope: 'local' | 'team'
+  mode: 'recommend' | 'automatic'
+  enabled: boolean
+  match: { kind: DiscrepancyKind; conceptType: string; key: string; sources: string[] }
+  action: { type: 'prefer_source'; source: string } | { type: 'acknowledge'; reasonCode: AcknowledgementReason }
+  evidenceDecisionIds: string[]
+}
+
+export interface DiscrepancyRuleSuggestion {
+  id: string
+  match: DiscrepancyRule['match']
+  action: DiscrepancyRule['action']
+  evidenceDecisionIds: string[]
+  evidenceCount: number
+}
+
+export interface DiscrepancyRecord {
+  id: string
+  legacyId?: string
+  kind: DiscrepancyKind
+  originalKind: DiscrepancyKind
+  conceptId: string
+  conceptTitle: string
+  conceptType: string
+  key: string
+  label: string
+  target?: string
+  revision: string
+  status: DiscrepancyStatus
+  contributions: DiscrepancyContribution[]
+  effectiveSource: string | null
+  effectiveValue: unknown
+  winnerReason: string
+  owner: string
+  priority: string
+  fresherDissent: boolean
+  freshness: { effectiveUpdated: string | null; newestUpdated: string | null; hasNewerDissent: boolean }
+  affectedLinks: string[]
+  sourceHealth: ({ source: string; status: string; error: string | null } | null)[]
+  history: ConflictResolutionRecord[]
+  matchingRules: Pick<DiscrepancyRule, 'id' | 'scope' | 'mode' | 'action' | 'evidenceDecisionIds'>[]
+  ruleConflict?: boolean
+}
+
+export interface DiscrepanciesResponse {
+  discrepancies: DiscrepancyRecord[]
+  coverageComplete: boolean
+  indexing: boolean
+  indexingSources: string[]
+  errors: { concept: string; error: string }[]
+  generation: number
+}
+
+export interface DiscrepancyDecisionRequest {
+  discrepancyId: string
+  revision: string
+  action: DiscrepancyAction
+  selectedSource?: string
+  content?: string
+  reasonCode?: AcknowledgementReason
+  note?: string
 }
 
 export interface ResolveConflictRequest {

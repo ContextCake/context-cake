@@ -12,12 +12,12 @@ const narrativePoints = [
 		body: 'Each selected value shows the layer it came from and the date of that source.',
 	},
 	{
-		title: 'The other answer stays visible',
-		body: 'An override doesn’t erase the value it replaced.',
+		title: 'Structural discrepancies stay visible',
+		body: 'Shared OKF identities make aligned differences inspectable without claiming semantic contradiction detection.',
 	},
 	{
 		title: 'From the answer to the file',
-		body: 'Browse resolved concepts and their conflicts, then open the document any section came from.',
+		body: 'Browse resolved concepts and their discrepancies, then open the document any section came from.',
 	},
 ];
 ---
@@ -52,6 +52,7 @@ const narrativePoints = [
 		</section>
 
 		<section class="frame-section">
+			<p class="simulation-note"><strong>Simulation—no files will change.</strong> Actions and history reset on reload; automatic rules never run.</p>
 			<div class="stage" id="demo-stage" data-demo-stage>
 				<figure class="frame-wrap" data-demo-frame>
 					<div class="chrome">
@@ -353,6 +354,14 @@ const narrativePoints = [
 	/* Live demo stage ------------------------------------------------------ */
 	.frame-section {
 		padding-bottom: 3rem;
+	}
+	.simulation-note {
+		margin: 0 0 0.75rem;
+		padding: 0.7rem 0.9rem;
+		border: 1px solid var(--cc-border-strong);
+		background: var(--cc-surface-raised);
+		color: var(--cc-text-body);
+		font-size: 0.78rem;
 	}
 	/* The stage holds the inline height; the panel fills it absolutely so that
 	   when it goes fixed (immersive) the page keeps its place — no jump. */

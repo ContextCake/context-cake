@@ -13,7 +13,8 @@
 
 import demoBundleRaw from './generated/demo-cascade.json'
 import type {
-  ConflictResolutionRecord, DemoBundle, GraphSummary, GraphSource, ResolveConflictRequest,
+  ConflictResolutionRecord, DemoBundle, DiscrepanciesResponse, DiscrepancyDecisionRequest, DiscrepancyRecord,
+  DiscrepancyRule, DiscrepancyRuleSuggestion, GraphSummary, GraphSource, ResolveConflictRequest,
   ResolvedConcept, ResolvedSection, SourceStatus, StatusSummary,
 } from './types'
 import type { Concept, ConceptSection, Conflict, Dissent, Source } from './data'
@@ -60,6 +61,13 @@ export interface DataSource {
   status(): Promise<StatusSummary | null>
   conflictResolutions(): Promise<ConflictResolutionRecord[]>
   resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord>
+  discrepancies(): Promise<DiscrepanciesResponse | null>
+  decideDiscrepancy(request: DiscrepancyDecisionRequest): Promise<ConflictResolutionRecord>
+  discrepancyRules(): Promise<{ rules: DiscrepancyRule[]; suggestions: DiscrepancyRuleSuggestion[] }>
+  createDiscrepancyRule(suggestionId: string): Promise<DiscrepancyRule>
+  patchDiscrepancyRule(id: string, changes: { mode?: 'recommend' | 'automatic'; enabled?: boolean }): Promise<DiscrepancyRule>
+  promoteDiscrepancyRule(id: string, confirm: boolean): Promise<Record<string, unknown>>
+  setDiscrepancyPriority(id: string, priority: string): Promise<void>
 }
 
 // ---- Transport --------------------------------------------------------------
@@ -188,6 +196,42 @@ class DemoSource implements DataSource {
     }
   }
   async conflictResolutions(): Promise<ConflictResolutionRecord[]> { return this.resolutions }
+  async discrepancies(): Promise<DiscrepanciesResponse> {
+    const conflicts = adaptConflicts(this.bundle.concepts, this.resolutions)
+    return {
+      discrepancies: conflicts.map((conflict) => legacyConflictRecord(conflict)),
+      coverageComplete: true, indexing: false, indexingSources: [], errors: [], generation: 1,
+    }
+  }
+  async decideDiscrepancy(request: DiscrepancyDecisionRequest): Promise<ConflictResolutionRecord> {
+    if (request.action !== 'choose_contribution' || !request.selectedSource) {
+      const current = (await this.discrepancies()).discrepancies.find((item) => item.id === request.discrepancyId)
+      if (!current) throw new LiveDataError('bad-status', 'This discrepancy is no longer open.', 409)
+      const chosen = request.action === 'compose'
+        ? { layer: current.effectiveSource ?? current.contributions[0].source, content: request.content ?? '', updated: new Date().toISOString() }
+        : null
+      const record: ConflictResolutionRecord = {
+        schemaVersion: 2, id: `demo-${Date.now()}-${this.resolutions.length + 1}`,
+        conflictId: current.legacyId ?? current.id, discrepancyId: current.id,
+        conceptId: current.conceptId, title: current.conceptTitle, sectionKey: current.key,
+        sectionHeading: current.label,
+        contributions: current.contributions.map((item) => ({ layer: item.source, level: item.level, content: String(item.value), updated: item.updated })),
+        chosen, method: 'manual', actor: 'local-user', decidedAt: new Date().toISOString(),
+        action: request.action, reason: request.action === 'acknowledge' ? 'You kept this scoped difference.' : 'You wrote a reconciled answer.',
+        reasonCode: request.reasonCode, note: request.note,
+        transactionState: request.action === 'acknowledge' ? 'not_required' : 'committed', writtenTargets: [],
+      }
+      this.resolutions.push(record)
+      return record
+    }
+    const [, conceptId, sectionKey] = request.discrepancyId.split('::')
+    return this.resolveConflict({ conceptId, sectionKey, selectedLayer: request.selectedSource, method: 'manual' })
+  }
+  async discrepancyRules() { return { rules: [], suggestions: [] } }
+  async createDiscrepancyRule(): Promise<DiscrepancyRule> { throw new LiveDataError('bad-status', 'Simulation rules reset on reload.', 405) }
+  async patchDiscrepancyRule(): Promise<DiscrepancyRule> { throw new LiveDataError('bad-status', 'Automatic rules never run in simulation.', 405) }
+  async promoteDiscrepancyRule(): Promise<Record<string, unknown>> { throw new LiveDataError('bad-status', 'Simulation cannot promote team rules.', 405) }
+  async setDiscrepancyPriority(): Promise<void> { /* simulation-only local state is owned by the store */ }
   async resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord> {
     const prior = request.resolutionId
       ? this.resolutions.find((item) => item.id === request.resolutionId)
@@ -300,6 +344,41 @@ class LiveSource implements DataSource {
       body: JSON.stringify(request),
     })
     return response.resolution
+  }
+  async discrepancies(): Promise<DiscrepanciesResponse | null> {
+    try { return await this.get<DiscrepanciesResponse>('/api/discrepancies') }
+    catch (error) {
+      if (error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404) return null
+      throw error
+    }
+  }
+  async decideDiscrepancy(request: DiscrepancyDecisionRequest): Promise<ConflictResolutionRecord> {
+    return (await this.request<{ decision: ConflictResolutionRecord }>('/api/discrepancy-decisions', {
+      method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(request),
+    })).decision
+  }
+  async discrepancyRules(): Promise<{ rules: DiscrepancyRule[]; suggestions: DiscrepancyRuleSuggestion[] }> {
+    return this.get('/api/discrepancy-rules')
+  }
+  async createDiscrepancyRule(suggestionId: string): Promise<DiscrepancyRule> {
+    return (await this.request<{ rule: DiscrepancyRule }>('/api/discrepancy-rules', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ suggestionId }),
+    })).rule
+  }
+  async patchDiscrepancyRule(id: string, changes: { mode?: 'recommend' | 'automatic'; enabled?: boolean }): Promise<DiscrepancyRule> {
+    return (await this.request<{ rule: DiscrepancyRule }>(`/api/discrepancy-rules?id=${encodeURIComponent(id)}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(changes),
+    })).rule
+  }
+  async promoteDiscrepancyRule(id: string, confirm: boolean): Promise<Record<string, unknown>> {
+    return this.request('/api/discrepancy-rules/promote', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, confirm }),
+    })
+  }
+  async setDiscrepancyPriority(id: string, priority: string): Promise<void> {
+    await this.request(`/api/discrepancies?id=${encodeURIComponent(id)}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ priority }),
+    })
   }
   private async get<T>(path: string): Promise<T> {
     return this.request<T>(path, { headers: { accept: 'application/json' } })
@@ -697,11 +776,60 @@ export function adaptConflicts(concepts: ResolvedConcept[], resolutions: Conflic
       section: headingText(latest.sectionHeading),
       title: `${headingText(latest.sectionHeading)} — ${latest.title}`,
       status: 'resolved',
-      winner: layerOf(latest.chosen.layer, latest.chosen.level ?? (latest.chosen.layer === 'personal' ? 3 : latest.chosen.layer === 'team' ? 2 : 0)),
+      winner: layerOf(latest.chosen?.layer ?? latest.contributions[0]?.layer ?? '', latest.chosen?.level ?? latest.contributions[0]?.level ?? 0),
       contributions,
       safe: false,
       history,
     })
   }
   return out
+}
+
+function legacyConflictRecord(conflict: Conflict): DiscrepancyRecord {
+  return {
+    id: `section_content::${conflict.concept}::${conflict.sectionKey}`,
+    legacyId: conflict.id,
+    kind: 'section_content', originalKind: 'section_content',
+    conceptId: conflict.concept, conceptTitle: conflict.title, conceptType: 'concept',
+    key: conflict.sectionKey, label: conflict.section,
+    revision: `${conflict.id}:${conflict.history.length}`,
+    status: conflict.status === 'resolved' ? 'resolved' : 'needs_review',
+    contributions: conflict.contributions.map((item, index) => ({
+      source: item.sourceLayer, level: item.layer === 'personal' ? 3 : item.layer === 'team' ? 2 : 0,
+      updated: item.updated || null, value: item.value, fingerprint: `${conflict.id}:${index}`, effective: index === 0,
+    })),
+    effectiveSource: conflict.contributions[0]?.sourceLayer ?? null,
+    effectiveValue: conflict.contributions[0]?.value ?? '',
+    winnerReason: `${conflict.contributions[0]?.sourceLayer ?? 'The selected source'} wins by configured layer precedence.`,
+    owner: 'Unassigned', priority: 'unassigned', fresherDissent: conflict.contributions.some((item) => item.fresherDissent),
+    freshness: { effectiveUpdated: conflict.contributions[0]?.updated ?? null, newestUpdated: conflict.contributions[0]?.updated ?? null, hasNewerDissent: conflict.contributions.some((item) => item.fresherDissent) },
+    affectedLinks: [],
+    sourceHealth: conflict.contributions.map((item) => ({ source: item.sourceLayer, status: 'ok', error: null })),
+    history: conflict.history, matchingRules: [],
+  }
+}
+
+/** Raw professional discrepancy records → the existing navigator view model. */
+export function adaptDiscrepancies(records: DiscrepancyRecord[], coverageComplete = true): Conflict[] {
+  return records.map((record) => {
+    const contributions = record.contributions.map((item) => ({
+      layer: layerOf(item.source, item.level), sourceLayer: item.source,
+      value: typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2),
+      updated: item.updated ?? '',
+      ...(record.fresherDissent && !item.effective ? { fresherDissent: true } : {}),
+    }))
+    const effective = record.contributions.find((item) => item.effective) ?? record.contributions[0]
+    return {
+      id: record.id, concept: record.conceptId, sectionKey: record.key,
+      section: record.label, title: `${record.label} — ${record.conceptTitle}`,
+      status: record.status === 'resolved' ? 'resolved' : 'open',
+      winner: layerOf(effective?.source ?? '', effective?.level ?? 0),
+      contributions, safe: false, history: record.history,
+      kind: record.kind, discrepancyStatus: record.status, revision: record.revision,
+      owner: record.owner, priority: record.priority, winnerReason: record.winnerReason,
+      effectiveSource: record.effectiveSource, coverageComplete, sourceHealth: record.sourceHealth,
+      matchingRules: record.matchingRules, ruleConflict: record.ruleConflict, target: record.target,
+      affectedLinks: record.affectedLinks,
+    }
+  })
 }

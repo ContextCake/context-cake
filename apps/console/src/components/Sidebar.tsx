@@ -51,7 +51,7 @@ function SidebarInner({ onOpenSettings, onNavigate }: { onOpenSettings?: () => v
   if (view === 'triage' || view === 'conflicts') reviewView.current = view
 
   const reviewCount = signals.filter((signal) => signal.route === 'review_required').length
-    + conflicts.filter((conflict) => conflict.status === 'open').length
+    + conflicts.filter((conflict) => ['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'].includes(conflict.discrepancyStatus ?? (conflict.status === 'open' ? 'needs_review' : 'resolved'))).length
   const sourceErrors = sources.filter((source) => source.status === 'degraded' || source.status === 'error').length
 
   const go = (destination: ShellDestination) => {

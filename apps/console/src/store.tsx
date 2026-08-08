@@ -6,10 +6,13 @@ import {
   type Activity, type Concept, type Conflict, type Signal, type Source,
 } from './data'
 import {
-  adaptConcept, adaptConflicts, adaptSources, createDataSource, LiveDataError, mergeSourceStatus,
+  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, createDataSource, LiveDataError, mergeSourceStatus,
   type Mode,
 } from './api'
-import type { GraphSummary, SourceStatus } from './types'
+import type {
+  DiscrepancyDecisionRequest, DiscrepancyRule, DiscrepancyRuleSuggestion,
+  GraphSummary, SourceStatus,
+} from './types'
 import type { LayerId, RouteId } from './theme'
 import { dispatchNavigationGuard, filesHash, isViewId, parseHash, type ViewId } from './shell-navigation'
 
@@ -209,6 +212,8 @@ export interface StoreData {
   loadErrors: { concept: string; error: string }[]
   resolvingConflict: string | null
   resolutionError: { message: string; partial: boolean } | null
+  discrepancyRules: DiscrepancyRule[]
+  discrepancyRuleSuggestions: DiscrepancyRuleSuggestion[]
 
   setView: (v: ViewId) => void
   setTriageTab: (t: TriageTab) => void
@@ -236,6 +241,11 @@ export interface StoreData {
   route: (target: RouteId) => void
   resolveConflict: (conflictId: string, sourceLayer: string, method: 'automatic' | 'manual') => Promise<void>
   resolveSafeConflicts: () => Promise<void>
+  decideDiscrepancy: (request: DiscrepancyDecisionRequest) => Promise<void>
+  approveRuleSuggestion: (id: string) => Promise<void>
+  updateDiscrepancyRule: (id: string, changes: { mode?: 'recommend' | 'automatic'; enabled?: boolean }) => Promise<void>
+  promoteDiscrepancyRule: (id: string, confirm: boolean) => Promise<Record<string, unknown>>
+  setDiscrepancyPriority: (id: string, priority: string) => Promise<void>
   send: (text?: string) => void
   reload: () => void
   /**
@@ -306,6 +316,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [loadErrors, setLoadErrors] = useState<{ concept: string; error: string }[]>([])
   const [resolvingConflict, setResolvingConflict] = useState<string | null>(null)
   const [resolutionError, setResolutionError] = useState<{ message: string; partial: boolean } | null>(null)
+  const [discrepancyRules, setDiscrepancyRules] = useState<DiscrepancyRule[]>([])
+  const [discrepancyRuleSuggestions, setDiscrepancyRuleSuggestions] = useState<DiscrepancyRuleSuggestion[]>([])
   // Triage signals and the activity feed have no resolver equivalent — demo-only
   // fixtures (D6: live-mode triage is read-only, and there is no signal API).
   const [signals, setSignals] = useState<Signal[]>(mode === 'demo' ? initialSignals : [])
@@ -441,9 +453,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       shellReadyRef.current = true
       setLoading(false) // the shell can render now — everything else streams in
 
-      const [{ concepts: raw, errors, indexing, indexingSources: resolvingSources }, resolutionHistory] = await Promise.all([
+      const [{ concepts: raw, errors, indexing, indexingSources: resolvingSources }, resolutionHistory, discrepancyPayload, rulePayload] = await Promise.all([
         source.resolveAll(),
         source.conflictResolutions(),
+        source.discrepancies ? source.discrepancies() : Promise.resolve(null),
+        source.discrepancyRules ? source.discrepancyRules().catch(() => ({ rules: [], suggestions: [] })) : Promise.resolve({ rules: [], suggestions: [] }),
       ])
       if (cancelled) return false
       // Only fail the whole page when nothing resolved AND nothing is still
@@ -457,8 +471,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // leaves the banner running after the work has landed.
       applyIndexing(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
       setConcepts(raw.map(adaptConcept))
-      const derivedConflicts = adaptConflicts(raw, resolutionHistory)
+      const derivedConflicts = discrepancyPayload
+        ? adaptDiscrepancies(discrepancyPayload.discrepancies, discrepancyPayload.coverageComplete)
+        : adaptConflicts(raw, resolutionHistory)
       setConflicts(derivedConflicts)
+      setDiscrepancyRules(rulePayload.rules)
+      setDiscrepancyRuleSuggestions(rulePayload.suggestions)
       // Honor a deep-linked concept from the URL hash; else default to the
       // first. Only claim the deep link once it actually resolved.
       const pendingId = pendingConceptRef.current
@@ -841,6 +859,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [applyResolution])
 
+  const decideDiscrepancy = useCallback(async (request: DiscrepancyDecisionRequest) => {
+    if (resolvingConflictRef.current) return
+    resolvingConflictRef.current = request.discrepancyId
+    setResolvingConflict(request.discrepancyId)
+    setResolutionError(null)
+    try {
+      const record = await source.decideDiscrepancy(request)
+      setConflicts((previous) => previous.map((item) => item.id === request.discrepancyId
+        ? { ...item, status: request.action === 'acknowledge' ? 'open' : 'resolved', discrepancyStatus: request.action === 'acknowledge' ? 'acknowledged' : 'resolved', history: [...item.history, record] }
+        : item))
+      window.setTimeout(() => setReloadKey((key) => key + 1), 300)
+    } catch (error) {
+      setResolutionError({ message: error instanceof Error ? error.message : String(error), partial: false })
+      throw error
+    } finally {
+      resolvingConflictRef.current = null
+      setResolvingConflict(null)
+    }
+  }, [source])
+
+  const approveRuleSuggestion = useCallback(async (id: string) => {
+    const rule = await source.createDiscrepancyRule(id)
+    setDiscrepancyRules((items) => [...items, rule])
+    setDiscrepancyRuleSuggestions((items) => items.filter((item) => item.id !== id))
+    setReloadKey((key) => key + 1)
+  }, [source])
+
+  const updateDiscrepancyRule = useCallback(async (id: string, changes: { mode?: 'recommend' | 'automatic'; enabled?: boolean }) => {
+    const rule = await source.patchDiscrepancyRule(id, changes)
+    setDiscrepancyRules((items) => items.map((item) => item.id === id ? rule : item))
+    setReloadKey((key) => key + 1)
+  }, [source])
+
+  const promoteDiscrepancyRule = useCallback((id: string, confirm: boolean) => source.promoteDiscrepancyRule(id, confirm), [source])
+  const setDiscrepancyPriority = useCallback(async (id: string, priority: string) => {
+    await source.setDiscrepancyPriority(id, priority)
+    setConflicts((items) => items.map((item) => item.id === id ? { ...item, priority } : item))
+  }, [source])
+
   const send = useCallback((text?: string) => {
     const q = (text != null ? text : chatInputRef.current).trim()
     if (!q || chatBusyRef.current) return
@@ -887,11 +944,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const data = useMemo<StoreData>(() => ({
     mode, loading, load, error,
     concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError,
+    discrepancyRules, discrepancyRuleSuggestions,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery,
     setFilesScope, setFilesPath, openFilesScope, openConcept,
     openChat, closeChat, setChatInput,
-    retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey,
-  }), [mode, loading, load, error, concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError, retryNow, route, resolveConflict, resolveSafeConflicts, send, reload, reloadKey, setView, setSelConcept, setQuery, setFilesScope, setFilesPath, openFilesScope, openConcept, openChat, closeChat])
+    retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
+    approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
+    send, reload, reloadKey,
+  }), [mode, loading, load, error, concepts, sources, signals, conflicts, activity, loadErrors,
+    resolvingConflict, resolutionError, discrepancyRules, discrepancyRuleSuggestions,
+    retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
+    approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
+    send, reload, reloadKey, setView, setSelConcept, setQuery, setFilesScope, setFilesPath,
+    openFilesScope, openConcept, openChat, closeChat])
 
   const nav = useMemo<StoreNav>(
     () => ({ view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, chatOpen }),

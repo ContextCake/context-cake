@@ -205,7 +205,7 @@ export async function writeFileApi(rawBody, roots) {
  * partial disagreement. Omitting a layer (or the map) skips its check, which is
  * also the compatibility path for older clients.
  */
-export async function writeSectionApi(rawBody, roots) {
+export async function prepareSectionWrites(rawBody, roots) {
   const body = parseJson(rawBody);
   const { conceptId, sectionKey, layers, content } = body;
   if (typeof conceptId !== "string" || typeof sectionKey !== "string" || typeof content !== "string") {
@@ -253,7 +253,7 @@ export async function writeSectionApi(rawBody, roots) {
       ? replacePlainTextBody(originalText, sectionKey, content)
       : replaceSection(originalText, sectionKey, content, { refreshUpdatedTo: today });
     if (!replaced) { skipped.push({ layer, reason: `section "${sectionKey}" not found` }); continue; }
-    writes.push({ layer, abs: target.abs, text, currentContent, mtime: stat.mtime.toISOString() });
+    writes.push({ layer, abs: target.abs, text, currentContent, mtime: stat.mtime.toISOString(), mode: stat.mode });
   }
   if (body.requireAll === true && skipped.length > 0) {
     throw httpError(409, `Nothing was changed. ${skipped.map((item) => `${item.layer}: ${item.reason}`).join("; ")}`);
@@ -268,12 +268,141 @@ export async function writeSectionApi(rawBody, roots) {
       throw httpError(409, `${write.layer}/${conceptId}.md changed after this conflict was loaded. Reload it before resolving — nothing was written.`);
     }
   }
+  return { body, writes, skipped };
+}
+
+export async function writeSectionApi(rawBody, roots) {
+  const { writes, skipped } = await prepareSectionWrites(rawBody, roots);
   // A section write into a clone-backed layer dirties .cache/repos, and a later
   // Sync's `git pull --ff-only` will surface that as a failure. Acceptable —
   // the user chose to edit their copy; don't guard it here.
   for (const write of writes) await fsp.writeFile(write.abs, write.text, "utf8");
   return { ok: true, written: writes.map((write) => write.layer), skipped };
 }
+
+/**
+ * Stage a recoverable multi-file section transaction. New and original bytes
+ * live beside each target so rename/copy never crosses filesystems. The caller
+ * journals `targets` before commit and owns final cleanup.
+ */
+export async function stageSectionTransaction(rawBody, roots, transactionId, options = {}) {
+  const { writes, skipped } = await prepareSectionWrites(rawBody, roots);
+  return stagePreparedWrites(writes, skipped, transactionId, options);
+}
+
+export async function stageFrontmatterTransaction(rawBody, roots, transactionId) {
+  const body = parseJson(rawBody);
+  const { conceptId, key, layers, value } = body;
+  if (typeof conceptId !== "string" || typeof key !== "string" || !Array.isArray(layers) || !layers.length) {
+    throw httpError(400, "Provide conceptId, key, and layers");
+  }
+  if (key === "updated" || key === "override") throw httpError(400, `Frontmatter field ${key} is resolver-managed`);
+  const expectedValues = body.expectedValues ?? {};
+  const writes = [];
+  const skipped = [];
+  for (const layer of layers) {
+    const root = roots.get(layer);
+    if (!root) { skipped.push({ layer, reason: "source is not locally writable" }); continue; }
+    let target = null;
+    let stat = null;
+    for (const ext of root.kind === "files" ? FILES_EXTENSIONS.filter((item) => item !== ".txt") : [".md"]) {
+      const candidate = resolveLayerFile(`${layer}/${conceptId}${ext}`, roots);
+      try { stat = await fsp.stat(candidate.abs); } catch { stat = null; }
+      if (stat?.isFile()) { target = candidate; break; }
+    }
+    if (!target || !stat) { skipped.push({ layer, reason: "no writable frontmatter document" }); continue; }
+    const originalText = await fsp.readFile(target.abs, "utf8");
+    const currentValue = readFrontmatterValue(originalText, key);
+    if (stableScalar(currentValue) !== stableScalar(expectedValues[layer])) {
+      throw httpError(409, `${layer}/${conceptId}${target.ext} changed after this discrepancy loaded. Reload it before resolving — nothing was written.`);
+    }
+    const text = replaceFrontmatterValue(originalText, key, value);
+    writes.push({ layer, abs: target.abs, text, mode: stat.mode });
+  }
+  if (skipped.length) throw httpError(409, `Nothing was changed. ${skipped.map((item) => `${item.layer}: ${item.reason}`).join("; ")}`);
+  return stagePreparedWrites(writes, skipped, transactionId);
+}
+
+async function stagePreparedWrites(writes, skipped, transactionId, options = {}) {
+  const targets = [];
+  try {
+    for (const [index, write] of writes.entries()) {
+      const suffix = `.contextcake-${transactionId}-${index}`;
+      const staged = `${write.abs}${suffix}.new`;
+      const backup = `${write.abs}${suffix}.bak`;
+      await fsp.writeFile(staged, write.text, { encoding: "utf8", flag: "wx", mode: write.mode & 0o777 });
+      await fsp.copyFile(write.abs, backup, fs.constants.COPYFILE_EXCL);
+      targets.push({ layer: write.layer, path: write.abs, staged, backup });
+    }
+  } catch (error) {
+    await cleanupTargets(targets);
+    throw error;
+  }
+
+  async function commit() {
+    const changed = [];
+    try {
+      for (const [index, target] of targets.entries()) {
+        await options.beforeReplace?.(index, target);
+        await fsp.rename(target.staged, target.path);
+        changed.push(target);
+      }
+      return changed.map((target) => target.layer);
+    } catch (error) {
+      try {
+        for (const target of changed.reverse()) await fsp.copyFile(target.backup, target.path);
+      } catch (rollbackError) {
+        const combined = new Error(`${error.message}; rollback failed: ${rollbackError.message}`);
+        combined.code = "RecoveryRequired";
+        throw combined;
+      }
+      throw error;
+    }
+  }
+
+  async function rollback() {
+    for (const target of targets) await fsp.copyFile(target.backup, target.path);
+  }
+
+  async function cleanup() { await cleanupTargets(targets); }
+  return { targets, skipped, commit, rollback, cleanup };
+}
+
+async function cleanupTargets(targets) {
+  await Promise.all(targets.flatMap((target) => [target.staged, target.backup].map((file) => fsp.unlink(file).catch(() => {}))));
+}
+
+function readFrontmatterValue(text, key) {
+  if (!text.startsWith("---\n")) return undefined;
+  const end = text.indexOf("\n---", 4);
+  if (end === -1) return undefined;
+  for (const line of text.slice(4, end).split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (match?.[1] === key) return parseScalar(match[2].trim());
+  }
+  return undefined;
+}
+
+function replaceFrontmatterValue(text, key, value) {
+  if (!text.startsWith("---\n")) throw httpError(409, "This document has no writable frontmatter");
+  const end = text.indexOf("\n---", 4);
+  if (end === -1) throw httpError(409, "This document has malformed frontmatter");
+  const before = text.slice(4, end).split(/\r?\n/);
+  const index = before.findIndex((line) => line.startsWith(`${key}:`));
+  if (index === -1) throw httpError(409, `Frontmatter field ${key} no longer exists`);
+  before[index] = `${key}: ${renderScalar(value)}`;
+  return `---\n${before.join("\n")}\n---${text.slice(end + 4)}`;
+}
+
+function parseScalar(value) {
+  if (value.startsWith("[") && value.endsWith("]")) return value.slice(1, -1).split(",").map((part) => part.trim().replace(/^['"]|['"]$/g, "")).filter(Boolean);
+  return value.replace(/^['"]|['"]$/g, "");
+}
+function renderScalar(value) {
+  if (Array.isArray(value)) return `[${value.map((item) => JSON.stringify(String(item))).join(", ")}]`;
+  return JSON.stringify(String(value));
+}
+function stableScalar(value) { return JSON.stringify(value); }
 
 // Replace the body of the section identified by `key`, keeping its heading.
 // Mirrors the OKF parser's key derivation ({#anchor} or normalized heading).

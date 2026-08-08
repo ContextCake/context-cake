@@ -57,11 +57,13 @@ vi.mock('../store', async () => {
     return { filesScope, filesPath }
   }
   const useStoreInput = () => ({ query: mocks.store.query })
+  const useStoreChat = () => ({ chatBusy: false, chatInput: '', chatMessages: [] })
   return {
     useStoreData,
     useStoreNav,
     useStoreInput,
-    useStore: () => ({ ...useStoreData(), ...useStoreNav(), ...useStoreInput() }),
+    useStoreChat,
+    useStore: () => ({ ...useStoreData(), ...useStoreNav(), ...useStoreInput(), ...useStoreChat() }),
   }
 })
 

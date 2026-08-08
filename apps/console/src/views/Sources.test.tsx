@@ -11,7 +11,7 @@ import type { Source } from '../data'
 const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), useStore: vi.fn(), reload: vi.fn(), openFilesScope: vi.fn() }))
 
 vi.mock('../api', () => ({ apiFetch: mocks.apiFetch }))
-vi.mock('../store', () => ({ useStore: mocks.useStore, useStoreData: mocks.useStore, useStoreNav: mocks.useStore, useStoreInput: mocks.useStore }))
+vi.mock('../store', () => ({ useStore: mocks.useStore, useStoreData: mocks.useStore, useStoreNav: mocks.useStore, useStoreInput: mocks.useStore, useStoreChat: mocks.useStore }))
 
 let container: HTMLDivElement
 let root: Root

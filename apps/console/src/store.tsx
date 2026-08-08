@@ -44,6 +44,9 @@ export interface ChatMessage {
   canned?: boolean
 }
 
+/** Live mode has no activity feed. Shared so its identity never moves. */
+const NO_ACTIVITY: Activity[] = []
+
 const initialMessages: ChatMessage[] = [
   { role: 'assistant', intro: true, text: "Ask me anything about your team's knowledge. I read the resolved cascade — Company, Team, and your Personal layer — and tell you which layer each answer comes from." },
 ]
@@ -189,9 +192,13 @@ function asLiveDataError(e: unknown): LiveDataError {
  *   chat  — the Ask composer and its transcript. Changes per keystroke.
  *
  * The two typing surfaces are separate contexts because they have disjoint
- * audiences: every searchable view reads `query`, and only the Ask panel reads
- * the composer. Sharing one context meant a question typed into a panel
- * floating OVER a view repainted the view for every character of it.
+ * audiences: `query` is read by the Header that owns the field and by all five
+ * searchable views, the composer only by the Ask panel. Sharing one context
+ * meant a question typed into a panel floating OVER a view repainted the view
+ * for every character of it.
+ *
+ * None of this survives a `data` value that changes identity per provider
+ * render — see NO_ACTIVITY above, which is what that mistake looks like.
  *
  * Actions all live in `data` and are all stable identities, so a memoized child
  * that takes one as a prop keeps its memo.
@@ -328,7 +335,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Triage signals and the activity feed have no resolver equivalent — demo-only
   // fixtures (D6: live-mode triage is read-only, and there is no signal API).
   const [signals, setSignals] = useState<Signal[]>(mode === 'demo' ? initialSignals : [])
-  const activity = mode === 'demo' ? demoActivity : []
+  // NO_ACTIVITY, not a fresh `[]`: this is a dependency of the `data` memo, so
+  // an inline literal gave `data` a new identity on every provider render — and
+  // in live mode, which is the only mode that took that branch, that defeated
+  // the entire context split. `App` subscribes to `data` and owns every
+  // memoized child, so a keystroke anywhere repainted the whole tree in the
+  // mode the Mac app ships in, while the demo-mode render tests measured zero.
+  const activity = mode === 'demo' ? demoActivity : NO_ACTIVITY
 
   const initial = useMemo(initialRoute, [])
   const [view, setViewState] = useState<ViewId>(initial.view)

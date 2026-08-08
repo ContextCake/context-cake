@@ -12,6 +12,15 @@
 // So this file pins the same properties with the store in live mode. It is a
 // separate file because `vi.mock` is per-file and the suite next door must stay
 // on the demo path.
+//
+// ONE INVARIANT HOLDS THESE TESTS UP: every window between capturing a baseline
+// count and asserting on it must stay synchronous. Live mode really does arm
+// the poll loop (one 5s timer per test, cleared on unmount), and a poll that
+// landed mid-window would legitimately move the numbers — `setLastRefreshAt`
+// feeds `load`, and `load` is a dependency of the `data` memo. No poll can
+// interleave with straight-line code, which is why the counts are exact today.
+// Add an `await` between a baseline and its assertion and this becomes a
+// five-second timing flake that CI will find long before you do.
 import { act, type ComponentType } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -29,6 +38,14 @@ const renders: Record<string, number> = {}
 // A live-mode source that still answers from the demo bundle. The mode flag is
 // the whole variable under test: the payloads are identical either way, and
 // swapping in a real LiveSource would only measure jsdom's missing network.
+//
+// The Proxy returns unbound methods, which then run with `this` set to the
+// proxy. That resolves only because DemoSource's fields are TypeScript
+// `private` — a compile-time marker over an ordinary property, so `this.bundle`
+// re-enters the trap and finds the target's value. Convert one of them to a
+// real `#private` field and every call through here throws, surfacing as the
+// store's generic `refreshError` rather than as an obvious test failure. Bind
+// to the target here if that day comes.
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api')
   return {

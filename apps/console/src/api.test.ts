@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  adaptConcept, adaptConflicts, adaptSources, apiFetch, LiveDataError, mergeSourceStatus, selectMode,
+  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, apiFetch, computeLevelBuckets, LiveDataError, mergeSourceStatus, selectMode,
   trivialConflictReason,
 } from './api'
-import type { GraphSummary, ResolvedConcept } from './types'
+import type { DiscrepancyRecord, GraphSummary, ResolvedConcept } from './types'
+
+// The rank-based level→lane mapping (see computeLevelBuckets in api.ts) needs
+// the full set of levels present across a resolve pass, not just the levels a
+// single test concept happens to carry. Every fixture below uses the
+// canonical trio of levels, so this single buckets value reproduces the old
+// fixed-threshold mapping (0 → company, 2 → team, 3 → personal) exactly —
+// tests that specifically exercise the rank behavior build their own.
+const STANDARD_BUCKETS = computeLevelBuckets([0, 2, 3])
 
 // ---- selectMode -------------------------------------------------------
 
@@ -106,6 +114,55 @@ describe('LiveSource error taxonomy', () => {
   })
 })
 
+describe('LiveSource.search', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn())
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('returns hits from /api/search on the happy path', async () => {
+    const { createDataSource } = await import('./api')
+    const hits = [{ id: 'decisions/primary-db', title: 'Primary database', score: 4.2, layers: ['team'], snippet: '...SingleStore for HTAP...' }]
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ hits }), { status: 200 }))
+    const source = createDataSource('live')
+
+    await expect(source.search('singlestore')).resolves.toEqual(hits)
+    const [calledUrl] = vi.mocked(fetch).mock.calls[0]
+    expect(String(calledUrl)).toBe('/api/search?q=singlestore&limit=20')
+  })
+
+  it('encodes the query and honors a custom limit', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ hits: [] }), { status: 200 }))
+    const source = createDataSource('live')
+
+    await source.search('primary db?', 5)
+    const [calledUrl] = vi.mocked(fetch).mock.calls[0]
+    expect(String(calledUrl)).toBe(`/api/search?q=${encodeURIComponent('primary db?')}&limit=5`)
+  })
+
+  // The existing older-engine-fallback idiom (see status() above): a 404
+  // means this engine predates /api/search, and the signal is `null`, not a
+  // thrown error — the caller (store.search) decides what to do with that.
+  it('resolves to null on 404 — an engine older than this console', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 404, json: async () => ({}) } as Response)
+    const source = createDataSource('live')
+
+    await expect(source.search('anything')).resolves.toBeNull()
+  })
+
+  it('rethrows a non-404 failure — only the 404 case is a silent fallback signal here', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500, json: async () => ({}) } as Response)
+    const source = createDataSource('live')
+
+    await expect(source.search('anything')).rejects.toMatchObject({ kind: 'bad-status', status: 500 })
+  })
+})
+
 describe('desktop API credential transport', () => {
   afterEach(() => {
     delete window.__CC_DESKTOP
@@ -196,6 +253,31 @@ describe('desktop API credential transport', () => {
 
 // ---- Adapters: raw engine types -> console view model -------------------
 
+describe('computeLevelBuckets', () => {
+  it('ranks the highest level present as personal, the next as team, the rest as company', () => {
+    const buckets = computeLevelBuckets([0, 1, 2, 3])
+    expect(buckets.get(3)).toBe('personal')
+    expect(buckets.get(2)).toBe('team')
+    expect(buckets.get(1)).toBe('company')
+    expect(buckets.get(0)).toBe('company')
+  })
+
+  it('puts the sole level present in the top lane rather than folding it into company', () => {
+    expect(computeLevelBuckets([1]).get(1)).toBe('personal')
+  })
+
+  it('promotes a second-place level to team even when it is not 2', () => {
+    expect(computeLevelBuckets([3, 1]).get(1)).toBe('team')
+    expect(computeLevelBuckets([5, 4]).get(4)).toBe('team')
+  })
+
+  it('ignores duplicate levels when ranking', () => {
+    const buckets = computeLevelBuckets([2, 2, 0, 0])
+    expect(buckets.get(2)).toBe('personal')
+    expect(buckets.get(0)).toBe('team')
+  })
+})
+
 describe('adaptConcept', () => {
   const sample: ResolvedConcept = {
     id: 'decisions/primary-db',
@@ -219,30 +301,37 @@ describe('adaptConcept', () => {
   }
 
   it('maps id, title, and type from frontmatter', () => {
-    const c = adaptConcept(sample)
+    const c = adaptConcept(sample, STANDARD_BUCKETS)
     expect(c.id).toBe('decisions/primary-db')
     expect(c.title).toBe('Primary database')
     expect(c.type).toBe('decision')
   })
 
   it('orders contributing layers by precedence (personal, team, company)', () => {
-    const c = adaptConcept(sample)
+    const c = adaptConcept(sample, STANDARD_BUCKETS)
     expect(c.layers).toEqual(['team', 'company'])
   })
 
+  it('carries the real contributor source names, winner first — a zero-section concept has no section to read one from', () => {
+    const c = adaptConcept(sample, STANDARD_BUCKETS)
+    expect(c.contributorLayers).toEqual(['team', 'company'])
+    const empty: ResolvedConcept = { ...sample, sections: [] }
+    expect(adaptConcept(empty, STANDARD_BUCKETS).contributorLayers).toEqual(['team', 'company'])
+  })
+
   it('marks conflict true when any section has dissents', () => {
-    const c = adaptConcept(sample)
+    const c = adaptConcept(sample, STANDARD_BUCKETS)
     expect(c.conflict).toBe(true)
   })
 
   it('marks draft only from OKF frontmatter (write.mjs stamps auto-captures)', () => {
     const stamped: ResolvedConcept = { ...sample, frontmatter: { ...sample.frontmatter, draft: true } }
-    expect(adaptConcept(stamped).draft).toBe(true)
-    expect(adaptConcept(sample).draft).toBe(false)
+    expect(adaptConcept(stamped, STANDARD_BUCKETS).draft).toBe(true)
+    expect(adaptConcept(sample, STANDARD_BUCKETS).draft).toBe(false)
     // A concept owned by a single layer is NOT draft — finished knowledge
     // commonly lives in exactly one layer.
     const solo: ResolvedConcept = { ...sample, contributors: [sample.contributors[0]], sections: [] }
-    expect(adaptConcept(solo).draft).toBe(false)
+    expect(adaptConcept(solo, STANDARD_BUCKETS).draft).toBe(false)
   })
 
   it('maps non-canonical layer names via contributor levels, not the name', () => {
@@ -266,16 +355,16 @@ describe('adaptConcept', () => {
         },
       ],
     }
-    const c = adaptConcept(custom)
+    const c = adaptConcept(custom, STANDARD_BUCKETS)
     expect(c.sections[0].winner).toBe('team')
     expect(c.layers).toEqual(['team', 'company'])
-    const cards = adaptConflicts([custom])
+    const cards = adaptConflicts([custom], [], STANDARD_BUCKETS)
     expect(cards[0].winner).toBe('team')
     expect(cards[0].contributions[0].layer).toBe('team')
   })
 
   it('maps section winner, value, and provenance date', () => {
-    const c = adaptConcept(sample)
+    const c = adaptConcept(sample, STANDARD_BUCKETS)
     const s = c.sections[0]
     expect(s.name).toBe('Choice')
     expect(s.winner).toBe('team')
@@ -284,7 +373,7 @@ describe('adaptConcept', () => {
   })
 
   it('surfaces dissenting layers on the section, not hidden', () => {
-    const c = adaptConcept(sample)
+    const c = adaptConcept(sample, STANDARD_BUCKETS)
     const s = c.sections[0]
     expect(s.dissents).toHaveLength(1)
     expect(s.dissents?.[0]).toMatchObject({ layer: 'company', value: 'Postgres (org standard).', updated: '2025-06-01' })
@@ -295,7 +384,7 @@ describe('adaptConcept', () => {
       ...sample,
       sections: [{ ...sample.sections[0], suppressed: true, conflicts: undefined }],
     }
-    const c = adaptConcept(suppressed)
+    const c = adaptConcept(suppressed, STANDARD_BUCKETS)
     expect(c.sections[0].suppressed).toBe(true)
     expect(c.sections[0].dissents).toEqual([])
   })
@@ -394,7 +483,7 @@ describe('adaptConcept with headingless documents', () => {
   }
 
   it('names a headingless section by its key instead of throwing', () => {
-    const concept = adaptConcept(headless)
+    const concept = adaptConcept(headless, STANDARD_BUCKETS)
     expect(concept.sections[0].name).toBe('body')
   })
 
@@ -404,7 +493,7 @@ describe('adaptConcept with headingless documents', () => {
       contributors: [...headless.contributors, { layer: 'team', level: 2, updated: '2026-02-10' }],
       sections: [{ ...headless.sections[0], conflicts: [{ layer: 'team', updated: '2026-02-10', content: 'Talked to Priya on Tuesday.' }] }],
     }
-    const [conflict] = adaptConflicts([contested])
+    const [conflict] = adaptConflicts([contested], [], STANDARD_BUCKETS)
     expect(conflict.section).toBe('body')
     expect(conflict.title).toBe('body — 2026-02-11')
   })
@@ -539,6 +628,26 @@ describe('adaptSources', () => {
     expect(adaptSources(graph)[0].layer).toBe('personal')
   })
 
+  // The fixed-threshold mapping this replaced sent any level < 2 straight to
+  // 'company' — so a level-1 source sat in Company next to level 0, and the
+  // Team lane, with nothing at level 2, sat empty. Ranked among the levels
+  // that actually exist (3 and 1 here), level 1 is the *second* highest and
+  // now lands in 'team'.
+  it('ranks a level-1 source into team, not company, when a higher level exists', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 10, resolvedTokens: 10, concepts: 2, sources: 2 },
+      sources: [
+        { name: 'personal', level: 3, kind: 'okf-local', conceptCount: 1, tokens: 10, latestUpdated: null, status: 'ok', error: null },
+        { name: 'messy-vault', level: 1, kind: 'files', conceptCount: 1, tokens: 10, latestUpdated: null, status: 'ok', error: null },
+      ],
+      concepts: [],
+    }
+    const [, vault] = adaptSources(graph)
+    expect(vault.name).toBe('messy-vault')
+    expect(vault.layer).toBe('team')
+    expect(vault.layer).not.toBe('company')
+  })
+
   it('never paints a zero-concept MCP source as serving (the false green)', () => {
     // A dead MCP child answers [] instead of throwing, so its row arrives
     // status 'ok' with nothing served — that must not read as healthy.
@@ -622,7 +731,7 @@ describe('adaptConflicts', () => {
         ],
       },
     ]
-    const out = adaptConflicts(concepts)
+    const out = adaptConflicts(concepts, [], STANDARD_BUCKETS)
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({
       id: 'decisions/primary-db::choice',
@@ -644,7 +753,7 @@ describe('adaptConflicts', () => {
         sections: [{ key: 'steps', heading: '## Steps {#steps}', content: 'Deploy.', sourceLayer: 'team', sourceUpdated: null }],
       },
     ]
-    expect(adaptConflicts(concepts)).toEqual([])
+    expect(adaptConflicts(concepts, [], STANDARD_BUCKETS)).toEqual([])
   })
 
   it('classifies formatting-only prose but never guesses when words or code change', () => {
@@ -671,11 +780,66 @@ describe('adaptConflicts', () => {
       reason: 'You chose the acme-eng answer.',
       actor: 'local-user',
       decidedAt: '2026-08-05T00:00:00.000Z',
-    }])
+    }], STANDARD_BUCKETS)
 
     expect(resolved.status).toBe('resolved')
     expect(resolved.winner).toBe('team')
     expect(resolved.contributions.map((item) => item.layer)).toEqual(['team', 'company'])
+    // F13 prerequisite: a resolved card carries the winning source directly,
+    // so the Conflicts source filter can match it even when the contributions
+    // snapshot it carries doesn't happen to include that source by name.
+    expect(resolved.effectiveSource).toBe('acme-eng')
+  })
+})
+
+describe('adaptDiscrepancies', () => {
+  function frontmatterRecord(overrides: Partial<DiscrepancyRecord> = {}): DiscrepancyRecord {
+    return {
+      id: 'frontmatter_value::decisions/primary-db::tags',
+      kind: 'frontmatter_value',
+      originalKind: 'frontmatter_value',
+      conceptId: 'decisions/primary-db',
+      conceptTitle: 'Primary database',
+      conceptType: 'concept',
+      key: 'tags',
+      label: 'tags',
+      revision: 'rev-1',
+      status: 'needs_review',
+      contributions: [
+        { source: 'team', level: 2, updated: '2026-01-01', value: 'oltp', fingerprint: 'fp1', effective: true },
+        { source: 'company', level: 0, updated: '2025-01-01', value: 'oltp', fingerprint: 'fp2', effective: false },
+      ],
+      effectiveSource: 'team',
+      effectiveValue: 'oltp',
+      winnerReason: 'team wins by configured layer precedence.',
+      owner: 'Unassigned',
+      priority: 'unassigned',
+      fresherDissent: false,
+      freshness: { effectiveUpdated: '2026-01-01', newestUpdated: '2026-01-01', hasNewerDissent: false },
+      affectedLinks: [],
+      sourceHealth: [],
+      history: [],
+      matchingRules: [],
+      ...overrides,
+    }
+  }
+
+  it('flags a discrepancy isList when any raw contribution value is an array — the engine 400s compose against it', () => {
+    const record = frontmatterRecord({
+      contributions: [
+        { source: 'team', level: 2, updated: '2026-01-01', value: ['postgres', 'oltp'], fingerprint: 'fp1', effective: true },
+        { source: 'company', level: 0, updated: '2025-01-01', value: ['mysql'], fingerprint: 'fp2', effective: false },
+      ],
+    })
+    const [card] = adaptDiscrepancies([record], true, STANDARD_BUCKETS)
+    expect(card.isList).toBe(true)
+    // The display value is still the honest stringified form, never the raw array.
+    expect(card.contributions[0].value).toBe(JSON.stringify(['postgres', 'oltp'], null, 2))
+  })
+
+  it('never flags isList for an ordinary string-valued frontmatter field', () => {
+    const [card] = adaptDiscrepancies([frontmatterRecord()], true, STANDARD_BUCKETS)
+    expect(card.isList).toBeUndefined()
   })
 })
 
@@ -700,9 +864,9 @@ describe('fresherDissent (C-b)', () => {
   }
 
   it('carries the section flag through adaptConcept onto the view section', () => {
-    const c = adaptConcept(conflicted({ fresherDissent: true }))
+    const c = adaptConcept(conflicted({ fresherDissent: true }), STANDARD_BUCKETS)
     expect(c.sections[0].fresherDissent).toBe(true)
-    expect(adaptConcept(conflicted({})).sections[0].fresherDissent).toBeUndefined()
+    expect(adaptConcept(conflicted({}), STANDARD_BUCKETS).sections[0].fresherDissent).toBeUndefined()
   })
 
   it('marks exactly the strictly-newer dissent contribution on the conflict card', () => {
@@ -714,7 +878,7 @@ describe('fresherDissent (C-b)', () => {
       ],
     })
     concept.contributors.push({ layer: 'company', level: 0, updated: '2025-01-01' })
-    const [card] = adaptConflicts([concept])
+    const [card] = adaptConflicts([concept], [], STANDARD_BUCKETS)
     expect(card.contributions[0].fresherDissent).toBeUndefined() // the winner is never its own dissent
     expect(card.contributions[1]).toMatchObject({ layer: 'team', fresherDissent: true })
     expect(card.contributions[2].fresherDissent).toBeUndefined() // older dissent stays unmarked
@@ -723,7 +887,7 @@ describe('fresherDissent (C-b)', () => {
   it('never marks a dissent when the engine did not flag the section', () => {
     // The engine owns the rule (it also knows about suppression and
     // formatting-equivalence); the console must not out-guess it.
-    const [card] = adaptConflicts([conflicted({})])
+    const [card] = adaptConflicts([conflicted({})], [], STANDARD_BUCKETS)
     expect(card.contributions.every((k) => k.fresherDissent === undefined)).toBe(true)
   })
 
@@ -737,7 +901,7 @@ describe('fresherDissent (C-b)', () => {
       ],
     })
     concept.contributors.push({ layer: 'company', level: 0, updated: '2026-06-01' })
-    const [card] = adaptConflicts([concept])
+    const [card] = adaptConflicts([concept], [], STANDARD_BUCKETS)
     expect(card.contributions[1].fresherDissent).toBeUndefined()
     expect(card.contributions[2].fresherDissent).toBe(true)
   })
@@ -748,13 +912,13 @@ describe('fresherDissent (C-b)', () => {
       sourceUpdated: null,
       conflicts: [{ layer: 'team', updated: '2026-06-01', content: 'Dated dissent.' }],
     })
-    const [card] = adaptConflicts([concept])
+    const [card] = adaptConflicts([concept], [], STANDARD_BUCKETS)
     expect(card.contributions[1].fresherDissent).toBeUndefined()
 
     const garbled = conflicted({
       fresherDissent: true,
       conflicts: [{ layer: 'team', updated: 'not-a-date', content: 'Undated dissent.' }],
     })
-    expect(adaptConflicts([garbled])[0].contributions[1].fresherDissent).toBeUndefined()
+    expect(adaptConflicts([garbled], [], STANDARD_BUCKETS)[0].contributions[1].fresherDissent).toBeUndefined()
   })
 })

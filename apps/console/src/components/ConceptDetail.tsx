@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
 import { C, css, lc, MONO, conceptTypeStyle } from '../theme'
-import { layerName } from '../data'
 import type { Concept } from '../data'
 import { filesRevalidation, useLayerFiles } from '../layer-files'
 import { useStoreData } from '../store'
@@ -56,6 +55,38 @@ function OpenFile({ layer, path, conceptId }: { layer: string; path: string | un
   )
 }
 
+/**
+ * A concept with no sections is a dead end — the resolver produced an id and
+ * some frontmatter, but nothing to read. Rather than rendering an empty
+ * `<div>` with no explanation, name the situation and, where a source file is
+ * identifiable, offer a way to it: the winning contributor's file, or —
+ * absent a listing for it (an MCP or REST-read contributor keeps no file
+ * here) — a plain way into the Files tab, scoped to that source, so browsing
+ * is still one click away.
+ */
+function EmptyConcept({ concept, fileFor }: { concept: Concept; fileFor: (sourceLayer: string) => string | undefined }) {
+  const { openFilesScope } = useStoreData()
+  const winner = concept.contributorLayers?.[0]
+  const path = winner ? fileFor(winner) : undefined
+  return (
+    <div style={css(`display:flex; flex-direction:column; gap:10px; align-items:flex-start; padding:16px 0;`)}>
+      <p style={css('margin:0; font-size:13px; color:#57564F;')}>This concept has no sections — the file may be empty.</p>
+      {winner && (
+        path
+          ? <OpenFile layer={winner} path={path} conceptId={concept.id} />
+          : (
+            <button
+              type="button"
+              className="cc-h-bd-strong"
+              onClick={() => openFilesScope(winner)}
+              style={css(`flex:0 0 auto; padding:5px 11px; border:1px solid ${C.line}; border-radius:999px; background:${C.raised}; cursor:pointer; font:inherit; font-size:11px; font-weight:600; color:${C.caption};`)}
+            >Browse {winner} in Files</button>
+          )
+      )}
+    </div>
+  )
+}
+
 /** The resolved read of a concept — provenance chips per section + inline dissent.
  *  Shared by the Concepts view and the Canvas node slide-over. */
 export function ConceptDetail({ concept }: { concept: Concept }) {
@@ -77,10 +108,15 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
       </div>
 
       <div style={css('display:flex; flex-direction:column;')}>
+        {concept.sections.length === 0 && <EmptyConcept concept={concept} fileFor={fileFor} />}
         {concept.sections.map((s) => {
           const col = lc(s.winner)
           const dissents = s.dissents ?? []
-          const provenance = `${layerName(s.winner)}${s.updated ? ' · ' + s.updated : ''}`
+          // The real source that won this section, not the three-lane bucket it
+          // renders in — two sources can share a lane, and only the source name
+          // says which one is behind the value. The colored dot beside the
+          // heading already carries the lane; this text carries provenance.
+          const provenance = `${s.sourceLayer}${s.updated ? ' · ' + s.updated : ''}`
           return (
             <div key={s.key ?? s.name} style={css('padding:16px 0; border-bottom:1px solid #EDEAE0;')}>
               <div style={css('display:flex; align-items:center; gap:9px; margin-bottom:8px;')}>
@@ -93,7 +129,7 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
               {s.suppressed ? (
                 <div style={css('display:flex; align-items:center; gap:7px; font-size:12px; color:#8A8A82;')}>
                   <span aria-hidden="true">▢</span>
-                  <span>suppressed by {layerName(s.winner)}</span>
+                  <span>suppressed by {s.sourceLayer}</span>
                 </div>
               ) : (
                 <div style={css('font-size:13.5px; color:#1A1915; line-height:1.55;')}>{s.value}</div>
@@ -107,7 +143,7 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
                       <div key={`${d.layer}-${i}`} style={css('display:flex; align-items:flex-start; gap:9px; padding:10px 12px; background:#FBF0DD; border:1px solid #E8C88C; border-radius:9px;')}>
                         <svg style={{ flex: '0 0 auto', marginTop: 1 }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" strokeWidth="2.2" strokeLinecap="round"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></svg>
                         <div style={css('flex:1; font-size:12px; color:#5A3D12; line-height:1.45;')}>
-                          <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:1px 6px; border-radius:999px; background:#FFFFFF; color:${dc.text}; border:1px solid ${dc.strokeE}; margin-right:2px;`)}>{layerName(d.layer)}</span> says <span style={{ color: 'var(--cc-amber-text2)' }}>"{d.value}"</span> — overridden here.
+                          <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:1px 6px; border-radius:999px; background:#FFFFFF; color:${dc.text}; border:1px solid ${dc.strokeE}; margin-right:2px;`)}>{d.sourceLayer}</span> says <span style={{ color: 'var(--cc-amber-text2)' }}>"{d.value}"</span> — overridden here.
                         </div>
                         {d.updated && <span style={css(`flex:0 0 auto; font-family:${MONO}; font-size:10px; color:${C.amberText2};`)}>{d.updated}</span>}
                         <OpenFile layer={d.sourceLayer} path={fileFor(d.sourceLayer)} conceptId={concept.id} />

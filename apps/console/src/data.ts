@@ -79,6 +79,13 @@ export interface Conflict {
   ruleConflict?: boolean
   target?: string
   affectedLinks?: string[]
+  /**
+   * True when any raw contribution behind this discrepancy is an array-typed
+   * frontmatter value (a list field). The engine 400s a compose against such
+   * a field (service.mjs), so the UI disables the compose disposition rather
+   * than letting the request round-trip into an error.
+   */
+  isList?: boolean
 }
 
 /** `sourceLayer` is the source's real name; `layer` is the lane it renders in. */
@@ -100,6 +107,13 @@ export interface ConceptSection {
 export interface Concept {
   id: string; title: string; type: string; layers: LayerId[]
   conflict?: boolean; draft?: boolean; sections: ConceptSection[]
+  /**
+   * The real source names behind this concept, winner first — kept
+   * separately from `layers` (the three-lane buckets) because a concept with
+   * zero sections has no `ConceptSection.sourceLayer` to read a contributor's
+   * real name from, and the "Open file" affordance needs one anyway.
+   */
+  contributorLayers?: string[]
 }
 
 export interface Activity {

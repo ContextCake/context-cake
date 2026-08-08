@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { C, css, lc, MONO, type LayerId } from '../theme'
-import { layerLevel, layers, type Concept } from '../data'
+import { layerLevel, layerName, layers, type Concept } from '../data'
 import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
 import { useStoreData } from '../store'
@@ -13,12 +13,67 @@ const LANE_TOP = 60, LANE_H = 196, LANE_GAP = 16
 const LANE_INNER = LANE_H - LANE_GAP
 const NODE_DY = 46, GHOST_DY = 62
 
+// A real-DOM canvas with no virtualization: every node is a live element in
+// the pan/zoom transform, so a vault with thousands of concepts in one lane
+// stops being interactive well before it stops being legible. Cap what's
+// rendered rather than let the browser choke on it — Knowledge (unpaginated,
+// list-based) is where the rest is still reachable.
+const MAX_NODES_PER_LANE = 250
+// Not a floor: Fit must be able to reach whatever scale the content actually
+// needs. 0.2 as a floor meant a large cascade's "Fit" button silently stopped
+// fitting — this is only here to keep the transform away from exactly zero.
+const MIN_SCALE = 0.001
+const MAX_SCALE = 2
+
+const NUM = new Intl.NumberFormat()
+
 // lanes top→bottom: highest precedence (Personal) on top so "up = wins"
 const LANE_ORDER: LayerId[] = ['personal', 'team', 'company']
 const laneIndex = (id: LayerId) => LANE_ORDER.indexOf(id)
 const laneY = (i: number) => LANE_TOP + i * LANE_H
 const primaryLayer = (c: Concept): LayerId =>
   c.layers.slice().sort((a, b) => layerLevel(b) - layerLevel(a))[0]
+
+/** Fit scale/pan for a `cw`×`ch` viewport around `worldW`×`worldH` content, or
+ *  `null` while the element is not yet laid out (see the caller's guard). */
+export function computeFitScale(cw: number, ch: number, worldW: number, worldH: number) {
+  if (cw < 40 || ch < 40) return null
+  const scale = Math.max(MIN_SCALE, Math.min(1, (cw - 48) / worldW, (ch - 48) / worldH))
+  return { scale, tx: (cw - worldW * scale) / 2, ty: Math.max(24, (ch - worldH * scale) / 2) }
+}
+
+/** Clamp a manual zoom (wheel or +/− button) to the app's zoom range. */
+export function clampZoom(scale: number): number {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale))
+}
+
+export interface LaneCapResult {
+  concepts: Concept[]
+  shown: number
+  total: number
+  laneCounts: Record<LayerId, { shown: number; total: number }>
+}
+
+/**
+ * Cap how many concepts land on the canvas per lane. Selection keeps the
+ * first N in resolve-all order: `Concept` carries no single "last updated"
+ * timestamp of its own (only per-section dates), and scanning every section
+ * of every concept just to sort would undercut the point of a cheap cap at
+ * the scale this exists for.
+ */
+export function capConceptsPerLane(concepts: Concept[], max = MAX_NODES_PER_LANE): LaneCapResult {
+  const byLane: Record<LayerId, Concept[]> = { company: [], team: [], personal: [] }
+  for (const c of concepts) byLane[primaryLayer(c)].push(c)
+  const laneCounts = {} as Record<LayerId, { shown: number; total: number }>
+  const out: Concept[] = []
+  for (const id of LANE_ORDER) {
+    const all = byLane[id]
+    const shown = all.slice(0, max)
+    laneCounts[id] = { shown: shown.length, total: all.length }
+    out.push(...shown)
+  }
+  return { concepts: out, shown: out.length, total: concepts.length, laneCounts }
+}
 
 interface NodePos { c: Concept; x: number; y: number; conflict: boolean }
 interface GhostPos { key: string; parent: NodePos; layer: LayerId; value: string; x: number; y: number }
@@ -72,14 +127,31 @@ function edgePath(x1: number, y1: number, x2: number, y2: number) {
 }
 
 function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolean }) {
-  const { setSelConcept, setSelConflict, setView, conflicts, concepts } = useStoreData()
+  const { setSelConcept, setSelConflict, setView, conflicts, concepts, sources, mode } = useStoreData()
+  // Capped before layout: a real-DOM canvas with no virtualization stops
+  // being usable well before thousands of nodes finish laying out. Ghost
+  // (dissent) cards derive from `nodes` below, so they respect the cap too —
+  // there is no separate ghost list to cap.
+  const capped = useMemo(() => capConceptsPerLane(concepts), [concepts])
   // Memoized: pan/zoom re-renders every pointermove — don't re-lay-out for those.
-  const { nodes, ghosts, worldW, worldH } = useMemo(() => computeLayout(concepts), [concepts])
+  const { nodes, ghosts, worldW, worldH } = useMemo(() => computeLayout(capped.concepts), [capped.concepts])
+  // Full counts, not the capped subset — the lane header's "N concepts" stays
+  // an honest total even while the canvas itself only renders some of them.
   const laneCounts = useMemo(() => {
     const counts: Record<LayerId, number> = { company: 0, team: 0, personal: 0 }
     for (const c of concepts) counts[primaryLayer(c)] += 1
     return counts
   }, [concepts])
+  // Real (source name, level) pairs behind each lane, for honest lane headers
+  // (Fix F3): demo mode's sources are already the canonical company/team/
+  // personal trio, so this reduces to the static labels there — the fallback
+  // below only changes what a live, non-canonical cascade renders.
+  const laneSourceRows = useMemo(() => {
+    const rows: Record<LayerId, { name: string; level: number }[]> = { company: [], team: [], personal: [] }
+    if (mode === 'demo') return rows
+    for (const s of sources) rows[s.layer].push({ name: s.name, level: s.level })
+    return rows
+  }, [sources, mode])
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const [view, setViewT] = useState({ tx: 40, ty: 20, scale: 1 })
@@ -94,13 +166,12 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   const fit = useCallback(() => {
     const el = wrapRef.current
     if (!el) return
-    const cw = el.clientWidth, ch = el.clientHeight
-    // Guard against a not-yet-laid-out element (async data can populate before
-    // layout settles): a zero width would yield a negative scale that never
-    // self-corrects, collapsing the whole canvas to a speck.
-    if (cw < 40 || ch < 40) return
-    const scale = Math.max(0.2, Math.min(1, (cw - 48) / worldW, (ch - 48) / worldH))
-    setViewT({ scale, tx: (cw - worldW * scale) / 2, ty: Math.max(24, (ch - worldH * scale) / 2) })
+    // computeFitScale's own guard covers a not-yet-laid-out element (async
+    // data can populate before layout settles): a zero width would otherwise
+    // yield a negative scale that never self-corrects, collapsing the canvas
+    // to a speck.
+    const next = computeFitScale(el.clientWidth, el.clientHeight, worldW, worldH)
+    if (next) setViewT(next)
   }, [worldW, worldH])
 
   useLayoutEffect(() => { fit() }, [fit])
@@ -125,7 +196,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
       const rect = el.getBoundingClientRect()
       const px = e.clientX - rect.left, py = e.clientY - rect.top
       setViewT((v) => {
-        const next = Math.min(2, Math.max(0.4, v.scale * Math.exp(-e.deltaY * 0.0015)))
+        const next = clampZoom(v.scale * Math.exp(-e.deltaY * 0.0015))
         const wx = (px - v.tx) / v.scale, wy = (py - v.ty) / v.scale
         return { scale: next, tx: px - wx * next, ty: py - wy * next }
       })
@@ -185,7 +256,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   }, [keyboardSuspended, openId, wideInspector])
   const zoom = (dir: number) => setViewT((v) => {
     const el = wrapRef.current!, px = el.clientWidth / 2, py = el.clientHeight / 2
-    const next = Math.min(2, Math.max(0.4, v.scale * (dir > 0 ? 1.2 : 1 / 1.2)))
+    const next = clampZoom(v.scale * (dir > 0 ? 1.2 : 1 / 1.2))
     const wx = (px - v.tx) / v.scale, wy = (py - v.ty) / v.scale
     return { scale: next, tx: px - wx * next, ty: py - wy * next }
   })
@@ -205,18 +276,27 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
         style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: wideInspector && openConceptObj ? 360 : 0, cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none' }}
       >
         <div style={{ position: 'absolute', top: 0, left: 0, transformOrigin: '0 0', transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`, width: worldW, height: worldH }}>
-          {/* lane backgrounds + labels */}
+          {/* lane backgrounds + labels — real levels and source names behind
+              each lane, not the static trio (F3): a level-1 source that ranks
+              into 'team' should say so, and two sources sharing a lane should
+              both be named rather than only the lane's generic blurb. */}
           {LANE_ORDER.map((id, i) => {
             const L = layers.find((l) => l.id === id)!
             const col = lc(id)
+            const rows = laneSourceRows[id]
+            const levels = [...new Set(rows.map((r) => r.level))].sort((a, b) => a - b)
+            const conventional = rows.some((r) => r.name === id)
+            const badgeText = levels.length ? levels.join('/') : String(L.level)
+            const primary = conventional || rows.length === 0 ? L.name : `L${levels.join('/')}`
+            const detail = rows.length ? rows.map((r) => r.name).join(', ') : L.members
             return (
               <div key={id} style={{ position: 'absolute', left: 0, top: laneY(i), width: worldW, height: LANE_INNER }}>
                 <div style={css(`position:absolute; inset:0; background:var(--cc-lane-bg); border:1px solid var(--cc-lane-line); border-radius:16px;`)} />
                 <div style={css(`position:absolute; left:18px; top:14px; display:flex; align-items:center; gap:10px;`)}>
-                  <span style={css(`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${C.raised}; border:2px solid ${col.strokeE}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:12px;`)}>{L.level}</span>
+                  <span style={css(`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${C.raised}; border:2px solid ${col.strokeE}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:12px;`)}>{badgeText}</span>
                   <div style={{ lineHeight: 1.15 }}>
-                    <div style={css(`font-size:13px; font-weight:600; color:${col.text};`)}>{L.name}</div>
-                    <div style={css(`font-size:10.5px; color:${C.caption}; font-family:${MONO};`)}>{L.members} · {laneCounts[id]} concept{laneCounts[id] === 1 ? '' : 's'}</div>
+                    <div style={css(`font-size:13px; font-weight:600; color:${col.text};`)}>{primary}</div>
+                    <div style={css(`font-size:10.5px; color:${C.caption}; font-family:${MONO};`)}>{detail} · {laneCounts[id]} concept{laneCounts[id] === 1 ? '' : 's'}</div>
                   </div>
                 </div>
               </div>
@@ -252,6 +332,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
                 onMouseEnter={() => setHoverId(g.parent.c.id)}
                 onMouseLeave={() => setHoverId(null)}
                 title="Layers disagree — open the conflict"
+                aria-label={`${g.parent.c.title} — ${layerName(g.layer)} dissents, has conflict`}
                 style={{ position: 'absolute', left: g.x, top: g.y, width: GHOST_W, height: GHOST_H, ...css(`display:flex; flex-direction:column; justify-content:center; gap:4px; text-align:left; padding:10px 12px; background:${C.surface}; border:1px dashed var(--cc-edge-conflict); border-radius:11px; cursor:pointer; font:inherit;`) }}
               >
                 <div style={css('display:flex; align-items:center; gap:7px;')}>
@@ -275,6 +356,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
                 onClick={(event) => openConcept(n.c, event.currentTarget)}
                 onMouseEnter={() => setHoverId(n.c.id)}
                 onMouseLeave={() => setHoverId(null)}
+                aria-label={`${n.c.title} — ${layerName(primaryLayer(n.c))}${n.conflict ? ', has conflict' : n.c.draft ? ', draft' : ''}`}
                 style={{ position: 'absolute', left: n.x, top: n.y, width: NODE_W, height: NODE_H, boxShadow: glow, ...css(`display:flex; flex-direction:column; gap:0; text-align:left; padding:12px 14px; background:${C.raised}; border:1px solid ${selected ? col.strokeE : C.line}; border-left:3px solid ${col.strokeE}; border-radius:12px; cursor:pointer; font:inherit;`) }}
               >
                 <div style={css('display:flex; align-items:center; gap:8px;')}>
@@ -314,16 +396,32 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
 
       {/* zoom controls */}
       <div style={css(`position:absolute; right:20px; bottom:20px; display:flex; flex-direction:column; gap:6px;`)}>
-        {[['+', () => zoom(1)], ['−', () => zoom(-1)], ['⤢', fit]].map(([label, fn]) => (
+        {([['+', 'Zoom in', () => zoom(1)], ['−', 'Zoom out', () => zoom(-1)], ['⤢', 'Fit to view', fit]] as const).map(([label, name, fn]) => (
           <button
-            key={label as string}
+            key={name}
             className="cc-h-navbg"
-            onClick={fn as () => void}
-            title={label === '⤢' ? 'Fit' : label === '+' ? 'Zoom in' : 'Zoom out'}
+            onClick={fn}
+            title={name}
+            aria-label={name}
             style={css(`display:grid; place-items:center; width:36px; height:36px; background:${C.surface}; border:1px solid ${C.lineStrong}; border-radius:9px; cursor:pointer; color:${C.body}; font-size:16px; font-weight:500;`)}
-          >{label as string}</button>
+          >{label}</button>
         ))}
       </div>
+
+      {/* cap banner — a real-DOM canvas with no virtualization stops being
+          usable well before a large cascade finishes laying out (F7); this
+          says what's hidden and where the rest still is. */}
+      {capped.shown < capped.total && (
+        <div style={css(`position:absolute; left:20px; top:16px; display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--cc-header-bg); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid ${C.line}; border-radius:9px; box-shadow:0 4px 16px var(--cc-shadow);`)}>
+          <span style={css(`font-size:11.5px; color:${C.caption};`)}>Showing {NUM.format(capped.shown)} of {NUM.format(capped.total)}</span>
+          <button
+            type="button"
+            className="cc-h-bd-strong"
+            onClick={() => setView('concepts')}
+            style={css(`padding:2px 9px; border:1px solid ${C.lineStrong}; border-radius:999px; background:${C.raised}; cursor:pointer; font:inherit; font-size:11px; font-weight:600; color:${C.body};`)}
+          >Browse everything in Knowledge</button>
+        </div>
+      )}
 
       {/* node detail slide-over */}
       {openConceptObj && (

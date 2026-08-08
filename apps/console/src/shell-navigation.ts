@@ -97,6 +97,21 @@ export function dispatchNavigationGuard(): boolean {
 
 export const SEARCHABLE_VIEWS = new Set<ViewId>(['concepts', 'files', 'sources', 'triage', 'conflicts'])
 
+/** Per-view document title, same names the command palette's "Go to …" entries use. */
+export const VIEW_TITLES: Record<ViewId, string> = {
+  overview: 'Home',
+  canvas: 'Cascade',
+  concepts: 'Knowledge: Concepts',
+  files: 'Knowledge: Files',
+  sources: 'Sources',
+  triage: 'Review: Queue',
+  conflicts: 'Review: Discrepancies',
+}
+
+export function titleForView(view: ViewId): string {
+  return `${VIEW_TITLES[view]} — ContextCake`
+}
+
 export function readBrowserGroupedViews(): { knowledgeView: KnowledgeSubview; reviewView: ReviewSubview } {
   try {
     return {

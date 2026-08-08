@@ -606,6 +606,39 @@ describe('SetupWizard add-a-source mode', () => {
     expect(container.querySelector('#wiz-add-level')?.textContent).toBe('3')
   })
 
+  // F22b: `role="radio"` buttons get no native arrow-key behavior — unlike a
+  // real `<input type="radio">`, there is no browser default for the browser
+  // to run — so ChoiceCards implements the APG roving-tabindex pattern by
+  // hand. Selection follows focus and only the selected card is a tab stop.
+  it('moves the source-kind selection with ArrowDown/ArrowRight and ArrowUp/ArrowLeft, wrapping at the ends', async () => {
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+
+    expect(sourceChoice('Markdown folder').getAttribute('tabindex')).toBe('0')
+    expect(sourceChoice('ContextCake folder').getAttribute('tabindex')).toBe('-1')
+
+    await act(async () => sourceChoice('Markdown folder').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })))
+    expect(sourceChoice('ContextCake folder').getAttribute('aria-checked')).toBe('true')
+    expect(sourceChoice('ContextCake folder').getAttribute('tabindex')).toBe('0')
+    expect(sourceChoice('Markdown folder').getAttribute('tabindex')).toBe('-1')
+    expect(document.activeElement).toBe(sourceChoice('ContextCake folder'))
+
+    // ArrowRight is the same direction as ArrowDown for this vertically
+    // stacked group, twice more to reach MCP server (index 3, wrapping never
+    // triggered yet).
+    await act(async () => sourceChoice('ContextCake folder').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })))
+    await act(async () => sourceChoice('GitHub repo').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })))
+    expect(sourceChoice('MCP server').getAttribute('aria-checked')).toBe('true')
+
+    // Past the last choice, ArrowDown wraps back to the first.
+    await act(async () => sourceChoice('MCP server').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })))
+    expect(sourceChoice('Markdown folder').getAttribute('aria-checked')).toBe('true')
+    expect(document.activeElement).toBe(sourceChoice('Markdown folder'))
+
+    // And ArrowUp from the first wraps back to the last.
+    await act(async () => sourceChoice('Markdown folder').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })))
+    expect(sourceChoice('MCP server').getAttribute('aria-checked')).toBe('true')
+  })
+
   it('accepts a second repo beside team under its own name (EARS)', async () => {
     await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
 

@@ -17,7 +17,16 @@ import { ConnectAgentDialog } from './components/ConnectAgentDialog'
 import { SettingsView } from './components/SettingsView'
 import type { LiveErrorKind } from './api'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
+import { useOpenerFocus } from './components/useOpenerFocus'
 import { readBrowserGroupedViews, SEARCHABLE_VIEWS, viewForDestination } from './shell-navigation'
+
+// Stable across renders (useOpenerFocus's `restore` keys off this array's
+// identity) — must live outside the component, not be re-literaled inline.
+const SETTINGS_FOCUS_FALLBACKS = ['.cc-settings-cta', '.cc-toolbar-leading button']
+// The wizard can auto-open with no trigger at all (first run) or be reopened
+// from a button that only exists in one view (Sources' "Add Source"); the
+// sidebar toggle is the one control guaranteed to be on screen in every view.
+const WIZARD_FOCUS_FALLBACKS = ['.cc-toolbar-leading button']
 
 const ERROR_COPY: Record<LiveErrorKind, (msg: string) => string> = {
   unreachable: () => "Can't reach the ContextCake server. Start it with `npm run console:live`, or view the demo.",
@@ -83,7 +92,8 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [backgroundAnnouncement, setBackgroundAnnouncement] = useState('')
-  const settingsOpener = useRef<HTMLElement | null>(null)
+  const settingsFocus = useOpenerFocus(SETTINGS_FOCUS_FALLBACKS)
+  const wizardFocus = useOpenerFocus(WIZARD_FOCUS_FALLBACKS)
   const paletteOpener = useRef<HTMLElement | null>(null)
   const askOpener = useRef<HTMLElement | null>(null)
   const drawerOpener = useRef<HTMLElement | null>(null)
@@ -102,22 +112,23 @@ export function App() {
   const isDesktop = typeof window !== 'undefined' && Boolean(window.__CC_DESKTOP)
 
   useEffect(() => {
-    if (needsSetup && wizardOpen === undefined) setWizardOpen(true)
-  }, [needsSetup, wizardOpen])
+    if (needsSetup && wizardOpen === undefined) { wizardFocus.capture(); setWizardOpen(true) }
+  }, [needsSetup, wizardOpen, wizardFocus])
 
   const showWizard = wizardOpen === true
-  const closeWizard = () => setWizardOpen(false)
+  const closeWizard = () => { setWizardOpen(false); wizardFocus.restore() }
   // Handlers that reach a memoized child (Sidebar, Header, Sources, ChatPanel)
   // are stable identities. A fresh arrow function per render would re-render
   // the child through its memo and give the whole split back.
-  const reopenWizard = useCallback(() => setWizardOpen(true), [])
+  const reopenWizard = useCallback(() => { wizardFocus.capture(); setWizardOpen(true) }, [wizardFocus])
   const openConnect = useCallback(() => {
     if (sources.length === 0 && !sourceSetupComplete) {
+      wizardFocus.capture()
       setWizardOpen(true)
       return
     }
     setConnectOpen(true)
-  }, [sources.length, sourceSetupComplete])
+  }, [sources.length, sourceSetupComplete, wizardFocus])
   const openSettings = useCallback(() => {
     if (window.__CC_DESKTOP?.windows) {
       setDrawerOpen(false)
@@ -126,10 +137,10 @@ export function App() {
       window.__CC_DESKTOP.windows.openSettings().catch(() => {})
       return
     }
-    settingsOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    settingsFocus.capture()
     setDrawerOpen(false)
     setSettingsOpen(true)
-  }, [])
+  }, [settingsFocus])
   const openPalette = () => {
     paletteOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setDrawerOpen(false)
@@ -198,27 +209,7 @@ export function App() {
     { id: 'settings', label: 'Open Settings', shortcut: '⌘,', run: openSettings },
     { id: 'sidebar', label: 'Toggle Sidebar', run: toggleSidebar },
   ], [isDesktop, mode, openAskFromPalette, openConnect, openFilesScope, openSettings, reopenWizard, setView, sources, toggleSidebar])
-  const closeSettings = () => {
-    const opener = settingsOpener.current
-    setSettingsOpen(false)
-    window.requestAnimationFrame(() => {
-      const candidates = [
-        opener,
-        document.querySelector<HTMLElement>('.cc-settings-cta'),
-        document.querySelector<HTMLElement>('.cc-toolbar-leading button'),
-      ]
-      candidates.find((candidate) => {
-        if (!candidate?.isConnected) return false
-        if (!candidate.matches('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')) return false
-        const rect = candidate.getBoundingClientRect()
-        const hasNoLayout = rect.width === 0 && rect.height === 0
-        const visible = hasNoLayout || (rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 && rect.left < window.innerWidth && rect.top < window.innerHeight)
-        if (visible) candidate.focus()
-        return visible
-      })
-      settingsOpener.current = null
-    })
-  }
+  const closeSettings = () => { setSettingsOpen(false); settingsFocus.restore() }
 
   // Announce transitions, not ticks. A live region that re-read a progress
   // counter every 900ms would make the app unusable with a screen reader; the
@@ -442,7 +433,7 @@ export function App() {
 
   return (
     <>
-      <div className="cc-app-layer" aria-hidden={(settingsOpen || paletteOpen) || undefined} inert={(settingsOpen || paletteOpen) || undefined}>{body}</div>
+      <div className="cc-app-layer" aria-hidden={(settingsOpen || paletteOpen || showWizard) || undefined} inert={(settingsOpen || paletteOpen || showWizard) || undefined}>{body}</div>
       {settingsOpen && <SettingsView appMode={mode} onClose={closeSettings} onIndexingChange={reload} />}
       {paletteOpen && <CommandPalette commands={paletteCommands} onClose={closePalette} />}
       {showWizard && <SetupWizard addingSource={sources.length > 0} onClose={closeWizard} onConnectAgent={isDesktop ? () => {

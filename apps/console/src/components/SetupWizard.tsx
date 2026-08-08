@@ -345,7 +345,16 @@ function errorLine(message: string): React.ReactNode {
   return <p role="alert" style={css('margin:0; font-size:12px; color:var(--cc-amber-text); overflow-wrap:anywhere;')}>{message}</p>
 }
 
-/** Generic radio-card group (kind pickers, repo access). */
+/**
+ * Generic radio-card group (kind pickers, repo access). `role="radio"`
+ * buttons get no native arrow-key behavior — unlike real `<input
+ * type="radio">`s, the browser has nothing to do that for — so this
+ * implements the APG roving-tabindex pattern by hand: ArrowDown/ArrowRight
+ * moves to the next card (wrapping), ArrowUp/ArrowLeft to the previous, and
+ * selection follows focus. Only the selected card is a tab stop; the rest
+ * are reachable by arrow key once inside the group, same contract the file
+ * tree and the discrepancy list already use.
+ */
 function ChoiceCards<T extends string>({
   value, onChange, choices, label,
 }: {
@@ -354,8 +363,17 @@ function ChoiceCards<T extends string>({
   choices: Array<{ value: T; title: string; detail: string; badge?: string }>
   label: string
 }) {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft'].includes(event.key)) return
+    event.preventDefault()
+    const index = Math.max(0, choices.findIndex((choice) => choice.value === value))
+    const delta = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1
+    const next = choices[(index + delta + choices.length) % choices.length]
+    onChange(next.value)
+    event.currentTarget.querySelector<HTMLButtonElement>(`[value="${next.value}"]`)?.focus()
+  }
   return (
-    <div role="radiogroup" aria-label={label} style={css('display:grid; gap:8px;')}>
+    <div role="radiogroup" aria-label={label} onKeyDown={onKeyDown} style={css('display:grid; gap:8px;')}>
       {choices.map((choice) => {
         const selected = value === choice.value
         return (
@@ -363,7 +381,9 @@ function ChoiceCards<T extends string>({
             key={choice.value}
             type="button"
             role="radio"
+            value={choice.value}
             aria-checked={selected}
+            tabIndex={selected ? 0 : -1}
             onClick={() => onChange(choice.value)}
             style={css(`display:grid; grid-template-columns:16px minmax(0,1fr); gap:10px; width:100%; padding:11px 12px; text-align:left; border-radius:10px; border:1px solid ${selected ? C.tealStroke : C.line}; background:${selected ? C.tealFill : C.surface}; color:${C.ink}; cursor:pointer; font:inherit; transition:border-color 150ms ease, background 150ms ease;`)}
           >

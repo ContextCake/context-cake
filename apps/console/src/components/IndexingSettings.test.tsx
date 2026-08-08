@@ -121,4 +121,23 @@ describe('IndexingSettings', () => {
 
     expect(container.textContent).toContain('running ContextCake engine')
   })
+
+  it('labels a millisecond setting with its unit and a human-scale reading, and leaves a count setting alone', async () => {
+    await act(async () => root.render(<IndexingSettings />))
+
+    // sourceBudgetMs (30000 in the default payload): unitless before this fix.
+    expect(field('sourceBudgetMs').nextElementSibling?.textContent).toBe('ms')
+    expect(container.textContent).toContain('30000 ms = 30 sec')
+
+    // maxDocFiles is a count, not a duration — no unit, no invented reading.
+    expect(field('maxDocFiles').nextElementSibling).toBeNull()
+    expect(container.textContent).not.toContain('10000 ms')
+  })
+
+  it('updates the human-scale reading as the field is edited', async () => {
+    await act(async () => root.render(<IndexingSettings />))
+
+    await type(field('sourceBudgetMs'), '120000')
+    expect(container.textContent).toContain('120000 ms = 2 min')
+  })
 })

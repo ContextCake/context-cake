@@ -12,7 +12,7 @@ vi.mock('../api', async (importOriginal) => ({
 }))
 vi.mock('../store', () => {
   const store = () => ({ reload: mocks.reload })
-  return { useStore: store, useStoreData: store, useStoreNav: store, useStoreInput: store }
+  return { useStore: store, useStoreData: store, useStoreNav: store, useStoreInput: store, useStoreChat: store }
 })
 
 let container: HTMLDivElement

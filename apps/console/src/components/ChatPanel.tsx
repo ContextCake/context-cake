@@ -1,13 +1,13 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { C, css, lc, MONO } from '../theme'
-import { useStoreData, useStoreInput } from '../store'
+import { useStoreChat, useStoreData } from '../store'
 
 const SUGGESTIONS = ['What database do we use?', 'How do we handle on-call?']
 const MCP_CONFIG_CMD = 'claude mcp add contextcake -- node mcp-server.mjs --manifest layers.json'
 
 function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: { keyboardSuspended?: boolean; onConnectAgent?: () => void; onClose: () => void }) {
   const { setChatInput, send } = useStoreData()
-  const { chatMessages, chatBusy, chatInput } = useStoreInput()
+  const { chatMessages, chatBusy, chatInput } = useStoreChat()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const panelRef = useRef<HTMLElement>(null)

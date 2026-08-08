@@ -11,10 +11,13 @@ import { LiveDataError } from '../api'
 import type { BackgroundTask, Store } from '../store'
 
 const mocks = vi.hoisted(() => ({ store: { current: null as unknown as Store } }))
-// The store is three contexts now; this component reads the data half.
+// The store is four contexts now; this component reads the data half. All four
+// hooks are declared even though this component reads one, because the factory
+// REPLACES the module: a hook left out is a `not a function` crash the day some
+// child reaches for it, and tsc cannot see into an untyped factory.
 vi.mock('../store', () => {
   const store = () => mocks.store.current
-  return { useStore: store, useStoreData: store, useStoreNav: store, useStoreInput: store }
+  return { useStore: store, useStoreData: store, useStoreNav: store, useStoreInput: store, useStoreChat: store }
 })
 
 let container: HTMLDivElement

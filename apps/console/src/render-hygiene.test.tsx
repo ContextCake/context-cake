@@ -14,6 +14,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
+import { ChatPanel } from './components/ChatPanel'
 import { StoreProvider } from './store'
 import { SEARCHABLE_VIEWS, type ViewId } from './shell-navigation'
 import { Concepts } from './views/Concepts'
@@ -38,6 +39,19 @@ vi.mock('./components/icons', async () => {
   return counted
 })
 
+// The views render no icons, so they need a leaf of their own. `LayerChip` is
+// what Concepts renders inline on every row — unmemoized, so one render of the
+// view is at least one render of the chip.
+vi.mock('./components/LayerChip', async () => {
+  const actual = await vi.importActual<Record<string, ComponentType<never>>>('./components/LayerChip')
+  return {
+    LayerChip: (props: Record<string, unknown>) => {
+      renders.LayerChip = (renders.LayerChip ?? 0) + 1
+      return (actual.LayerChip as unknown as AnyComponent)(props)
+    },
+  }
+})
+
 let container: HTMLDivElement
 let root: Root
 
@@ -48,11 +62,14 @@ function pointer(kind: string, clientX: number): PointerEvent {
   return event
 }
 
-function typeInto(input: HTMLInputElement, text: string) {
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+function typeInto(field: HTMLInputElement | HTMLTextAreaElement, text: string) {
+  const proto = field instanceof HTMLTextAreaElement
+    ? window.HTMLTextAreaElement.prototype
+    : window.HTMLInputElement.prototype
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
   act(() => {
-    setter?.call(input, text)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
+    setter?.call(field, text)
+    field.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
 
@@ -162,12 +179,13 @@ const SEARCH_CASES: { view: ViewId; Component: ComponentType; rows: string }[] =
   { view: 'files', Component: Files, rows: '[role="treeitem"]' },
 ]
 
-async function mountView(view: ViewId, Component: ComponentType) {
+async function mountView(view: ViewId, Component: ComponentType, { chat = false } = {}) {
   window.location.hash = `#/${view}`
   await act(async () => root.render(
     <StoreProvider>
       <Header onToggleSidebar={() => {}} onAsk={() => {}} />
       <Component />
+      {chat && <ChatPanel onClose={() => {}} />}
     </StoreProvider>,
   ))
   // The demo bundle resolves through a promise chain; let it land.
@@ -198,4 +216,44 @@ describe('a search keystroke reaches the view', () => {
       expect(container.textContent).not.toBe(textBefore)
     })
   }
+})
+
+/**
+ * The chat composer is the second thing a user types into, and the one the
+ * split above did not cover: it lives in a slide-over rendered OVER the active
+ * view, and the view has nothing to say about it. While `chatInput` shared a
+ * context with `query`, every character of a question repainted whichever view
+ * happened to be underneath.
+ *
+ * Both halves are asserted for the same reason the search suite pairs its own:
+ * "the view did not re-render" is trivially satisfiable by a composer that
+ * stopped updating, and "the composer updated" says nothing about the tree
+ * beneath it.
+ */
+describe('a chat keystroke stays inside the chat', () => {
+  it('leaves the view under the panel alone, while a search keystroke still reaches it', async () => {
+    await mountView('concepts', Concepts, { chat: true })
+    const composer = container.querySelector<HTMLTextAreaElement>('.cc-ask-panel textarea')
+    expect(composer, 'the chat panel rendered no composer').toBeTruthy()
+    const search = container.querySelector<HTMLInputElement>('input[data-context-search]')
+    expect(search, 'the toolbar rendered no search field').toBeTruthy()
+    // Typed into the search box below. Taken off the view so the assertion
+    // does not depend on what the demo fixture happens to be called.
+    const conceptId = container.querySelector('.cc-navigator-detail > div > button.cc-h-bd-strong code')?.textContent
+    expect(conceptId, 'the view rendered no concept rows').toBeTruthy()
+
+    const before = renders.LayerChip ?? 0
+    expect(before, 'the view rendered no layer chips — the probe is counting nothing').toBeGreaterThan(0)
+    for (const text of ['w', 'wh', 'wha', 'what']) typeInto(composer!, text)
+
+    // The composer is live: four characters, and it holds all four.
+    expect(composer!.value).toBe('what')
+    // And the view underneath sat every one of them out.
+    expect((renders.LayerChip ?? 0) - before).toBe(0)
+
+    // The other half — the same view still repaints for the box that IS its own.
+    const beforeSearch = renders.LayerChip ?? 0
+    typeInto(search!, conceptId!)
+    expect(renders.LayerChip ?? 0).toBeGreaterThan(beforeSearch)
+  })
 })

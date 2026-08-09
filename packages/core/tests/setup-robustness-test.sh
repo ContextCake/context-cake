@@ -244,9 +244,12 @@ printf '# Meeting notes\n\n## Decision\n\nExternal edit wins.\n' > "$TMP/notes/m
 STALE_BODY="{\"path\":\"notes/meeting.md\",\"text\":\"stale editor text\",\"modified\":\"$(JQ 'd.modified' <<<"$OPEN")\"}"
 code 409 "$(C -X PUT -H 'content-type: application/json' -d "$STALE_BODY" "$BASE/api/file")" "a stale editor cannot overwrite an external edit"
 grep -q 'External edit wins' "$TMP/notes/meeting.md" && pass "the external edit remains intact after the conflict" || fail "stale save overwrote disk"
-# Restore the fixture for the indexed-read assertions below. Omitting modified
-# remains a supported compatibility path for older playground clients.
-code 200 "$(C -X PUT -H 'content-type: application/json' -d "{\"path\":\"notes/meeting.md\",\"text\":\"# Meeting notes\n\n## Decision\n\nShip on Monday.\n\"}" "$BASE/api/file")" "legacy save without a revision remains supported"
+# modified is required (F20) — a save that names neither modified nor force
+# is refused rather than blindly overwriting whatever is on disk.
+code 400 "$(C -X PUT -H 'content-type: application/json' -d "{\"path\":\"notes/meeting.md\",\"text\":\"# Meeting notes\n\n## Decision\n\nShip on Monday.\n\"}" "$BASE/api/file")" "a save without modified or force is refused"
+# Restore the fixture for the indexed-read assertions below. force: true is
+# the deliberate-overwrite escape hatch that replaces the old "omit modified" path.
+code 200 "$(C -X PUT -H 'content-type: application/json' -d "{\"path\":\"notes/meeting.md\",\"text\":\"# Meeting notes\n\n## Decision\n\nShip on Monday.\n\",\"force\":true}" "$BASE/api/file")" "force:true restores the fixture despite no modified"
 code 404 "$(C -X PUT -H 'content-type: application/json' -d '{"path":"notes/brand-new.md","text":"nope"}' "$BASE/api/file")" "the editor refuses to create new files"
 code 403 "$(C "$BASE/api/file?path=notes/../../escape.md")" "traversal out of a layer root blocked"
 code 404 "$(C "$BASE/api/file?path=nosuchlayer/x.md")" "unknown layer rejected"

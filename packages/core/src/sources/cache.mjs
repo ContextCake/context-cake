@@ -89,13 +89,18 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
     async listConceptIds(options = {}) {
       const notes = options?.notes ?? null;
       const entry = await cached("list.v2", async () => {
-        const collected = { skipped: [], unreadable: [] };
+        const collected = { skipped: [], unreadable: [], hidden: 0 };
         const ids = await source.listConceptIds({ ...options, notes: collected });
         return { ids, notes: collected };
       });
       if (notes) {
         for (const item of entry.notes?.skipped ?? []) notes.skipped?.push(item);
         for (const item of entry.notes?.unreadable ?? []) notes.unreadable?.push(item);
+        // A count, not a list — unlike skipped/unreadable this only ever holds
+        // a number (see okf-local's walkDocs), so a cache hit has to add it
+        // rather than push, or a layer's hidden count would read 0 on every
+        // read except the one that actually walked the disk.
+        notes.hidden = (notes.hidden ?? 0) + (entry.notes?.hidden ?? 0);
       }
       return entry.ids;
     },

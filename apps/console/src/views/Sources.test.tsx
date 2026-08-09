@@ -93,6 +93,12 @@ function ok(body: Record<string, unknown> = { ok: true }) {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
 }
 
+/** The metadata `dl`'s value cell for a given label ("Last success", "Last error", …). */
+function metadataValue(label: string): string | null {
+  const dt = Array.from(container.querySelectorAll('.cc-source-metadata dt')).find((item) => item.textContent === label)
+  return dt?.nextElementSibling?.textContent ?? null
+}
+
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   container = document.createElement('div')
@@ -124,6 +130,28 @@ describe('Sources rows', () => {
     expect(container.textContent).toContain('Last success')
     expect(container.textContent).toContain('Last error')
     expect(container.textContent).toContain('github · level 2')
+  })
+
+  it('shows the error string in the Last error field, not just its date', async () => {
+    await mount([src({
+      name: 'acme-docs', sourceKind: 'github', level: 2, layer: 'team', status: 'degraded',
+      error: 'GitHub API 403 on /repos/acme/payments',
+      lastSuccessAt: '2026-07-28T09:00:00.000Z', lastErrorAt: '2026-07-28T10:05:00.000Z',
+    })])
+
+    expect(metadataValue('Last error')).toContain('GitHub API 403 on /repos/acme/payments')
+    expect(metadataValue('Last error')).not.toBe('None')
+    // The date is not the fact that matters here, but it's still worth keeping
+    // beside the message rather than dropping it.
+    expect(metadataValue('Last error')).toContain(new Date('2026-07-28T10:05:00.000Z').toLocaleString())
+    expect(metadataValue('Last success')).toBe(new Date('2026-07-28T09:00:00.000Z').toLocaleString())
+  })
+
+  it('reports "None" for Last error and "Not yet" for Last success on a source with neither', async () => {
+    await mount([src({ name: 'fresh' })])
+
+    expect(metadataValue('Last error')).toBe('None')
+    expect(metadataValue('Last success')).toBe('Not yet')
   })
 
   it('surfaces missing and host-mismatched credentials without exposing a secret', async () => {

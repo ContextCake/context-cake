@@ -1,16 +1,84 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useRef, useState } from 'react'
 import { C, css, conceptTypeStyle, MONO } from '../theme'
 import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
 import { useDetailSurface } from '../components/useDetailSurface'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
+import type { Concept } from '../data'
+import type { SearchHit } from '../types'
+
+/** How long a keystroke waits before it becomes an /api/search request. */
+const SEARCH_DEBOUNCE_MS = 250
 
 function ConceptsInner() {
-  const { setSelConcept, concepts } = useStoreData()
+  const { setSelConcept, concepts, mode, search } = useStoreData()
   const { selConcept } = useStoreNav()
   const { query } = useStoreInput()
   const q = query.trim().toLowerCase()
-  const list = concepts.filter((c) => !q || `${c.title} ${c.id}`.toLowerCase().includes(q))
+  const substringList = concepts.filter((c) => !q || `${c.title} ${c.id}`.toLowerCase().includes(q))
+
+  // Engine full-text search (live mode only). `null` means "no answer to show
+  // yet" — either nothing has been typed, the debounced request is still in
+  // flight, or the engine failed/is too old — and the substring filter above
+  // is what renders in every one of those cases. A non-null array (possibly
+  // empty) is the engine's own answer. It is reset to `null` at the top of
+  // every run of this effect — not only when the query empties — so a query
+  // change immediately falls back to the substring list instead of rendering
+  // the PREVIOUS query's hits for the debounce window + round-trip.
+  const [engineHits, setEngineHits] = useState<SearchHit[] | null>(null)
+  useEffect(() => {
+    setEngineHits(null)
+    if (mode !== 'live' || !q) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      void search(query.trim()).then((hits) => { if (!cancelled) setEngineHits(hits) })
+    }, SEARCH_DEBOUNCE_MS)
+    return () => { cancelled = true; clearTimeout(timer) }
+    // `query` (raw) is read inside, deliberately not a dependency: depending
+    // on both `q` (trimmed+lowercased) and `query` re-ran this — and its
+    // setEngineHits(null) reset — on a trailing-space or capitalization-only
+    // keystroke that changes `query` but not the normalized search term,
+    // re-firing an identical search and blanking the ranked list in between.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, q, search])
+
+  // A hit for a concept not in the loaded list is skipped rather than
+  // rendered as a dead row — resolve-all supplies the full set, so this only
+  // happens for a concept still resolving in the background.
+  const usingEngine = mode === 'live' && q !== '' && engineHits !== null
+  // Union, not replace: the engine is BM25F over whole stemmed tokens with no
+  // prefix matching, so typing "primary" one keystroke at a time returns zero
+  // hits until the word completes ("prim"/"prima"/"primar" all miss; only
+  // "primary" hits) — letting the engine's answer wholesale replace the
+  // substring list blanked the list mid-word. Engine hits render first, in
+  // the engine's own rank order (a relevance signal the substring filter
+  // doesn't have); any concept the substring filter also matches but the
+  // engine didn't return follows, deduped by id. So the "no matches" empty
+  // state below is only reachable when both lists come back empty.
+  // `rankedCount` is how many of `list`'s leading entries came from the
+  // engine half of the union above, vs. the substring-only tail — the split
+  // point the "Top matches" / "Also contains" divider renders at below.
+  let rankedCount = 0
+  const list = usingEngine
+    ? (() => {
+        const seen = new Set<string>()
+        const merged: Concept[] = []
+        for (const hit of engineHits) {
+          const match = concepts.find((c) => c.id === hit.id)
+          if (match && !seen.has(match.id)) { seen.add(match.id); merged.push(match); rankedCount += 1 }
+        }
+        for (const c of substringList) {
+          if (!seen.has(c.id)) { seen.add(c.id); merged.push(c) }
+        }
+        return merged
+      })()
+    : substringList
+  // Only when the engine answered precisely AND the substring filter still
+  // has something extra to say — a 1-hit engine answer next to 400
+  // substring-only ids otherwise renders as 401 undifferentiated rows, with
+  // the engine's precision visually indistinguishable from the noise below
+  // it.
+  const showMatchDivider = rankedCount > 0 && rankedCount < list.length
   const selCpt = concepts.find((c) => c.id === selConcept) || null
   const [detailOpen, setDetailOpen] = useState(Boolean(selConcept))
   const selectedButton = useRef<HTMLButtonElement | null>(null)
@@ -22,14 +90,21 @@ function ConceptsInner() {
   }, [])
 
   if (concepts.length === 0) return <div className="cc-ui-empty"><strong>No concepts yet</strong><p>Add or index a source to build the resolved cascade.</p></div>
-  if (list.length === 0) return <div className="cc-ui-empty"><strong>No matching concepts</strong><p>Try a title, concept ID, or type.</p></div>
+  if (list.length === 0) {
+    return (
+      <div className="cc-ui-empty">
+        <strong>No matching concepts</strong>
+        <p>{usingEngine ? 'No matches in titles or content.' : 'Try a title, concept ID, or type.'}</p>
+      </div>
+    )
+  }
 
   return (
     <div ref={detail.containerRef} className="cc-navigator-detail" style={css('display:grid; grid-template-columns:minmax(240px,280px) minmax(0,1fr); gap:12px; align-items:start;')}>
       <div style={css('display:flex; flex-direction:column; gap:8px;')}>
-        {list.map((c) => {
+        {list.map((c, i) => {
           const selected = c.id === selConcept
-          return (
+          const row = (
             <button
               key={c.id}
               className="cc-h-bd-strong"
@@ -41,6 +116,9 @@ function ConceptsInner() {
                 <span style={conceptTypeStyle(c.type)}>{c.type}</span>
                 {c.conflict && <span title="has conflict" style={css('width:7px; height:7px; border-radius:999px; background:#C77D2A;')} />}
                 {c.draft && <span style={css(`font-size:10px; font-family:${MONO}; color:#7A5A28;`)}>draft</span>}
+                {/* No sections to read — a dead end worth flagging here so it's
+                    triageable from the list, not only discovered by opening it. */}
+                {c.sections.length === 0 && <span title="This concept has no sections" style={css(`font-size:10px; font-family:${MONO}; color:#8A8A82;`)}>empty</span>}
               </div>
               <div style={css('font-weight:600; font-size:13.5px; margin-top:7px;')}>{c.title}</div>
               <code style={css(`display:block; font-family:${MONO}; font-size:11px; color:#8A8A82; margin-top:3px;`)}>{c.id}</code>
@@ -49,6 +127,28 @@ function ConceptsInner() {
               </div>
             </button>
           )
+          // Divider between the engine's ranked half and the substring-only
+          // tail (F6) — same small-caption idiom as Triage's "Why it routed
+          // here" / "Where it lands" pair. Only rendered when both halves are
+          // non-empty (showMatchDivider), so a plain substring list or an
+          // all-engine answer never grows an empty-handed label.
+          if (showMatchDivider && i === 0) {
+            return (
+              <Fragment key={c.id}>
+                <div style={css('font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8A8A82;')}>Top matches</div>
+                {row}
+              </Fragment>
+            )
+          }
+          if (showMatchDivider && i === rankedCount) {
+            return (
+              <Fragment key={c.id}>
+                <div style={css('font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8A8A82; margin-top:6px;')}>Also contains</div>
+                {row}
+              </Fragment>
+            )
+          }
+          return row
         })}
       </div>
 

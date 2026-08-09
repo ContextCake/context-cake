@@ -127,7 +127,7 @@ function validateRule(rule) {
   if (rule.action.type === "prefer_source") {
     if (typeof rule.action.source !== "string" || !sources.includes(rule.action.source)) throw new Error("Invalid preferred source");
   } else if (rule.action.type === "acknowledge") {
-    if (!["different_scopes", "temporary_migration", "source_specific_authority", "other"].includes(rule.action.reasonCode)) {
+    if (!["different_scopes", "temporary_migration", "source_specific_authority", "target_missing", "other"].includes(rule.action.reasonCode)) {
       throw new Error("Invalid acknowledgement reason");
     }
   } else throw new Error("Invalid discrepancy rule action");

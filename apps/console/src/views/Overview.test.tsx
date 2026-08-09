@@ -42,3 +42,34 @@ it('shows a calm resolved state when nothing needs review', async () => {
   await act(async () => root.render(<Overview />))
   expect(container.textContent).toContain('Nothing needs review')
 })
+
+// F3: the Cascade summary used to render the static company/team/personal
+// blurb and level no matter what actually fed a lane. A level-1 source with
+// no name matching its lane should read as itself — its real name and level —
+// not the generic "runbooks, decisions, system docs" / "2" it happened to
+// inherit from the lane it ranked into.
+it('names the real source and level behind a lane instead of the static blurb', async () => {
+  mocks.useStore.mockReturnValue({
+    mode: 'live', setView: mocks.setView,
+    signals: [], conflicts: [],
+    sources: [{ name: 'messy-vault', status: 'synced', layer: 'team', level: 1, conceptCount: 4 }],
+    concepts: [], activity: [], loadErrors: [],
+  })
+  await act(async () => root.render(<Overview />))
+  expect(container.textContent).toContain('messy-vault')
+  expect(container.textContent).toContain('1')
+  expect(container.textContent).not.toContain('runbooks, decisions, system docs')
+})
+
+// Demo mode's sources are already the canonical trio; the honest-labeling
+// pass must not disturb its existing static blurb.
+it('keeps the static cascade blurb in demo mode', async () => {
+  mocks.useStore.mockReturnValue({
+    mode: 'demo', setView: mocks.setView,
+    signals: [], conflicts: [],
+    sources: [{ name: 'team', status: 'synced', layer: 'team', level: 2, conceptCount: 4 }],
+    concepts: [], activity: [], loadErrors: [],
+  })
+  await act(async () => root.render(<Overview />))
+  expect(container.textContent).toContain('runbooks, decisions, system docs')
+})

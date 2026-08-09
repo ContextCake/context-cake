@@ -90,16 +90,31 @@ export function buildDiscrepancies(concepts, {
   // current output. Keep its evidence discoverable from the append-only log so
   // "resolved" never means "forgotten". A current finding always wins this
   // projection (including a reopened finding after a later source edit).
+  // decisionMap indexes a decision under BOTH its canonical discrepancyId and
+  // its legacy conflictId, so this loop would otherwise visit the same decided
+  // discrepancy twice and emit two resolved rows for one resolution. Dedupe on
+  // the canonical id — discrepancyId when the decision recorded one, else the
+  // map key itself.
   const currentIds = new Set(out.map((item) => item.id));
+  const seenCanonical = new Set();
   for (const [id, history] of decisionsById) {
     if (!id.includes("::") || currentIds.has(id)) continue;
     const latest = history.at(-1);
     if (latest?.schemaVersion !== 2 || latest.action === "acknowledge") continue;
+    const canonicalId = latest.discrepancyId ?? id;
+    // A current finding always wins this projection (including a reopened
+    // finding after a later source edit) — decisionsById indexes the same
+    // decision under both discrepancyId and the legacy conflictId, so a
+    // decision whose legacy key merely doesn't collide with `currentIds` (the
+    // canonical id it resolves to does) must still be skipped here, or the
+    // live row above and this resolved-history row emit the same id twice.
+    if (seenCanonical.has(canonicalId) || currentIds.has(canonicalId)) continue;
+    seenCanonical.add(canonicalId);
     const contributions = (latest.contributions ?? []).map((item) => contribution(
       item.layer, item.level, item.updated, item.content, item.layer === latest.chosen?.layer,
     ));
     out.push({
-      id, legacyId: latest.conflictId, kind: latest.discrepancyKind ?? "section_content",
+      id: canonicalId, legacyId: latest.conflictId, kind: latest.discrepancyKind ?? "section_content",
       originalKind: latest.discrepancyKind ?? "section_content", conceptId: latest.conceptId,
       conceptTitle: latest.title ?? latest.conceptId, conceptType: latest.conceptType ?? "concept",
       key: latest.sectionKey ?? latest.fieldKey ?? latest.linkTarget ?? "unknown",

@@ -285,6 +285,37 @@ for evil in "../secret" ".." "/etc/passwd" "a/.." "decisions/../../secret"; do
   [ "$out" = "null" ] || fail "traversal id '$evil' should load as null" "$out"
 done
 
+# --- 5b. A vanished (or never-existed) layer root is a status error, not an --
+# empty read (F19). walkDocs used to catch-and-continue on ANY readdir failure,
+# including the layer ROOT itself — so a deleted source folder came back as an
+# empty listing, indistinguishable from a layer that was genuinely empty. The
+# root failing is different: there is nothing behind this source at all.
+
+cat > "$tmpdir/vanished.mjs" <<EOF
+import { createFilesSource } from "${sources_dir}/files.mjs";
+import { createOkfLocalSource } from "${sources_dir}/okf-local.mjs";
+const root = process.argv[2];
+const out = {};
+for (const [kind, make] of [["files", createFilesSource], ["okf-local", createOkfLocalSource]]) {
+  const source = make({ name: kind, level: 2, root });
+  try {
+    await source.listConceptIds({});
+    out[kind] = "NO-THROW";
+  } catch (err) {
+    out[kind] = err.message;
+  }
+}
+console.log(JSON.stringify(out));
+EOF
+vanished_out="$(node "$tmpdir/vanished.mjs" "$tmpdir/does-not-exist-root")"
+for kind in files okf-local; do
+  node -e '
+    const msg = JSON.parse(process.argv[1])[process.argv[2]];
+    if (msg === "NO-THROW") { console.error("should throw rather than list as empty"); process.exit(1); }
+    if (!msg.includes(process.argv[3])) { console.error("error should name the missing folder: " + msg); process.exit(1); }
+  ' "$vanished_out" "$kind" "$tmpdir/does-not-exist-root" || fail "vanished layer root ($kind)" "$vanished_out"
+done
+
 # --- 6. Cache wrapper: memoization, sync(), TTL expiry, disk round-trip -------
 
 cat > "$tmpdir/cache.mjs" <<EOF
@@ -334,4 +365,4 @@ EOF
 cache_out="$(node "$tmpdir/cache.mjs" "$docs" "$tmpdir/cache")"
 grep -q 'CACHE-OK' <<<"$cache_out" || fail "cache wrapper behavior" "$cache_out"
 
-echo "files source test passed (plain md/mdx/txt synthesis + OKF delegation + cascade + traversal guard + cache)"
+echo "files source test passed (plain md/mdx/txt synthesis + OKF delegation + cascade + traversal guard + vanished root + cache)"

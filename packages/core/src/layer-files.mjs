@@ -8,7 +8,8 @@
 //   GET  /api/files                 → { layers: [{ layer, kind, root, fileCount, files[] }] }
 //   GET  /api/file?path=<l>/<rel>   → { path, layer, rel, ext, kind, editable, text? }
 //   GET  /api/file/raw?path=…       → the bytes (images/PDF preview)
-//   PUT  /api/file                  → { path, text, modified? } overwrite an existing text file
+//   PUT  /api/file                  → { path, text, modified } overwrite an existing text file
+//                                      (modified required unless force: true)
 //   PUT  /api/section               → write one resolved section across layers
 //
 // Every path is resolved against its layer root and checked with
@@ -90,7 +91,20 @@ async function walkAll(root, limits) {
   while (stack.length > 0) {
     const dir = stack.pop();
     let dirents;
-    try { dirents = await fsp.readdir(dir, { withFileTypes: true }); } catch { continue; }
+    try {
+      dirents = await fsp.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      // The layer ROOT failing to read is a different fact from an ordinary
+      // subdirectory vanishing mid-walk — same distinction okf-local's
+      // walkDocs draws for the indexer. Losing the root means there is
+      // nothing left behind this layer at all, not the empty-folder answer a
+      // deleted folder used to get, indistinguishable from one that was
+      // simply never populated.
+      if (dir === root && (err.code === "ENOENT" || err.code === "ENOTDIR")) {
+        throw new Error(`Layer folder no longer exists: ${root}`);
+      }
+      continue;
+    }
     for (const dirent of dirents) {
       if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
       if (++scanned > maxEntries) { truncated = true; break; }
@@ -109,19 +123,33 @@ async function walkAll(root, limits) {
 export async function listFilesApi(roots, limits) {
   const layers = [];
   for (const [layer, { root, kind }] of roots) {
-    const { files, truncated } = await walkAll(root, limits);
-    layers.push({
-      layer,
-      kind,
-      root,
-      fileCount: files.length,
-      truncated,
-      files: files.map((abs) => {
-        const rel = toPosix(path.relative(root, abs));
-        const ext = path.extname(abs).toLowerCase();
-        return { path: `${layer}/${rel}`, name: path.basename(abs), rel, ext, kind: fileKind(ext), markdown: MARKDOWN_EXT.has(ext) };
-      }),
-    });
+    try {
+      const { files, truncated } = await walkAll(root, limits);
+      layers.push({
+        layer,
+        kind,
+        root,
+        fileCount: files.length,
+        truncated,
+        // Additive, and null on the common path: a layer whose folder is
+        // genuinely empty (or a subfolder that merely vanished mid-walk, which
+        // walkAll already skips over) is not an error and says so.
+        error: null,
+        files: files.map((abs) => {
+          const rel = toPosix(path.relative(root, abs));
+          const ext = path.extname(abs).toLowerCase();
+          return { path: `${layer}/${rel}`, name: path.basename(abs), rel, ext, kind: fileKind(ext), markdown: MARKDOWN_EXT.has(ext) };
+        }),
+      });
+    } catch (err) {
+      // Read around, never crash the whole listing: one layer whose folder
+      // moved or was deleted must not blank every other layer's files. The row
+      // still appears — with `error` set and `fileCount: 0` — rather than
+      // silently taking on the empty-folder shape a genuinely empty layer
+      // reports, which used to read as "add a note and it appears here" for a
+      // folder that no longer exists.
+      layers.push({ layer, kind, root, fileCount: 0, truncated: false, error: err.message, files: [] });
+    }
   }
   return { layers };
 }
@@ -185,8 +213,18 @@ export async function writeFileApi(rawBody, roots) {
   let stat;
   try { stat = await fsp.stat(abs); } catch { throw httpError(404, `Refusing to create new files: ${apiPath}`); }
   if (!stat.isFile()) throw httpError(400, `Not a file: ${apiPath}`);
-  if (body.modified !== undefined && body.modified !== stat.mtime.toISOString()) {
-    throw httpError(409, `This file changed on disk after you opened it. Reopen ${apiPath} and merge your edit.`);
+  // `modified` used to be optional, which meant a client that forgot to send
+  // it silently skipped the stale-editor check below and overwrote whatever
+  // changed on disk since it last read the file. It is required now — the
+  // caller must either name the version it read (from GET /api/file) or say
+  // out loud that it means to overwrite regardless.
+  if (body.force !== true) {
+    if (body.modified === undefined) {
+      throw httpError(400, `Provide modified: the file's last-read modified timestamp (from GET /api/file), or force: true to overwrite deliberately.`);
+    }
+    if (body.modified !== stat.mtime.toISOString()) {
+      throw httpError(409, `This file changed on disk after you opened it. Reopen ${apiPath} and merge your edit.`);
+    }
   }
   await fsp.writeFile(abs, body.text, "utf8");
   const after = await fsp.stat(abs);

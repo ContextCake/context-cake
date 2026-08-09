@@ -95,6 +95,14 @@ auth on every `/api/*` route** (random per-launch token, requested by the
 preload through exact-window/exact-origin IPC) — loopback + Origin checks alone don't isolate other
 local users on shared Macs.
 
+`PUT /api/file` is a breaking change from the earlier playground-only version:
+`modified` (the file's last-read mtime, from `GET /api/file`) is now required,
+or the call must say `force: true` to overwrite deliberately. It used to be
+optional, which meant a caller that simply forgot to send it silently skipped
+the stale-editor guard and overwrote whatever had changed on disk — exactly
+the case the guard exists for. There is no compatibility path for a caller
+that omits both; it now gets a 400 instead of a silent overwrite.
+
 ## 5. User data layout (spec §5 "config preservation")
 
 | Path | Contents | Touched by updates? |

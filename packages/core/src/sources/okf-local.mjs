@@ -372,6 +372,7 @@ export async function walkDocs(root, extensions, limits = null, { signal = null,
   const { maxFiles, maxEntries } = { ...defaultWalkLimits(), ...(limits ?? {}) };
   const files = [];
   let scanned = 0;
+  let hiddenSkipped = 0;
   const stack = [root];
   while (stack.length > 0) {
     throwIfAborted(signal);
@@ -380,10 +381,18 @@ export async function walkDocs(root, extensions, limits = null, { signal = null,
     try {
       dirents = await fsp.readdir(current, { withFileTypes: true });
     } catch (err) {
-      // Skipping is still right — one locked folder must not fail the whole
-      // layer — but a folder we are not ALLOWED to read is a different fact
-      // from a folder with nothing in it, and only one of them is worth saying.
-      // A missing root is already reported as an empty source.
+      // The layer ROOT failing to read is a different fact from an ordinary
+      // subdirectory going missing mid-walk: the root is the whole source, so
+      // losing it means there is nothing left behind this layer at all — not
+      // the empty-folder answer a deleted vault used to get, indistinguishable
+      // from one that was simply never populated.
+      if (current === root && (err.code === "ENOENT" || err.code === "ENOTDIR")) {
+        throw new Error(`Layer folder no longer exists: ${root}`);
+      }
+      // Skipping is still right for everything else — one locked or vanished
+      // subfolder must not fail the whole layer — but a folder we are not
+      // ALLOWED to read is a different fact from a folder with nothing in it,
+      // and only one of them is worth saying.
       if (err.code === "EACCES" || err.code === "EPERM") {
         notes?.unreadable.push({ rel: relTo(root, current), code: err.code });
       }
@@ -391,7 +400,8 @@ export async function walkDocs(root, extensions, limits = null, { signal = null,
     }
     const candidates = [];
     for (const dirent of dirents) {
-      if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
+      if (dirent.name.startsWith(".")) { hiddenSkipped += 1; continue; }
+      if (dirent.name === "node_modules") continue;
       scanned += 1;
       if (scanned > maxEntries) {
         throw new Error(
@@ -421,6 +431,10 @@ export async function walkDocs(root, extensions, limits = null, { signal = null,
       }
     }
   }
+  // A skip an entry never mentions is a skip nobody can act on. Counted, not
+  // itemized — one number per source is enough to say "this is deliberate",
+  // and the walk never descends into a dot-dir to name what is inside it.
+  if (notes) notes.hidden = (notes.hidden ?? 0) + hiddenSkipped;
   return files.sort();
 }
 

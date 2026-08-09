@@ -35,6 +35,38 @@ test("builds section, frontmatter, and settled broken-link discrepancies", () =>
   assert.equal(section.contributions.length, 2);
 });
 
+test("frontmatter_value discrepancies preserve a map-valued contribution as a real object", () => {
+  // No on-disk YAML syntax in this engine's own parsers produces a genuine
+  // map value today (parseYamlScalar only recognizes `[...]` arrays), but
+  // buildDiscrepancies operates on whatever a source's already-parsed
+  // frontmatter object hands it — a future or foreign adapter that DOES
+  // produce a map must not have its shape coerced on the way to a
+  // discrepancy row. service.mjs's compose guard depends on exactly this:
+  // it refuses compose when `typeof item.value === "object" && item.value
+  // !== null`, which only catches a map if this projection leaves it alone
+  // (a guard narrowed back to Array.isArray, as it once was, would let a
+  // map slip through and let renderScalar mangle it — see service.mjs).
+  const mapConcept = {
+    ...concept,
+    frontmatterConflicts: [{
+      key: "review",
+      winner: { layer: "team", level: 2, updated: "2026-08-01", value: { approved: true } },
+      contributions: [
+        { layer: "team", level: 2, updated: "2026-08-01", value: { approved: true } },
+        { layer: "company", level: 0, updated: "2026-07-01", value: { approved: false } },
+      ],
+    }],
+  };
+  const result = buildDiscrepancies([mapConcept], { coverageComplete: false });
+  const review = result.discrepancies.find((item) => item.key === "review");
+  assert.ok(review, "expected a frontmatter_value discrepancy for the map field");
+  for (const item of review.contributions) {
+    assert.equal(Array.isArray(item.value), false);
+    assert.deepEqual(item.value, item.effective ? { approved: true } : { approved: false });
+  }
+  assert.equal(review.contributions.some((item) => typeof item.value === "object" && item.value !== null), true);
+});
+
 test("does not manufacture broken links with incomplete coverage", () => {
   const result = buildDiscrepancies([concept], { coverageComplete: false });
   assert.equal(result.discrepancies.some((item) => item.kind === "broken_link"), false);
@@ -101,6 +133,78 @@ test("conflicting matching rules disable automation and surface the ambiguity", 
   const item = buildDiscrepancies([concept], { rules, coverageComplete: false }).discrepancies.find((row) => row.originalKind === "section_content");
   assert.equal(item.ruleConflict, true);
   assert.equal(item.status, "needs_review");
+});
+
+test("a resolved section_content decision emits exactly one record, under its canonical id", () => {
+  // schemaVersion-2, non-acknowledge, committed decision carrying BOTH the
+  // canonical discrepancyId and the legacy conflictId. decisionMap indexes it
+  // under both keys, so the resolved-record reconstruction must dedupe by
+  // canonical id or this becomes two rows for one resolution (F12).
+  const decisions = [{
+    schemaVersion: 2, id: "d1",
+    discrepancyId: "section_content::decisions/settled::choice",
+    conflictId: "decisions/settled::choice",
+    action: "choose_contribution", transactionState: "committed",
+    conceptId: "decisions/settled", title: "Settled", conceptType: "decision",
+    sectionKey: "choice", sectionHeading: "Choice", owner: "Platform",
+    chosen: { layer: "team", content: "Use Postgres.", updated: "2026-08-01" },
+    contributions: [
+      { layer: "team", level: 2, content: "Use Postgres.", updated: "2026-08-01" },
+      { layer: "company", level: 0, content: "Use MySQL.", updated: "2026-07-01" },
+    ],
+  }];
+  // No current conflict for this concept — buildDiscrepancies' first pass
+  // produces nothing for it, so the decision is only visible through the
+  // resolved-record reconstruction loop this test targets.
+  const settled = { ...concept, id: "decisions/settled", sections: [], frontmatterConflicts: [] };
+  const result = buildDiscrepancies([settled], { decisions, coverageComplete: false });
+  const rows = result.discrepancies.filter((item) => item.conceptId === "decisions/settled");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, "section_content::decisions/settled::choice");
+  assert.equal(rows[0].legacyId, "decisions/settled::choice");
+  assert.equal(rows[0].status, "resolved");
+});
+
+test("a live section conflict is not duplicated by its own committed decision (both ids present)", () => {
+  // schemaVersion-2, non-acknowledge, committed decision carrying BOTH the
+  // canonical discrepancyId and the legacy conflictId, for a concept whose
+  // section is STILL in conflict — so the first pass emits a live row AND the
+  // resolved-record reconstruction loop visits this decision under its legacy
+  // key. That legacy key doesn't collide with currentIds, but the canonical id
+  // it resolves to does — dedupe has to check the canonical id, or this
+  // concept+section ends up with two rows sharing one id (F13).
+  const decisions = [{
+    schemaVersion: 2, id: "d1",
+    discrepancyId: "section_content::decisions/db::choice",
+    conflictId: "decisions/db::choice",
+    action: "choose_contribution", transactionState: "committed",
+    conceptId: "decisions/db", title: "Database", conceptType: "decision",
+    sectionKey: "choice", sectionHeading: "Choice", owner: "Platform",
+    chosen: { layer: "team", content: "Use Postgres.", updated: "2026-08-01" },
+    // Recorded fingerprints differ from what's on disk now, so the live
+    // section reopens rather than resolving quietly.
+    contributions: [
+      { layer: "team", level: 2, content: "Use Postgres.", updated: "2026-08-01" },
+      { layer: "company", level: 0, content: "Use MySQL.", updated: "2026-07-01" },
+    ],
+  }];
+  const result = buildDiscrepancies([concept], { decisions, coverageComplete: false });
+  const rows = result.discrepancies.filter((item) => item.conceptId === "decisions/db" && item.key === "choice");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "reopened");
+  const ids = result.discrepancies.map((item) => item.id);
+  assert.equal(ids.length, new Set(ids).size);
+});
+
+test("active-discrepancy decoration still finds a decision by its legacy id", () => {
+  // finalize() looks a discrepancy's history up by discrepancyId first, then
+  // falls back to legacyId — the same fallback the dedupe above must not break.
+  const decisions = [{
+    schemaVersion: 2, id: "d1", conflictId: "decisions/db::choice", action: "acknowledge", reasonCode: "other",
+  }];
+  const result = buildDiscrepancies([concept], { decisions, coverageComplete: false });
+  const section = result.discrepancies.find((item) => item.originalKind === "section_content");
+  assert.equal(section.status, "acknowledged");
 });
 
 test("serialized shared rules contain structural metadata only", () => {

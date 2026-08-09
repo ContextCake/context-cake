@@ -259,6 +259,11 @@ describe('store load state', () => {
       // Generation moves every tick (the engine counts documents into it), but
       // nothing that decides the payload changes until the snapshot lands.
       mocks.status
+        // Consumed by the WP-B bootstrap probe, immediately after readAll()
+        // commits — same generation and shape readAll() itself just saw, so
+        // the probe is a no-op and the three progress-only ticks below still
+        // land on the recurring poll() exactly as before.
+        .mockResolvedValueOnce(statusPayload({ generation: 1, indexing: true, loaded: 0, total: 3000 }))
         .mockResolvedValueOnce(statusPayload({ generation: 2, indexing: true, loaded: 400, total: 3000 }))
         .mockResolvedValueOnce(statusPayload({ generation: 3, indexing: true, loaded: 900, total: 3000 }))
         .mockResolvedValueOnce(statusPayload({ generation: 4, indexing: true, loaded: 1800, total: 3000 }))
@@ -354,19 +359,23 @@ describe('store load state', () => {
       expect(probe().dataset.count).toBe('1')
     })
 
-    it('stops polling while the window is hidden and resumes when it comes back', async () => {
-      mocks.graph.mockResolvedValue(graphPayload(['personal']))
-      mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
-      mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: true, loaded: 10, total: 3000 }))
+    it('stops polling while the window is hidden when nothing is active, and resumes when it comes back', async () => {
+      // The cost optimization this pins: a hidden tab with nothing in flight
+      // must stay silent, exactly as before FIX 3 — only a hidden tab with
+      // real work active gets the new slower-but-still-polling behavior
+      // (see the next test).
+      mocks.graph.mockResolvedValue(graphPayload([]))
+      mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: false, conceptCount: 1 }))
 
       await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
-      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(11_000) })
       const whileVisible = mocks.status.mock.calls.length
       expect(whileVisible).toBeGreaterThan(0)
 
       const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
       await act(async () => document.dispatchEvent(new Event('visibilitychange')))
-      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
       expect(mocks.status.mock.calls.length).toBe(whileVisible)
 
       visibility.mockReturnValue('visible')
@@ -374,6 +383,177 @@ describe('store load state', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(50) })
       expect(mocks.status.mock.calls.length).toBeGreaterThan(whileVisible)
       visibility.mockRestore()
+    })
+
+    // FIX 3(a): schedule() used to be a flat no-op while hidden, so a
+    // backgrounded tab that was still indexing when it went hidden (or that
+    // started out hidden — see the WP-B bootstrap-probe test below) had
+    // nothing left to resume it, possibly forever. Real work in flight now
+    // keeps the loop polling through a hidden window, just at
+    // HIDDEN_ACTIVE_POLL_MS instead of the visible ACTIVE_POLL_MS cadence.
+    it('keeps polling, slower, while hidden when work is active — and recovers once the engine finishes', async () => {
+      mocks.graph.mockResolvedValue(graphPayload(['personal']))
+      mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: true, loaded: 10, total: 3000 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      expect(probe().dataset.indexing).toBe('personal')
+
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+      const whileHiddenStart = mocks.status.mock.calls.length
+
+      // Well past the visible cadence (900ms) but short of the hidden-active
+      // one: if hiding failed to slow the loop down, a poll would already
+      // have landed here.
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      expect(mocks.status.mock.calls.length).toBe(whileHiddenStart)
+
+      // The engine finishes indexing while the tab is still hidden. FIX 3:
+      // the heavy graph+resolve-all refetch this would otherwise trigger is
+      // deferred while hidden — see the dedicated FIX 3 test below for the
+      // call-count proof. Only the cheap status signal lands here.
+      mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 9, indexing: false, conceptCount: 1 }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+
+      expect(mocks.status.mock.calls.length).toBeGreaterThan(whileHiddenStart)
+      // The status route's own indexingSources answers directly, independent
+      // of the deferred heavy refetch — a hidden tab still learns indexing is
+      // done without downloading the corpus to prove it.
+      expect(probe().dataset.indexing).toBe('')
+      // The resolved concept count is the deferred half: still stale.
+      expect(probe().dataset.count).toBe('0')
+
+      // Once idle (nothing active) AND still hidden, the loop goes fully
+      // silent — confirming the hidden polling wound back down rather than
+      // persisting after work finished.
+      const afterRecovery = mocks.status.mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+      expect(mocks.status.mock.calls.length).toBe(afterRecovery)
+
+      // Returning to visible lands the deferred catch-up.
+      visibility.mockReturnValue('visible')
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+      expect(probe().dataset.count).toBe('1')
+
+      visibility.mockRestore()
+    })
+
+    // FIX 3: /api/graph and /api/resolve-all are the 620ms/150MB-on-a-real-vault
+    // payloads (see CLAUDE.md); a hidden tab has nobody to show them to. This
+    // pins the call counts directly, rather than through a derived dataset
+    // value, so a regression here fails on the exact thing that was expensive.
+    it('issues zero heavy payload calls while hidden, then exactly one catch-up refetch on return to visible (FIX 3)', async () => {
+      mocks.graph.mockResolvedValue(graphPayload(['personal']))
+      mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: true, loaded: 10, total: 3000 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+      const graphAtHidden = mocks.graph.mock.calls.length
+      const resolveAllAtHidden = mocks.resolveAll.mock.calls.length
+
+      // The snapshot lands while hidden: generation moves and indexing flips
+      // to done — exactly the condition that would normally earn a heavy
+      // refetch.
+      mocks.status.mockResolvedValue(statusPayload({ generation: 9, indexing: false, conceptCount: 1 }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+
+      expect(mocks.graph.mock.calls.length).toBe(graphAtHidden)
+      expect(mocks.resolveAll.mock.calls.length).toBe(resolveAllAtHidden)
+
+      mocks.resolveAll.mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+      visibility.mockReturnValue('visible')
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+
+      expect(mocks.graph.mock.calls.length).toBe(graphAtHidden + 1)
+      expect(mocks.resolveAll.mock.calls.length).toBe(resolveAllAtHidden + 1)
+      expect(probe().dataset.count).toBe('1')
+      expect(probe().dataset.indexing).toBe('')
+
+      visibility.mockRestore()
+    })
+
+    // FIX 2: a failed pass tells us nothing about whether work is active, so
+    // it must not keep a hidden tab polling off a stale `activeState === true`
+    // from the last successful pass. Measured before this fix: 85 failed
+    // fetches in 10 simulated hidden minutes, no termination.
+    it('stops polling in a hidden tab once the engine starts failing, even though it was active a moment ago (FIX 2)', async () => {
+      mocks.graph.mockResolvedValue(graphPayload(['personal']))
+      mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+      mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: true, loaded: 10, total: 3000 }))
+
+      await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      expect(probe().dataset.indexing).toBe('personal')
+
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+
+      // The engine dies while the tab is hidden and stays dead.
+      mocks.status.mockRejectedValue(new Error('engine gone'))
+      const beforeFailures = mocks.status.mock.calls.length
+
+      // The already-scheduled hidden-active tick fires once, fails, and (per
+      // the fix) must not reschedule itself while hidden.
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      const afterOneFailure = mocks.status.mock.calls.length
+      expect(afterOneFailure).toBeGreaterThan(beforeFailures)
+
+      // Simulates the full 10-minutes-hidden repro: nothing more should fire.
+      await act(async () => { await vi.advanceTimersByTimeAsync(600_000) })
+      expect(mocks.status.mock.calls.length).toBe(afterOneFailure)
+
+      visibility.mockRestore()
+    })
+
+    // WP-B: a page that first renders hidden (an embedded webview can
+    // misreport visibility) never gets a recurring poll at all — schedule()
+    // is a no-op while hidden, and nothing resumes the loop until
+    // visibilitychange fires. Without a probe that ignores hidden(), a page
+    // that loaded mid-index would sit on that stuck snapshot forever with no
+    // way to notice the engine actually finished.
+    it('probes /api/status once at bootstrap even when the page starts hidden, and recovers a stuck initial snapshot once visible', async () => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      try {
+        mocks.graph.mockResolvedValue(graphPayload(['personal']))
+        mocks.resolveAll
+          .mockResolvedValueOnce({ concepts: [], errors: [], indexing: true, indexingSources: ['personal'] })
+          .mockResolvedValue({ concepts: [conceptPayload('a')], errors: [], indexing: false })
+        // The engine actually finished by the time this page loaded — status
+        // disagrees with the graph's still-indexing snapshot from readAll().
+        mocks.status.mockResolvedValue(statusPayload({ generation: 9, indexing: false, conceptCount: 1 }))
+
+        await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+
+        // Exactly one status call: the bootstrap probe. schedule() is a
+        // no-op while hidden, so nothing else could have called it.
+        expect(mocks.status.mock.calls.length).toBe(1)
+        // The status route's own indexingSources answers directly — a hidden
+        // tab learns indexing is done without the heavy refetch.
+        expect(probe().dataset.indexing).toBe('')
+        // FIX 3: the correction this probe would otherwise fetch immediately
+        // is deferred while hidden — count is still the stale readAll()
+        // snapshot from before the mismatch was noticed.
+        expect(probe().dataset.count).toBe('0')
+        expect(mocks.resolveAll.mock.calls.length).toBe(1)
+
+        // Becoming visible lands the deferred catch-up.
+        visibility.mockReturnValue('visible')
+        await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+        await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+        expect(mocks.resolveAll.mock.calls.length).toBe(2)
+        expect(probe().dataset.count).toBe('1')
+      } finally {
+        visibility.mockRestore()
+      }
     })
   })
 
@@ -441,6 +621,19 @@ describe('store load state', () => {
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
     expect(probe().dataset.filesScope).toBe('')
     expect(probe().dataset.filesPath).toBe('')
+  })
+})
+
+describe('document title', () => {
+  it('names the current view, and updates when the view changes', async () => {
+    mocks.graph.mockResolvedValue(graphPayload([]))
+    mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: false })
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    expect(document.title).toBe('Home — ContextCake')
+
+    await click('to sources')
+    expect(document.title).toBe('Sources — ContextCake')
   })
 })
 

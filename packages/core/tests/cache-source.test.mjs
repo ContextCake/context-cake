@@ -27,6 +27,8 @@ function recordingSource() {
       calls.push(options);
       options?.notes?.skipped.push({ rel: "huge.md", bytes: 99_000_000 });
       options?.notes?.unreadable.push({ rel: "locked", code: "EACCES" });
+      // A count, not a list — matches how okf-local's walkDocs reports it.
+      if (options?.notes) options.notes.hidden = (options.notes.hidden ?? 0) + 3;
       return ["a", "b"];
     },
     async loadConcept(id) { return { id, sections: [] }; },
@@ -58,6 +60,24 @@ test("what the walk could not read survives the wrapper, and the cache hit", asy
   await cached.listConceptIds({ notes: second });
   assert.equal(source.calls.length, 1, "the memo did not hit");
   assert.deepEqual(second, first, "warnings vanished on the cached read");
+});
+
+test("the hidden count survives the wrapper, and does not reset on a cache hit", async () => {
+  // hidden is a running total (see okf-local's walkDocs), not a list like
+  // skipped/unreadable — replaying it has to add rather than push, or a
+  // cached layer's skippedHidden count flickers to 0 on every read but the
+  // one that actually walked the disk.
+  const source = recordingSource();
+  const cached = withCache(source, { ttlMs: 60_000 });
+
+  const first = { skipped: [], unreadable: [], hidden: 0 };
+  await cached.listConceptIds({ notes: first });
+  assert.equal(first.hidden, 3, "the hidden count from the walk never reached the caller");
+
+  const second = { skipped: [], unreadable: [], hidden: 0 };
+  await cached.listConceptIds({ notes: second });
+  assert.equal(source.calls.length, 1, "the memo did not hit");
+  assert.equal(second.hidden, 3, "the hidden count reset to 0 on the cached read");
 });
 
 test("a cached local layer still reports its skipped documents", async () => {

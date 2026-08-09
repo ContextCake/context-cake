@@ -15,7 +15,7 @@ import demoBundleRaw from './generated/demo-cascade.json'
 import type {
   ConflictResolutionRecord, DemoBundle, DiscrepanciesResponse, DiscrepancyDecisionRequest, DiscrepancyRecord,
   DiscrepancyRule, DiscrepancyRuleSuggestion, GraphSummary, GraphSource, ResolveConflictRequest,
-  ResolvedConcept, ResolvedSection, SourceStatus, StatusSummary,
+  ResolvedConcept, ResolvedSection, SearchHit, SourceStatus, StatusSummary,
 } from './types'
 import type { Concept, ConceptSection, Conflict, Dissent, Source } from './data'
 import type { LayerId } from './theme'
@@ -59,6 +59,14 @@ export interface DataSource {
    * to reading progress off the graph.
    */
   status(): Promise<StatusSummary | null>
+  /**
+   * Full-text search over section content (GET /api/search), for the
+   * Knowledge search box. `null` means the same thing it means for `status()`
+   * above: an engine too old to have the route. Demo mode never calls this —
+   * it has no engine behind it — so `DemoSource` answers `null` unconditionally
+   * rather than reading its own bundle.
+   */
+  search(query: string, limit?: number): Promise<SearchHit[] | null>
   conflictResolutions(): Promise<ConflictResolutionRecord[]>
   resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord>
   discrepancies(): Promise<DiscrepanciesResponse | null>
@@ -195,9 +203,12 @@ class DemoSource implements DataSource {
       })),
     }
   }
+  /** Demo mode is pure client-side substring filtering — no engine to search. */
+  async search(): Promise<SearchHit[] | null> { return null }
   async conflictResolutions(): Promise<ConflictResolutionRecord[]> { return this.resolutions }
   async discrepancies(): Promise<DiscrepanciesResponse> {
-    const conflicts = adaptConflicts(this.bundle.concepts, this.resolutions)
+    const buckets = computeLevelBuckets(this.bundle.graph.sources.map((s) => s.level))
+    const conflicts = adaptConflicts(this.bundle.concepts, this.resolutions, buckets)
     return {
       discrepancies: conflicts.map((conflict) => legacyConflictRecord(conflict)),
       coverageComplete: true, indexing: false, indexingSources: [], errors: [], generation: 1,
@@ -327,6 +338,19 @@ class LiveSource implements DataSource {
       throw error
     }
   }
+  async search(query: string, limit = 20): Promise<SearchHit[] | null> {
+    try {
+      return (await this.get<{ hits: SearchHit[] }>(`/api/search?q=${encodeURIComponent(query)}&limit=${limit}`)).hits
+    } catch (error) {
+      // Same older-engine idiom as status() above: a 404 means this engine has
+      // no /api/search route, and the caller falls back to the substring
+      // filter. Any other failure (network, timeout, malformed body) is the
+      // caller's problem too — it wraps this call and treats every rejection
+      // the same way, so nothing here needs to distinguish them.
+      if (error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404) return null
+      throw error
+    }
+  }
   async conflictResolutions(): Promise<ConflictResolutionRecord[]> {
     try {
       return (await this.get<{ resolutions: ConflictResolutionRecord[] }>('/api/conflict-resolutions')).resolutions
@@ -420,12 +444,34 @@ export function createDataSource(mode: Mode = selectMode()): DataSource {
 const LAYER_IDS: LayerId[] = ['company', 'team', 'personal']
 const isLayerId = (s: string): s is LayerId => (LAYER_IDS as string[]).includes(s)
 
-/** Map a source/layer name (falling back to level) to a console LayerId. */
-function layerOf(name: string, level: number): LayerId {
+/**
+ * Rank-based bucket assignment for one resolve pass. `LayerId` stays a
+ * closed, three-value union — styling in ~8 files depends on it — so an
+ * arbitrary manifest level still needs an honest lane without widening that
+ * type. The highest level actually present becomes 'personal', the next
+ * 'team', and everything else 'company'. That fixes the fixed-threshold bug
+ * where a lone level-1 source (nothing above it) read as 'company' with the
+ * Team lane sitting empty: ranked among the levels that actually exist, level
+ * 1 is the *second* highest and lands in 'team'.
+ *
+ * Must be computed once per resolve pass from every source in play (not per
+ * concept or per record) and threaded through every adapter below — computing
+ * it from a narrower slice would bucket the same source differently
+ * depending on what happened to touch it.
+ */
+export type LevelBuckets = ReadonlyMap<number, LayerId>
+
+export function computeLevelBuckets(levels: Iterable<number>): LevelBuckets {
+  const distinct = [...new Set(levels)].sort((a, b) => b - a)
+  const buckets = new Map<number, LayerId>()
+  distinct.forEach((level, rank) => buckets.set(level, rank === 0 ? 'personal' : rank === 1 ? 'team' : 'company'))
+  return buckets
+}
+
+/** Map a source/layer name (falling back to its rank bucket) to a console LayerId. */
+function layerOf(name: string, level: number, buckets: LevelBuckets): LayerId {
   if (isLayerId(name)) return name
-  if (level >= 3) return 'personal'
-  if (level === 2) return 'team'
-  return 'company'
+  return buckets.get(level) ?? 'company'
 }
 
 /**
@@ -478,10 +524,10 @@ function newerAtDayGranularity(dissentUpdated: string | null, winnerUpdated: str
 }
 
 /** A resolved section → the console's ConceptSection (with provenance + dissent). */
-function adaptSection(s: ResolvedSection, levels: Map<string, number>): ConceptSection {
-  const winner = layerOf(s.sourceLayer, levels.get(s.sourceLayer) ?? 0)
+function adaptSection(s: ResolvedSection, levels: Map<string, number>, buckets: LevelBuckets): ConceptSection {
+  const winner = layerOf(s.sourceLayer, levels.get(s.sourceLayer) ?? 0, buckets)
   const dissents: Dissent[] = (s.conflicts ?? []).map((c) => ({
-    layer: layerOf(c.layer, levels.get(c.layer) ?? 0),
+    layer: layerOf(c.layer, levels.get(c.layer) ?? 0, buckets),
     sourceLayer: c.layer,
     value: c.content,
     updated: c.updated,
@@ -499,11 +545,12 @@ function adaptSection(s: ResolvedSection, levels: Map<string, number>): ConceptS
   }
 }
 
-/** A resolved concept → the console's Concept. */
-export function adaptConcept(r: ResolvedConcept): Concept {
+/** A resolved concept → the console's Concept. `buckets` is the rank-based
+ *  level→lane assignment for this resolve pass (see `computeLevelBuckets`). */
+export function adaptConcept(r: ResolvedConcept, buckets: LevelBuckets): Concept {
   const levels = contributorLevels(r)
-  const layerIds = orderLayers(r.contributors.map((c) => layerOf(c.layer, c.level)))
-  const sections = r.sections.map((s) => adaptSection(s, levels))
+  const layerIds = orderLayers(r.contributors.map((c) => layerOf(c.layer, c.level, buckets)))
+  const sections = r.sections.map((s) => adaptSection(s, levels, buckets))
   return {
     id: r.id,
     title: (r.frontmatter?.title as string) ?? r.id,
@@ -515,6 +562,7 @@ export function adaptConcept(r: ResolvedConcept): Concept {
     // draft signal. Owning a concept in a single layer does not make it draft.
     draft: r.frontmatter?.draft === true,
     sections,
+    contributorLayers: r.contributors.map((c) => c.layer),
   }
 }
 
@@ -552,6 +600,7 @@ export function progressPercent(p: { loaded?: number; total?: number | null } | 
 
 /** Graph sources → the console's Source[] (coverage/focus/status derived honestly). */
 export function adaptSources(g: GraphSummary): Source[] {
+  const buckets = computeLevelBuckets(g.sources.map((s) => s.level))
   return g.sources.map((s: GraphSource) => {
     const errored = s.status === 'error'
     // A remote source that can't reach its API doesn't throw — it answers with
@@ -587,7 +636,7 @@ export function adaptSources(g: GraphSummary): Source[] {
     return {
       name: s.name,
       kind: s.kind === 'mcp' ? 'mcp' : 'okf-local',
-      layer: layerOf(s.name, s.level),
+      layer: layerOf(s.name, s.level, buckets),
       // A source contributing nothing shouldn't show a full bar, however it
       // got there — errored, degraded to empty, or genuinely empty. While it
       // indexes the bar tracks real progress instead of standing in for it.
@@ -713,8 +762,10 @@ export function trivialConflictReason(values: string[]): string | null {
     : 'The answers use the same words in the same order; only formatting differs.'
 }
 
-/** Derive open conflicts plus resolved decisions retained by the local log. */
-export function adaptConflicts(concepts: ResolvedConcept[], resolutions: ConflictResolutionRecord[] = []): Conflict[] {
+/** Derive open conflicts plus resolved decisions retained by the local log.
+ *  `buckets` is the rank-based level→lane assignment for this resolve pass
+ *  (see `computeLevelBuckets`). */
+export function adaptConflicts(concepts: ResolvedConcept[], resolutions: ConflictResolutionRecord[] = [], buckets: LevelBuckets): Conflict[] {
   const out: Conflict[] = []
   const historyByConflict = new Map<string, ConflictResolutionRecord[]>()
   for (const resolution of resolutions) {
@@ -727,13 +778,13 @@ export function adaptConflicts(concepts: ResolvedConcept[], resolutions: Conflic
     const levels = contributorLevels(c)
     for (const s of c.sections) {
       if (!s.conflicts?.length) continue
-      const winner = layerOf(s.sourceLayer, levels.get(s.sourceLayer) ?? 0)
+      const winner = layerOf(s.sourceLayer, levels.get(s.sourceLayer) ?? 0, buckets)
       const id = `${c.id}::${s.key}`
       const history = historyByConflict.get(id) ?? []
       const contributions = [
         { layer: winner, sourceLayer: s.sourceLayer, value: s.content, updated: s.sourceUpdated ?? '' },
         ...s.conflicts.map((k) => ({
-          layer: layerOf(k.layer, levels.get(k.layer) ?? 0),
+          layer: layerOf(k.layer, levels.get(k.layer) ?? 0, buckets),
           sourceLayer: k.layer,
           value: k.content,
           updated: k.updated ?? '',
@@ -764,7 +815,7 @@ export function adaptConflicts(concepts: ResolvedConcept[], resolutions: Conflic
     if (out.some((item) => item.id === id)) continue
     const latest = history[history.length - 1]
     const contributions = latest.contributions.map((item) => ({
-      layer: layerOf(item.layer, item.level ?? (item.layer === 'personal' ? 3 : item.layer === 'team' ? 2 : 0)),
+      layer: layerOf(item.layer, item.level ?? (item.layer === 'personal' ? 3 : item.layer === 'team' ? 2 : 0), buckets),
       sourceLayer: item.layer,
       value: item.content,
       updated: item.updated ?? '',
@@ -776,10 +827,11 @@ export function adaptConflicts(concepts: ResolvedConcept[], resolutions: Conflic
       section: headingText(latest.sectionHeading),
       title: `${headingText(latest.sectionHeading)} — ${latest.title}`,
       status: 'resolved',
-      winner: layerOf(latest.chosen?.layer ?? latest.contributions[0]?.layer ?? '', latest.chosen?.level ?? latest.contributions[0]?.level ?? 0),
+      winner: layerOf(latest.chosen?.layer ?? latest.contributions[0]?.layer ?? '', latest.chosen?.level ?? latest.contributions[0]?.level ?? 0, buckets),
       contributions,
       safe: false,
       history,
+      effectiveSource: latest.chosen?.layer ?? latest.contributions[0]?.layer ?? null,
     })
   }
   return out
@@ -809,11 +861,20 @@ function legacyConflictRecord(conflict: Conflict): DiscrepancyRecord {
   }
 }
 
-/** Raw professional discrepancy records → the existing navigator view model. */
-export function adaptDiscrepancies(records: DiscrepancyRecord[], coverageComplete = true): Conflict[] {
+/** Raw professional discrepancy records → the existing navigator view model.
+ *  `buckets` is the rank-based level→lane assignment for this resolve pass
+ *  (see `computeLevelBuckets`). */
+export function adaptDiscrepancies(records: DiscrepancyRecord[], coverageComplete = true, buckets: LevelBuckets): Conflict[] {
   return records.map((record) => {
+    // The raw contribution value carries its real type (the engine never
+    // stringifies a list-typed frontmatter field before serving it) — check
+    // it BEFORE the display value below coerces every non-string into JSON
+    // text. `isList` rides with the discrepancy, not a contribution, because
+    // the engine's own compose guard (service.mjs) rejects the action for the
+    // whole field, not per-contributor.
+    const isList = record.contributions.some((item) => Array.isArray(item.value))
     const contributions = record.contributions.map((item) => ({
-      layer: layerOf(item.source, item.level), sourceLayer: item.source,
+      layer: layerOf(item.source, item.level, buckets), sourceLayer: item.source,
       value: typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2),
       updated: item.updated ?? '',
       ...(record.fresherDissent && !item.effective ? { fresherDissent: true } : {}),
@@ -823,13 +884,14 @@ export function adaptDiscrepancies(records: DiscrepancyRecord[], coverageComplet
       id: record.id, concept: record.conceptId, sectionKey: record.key,
       section: record.label, title: `${record.label} — ${record.conceptTitle}`,
       status: record.status === 'resolved' ? 'resolved' : 'open',
-      winner: layerOf(effective?.source ?? '', effective?.level ?? 0),
+      winner: layerOf(effective?.source ?? '', effective?.level ?? 0, buckets),
       contributions, safe: false, history: record.history,
       kind: record.kind, discrepancyStatus: record.status, revision: record.revision,
       owner: record.owner, priority: record.priority, winnerReason: record.winnerReason,
       effectiveSource: record.effectiveSource, coverageComplete, sourceHealth: record.sourceHealth,
       matchingRules: record.matchingRules, ruleConflict: record.ruleConflict, target: record.target,
       affectedLinks: record.affectedLinks,
+      ...(isList ? { isList: true } : {}),
     }
   })
 }

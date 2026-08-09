@@ -40,7 +40,16 @@ function OverviewInner() {
         <div className="cc-section-heading"><div><h2 id="cc-cascade-summary">Cascade summary</h2><p>Higher layers win only for the sections they define; everything else is inherited.</p></div><button type="button" onClick={() => setView('canvas')}>Open Cascade</button></div>
         <div className="cc-cascade-summary">{[...layers].sort((a, b) => b.level - a.level).map((layer) => {
           const count = concepts.filter((concept) => concept.layers.includes(layer.id)).length
-          return <div key={layer.id}><span className="cc-cascade-level">{layer.level}</span><LayerChip id={layer.id} /><span>{layer.sub}</span><strong>{count} concept{count === 1 ? '' : 's'}</strong></div>
+          // Real levels and source names behind this lane (F3), not the static
+          // trio: a level-1 source that ranks into 'team' should say so here
+          // too, not just on the Canvas. Demo mode's sources are already the
+          // canonical company/team/personal trio, so this falls back to the
+          // static blurb there unchanged.
+          const rows = mode === 'demo' ? [] : sources.filter((source) => source.layer === layer.id)
+          const levels = [...new Set(rows.map((row) => row.level).filter((level): level is number => typeof level === 'number'))].sort((a, b) => a - b)
+          const levelLabel = levels.length ? levels.join('/') : String(layer.level)
+          const sourceLabel = rows.length ? rows.map((row) => row.name).join(', ') : layer.sub
+          return <div key={layer.id}><span className="cc-cascade-level">{levelLabel}</span><LayerChip id={layer.id} /><span>{sourceLabel}</span><strong>{count} concept{count === 1 ? '' : 's'}</strong></div>
         })}</div>
       </section>
 

@@ -95,6 +95,21 @@ export interface StatusSummary {
   sources: SourceStatus[]
 }
 
+/**
+ * One hit from GET /api/search — BM25F over stemmed section content
+ * (`searchConcepts` in packages/core/src/search.mjs). `layers` names every
+ * contributing layer, best-scoring first; `snippet` is pre-extracted around
+ * the matched terms, so the console never has to re-tokenize the body.
+ * Hits arrive pre-sorted by score, highest first.
+ */
+export interface SearchHit {
+  id: string
+  title: string | null
+  score: number
+  layers: string[]
+  snippet: string
+}
+
 /** A source (layer) row in the graph summary. */
 export interface GraphSource {
   name: string
@@ -257,7 +272,7 @@ export interface ConflictResolutionRecord {
 export type DiscrepancyKind = 'section_content' | 'frontmatter_value' | 'broken_link' | 'changed_after_decision'
 export type DiscrepancyStatus = 'needs_review' | 'recommended' | 'auto_ready' | 'acknowledged' | 'resolved' | 'reopened' | 'blocked'
 export type DiscrepancyAction = 'choose_contribution' | 'compose' | 'acknowledge'
-export type AcknowledgementReason = 'different_scopes' | 'temporary_migration' | 'source_specific_authority' | 'other'
+export type AcknowledgementReason = 'different_scopes' | 'temporary_migration' | 'source_specific_authority' | 'target_missing' | 'other'
 
 export interface DiscrepancyContribution {
   source: string

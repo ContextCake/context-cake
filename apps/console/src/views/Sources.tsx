@@ -93,6 +93,18 @@ function fmtTime(iso: string): string {
   return Number.isNaN(t.getTime()) ? iso : t.toLocaleString()
 }
 
+/**
+ * The "Last error" metadata line. `lastErrorAt` alone used to render here — a
+ * bare date beside a live `s.error` string one field down, so a source that
+ * was actively failing still read "None" at a glance. The message is the
+ * fact that matters; the date is context for it, not a substitute.
+ */
+function lastErrorSummary(s: Source): string {
+  if (s.error) return s.lastErrorAt ? `${s.error} · ${fmtTime(s.lastErrorAt)}` : s.error
+  if (s.lastErrorAt) return fmtTime(s.lastErrorAt)
+  return 'None'
+}
+
 /** Sync applies to REST github layers and to clone-backed layers (origin set). */
 function canSync(s: Source): boolean {
   return !s.quarantined && (s.sourceKind === 'github' || Boolean(s.origin))
@@ -398,7 +410,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
 
             <dl className="cc-source-metadata">
               <div><dt>Last success</dt><dd>{s.lastSuccessAt ? fmtTime(s.lastSuccessAt) : 'Not yet'}</dd></div>
-              <div><dt>Last error</dt><dd>{s.lastErrorAt ? fmtTime(s.lastErrorAt) : 'None'}</dd></div>
+              <div><dt>Last error</dt><dd>{lastErrorSummary(s)}</dd></div>
               {/* "Not supported for this source kind" would be answering the
                   wrong question on an entry that is not a source at all. */}
               {!s.quarantined && <div><dt>Sync</dt><dd>{canSync(s) ? 'Available' : 'Not supported for this source kind'}</dd></div>}

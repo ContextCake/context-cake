@@ -1195,10 +1195,26 @@ async function smokeCheck() {
       //    and an uncaughtException on the main process is the fatal handler:
       //    the app would exit here. A plain-http target keeps the refusal from
       //    handing anything to the real browser.
-      const loadedBefore = win.webContents.getURL()
+      //
+      //    Wait for the guard itself rather than a fixed sleep, and compare
+      //    ORIGINS. Sleeping 200ms and diffing the whole URL string failed on
+      //    loaded CI runners for a reason that had nothing to do with the
+      //    guard: the console is live here with no engine behind it, so every
+      //    IPC call it makes is being refused, and an in-page history change on
+      //    that retry path moves getURL() without any navigation having been
+      //    allowed.
+      const originOf = (url) => { try { return new URL(url).origin } catch { return url } }
+      const originBefore = originOf(win.webContents.getURL())
+      let reachedGuard = false
+      const watchNavigation = (event, url) => { if (url.startsWith('http://127.0.0.1:1/')) reachedGuard = true }
+      win.webContents.on('will-navigate', watchNavigation)
       await win.webContents.executeJavaScript("location.href = 'http://127.0.0.1:1/blocked'")
-      await new Promise((resolve) => setTimeout(resolve, 200))
-      if (win.webContents.getURL() !== loadedBefore) failures.push('navigation guard: the window navigated off the engine origin')
+      for (let waited = 0; waited < 4000 && !reachedGuard; waited += 50) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      win.webContents.off('will-navigate', watchNavigation)
+      if (!reachedGuard) failures.push('navigation guard: the navigation attempt never reached the guard')
+      if (originOf(win.webContents.getURL()) !== originBefore) failures.push('navigation guard: the window navigated off the engine origin')
 
       // 3. A relaunch that FAILS must keep the app — that is exactly what the
       //    relaunch prompt promises. It used to call handleFatal, which shows

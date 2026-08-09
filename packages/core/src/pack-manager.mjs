@@ -370,6 +370,27 @@ function validateTrustContract(content) {
   return errors;
 }
 
+/**
+ * Entries the operating system writes into a folder on its own — `.DS_Store`
+ * is the one every macOS author hits, because Finder creates it merely by
+ * opening the directory. A Pack is a directory a human curates, so treating
+ * that as an unknown content type failed the install over a file the author
+ * never chose to add and cannot easily see.
+ *
+ * `.git` stays a loud error: that one says the author packed the wrong
+ * directory, which is worth stopping for.
+ *
+ * This is the ONE rule, and both the walk and the copy have to honour it. The
+ * walk decides what is validated and what the checksum covers; the copy
+ * decides what lands in the installed Pack. If they ever disagree, whatever
+ * the walk skipped would install unvalidated, unsized and outside the
+ * checksum — hidden content could then change a Pack without changing its
+ * identity.
+ */
+function isIncidentalPackEntry(name) {
+  return name.startsWith(".") && name !== ".git";
+}
+
 function walkPackEntries(root, errors) {
   const entries = [];
   const stack = [root];
@@ -377,6 +398,7 @@ function walkPackEntries(root, errors) {
   while (stack.length) {
     const current = stack.pop();
     for (const name of fs.readdirSync(current).sort()) {
+      if (isIncidentalPackEntry(name)) continue;
       const fullPath = path.join(current, name);
       const stat = fs.lstatSync(fullPath);
       const relative = toPosix(path.relative(root, fullPath));
@@ -446,6 +468,9 @@ function installImmutableVersion(sourceRoot, targetRoot, checksum) {
 
 function copyPackTree(source, destination) {
   for (const name of fs.readdirSync(source).sort()) {
+    // Same rule the walk applied: what was never validated or checksummed
+    // must not be installed either (see isIncidentalPackEntry).
+    if (isIncidentalPackEntry(name)) continue;
     const from = path.join(source, name);
     const to = path.join(destination, name);
     const stat = fs.lstatSync(from);

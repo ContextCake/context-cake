@@ -199,4 +199,44 @@ const root = process.argv[2]
 })().catch((error) => { console.error(error); process.exit(1) })
 NODE
 
-echo "pack test passed (trust validation + immutable install + profile assignment + reviewed update + rollback + retained removal + deterministic checksum + schema/contract parity)"
+# Finder writes .DS_Store into any folder a Mac user opens, so a Pack author
+# could fail their own install by looking at their Pack. The walk and the copy
+# must agree about ignoring it: if only the walk skipped it, the file would
+# install unvalidated and outside the checksum, and hidden content could then
+# change a Pack without changing its identity.
+cp -R "$source_pack" "$tmpdir/junked-pack"
+printf 'Mac Finder junk\0' > "$tmpdir/junked-pack/.DS_Store"
+mkdir -p "$tmpdir/junked-pack/updates"
+printf 'more junk\0' > "$tmpdir/junked-pack/updates/.DS_Store"
+printf 'hidden\n' > "$tmpdir/junked-pack/.hidden-note.md"
+
+node "$pack_cli" inspect "$tmpdir/junked-pack" > "$tmpdir/junked-inspect.json" \
+  || fail "a Pack containing .DS_Store failed to inspect"
+
+node - "$tmpdir/inspect.json" "$tmpdir/junked-inspect.json" <<'NODE' || fail "OS junk changed the Pack checksum — a Finder visit must not change a Pack's identity"
+const fs = require('node:fs')
+const clean = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+const junked = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
+if (clean.checksum !== junked.checksum) process.exit(1)
+NODE
+
+cat > "$tmpdir/junk-manifest.json" <<'EOF'
+{ "layers": [] }
+EOF
+node "$pack_cli" install "$tmpdir/junked-pack" --manifest "$tmpdir/junk-manifest.json" --packs-dir "$tmpdir/junk-packs" --level 0 > /dev/null \
+  || fail "a Pack containing .DS_Store failed to install"
+test -f "$tmpdir/junk-packs/contextcake/0.1.0/PACK.yaml" || fail "the Pack did not install"
+test -e "$tmpdir/junk-packs/contextcake/0.1.0/.DS_Store" && fail "install copied a file the checksum never covered"
+test -e "$tmpdir/junk-packs/contextcake/0.1.0/updates/.DS_Store" && fail "install copied nested junk the checksum never covered"
+test -e "$tmpdir/junk-packs/contextcake/0.1.0/.hidden-note.md" && fail "install copied a hidden file outside the checksum"
+
+# The guardrail that must survive: a packed repository is still an error, not
+# incidental junk to wave through.
+cp -R "$source_pack" "$tmpdir/repo-pack"
+mkdir -p "$tmpdir/repo-pack/.git"
+printf 'ref: refs/heads/main\n' > "$tmpdir/repo-pack/.git/HEAD"
+if node "$pack_cli" inspect "$tmpdir/repo-pack" > /dev/null 2>&1; then
+  fail "a Pack containing .git inspected cleanly; the packed-repo guardrail is gone"
+fi
+
+echo "pack test passed (trust validation + immutable install + profile assignment + reviewed update + rollback + retained removal + deterministic checksum + OS junk ignored consistently + schema/contract parity)"

@@ -396,6 +396,13 @@ node -e '
 ' "$TMP/manifest.json" && pass "the add landed inside profiles.default, not a legacy layers array" || fail "v2 add wrote the wrong place"
 code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"pv2","newName":"pv2b","level":0}' "$BASE/api/sources")" "CRUD rename/re-level works on v2"
 code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=pv2b")" "CRUD remove works on v2"
+# A section write invalidates every layer. The remote entry keeps serving its
+# last snapshot through that refresh, so its matching health observation must
+# travel with it too — an unrelated local edit cannot repaint a failed repo ok.
+GR_MTIME="$(curl -s "${AUTH[@]}" "$BASE/api/file?path=t/note.md" | JQ 'd.modified')"
+code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d "{\"conceptId\":\"note\",\"sectionKey\":\"body\",\"layers\":[\"t\"],\"content\":\"still hello after remote health check.\",\"modified\":{\"t\":\"$GR_MTIME\"}}" "$BASE/api/section")" "an unrelated section write invalidates all source indexes"
+G_REFRESH="$(curl -s "${AUTH[@]}" "$BASE/api/graph?wait=15000")"
+[ "$(JQ 'String((d.sources.find((s) => s.name === "gr").status === "degraded") && (d.sources.find((s) => s.name === "gr").lastErrorAt !== null))' <<<"$G_REFRESH")" = "true" ] && pass "remote health survives an unrelated all-layer invalidation" || fail "remote health lost after invalidation ($G_REFRESH)"
 
 echo "a dead MCP child paints its row degraded, then recovers (C-d)"
 cat > "$TMP/flaky.mjs" <<'EOF'

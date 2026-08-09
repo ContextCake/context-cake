@@ -98,6 +98,28 @@ describe('SetupWizard first run', () => {
     expect(postCalls()[0]).toMatchObject({ name: 'My notes', level: 3 })
   })
 
+  it('does not add a completed source again when the user goes back through Review', async () => {
+    await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+
+    await act(async () => button('Get started').click())
+    await enter('#wiz-personal-path', '/tmp/my-notes')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip').click())
+    await act(async () => button('Skip for now').click())
+
+    expect(container.textContent).toContain('These sources are already in your cascade')
+    expect(postCalls()).toHaveLength(1)
+
+    await act(async () => button('Back').click())
+    await act(async () => button('Back').click())
+    await act(async () => button('Back').click())
+    expect(container.querySelector('#wiz-personal-path')).toBeTruthy()
+
+    await act(async () => button('Next').click())
+    expect(container.textContent).toContain('Add a team source')
+    expect(postCalls()).toHaveLength(1)
+  })
+
   it('lets the level stepper change precedence away from the 3/2/0 defaults', async () => {
     await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
 

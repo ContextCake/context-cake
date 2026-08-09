@@ -200,7 +200,8 @@ describe('Knowledge search (live mode)', () => {
     const search = vi.fn()
       .mockResolvedValueOnce([{ id: a.id, title: a.title, score: 5, layers: ['personal'], snippet: '' }])
       .mockImplementationOnce(() => new Promise<SearchHit[]>((resolve) => { resolveSecond = resolve }))
-    const store = liveStoreWith([a, b], 'primary', search)
+    const setSelConcept = vi.fn()
+    const store = { ...liveStoreWith([a, b], 'primary', search), setSelConcept }
     mocks.useStore.mockReturnValue(store)
     await act(async () => root.render(<Concepts />))
     await act(async () => { await vi.advanceTimersByTimeAsync(250) })
@@ -218,13 +219,13 @@ describe('Knowledge search (live mode)', () => {
     mocks.useStore.mockReturnValue({ ...store, query: 'other' })
     await act(async () => { window.dispatchEvent(new Event('contextcake:close-detail')) })
 
-    // `a`'s stale hit from the first search must be gone immediately — well
-    // before the new debounced search resolves. (The detail panel on the
-    // right keeps showing whatever is still selected — that's unrelated to
-    // this bug, so the assertion is scoped to the list rows.)
+    // `a`'s stale hit and its detail must both be gone immediately — well
+    // before the new debounced search resolves.
     const list = rows().map((r) => r.textContent ?? '')
     expect(list.some((text) => text.includes('Primary database'))).toBe(false)
     expect(list.some((text) => text.includes('Other decision'))).toBe(true)
+    expect(setSelConcept).toHaveBeenCalledWith('')
+    expect(container.querySelector('[aria-label="Primary database concept detail"]')).toBeNull()
 
     resolveSecond([])
     await act(async () => { await vi.advanceTimersByTimeAsync(250) })

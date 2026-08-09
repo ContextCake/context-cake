@@ -301,6 +301,14 @@ function ConflictsInner() {
   return (
     <div className="cc-conflicts cc-discrepancy-center">
       <header className="cc-discrepancy-header"><div><span className="cc-eyebrow">Alignment workspace</span><h2>Discrepancy Center</h2><p>{actionable} actionable {actionable === 1 ? 'item' : 'items'}. Structural evidence only—no model-inferred contradictions.</p></div><span className="cc-actionable-count">{actionable}</span></header>
+      <section className="cc-discrepancy-guide" aria-label="How to resolve a discrepancy">
+        <strong>Resolve one difference at a time</strong>
+        <ol>
+          <li><span>1</span>Compare every source</li>
+          <li><span>2</span>Choose a winner or keep distinct scopes</li>
+          <li><span>3</span>Review affected files before applying</li>
+        </ol>
+      </section>
       {conflicts.some((item) => item.coverageComplete === false) && <div className="cc-coverage-warning" role="status">Coverage is incomplete while sources index or recover. Broken-link findings are paused.</div>}
       <nav className="cc-status-tabs" aria-label="Discrepancy status"><button data-active={status === 'actionable'} onClick={() => setStatus('actionable')}>Needs review</button><button data-active={status === 'recommended'} onClick={() => setStatus('recommended')}>Recommendations</button><button data-active={status === 'automated'} onClick={() => setStatus('automated')}>Automated</button><button data-active={status === 'acknowledged'} onClick={() => setStatus('acknowledged')}>Acknowledged</button><button data-active={status === 'resolved'} onClick={() => setStatus('resolved')}>Resolved</button></nav>
       <div className="cc-discrepancy-filters" aria-label="Discrepancy filters"><select aria-label="Kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="all">All kinds</option>{Object.entries(KIND_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select aria-label="Owner" value={owner} onChange={(event) => setOwner(event.target.value)}><option value="all">All owners</option>{owners.map((value) => <option key={value}>{value}</option>)}</select><select aria-label="Source" value={source} onChange={(event) => setSource(event.target.value)}><option value="all">All sources</option>{sources.map((value) => <option key={value}>{value}</option>)}</select><select aria-label="Priority" value={priority} onChange={(event) => setPriority(event.target.value)}><option value="all">All priorities</option><option value="unassigned">Unassigned</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select><label className="cc-filter-check"><input type="checkbox" checked={newerOnly} onChange={(event) => setNewerOnly(event.target.checked)} /> Newer dissent</label></div>

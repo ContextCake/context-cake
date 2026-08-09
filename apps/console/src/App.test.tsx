@@ -118,7 +118,9 @@ describe('Mac-first application shell', () => {
     expect(search?.value).toBe('auth')
     await act(async () => search?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(search?.value).toBe('')
-    expect(container.querySelector('.cc-navigator-detail-panel[data-open]')).toBeTruthy()
+    // A meaningful query change clears the prior selection so an unrelated
+    // concept detail cannot linger beside the refreshed result set.
+    expect(container.querySelector('.cc-navigator-detail-panel[data-open]')).toBeNull()
   })
 
   it('routes every shell navigation path through the unsaved-work guard', async () => {

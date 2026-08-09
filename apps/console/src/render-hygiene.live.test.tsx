@@ -100,6 +100,9 @@ function typeInto(field: HTMLInputElement | HTMLTextAreaElement, text: string) {
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   for (const key of Object.keys(renders)) delete renders[key]
+  // This suite measures the connected live composer. Unconnected live mode
+  // intentionally renders connection guidance instead of a fake input.
+  window.claude = { complete: vi.fn().mockResolvedValue('answer') }
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -109,6 +112,7 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   vi.unstubAllGlobals()
+  delete window.claude
   window.history.replaceState(null, '', '/')
   document.documentElement.removeAttribute('data-theme')
 })

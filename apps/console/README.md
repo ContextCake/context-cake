@@ -64,9 +64,10 @@ playground/service command documented in the repository instructions.
   folder-backed source, remove, and sync. Read-only in demo mode, where the way
   into the navigator is still offered.
 - **Ask ContextCake** uses the resolved cascade when a compatible
-  `window.claude.complete` harness bridge is present. Otherwise it returns a
-  visibly labeled sample answer; Electron does not currently provide that
-  completion bridge.
+  `window.claude.complete` harness bridge is present. Demo mode falls back to
+  visibly labeled sample answers. Live mode never substitutes demo knowledge:
+  without a bridge it points the user to the agent connection flow instead.
+  Electron does not currently provide that completion bridge.
 - **Settings** opens from the sidebar or Cmd/Ctrl-comma. General holds theme and
   update preferences; Account holds optional desktop GitHub sign-in, sync state,
   sign-out, and self-service deletion.

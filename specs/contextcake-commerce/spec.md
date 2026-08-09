@@ -5,6 +5,7 @@ team governance, and separately purchased expert Packs. Commerce must extend the
 local product without turning local resolution, authoring, or agent access into a trial.
 
 **Date:** 2026-07-17
+**Amended:** 2026-08-09 — added demo catalog and open creator brief boundaries
 **Status:** Approved commercial foundation; billing remains disabled until the matching
 product behavior is live
 **Depends on:** `specs/contextcake-auth/spec.md`, `specs/contextcake-packs/spec.md`, and
@@ -97,6 +98,25 @@ content are prohibited without documented rights. Professional workflow Packs ar
 substantive legal, medical, and financial advice remains out of scope until credential,
 jurisdiction, citation, freshness, and expert-review policies exist.
 
+## Demo Catalog and Creator Briefs
+
+The public Packs catalog MAY show **open creator briefs** beside published Packs when the
+two states are visually and verbally distinct. A creator brief describes a workflow
+ContextCake wants to invite proposals for or accept from a qualified creator; it is not an available
+Pack, a preorder, or evidence that its contents have passed review.
+
+Each open brief SHALL identify the intended user, bounded workflow, expected outcome,
+suggested Pack contents, creator qualifications, and target personal/team price band. Its
+primary action SHALL lead to the founding-creator application, not checkout. It MAY also
+collect manual buyer-interest signals without taking payment or implying a launch date.
+Published and preview Packs remain the only entries that may claim availability, show a
+completed review date, or offer installation and purchase actions.
+
+The demo catalog starts with briefs for grant teams, RFP response teams, customer research
+synthesis, client onboarding, operations SOPs, people-policy communications, nonprofit board
+reporting, and editorial production. These are portfolio hypotheses: creator applications,
+buyer interest, and design-partner access determine which become full Packs.
+
 ## Acceptance Criteria
 
 ### Free and paid boundaries
@@ -131,6 +151,14 @@ jurisdiction, citation, freshness, and expert-review policies exist.
 - [ ] WHEN self-service creator submission or automated payouts are enabled THE PROGRAM
   SHALL first have at least 10 third-party Packs, 100 completed purchases, a refund rate
   below 5%, and a repeatable seven-day review process.
+- [ ] WHEN an open creator brief appears in the catalog THE SITE SHALL label it as unpublished,
+  with no install, purchase, rating, or completed-review claim.
+- [ ] WHEN a visitor opens a creator brief THE SITE SHALL show its user, workflow, desired
+  outcome, proposed contents, creator fit, target price band, and a creator-application action.
+- [ ] WHEN a buyer expresses interest in an open brief THE SITE SHALL collect a manual signal
+  without charging the buyer, promising a launch date, or creating an entitlement.
+- [ ] WHEN catalog search or filtering is used THE SITE SHALL include both published Packs and
+  open briefs while preserving their distinct stages.
 
 ### Marketing comprehension
 

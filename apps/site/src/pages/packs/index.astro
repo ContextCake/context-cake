@@ -22,7 +22,7 @@ const structurePreview = `profession-pack/
 
 <Base
 	title="ContextCake Packs | inspectable professional workflows"
-	description="Browse workflow Packs with visible files, creators, permissions, licenses, and update policies."
+	description="Browse inspectable workflow Packs and open creator briefs with clear publishing stages, licenses, permissions, and update policies."
 >
 	<main class="packs-page">
 		<header class="catalog-intro">
@@ -89,7 +89,7 @@ const structurePreview = `profession-pack/
 							data-kind={pack.kind}
 							data-name={pack.name.toLocaleLowerCase()}
 							data-reviewed={pack.reviewedSort}
-							data-search={[pack.name, pack.creator, pack.category, pack.audience, pack.summary, pack.workflow, pack.formats.join(' ')].join(' ').toLocaleLowerCase()}
+							data-search={[pack.name, pack.creator, pack.category, pack.audience, pack.summary, pack.workflow, pack.kind === 'published' ? pack.formats.join(' ') : ''].join(' ').toLocaleLowerCase()}
 						>
 							<div class="pack-cell pack-identity" role="cell">
 								<p class="pack-status"><i aria-hidden="true"></i>{pack.status}<span>· by {pack.creator}</span></p>

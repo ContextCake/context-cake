@@ -7,11 +7,11 @@ ContextCake-powered surfaces.
 
 **Date:** 2026-07-06
 **Status:** Approved foundation - ready for private-pack repo implementation
-**Status update (2026-07-08):** launched as a free preview with payments deferred. The publicly
-featured pack is the **ContextCake Context Pack** (`specs/contextcake-packs/packs/contextcake/`,
-served at `/packs/contextcake`); the Data & Analytics pack below remains built and validated but
-is hidden from the site index until relaunch. The commercial model in this spec is unchanged —
-it activates when the `paymentsLive` flag flips.
+**Status update (2026-08-09):** launched as a free preview with payments deferred. The public
+catalog includes the **ContextCake Context Pack** (`specs/contextcake-packs/packs/contextcake/`,
+served at `/packs/contextcake`) and the built, validated **Data & Analytics Teams** preview at
+`/packs/data-analytics-teams`. The commercial model in this spec is unchanged — it activates
+when the `paymentsLive` flag flips.
 **Workflow:** Requirements-first
 **Primary target:** small in-house data and analytics teams
 **Depends on:** `specs/contextcake-core/design.md` and `specs/contextcake-site/`

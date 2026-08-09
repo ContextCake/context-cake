@@ -5,6 +5,7 @@ team governance, and separately purchased expert Packs. Commerce must extend the
 local product without turning local resolution, authoring, or agent access into a trial.
 
 **Date:** 2026-07-17
+**Amended:** 2026-08-09 — added demo catalog and open creator brief boundaries
 **Status:** Approved commercial foundation; billing remains disabled until the matching
 product behavior is live
 **Depends on:** `specs/contextcake-auth/spec.md`, `specs/contextcake-packs/spec.md`, and
@@ -101,7 +102,7 @@ jurisdiction, citation, freshness, and expert-review policies exist.
 
 The public Packs catalog MAY show **open creator briefs** beside published Packs when the
 two states are visually and verbally distinct. A creator brief describes a workflow
-ContextCake wants to commission or accept from a qualified creator; it is not an available
+ContextCake wants to invite proposals for or accept from a qualified creator; it is not an available
 Pack, a preorder, or evidence that its contents have passed review.
 
 Each open brief SHALL identify the intended user, bounded workflow, expected outcome,

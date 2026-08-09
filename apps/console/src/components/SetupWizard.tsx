@@ -710,6 +710,10 @@ export function SetupWizard({
   // that is success, not an error. A 409 on a *first* send is a real clash
   // with an existing source and surfaces inline.
   const attemptedRef = useRef<Set<string>>(new Set())
+  // Moving backward through the wizard must not POST the same completed step
+  // again. Keep the exact payload as the identity so an edited draft still
+  // gets normal conflict/error handling.
+  const completedRef = useRef<Set<string>>(new Set())
 
   const dialogRef = useRef<HTMLDivElement>(null)
 
@@ -742,6 +746,10 @@ export function SetupWizard({
     if ('error' in built) { setErr(built.error); return false }
     const name = String(built.body.name)
     const key = JSON.stringify(built.body)
+    if (completedRef.current.has(key)) {
+      setErr(null)
+      return true
+    }
     const isRetry = attemptedRef.current.has(key)
     setBusy(true)
     setErr(null)
@@ -778,6 +786,7 @@ export function SetupWizard({
           throw new Error(`${detail} — “${name}” may still be being added. Open Sources in a moment to see whether it arrived, rather than adding it again.`)
         }
       }
+      completedRef.current.add(key)
       setAdded((prev) => [...prev, {
         kind: built.kind,
         name: String(built.body.name),
@@ -1136,8 +1145,8 @@ export function SetupWizard({
           <StepShell
             stepIndex={4}
             stepCount={steps.length}
-            title="Review"
-            subtitle="Here's what will make up your cascade."
+            title="Review added sources"
+            subtitle="These sources are already in your cascade. Finish to confirm their live status."
             footer={(
               <>
                 <button type="button" style={btnGhost()} onClick={goBack}>Back</button>

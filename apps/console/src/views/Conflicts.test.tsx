@@ -155,6 +155,16 @@ afterEach(async () => {
 })
 
 describe('Discrepancy Center', () => {
+  it('explains the review workflow before presenting filters and evidence', async () => {
+    mocks.useStore.mockReturnValue(storeWith([freshConflict], freshConflict.id))
+    await act(async () => root.render(<Conflicts />))
+
+    const guide = container.querySelector('[aria-label="How to resolve a discrepancy"]')
+    expect(guide?.textContent).toContain('Compare every source')
+    expect(guide?.textContent).toContain('Choose a winner or keep distinct scopes')
+    expect(guide?.textContent).toContain('Review affected files before applying')
+  })
+
   it('badges the flagged dissent card as newer than the effective value', async () => {
     mocks.useStore.mockReturnValue(storeWith([freshConflict, staleConflict], freshConflict.id))
     await act(async () => root.render(<Conflicts />))

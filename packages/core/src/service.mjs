@@ -649,7 +649,7 @@ export function createEngineService({
    * pass lands (see scheduleFollowUp for when it actually runs).
    */
   function startIndex(source, key, settings, {
-    validity = null, previousSnap = null, previousSuccessAt = null, passes = 1,
+    validity = null, previousSnap = null, previousSuccessAt = null, previousHealth = null, passes = 1,
   } = {}) {
     const controller = new AbortController();
     const refreshing = previousSnap !== null;
@@ -664,6 +664,11 @@ export function createEngineService({
       // with no health() of its own does not forget its last real success the
       // moment a follow-up pass starts.
       lastSuccessAt: previousSuccessAt,
+      // Adapter instances are rebuilt after manifest mutations, while a valid
+      // index entry is deliberately adopted without re-reading. Preserve the
+      // health observation that belongs to that snapshot so an unrelated
+      // source add/remove cannot temporarily repaint a failed remote as ok.
+      lastHealth: previousHealth,
       validity,
       // Whether a pass is in flight, tracked separately from `status` — which
       // now says "ready" through a background refresh — because every decision
@@ -703,6 +708,7 @@ export function createEngineService({
         // worked; a source with no health() of its own (okf-local, files) has
         // no such signal to defer to, so it stamps unconditionally as before.
         const health = typeof source.health === "function" ? source.health() : null;
+        if (health) entry.lastHealth = health;
         if (!health || health.ok !== false) entry.lastSuccessAt = new Date().toISOString();
       })
       .catch((err) => {
@@ -781,6 +787,7 @@ export function createEngineService({
       validity: open.validities[i],
       previousSnap: entry.snap,
       previousSuccessAt: entry.lastSuccessAt,
+      previousHealth: entry.lastHealth,
       passes: entry.passes + 1,
     }));
   }
@@ -980,13 +987,15 @@ export function createEngineService({
    * concepts until something else moved.
    */
   function pinEntry({ source, entry }) {
+    const currentHealth = typeof source.health === "function" ? source.health() : null;
+    const healthObserved = currentHealth?.lastErrorAt != null || currentHealth?.lastSuccessAt != null;
     return {
       source, // the adapter, which is stable; the live `entry` is deliberately absent
       snap: entry.snap,
       status: entry.status === "ready" ? "ok" : entry.status,
       error: entry.error,
       progress: indexProgress(entry),
-      health: typeof source.health === "function" ? source.health() : null,
+      health: healthObserved ? currentHealth : entry.lastHealth ?? currentHealth,
       // The index's own record of the last successful pass, kept for sources
       // with no health() of their own (okf-local, files): without it a local
       // layer's lastSuccessAt read null forever, even after every index since

@@ -79,10 +79,19 @@ function ConceptsInner() {
   // the engine's precision visually indistinguishable from the noise below
   // it.
   const showMatchDivider = rankedCount > 0 && rankedCount < list.length
-  const selCpt = concepts.find((c) => c.id === selConcept) || null
   const [detailOpen, setDetailOpen] = useState(Boolean(selConcept))
+  const [detailQuery, setDetailQuery] = useState(q)
+  const selCpt = detailQuery === q ? concepts.find((c) => c.id === selConcept) || null : null
   const selectedButton = useRef<HTMLButtonElement | null>(null)
+  const previousQuery = useRef(q)
   const detail = useDetailSurface<HTMLDivElement, HTMLElement>(detailOpen)
+  useEffect(() => {
+    if (previousQuery.current === q) return
+    previousQuery.current = q
+    setDetailOpen(false)
+    selectedButton.current = null
+    setSelConcept('')
+  }, [q, setSelConcept])
   useEffect(() => {
     const close = () => { setDetailOpen(false); requestAnimationFrame(() => selectedButton.current?.focus({ preventScroll: true })) }
     window.addEventListener('contextcake:close-detail', close)
@@ -109,7 +118,7 @@ function ConceptsInner() {
               key={c.id}
               className="cc-h-bd-strong"
               aria-current={selected ? 'true' : undefined}
-              onClick={(event) => { selectedButton.current = event.currentTarget; setSelConcept(c.id); setDetailOpen(true) }}
+              onClick={(event) => { selectedButton.current = event.currentTarget; setSelConcept(c.id); setDetailQuery(q); setDetailOpen(true) }}
               style={css(`display:block; width:100%; text-align:left; padding:14px 15px; background:${selected ? C.tealFill : C.surface}; border:1px solid ${selected ? C.tealStroke : C.line}; border-radius:10px; cursor:pointer; font:inherit;`)}
             >
               <div style={css('display:flex; align-items:center; gap:8px;')}>

@@ -50,9 +50,7 @@ export interface ChatMessage {
 /** Live mode has no activity feed. Shared so its identity never moves. */
 const NO_ACTIVITY: Activity[] = []
 
-const initialMessages: ChatMessage[] = [
-  { role: 'assistant', intro: true, text: "Ask me anything about your team's knowledge. I read the resolved cascade — Company, Team, and your Personal layer — and tell you which layer each answer comes from." },
-]
+const initialMessages: ChatMessage[] = []
 
 declare global {
   interface Window {
@@ -1066,6 +1064,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const a = cannedAnswer(q)
       setChatMessages((prev) => [...prev, { role: 'assistant', canned: true, ...a }])
       setChatBusy(false)
+      chatBusyRef.current = false
+    }
+
+    const finishUnavailable = () => {
+      setChatMessages((prev) => [...prev, {
+        role: 'assistant',
+        text: 'I could not reach a connected agent, so I did not generate an answer. Reconnect your AI client and try again.',
+      }])
+      setChatBusy(false)
+      chatBusyRef.current = false
     }
 
     const complete = window.claude?.complete
@@ -1075,12 +1083,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .then((ans) => {
           setChatMessages((prev) => [...prev, { role: 'assistant', text: (ans || '').trim() }])
           setChatBusy(false)
+          chatBusyRef.current = false
         })
-        .catch(finishCanned)
-    } else {
+        .catch(source.mode === 'demo' ? finishCanned : finishUnavailable)
+    } else if (source.mode === 'demo') {
       setTimeout(finishCanned, 620)
+    } else {
+      finishUnavailable()
     }
-  }, [])
+  }, [source.mode])
 
   // `source.search` is on the DataSource interface, but several test harnesses
   // stub a partial DataSource (see store.test.tsx) with no `search` at all —

@@ -1117,8 +1117,31 @@ async function smokeCheck() {
       // debounce) without letting the debounce itself fire.
       await new Promise((resolve) => setTimeout(resolve, 60))
       console.log(`QUIT SMOKE bounds=${JSON.stringify(win.getBounds())} pendingSave=${windowStateTimer !== null}`)
-      if (process.env.CC_SMOKE_QUIT === 'close') win.close()
-      else app.quit()
+      if (process.env.CC_SMOKE_QUIT === 'close') {
+        // Closing the last window no longer ends the app on macOS (see
+        // window-all-closed), so the smoke ends it itself — after the close,
+        // which preserves the ordering this exercises: close fires, then
+        // window-all-closed, then before-quit.
+        app.once('window-all-closed', () => app.quit())
+        win.close()
+      } else app.quit()
+      return
+    }
+    // CC_SMOKE_CLOSE_ALIVE=1: on macOS the red X leaves the app running with
+    // no windows, so the Dock icon has something to reactivate. Reports what
+    // survived the close. Driven by test/window-lifecycle.test.mjs.
+    if (process.env.CC_SMOKE_CLOSE_ALIVE === '1') {
+      win.close()
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      // Reaching this line at all is the survival evidence: had the close
+      // ended the app, the process would be gone and nothing would print.
+      console.log(`CLOSE SMOKE survived-close windows=${BrowserWindow.getAllWindows().length} platform=${process.platform}`)
+      // Prove the Dock-click path really does rebuild a window, not just that
+      // the process outlived the close.
+      app.emit('activate')
+      await new Promise((resolve) => setTimeout(resolve, 1200))
+      console.log(`CLOSE SMOKE reactivated windows=${BrowserWindow.getAllWindows().length}`)
+      app.quit()
       return
     }
     // CC_SMOKE_ENGINE_LIFECYCLE=1: the three ways a relaunch used to go wrong,
@@ -1442,9 +1465,12 @@ app.on('activate', () => {
 })
 
 app.on('window-all-closed', () => {
-  // Menu-bar-less background mode isn't a thing yet; quitting keeps the
-  // service lifecycle simple. The CLI works with the app closed.
-  app.quit()
+  // On macOS closing the last window is not quitting — the app stays in the
+  // Dock and `activate` above builds a new window when its icon is clicked.
+  // Quitting here made that handler unreachable: the red button ended the
+  // process, so there was never a running app for the Dock icon to reopen.
+  // Everywhere else, no windows does mean done.
+  if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {

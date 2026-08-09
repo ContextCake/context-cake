@@ -1061,12 +1061,22 @@ button { font-family: inherit; }
 .cc-ui-empty strong { display: block; color: var(--cc-ink); font-size: 15px; font-weight: 600; }
 .cc-ui-empty p { margin: 6px auto 14px; max-width: 42ch; }
 
-.cc-switch { position: relative; flex: 0 0 auto; cursor: pointer; }
+/* The label IS the control, so it needs a box of its own: left as a bare
+   inline box it measured 0x0 while its block child escaped, which is what
+   left the switch sitting off its row. The knob is centred by the track's
+   own flex box rather than by a margin — a vertical margin on the first
+   in-flow child collapses straight through a parent with no padding, so the
+   knob was never centred in the 22px track either. Travel stays 14px: the
+   32px content box less the 18px knob. */
+.cc-switch { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; cursor: pointer; }
 .cc-switch input { position: absolute; opacity: 0; pointer-events: none; }
 .cc-switch > span[aria-hidden="true"] {
   width: 36px;
   height: 22px;
-  display: block;
+  display: flex;
+  align-items: center;
+  padding: 0 2px;
+  box-sizing: border-box;
   border-radius: 999px;
   background: var(--cc-line-strong);
   transition: background 150ms var(--cc-ease-out);
@@ -1075,8 +1085,7 @@ button { font-family: inherit; }
   content: '';
   width: 18px;
   height: 18px;
-  display: block;
-  margin: 2px;
+  flex: 0 0 auto;
   border-radius: 50%;
   background: var(--cc-raised);
   box-shadow: 0 1px 3px var(--cc-shadow);

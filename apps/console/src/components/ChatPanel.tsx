@@ -10,6 +10,8 @@ function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: 
   const { chatMessages, chatBusy, chatInput } = useStoreChat()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const emptyButtonRef = useRef<HTMLButtonElement>(null)
+  const emptyLinkRef = useRef<HTMLAnchorElement>(null)
   const panelRef = useRef<HTMLElement>(null)
   const [docked, setDocked] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia('(min-width: 1280px)').matches)
   const hasCompletion = typeof window !== 'undefined' && typeof window.claude?.complete === 'function'
@@ -39,6 +41,7 @@ function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: 
   useEffect(() => {
     if (keyboardSuspended) return
     if (canAsk) inputRef.current?.focus()
+    else (emptyButtonRef.current ?? emptyLinkRef.current)?.focus()
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
       if (e.key === 'Tab' && !docked) {
@@ -98,9 +101,9 @@ function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: 
               <strong>Live asking needs a connected agent.</strong>
               <p>Connect an AI client to ask questions against your live ContextCake knowledge.</p>
               {onConnectAgent ? (
-                <button type="button" className="cc-h-tealdark" onClick={connectAgent} style={css('min-height:40px; padding:0 15px; border:0; border-radius:8px; background:#1E6B64; color:var(--cc-on-teal); font:inherit; font-size:12px; font-weight:600; cursor:pointer;')}>Connect an agent</button>
+                <button ref={emptyButtonRef} type="button" className="cc-h-tealdark" onClick={connectAgent} style={css('min-height:40px; padding:0 15px; border:0; border-radius:8px; background:#1E6B64; color:var(--cc-on-teal); font:inherit; font-size:12px; font-weight:600; cursor:pointer;')}>Connect an agent</button>
               ) : (
-                <a href={CONNECT_GUIDE_URL} target="_blank" rel="noreferrer">Open the connection guide</a>
+                <a ref={emptyLinkRef} href={CONNECT_GUIDE_URL} target="_blank" rel="noreferrer">Open the connection guide</a>
               )}
             </div>
           )}

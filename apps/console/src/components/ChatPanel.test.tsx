@@ -40,6 +40,7 @@ describe('Ask ContextCake capability states', () => {
     expect(container.querySelector('textarea')).toBeNull()
     expect(container.textContent).not.toContain('What database do we use?')
     expect(container.textContent).not.toContain('Copy MCP config')
+    expect(document.activeElement?.textContent).toBe('Open the connection guide')
   })
 
   it('labels demo answers as samples and keeps the sample composer available', async () => {

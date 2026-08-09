@@ -867,6 +867,7 @@ export function createEngineService({
         validity: open.validities[i],
         previousSnap: previous?.snap ?? null,
         previousSuccessAt: previous?.lastSuccessAt ?? null,
+        previousHealth: previous?.lastHealth ?? null,
         passes: (previous?.passes ?? 0) + 1,
       }));
     });

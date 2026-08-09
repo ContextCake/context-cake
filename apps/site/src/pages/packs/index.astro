@@ -1,7 +1,11 @@
 ---
 import Base from '../../layouts/Base.astro';
 import CodeBlock from '../../components/CodeBlock.astro';
-import { catalogPacks } from '../../data/commerce';
+import { catalogPacks, creatorBriefs } from '../../data/commerce';
+
+const catalogEntries = [...catalogPacks, ...creatorBriefs];
+const publishedCount = catalogPacks.length;
+const briefCount = creatorBriefs.length;
 
 const structurePreview = `profession-pack/
 ├── START-HERE.md
@@ -24,24 +28,36 @@ const structurePreview = `profession-pack/
 		<header class="catalog-intro">
 			<div>
 				<h1>Packs</h1>
-				<p>Inspectable workflow kits for the tools your team already uses.</p>
+				<p>Inspectable workflow kits—and open briefs for the people who should create the next ones.</p>
+				<div class="intro-actions">
+					<a href="#catalog-title">Browse the catalog</a>
+					<a href="/creators">Become a creator</a>
+				</div>
 			</div>
 			<div class="intro-note">
-				<strong>Plain files first.</strong>
-				<span>Read every file before you install it. Keep your own changes in a separate layer.</span>
+				<strong>{publishedCount} published · {briefCount} open briefs</strong>
+				<span>Published Packs are ready to inspect. Open briefs are unpublished opportunities for qualified creators—not preorders.</span>
 			</div>
 		</header>
 
 		<section class="catalog-shell" aria-labelledby="catalog-title" data-pack-catalog>
 			<header class="catalog-toolbar">
 				<div class="catalog-title-group">
-					<h2 id="catalog-title">Browse Packs</h2>
-					<p aria-live="polite" data-result-count>{catalogPacks.length} Packs · curated by ContextCake</p>
+					<h2 id="catalog-title">Browse Packs and creator briefs</h2>
+					<p aria-live="polite" data-result-count>{publishedCount} published · {briefCount} open briefs</p>
 				</div>
 				<div class="catalog-controls">
 					<label class="search-control">
 						<span>Search</span>
 						<input type="search" placeholder="Name, workflow, or tool" autocomplete="off" data-pack-search />
+					</label>
+					<label class="sort-control">
+						<span>Stage</span>
+						<select data-pack-stage>
+							<option value="all">All</option>
+							<option value="published">Published</option>
+							<option value="brief">Open briefs</option>
+						</select>
 					</label>
 					<label class="sort-control">
 						<span>Sort</span>
@@ -60,16 +76,17 @@ const structurePreview = `profession-pack/
 					<span role="columnheader">Pack</span>
 					<span role="columnheader">Best for</span>
 					<span role="columnheader">License</span>
-					<span role="columnheader">Reviewed</span>
+					<span role="columnheader">Stage</span>
 					<span role="columnheader" class="sr-only">Open</span>
 				</div>
 				<div class="catalog-body" role="rowgroup" data-pack-list>
-					{catalogPacks.map((pack, index) => (
+					{catalogEntries.map((pack, index) => (
 						<div
 							class={`pack-record pack-record--${pack.accent}`}
 							role="row"
 							data-pack-row
 							data-order={index}
+							data-kind={pack.kind}
 							data-name={pack.name.toLocaleLowerCase()}
 							data-reviewed={pack.reviewedSort}
 							data-search={[pack.name, pack.creator, pack.category, pack.audience, pack.summary, pack.workflow, pack.formats.join(' ')].join(' ').toLocaleLowerCase()}
@@ -88,7 +105,7 @@ const structurePreview = `profession-pack/
 								{pack.teamPrice !== pack.price && <span>{pack.teamPrice}</span>}
 							</div>
 							<div class="pack-cell pack-reviewed" role="cell">
-								<time datetime={pack.reviewedSort}>{pack.reviewedAt}</time>
+								{pack.kind === 'published' ? <time datetime={pack.reviewedSort}>{pack.reviewedAt}</time> : <strong>Unpublished</strong>}
 								<span>{pack.updateCadence}</span>
 							</div>
 							<div class="pack-open" role="cell"><a href={pack.href} aria-label={`Open ${pack.name}`}>View <span aria-hidden="true">→</span></a></div>
@@ -99,12 +116,12 @@ const structurePreview = `profession-pack/
 
 			<div class="empty-state" data-empty-state hidden>
 				<strong>No Packs match that search.</strong>
-				<p>Try a broader workflow, profession, or tool name.</p>
+				<p>Try a broader workflow, profession, tool name, or stage.</p>
 				<button type="button" data-empty-clear>Clear search</button>
 			</div>
 			<footer class="catalog-footer">
-				<p>Ratings appear only after verified purchases. We don’t seed them with internal reviews.</p>
-				<a href="/creators">Create a Pack</a>
+				<p>Open briefs are invitations to create, not products. Ratings appear only after verified purchases.</p>
+				<a href="/creators">Pitch your own Pack</a>
 			</footer>
 		</section>
 
@@ -146,6 +163,8 @@ const structurePreview = `profession-pack/
 	.intro-note strong, .intro-note span { display: block; }
 	.intro-note strong { color: var(--cc-text); }
 	.intro-note span { margin-top: 0.4rem; color: var(--cc-text-body); line-height: 1.55; }
+	.intro-actions { display: flex; flex-wrap: wrap; gap: 1.2rem; margin-top: 1.5rem; }
+	.intro-actions a { color: var(--cc-text); font-weight: 700; text-underline-offset: 0.22em; }
 	.catalog-shell { overflow: hidden; border: 1px solid var(--cc-border-strong); border-radius: var(--cc-radius-md); background: var(--cc-surface); }
 	.catalog-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 1rem 2rem; padding: 1rem 1.1rem; border-bottom: 1px solid var(--cc-border-strong); }
 	.catalog-title-group h2 { margin: 0; font-size: 1.2rem; }
@@ -181,6 +200,7 @@ const structurePreview = `profession-pack/
 	.catalog-head { padding: 0.65rem 1.1rem; border-bottom: 1px solid var(--cc-border); color: var(--cc-text-muted); font-family: var(--cc-font-mono); font-size: 0.68rem; font-weight: 700; }
 	.pack-record { --row-accent: var(--cc-layer-team); position: relative; padding: 1.15rem 1.1rem; background: transparent; transition: background var(--cc-transition); }
 	.pack-record--personal { --row-accent: var(--cc-layer-personal); }
+	.pack-record--company { --row-accent: var(--cc-layer-company); }
 	.pack-record + .pack-record { border-top: 1px solid var(--cc-border); }
 	.pack-record:hover, .pack-record:focus-within { background: var(--cc-surface-soft); }
 	.pack-cell { min-width: 0; }
@@ -192,7 +212,7 @@ const structurePreview = `profession-pack/
 	.pack-identity h3 a::after { content: ''; position: absolute; inset: 0; }
 	.pack-identity > p:last-child { max-width: 54ch; margin: 0.4rem 0 0; color: var(--cc-text-body); font-size: 0.92rem; line-height: 1.5; }
 	.pack-audience, .pack-license, .pack-reviewed { display: grid; gap: 0.25rem; }
-	.pack-audience strong, .pack-license strong, .pack-reviewed time { color: var(--cc-text); font-size: 0.9rem; font-weight: 700; }
+	.pack-audience strong, .pack-license strong, .pack-reviewed time, .pack-reviewed strong { color: var(--cc-text); font-size: 0.9rem; font-weight: 700; }
 	.pack-audience span, .pack-license span, .pack-reviewed span { color: var(--cc-text-muted); font-size: 0.82rem; line-height: 1.4; }
 	.pack-open { justify-self: end; }
 	.pack-open a { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 0.3rem; min-height: 44px; color: var(--cc-text); font-weight: 700; text-decoration: none; }
@@ -246,15 +266,19 @@ const structurePreview = `profession-pack/
 	const catalog = document.querySelector<HTMLElement>('[data-pack-catalog]');
 	if (catalog) {
 		const search = catalog.querySelector<HTMLInputElement>('[data-pack-search]');
+		const stage = catalog.querySelector<HTMLSelectElement>('[data-pack-stage]');
 		const sort = catalog.querySelector<HTMLSelectElement>('[data-pack-sort]');
 		const list = catalog.querySelector<HTMLElement>('[data-pack-list]');
 		const count = catalog.querySelector<HTMLElement>('[data-result-count]');
 		const empty = catalog.querySelector<HTMLElement>('[data-empty-state]');
 		const clearButtons = catalog.querySelectorAll<HTMLButtonElement>('[data-clear-search], [data-empty-clear]');
 		const rows = Array.from(catalog.querySelectorAll<HTMLElement>('[data-pack-row]'));
+		const publishedRows = rows.filter((row) => row.dataset.kind === 'published').length;
+		const briefRows = rows.length - publishedRows;
 
 		const updateCatalog = () => {
 			const query = search?.value.trim().toLocaleLowerCase() ?? '';
+			const selectedStage = stage?.value ?? 'all';
 			const mode = sort?.value ?? 'featured';
 			const ordered = [...rows].sort((left, right) => {
 				if (mode === 'name') return (left.dataset.name ?? '').localeCompare(right.dataset.name ?? '');
@@ -263,17 +287,20 @@ const structurePreview = `profession-pack/
 			});
 			let visible = 0;
 			for (const row of ordered) {
-				const match = !query || (row.dataset.search ?? '').includes(query);
+				const matchesQuery = !query || (row.dataset.search ?? '').includes(query);
+				const matchesStage = selectedStage === 'all' || row.dataset.kind === selectedStage;
+				const match = matchesQuery && matchesStage;
 				row.hidden = !match;
 				if (match) visible += 1;
 				list?.append(row);
 			}
-			if (count) count.textContent = query ? `${visible} of ${rows.length} Packs` : `${rows.length} Packs · curated by ContextCake`;
+			if (count) count.textContent = query || selectedStage !== 'all' ? `${visible} of ${rows.length} entries` : `${publishedRows} published · ${briefRows} open briefs`;
 			if (empty) empty.hidden = visible !== 0;
 			for (const button of clearButtons) button.hidden = !query && button.hasAttribute('data-clear-search');
 		};
 
 		search?.addEventListener('input', updateCatalog);
+		stage?.addEventListener('change', updateCatalog);
 		sort?.addEventListener('change', updateCatalog);
 		for (const button of clearButtons) button.addEventListener('click', () => {
 			if (!search) return;

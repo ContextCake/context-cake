@@ -2,7 +2,7 @@
   "name": "contextcake-desktop",
   "productName": "ContextCake",
   "private": true,
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "ContextCake for Mac — desktop shell over the engine and console",
   "type": "module",
   "main": "src/main/main.mjs",

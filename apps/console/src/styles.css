@@ -1094,6 +1094,11 @@ button { font-family: inherit; }
 .cc-switch input:checked + span { background: var(--cc-teal-stroke-e); }
 .cc-switch input:checked + span::after { transform: translateX(14px); }
 .cc-switch input:focus-visible + span { outline: 2px solid var(--cc-blue-stroke); outline-offset: 2px; }
+/* A disabled switch has to look disabled. The metrics toggle is disabled while
+   its stored consent is still loading, and with no styling it rendered
+   identically to a live control — inviting a click that does nothing. */
+.cc-switch:has(input:disabled) { cursor: default; }
+.cc-switch input:disabled + span { opacity: 0.45; }
 
 .cc-settings-empty {
   padding: 18px;

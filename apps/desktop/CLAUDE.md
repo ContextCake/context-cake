@@ -99,14 +99,24 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   would ever `close()`, and `close()` is the only thing that tells the engine
   to kill the MCP servers it spawned.
 - **`before-quit` fires BEFORE the window's `close`, and `close` again after.**
-  On ⌘Q the order is `before-quit → close → closed → will-quit → quit`; on the
-  red X it is `close → closed → window-all-closed → quit → before-quit`. So
+  On ⌘Q the order is `before-quit → close → closed → will-quit → quit`. So
   anything that must be captured *from* a window at exit belongs in
   `before-quit` (the frame is still alive there), and anything a `close`
   handler queues is landed by `before-quit`'s `flushSettingsSync()`. Saving
   window geometry only in `close` lost it on every ⌘Q, because the async write
-  queue outlived nothing. `test/quit-persistence.test.mjs` drives both paths
-  through the real binary.
+  queue outlived nothing. `test/quit-persistence.test.mjs` drives it through
+  the real binary.
+- **On macOS the red X no longer reaches `quit` or `before-quit` at all.**
+  It is `close → closed → window-all-closed`, and then the app keeps running:
+  `window-all-closed` only quits off-darwin, because quitting there made the
+  `activate` handler unreachable and the Dock icon dead. The consequence for
+  anything written in a `close` handler is that **there is no `flushSettingsSync()`
+  behind it** — the async settings queue is the only thing that lands it, and
+  the app may sit with no windows indefinitely. `test/quit-persistence.test.mjs`
+  synthesizes a quit to keep asserting the ⌘Q ordering; the surviving-close
+  path is `test/window-lifecycle.test.mjs`, which also pins that rebuilding the
+  window is serialized (two Dock clicks must not make two main windows) and
+  that the app can still exit afterwards.
 - **A settings write can fail, and the caller has to hear about it.**
   `settings.mjs` writes asynchronously through a queue; a failed write KEEPS
   `unflushed` (so reads stay honest and the next patch retries it) and reports

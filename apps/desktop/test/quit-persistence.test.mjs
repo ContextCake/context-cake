@@ -6,10 +6,19 @@
 // cancelled the pending bounds save and flushed an empty queue, and only
 // afterwards did `close` compute the geometry — into an asynchronous write
 // queue that the exiting process never drained. Resize-then-⌘Q lost the new
-// frame every time. The red-X path happens to work because there the order is
-// reversed (`close` → `window-all-closed` → `app.quit()` → `before-quit`), so
-// both are asserted here: one is the regression, the other is the behaviour
-// that must not break while fixing it.
+// frame every time.
+//
+// The second case here used to be the red X, which worked because the order
+// was reversed: `close` → `window-all-closed` → `app.quit()` → `before-quit`.
+// That quit was a bug — it made `activate` unreachable and the Dock icon dead
+// — and removing it took the ordering with it, since on macOS the red X now
+// ends at `window-all-closed` and the app stays running. The smoke therefore
+// registers its own one-shot quit on that event to reproduce the same
+// sequence. What is asserted is unchanged and still live (delete
+// `saveWindowState` from the `close` handler and it fails), but be clear about
+// what it now covers: the ORDERING, not the shipping macOS red-X path. That
+// path — close with no quit behind it, so no `flushSettingsSync()` — is
+// `test/window-lifecycle.test.mjs`.
 //
 // The app runs under CC_SMOKE=1 with its own --user-data-dir, so this never
 // touches the developer's real settings.json and never shows a dialog.

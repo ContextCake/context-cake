@@ -60,9 +60,19 @@ test('closing the last window leaves the app running on macOS', { skip: process.
   // And the point of surviving: the Dock-click path can build a window again.
   const reactivated = /CLOSE SMOKE reactivated windows=(\d+)/.exec(run.out)
   assert.ok(reactivated, `the app never reported reactivating\n${run.out}`)
+  // Exactly one. Zero means `activate` is unreachable again; two means the
+  // rebuild is not serialized, and a second Dock click during a slow engine
+  // boot produced a duplicate main window.
   assert.equal(
     reactivated[1],
     '1',
-    `activate did not rebuild a window — the handler is unreachable again\n${run.out}`,
+    `activate rebuilt ${reactivated[1]} windows, expected exactly 1\n${run.out}`,
   )
+
+  // Surviving the close is only half of it: the app still has to be able to
+  // quit. Without this, an app that outlived its windows and could no longer
+  // exit would pass every assertion above — the SIGKILL at RUN_TIMEOUT_MS
+  // still produces an `exit` event and the output still holds both lines, so
+  // the regression would cost 90 silent seconds instead of failing.
+  assert.equal(run.code, 0, `the app did not exit cleanly after reactivating\n${run.out}`)
 })

@@ -551,7 +551,13 @@ async function ensureAnonymousMetricsPreference() {
   const current = readSettings().anonymousMetrics
   if (typeof current === 'boolean') return current
 
-  const { response } = await dialog.showMessageBox(win, {
+  // Parent the sheet the same way handleEngineCredentialFailure does. Now that
+  // closing the last window no longer quits on macOS, this is reachable with no
+  // window at all: the manifest watcher calls it when the first layer lands.
+  // An unparented showMessageBox does not throw — it runs an app-modal loop
+  // that blocks the main process behind a dialog the user may not be looking at.
+  const parent = win && !win.isDestroyed() ? win : null
+  const promptOptions = {
     type: 'question',
     title: 'Anonymous Usage Metrics',
     message: 'Help improve ContextCake?',
@@ -559,7 +565,10 @@ async function ensureAnonymousMetricsPreference() {
     buttons: ['Share Anonymous Metrics', "Don't Share"],
     defaultId: 1,
     cancelId: 1,
-  })
+  }
+  const { response } = await (parent
+    ? dialog.showMessageBox(parent, promptOptions)
+    : dialog.showMessageBox(promptOptions))
   const enabled = response === 0
   const { written } = writeLocalSettings({ anonymousMetrics: enabled })
   // A metrics-only preference must never turn a writable-settings problem into
@@ -1002,7 +1011,13 @@ async function createWindow() {
   const preferences = applyNativeAppearance()
   const uiState = uiStateSnapshot()
   const restored = restoreWindowState(readSettings().mainWindow, screen.getAllDisplays(), screen.getPrimaryDisplay())
-  win = new BrowserWindow({
+  // Bind the handlers below to THIS window rather than to the module-level
+  // `win`. They outlive the assignment, and `closed` in particular used to
+  // clear `win` no matter which window fired it — so an orphaned window
+  // closing left the app believing it had no window while one was still on
+  // screen, which silently disables the View menu, geometry saving, the
+  // relaunch prompt and `activate`.
+  const created = new BrowserWindow({
     ...restored.bounds,
     minWidth: 760,
     minHeight: 560,
@@ -1021,29 +1036,35 @@ async function createWindow() {
       additionalArguments: rendererArguments(preferences, uiState, 'main'),
     },
   })
-  trustedWindows.register(win, 'main')
-  protectWindowNavigation(win)
+  win = created
+  trustedWindows.register(created, 'main')
+  protectWindowNavigation(created)
 
-  win.once('ready-to-show', () => {
-    if (restored.maximized) win.maximize()
-    win.show()
+  created.once('ready-to-show', () => {
+    if (restored.maximized) created.maximize()
+    created.show()
   })
-  win.webContents.once('did-finish-load', () => {
+  created.webContents.once('did-finish-load', () => {
     sendToRenderer('auth:session-changed', currentAuthState())
     sendToRenderer('settings:sync-status', currentSyncState())
   })
-  win.on('resize', () => scheduleWindowStateSave(win))
-  win.on('move', () => scheduleWindowStateSave(win))
-  win.on('maximize', () => scheduleWindowStateSave(win))
-  win.on('unmaximize', () => scheduleWindowStateSave(win))
-  win.on('close', () => {
+  created.on('resize', () => scheduleWindowStateSave(created))
+  created.on('move', () => scheduleWindowStateSave(created))
+  created.on('maximize', () => scheduleWindowStateSave(created))
+  created.on('unmaximize', () => scheduleWindowStateSave(created))
+  created.on('close', () => {
     clearTimeout(windowStateTimer)
     windowStateTimer = null
-    saveWindowState(win)
+    saveWindowState(created)
     if (settingsWin && !settingsWin.isDestroyed()) settingsWin.close()
   })
-  win.on('closed', () => { clearTimeout(windowStateTimer); windowStateTimer = null; win = null })
-  await win.loadURL(`${service.origin}/console/${process.env.CC_SMOKE_UI === '1' ? '?mode=demo' : ''}`)
+  created.on('closed', () => {
+    if (win !== created) return
+    clearTimeout(windowStateTimer)
+    windowStateTimer = null
+    win = null
+  })
+  await created.loadURL(`${service.origin}/console/${process.env.CC_SMOKE_UI === '1' ? '?mode=demo' : ''}`)
   startManifestSync()
   startEngineWatchdog()
 }
@@ -1138,6 +1159,12 @@ async function smokeCheck() {
       console.log(`CLOSE SMOKE survived-close windows=${BrowserWindow.getAllWindows().length} platform=${process.platform}`)
       // Prove the Dock-click path really does rebuild a window, not just that
       // the process outlived the close.
+      //
+      // Twice, deliberately: createWindow() awaits a message-port round trip
+      // before it constructs anything, and across that await there are still
+      // zero windows — so two clicks during a slow engine both used to pass
+      // the guard and build two main windows. The count below is what pins it.
+      app.emit('activate')
       app.emit('activate')
       await new Promise((resolve) => setTimeout(resolve, 1200))
       console.log(`CLOSE SMOKE reactivated windows=${BrowserWindow.getAllWindows().length}`)
@@ -1421,10 +1448,11 @@ async function smokeCheck() {
 }
 
 app.on('second-instance', () => {
-  if (win) {
-    if (win.isMinimized()) win.restore()
-    win.focus()
-  }
+  // Launching the app again while it is running with no windows — now a real
+  // state on macOS — should give you a window, not silently do nothing.
+  if (!win) { ensureMainWindow().catch(handleFatal); return }
+  if (win.isMinimized()) win.restore()
+  win.focus()
 })
 
 // OAuth deep-link callbacks land here; consumed by the auth broker in Phase 2.
@@ -1460,9 +1488,27 @@ app.whenReady().then(async () => {
   if (process.env.CC_SMOKE === '1') await smokeCheck()
 }).catch(handleFatal)
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow().catch(handleFatal)
-})
+// Rebuilding the main window has to be serialized, and it has to ask about the
+// MAIN window specifically.
+//
+// createWindow() awaits before it constructs anything — pushGithubTokens() is a
+// message-port round trip with a 5s deadline — and across that whole await
+// there are still zero windows. A second Dock click during a slow engine
+// therefore built a second main window, both registered as 'main'.
+//
+// Counting all windows was the other half: a lone Settings window (⌘, works
+// with no main window) made getAllWindows() non-zero, so the Dock icon stopped
+// producing a window at all, and with no File > New Window there was no other
+// way back.
+let mainWindowPending = null
+
+function ensureMainWindow() {
+  if (trustedWindows.windowForRole('main')) return Promise.resolve()
+  mainWindowPending ??= createWindow().finally(() => { mainWindowPending = null })
+  return mainWindowPending
+}
+
+app.on('activate', () => { ensureMainWindow().catch(handleFatal) })
 
 app.on('window-all-closed', () => {
   // On macOS closing the last window is not quitting — the app stays in the

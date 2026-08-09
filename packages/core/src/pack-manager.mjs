@@ -377,18 +377,51 @@ function validateTrustContract(content) {
  * that as an unknown content type failed the install over a file the author
  * never chose to add and cannot easily see.
  *
- * `.git` stays a loud error: that one says the author packed the wrong
- * directory, which is worth stopping for.
+ * This list is deliberately of NAMES, not of "anything hidden". The first
+ * version of this rule was `name.startsWith(".")`, which reads like "skip the
+ * junk" and actually means "skip everything hidden" — it silently dropped
+ * `.claude/skills/*.md` and `.markdownlint.json`, content an author chose to
+ * ship. Dropping content changes the Pack's checksum, and since a rollback or
+ * a re-attach re-verifies an already-installed Pack against the checksum
+ * recorded in the manifest, that turned a curated Pack into one that could no
+ * longer be rolled back. Hidden is not the same as incidental.
+ *
+ * `Icon\r` and `Thumbs.db` are here because the same argument runs the other
+ * way: Finder writes `Icon\r` when a folder gets a custom icon and Explorer
+ * writes `Thumbs.db`, and neither begins with a dot. Junk is a fact about who
+ * wrote the file, not about how its name starts.
  *
  * This is the ONE rule, and both the walk and the copy have to honour it. The
  * walk decides what is validated and what the checksum covers; the copy
  * decides what lands in the installed Pack. If they ever disagree, whatever
  * the walk skipped would install unvalidated, unsized and outside the
- * checksum — hidden content could then change a Pack without changing its
- * identity.
+ * checksum — content could then change a Pack without changing its identity.
  */
+const OS_JUNK_NAMES = new Set([
+  ".ds_store", "icon\r", ".localized", ".spotlight-v100", ".trashes",
+  ".fseventsd", ".documentrevisions-v100", ".temporaryitems", ".appledouble",
+  "thumbs.db", "ehthumbs.db", "desktop.ini",
+]);
+
 function isIncidentalPackEntry(name) {
-  return name.startsWith(".") && name !== ".git";
+  const lower = name.toLowerCase();
+  // `._name` is the AppleDouble sidecar macOS writes beside a real file on a
+  // volume that cannot hold its metadata. It carries no authored content.
+  return OS_JUNK_NAMES.has(lower) || lower.startsWith("._");
+}
+
+/**
+ * A packed `.git` or `node_modules` means the author handed us the wrong
+ * directory, which is worth stopping for rather than quietly ignoring.
+ *
+ * `.git` is matched case-insensitively because on a case-insensitive volume
+ * `.GIT` *is* the git directory, and an exact comparison let it through. It
+ * can also arrive as a file rather than a directory (a submodule or worktree
+ * checkout), so this check sits ahead of the file/directory split — otherwise
+ * it fell through to the extension check and blamed the content type.
+ */
+function isPackedRepoEntry(name) {
+  return name.toLowerCase() === ".git" || name === "node_modules";
 }
 
 function walkPackEntries(root, errors) {
@@ -410,9 +443,10 @@ function walkPackEntries(root, errors) {
       if (relative.length > 500) errors.push(`${relative.slice(0, 80)}… exceeds the 500-character path limit.`);
       if (stat.isSymbolicLink()) {
         errors.push(`${relative} is a symlink; Pack symlinks are not allowed.`);
+      } else if (isPackedRepoEntry(name)) {
+        errors.push(`${relative} is not allowed in a Pack.`);
       } else if (stat.isDirectory()) {
-        if (name === "node_modules" || name === ".git") errors.push(`${relative} is not allowed in a Pack.`);
-        else stack.push(fullPath);
+        stack.push(fullPath);
       } else if (stat.isFile()) {
         if (!ALLOWED_EXTENSIONS.has(path.extname(name).toLowerCase())) errors.push(`${relative} is not an inspectable Pack content type.`);
         if (stat.size > MAX_FILE_BYTES) errors.push(`${relative} exceeds the 5 MB per-file limit.`);
@@ -426,19 +460,46 @@ function walkPackEntries(root, errors) {
   return entries.sort((a, b) => (a.relative < b.relative ? -1 : a.relative > b.relative ? 1 : 0));
 }
 
+/**
+ * Feed one field into the hash so that the boundary between fields cannot be
+ * forged. Length first, then the bytes.
+ *
+ * The previous framing was `path \0 content \0`. A path cannot contain NUL,
+ * but content can — nothing requires a `.md` or `.json` file to be text — so
+ * an author could write the framing of a SECOND file into the bytes of the
+ * first and produce two different trees with one checksum. That was a real
+ * second preimage, not a theoretical one: a Pack containing an extra file the
+ * reviewer never saw installed cleanly while pinned to the reviewed Pack's
+ * checksum. For content that is injected into an agent's graph, "a file
+ * appears without the identity changing" is the exact thing the checksum is
+ * there to prevent.
+ */
+function hashField(hash, buffer) {
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64BE(BigInt(buffer.length));
+  hash.update(length);
+  hash.update(buffer);
+}
+
 function checksumEntries(root, entries) {
   const hash = crypto.createHash("sha256");
   for (const entry of entries) {
-    if (!entry.stat.isFile()) continue;
-    hash.update(entry.relative);
-    hash.update("\0");
+    const isFile = entry.stat.isFile();
+    hashField(hash, Buffer.from(entry.relative, "utf8"));
+    // Directories are hashed too, as a kind with an empty body. The copy
+    // creates them, so leaving them out meant an empty directory could be
+    // installed without appearing in the identity of what was installed.
+    hash.update(isFile ? "f" : "d");
+    if (!isFile) {
+      hashField(hash, Buffer.alloc(0));
+      continue;
+    }
     let content = fs.readFileSync(path.join(root, entry.relative));
     if (entry.relative === MANIFEST_FILE) {
       // Normalize the declared tree checksum to avoid a self-referential hash.
       content = Buffer.from(content.toString("utf8").replace(/(^\s*checksum:\s*).+$/m, "$1\"pending-release\""));
     }
-    hash.update(content);
-    hash.update("\0");
+    hashField(hash, content);
   }
   return `sha256:${hash.digest("hex")}`;
 }

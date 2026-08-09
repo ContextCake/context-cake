@@ -157,20 +157,30 @@ function walk(dir, base, acc) {
   for (const name of fs.readdirSync(dir)) {
     const full = path.join(dir, name)
     const stat = fs.lstatSync(full)
-    if (stat.isDirectory()) walk(full, base, acc)
-    else if (stat.isFile()) acc.push(path.relative(base, full).split(path.sep).join('/'))
+    const rel = path.relative(base, full).split(path.sep).join('/')
+    if (stat.isDirectory()) { acc.push({ rel, dir: true }); walk(full, base, acc) }
+    else if (stat.isFile()) acc.push({ rel, dir: false })
   }
   return acc
 }
-const files = walk(root, root, []).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+const entries = walk(root, root, []).sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))
+// Length-prefixed fields: the boundary between path and content must not be
+// expressible inside either of them, or one file's bytes could carry the
+// framing of another and two different trees would hash alike.
+function field(hash, buffer) {
+  const length = Buffer.alloc(8)
+  length.writeBigUInt64BE(BigInt(buffer.length))
+  hash.update(length)
+  hash.update(buffer)
+}
 const hash = crypto.createHash('sha256')
-for (const rel of files) {
-  hash.update(rel)
-  hash.update('\0')
-  let content = fs.readFileSync(path.join(root, rel))
-  if (rel === 'PACK.yaml') content = Buffer.from(content.toString('utf8').replace(/(^\s*checksum:\s*).+$/m, '$1"pending-release"'))
-  hash.update(content)
-  hash.update('\0')
+for (const entry of entries) {
+  field(hash, Buffer.from(entry.rel, 'utf8'))
+  hash.update(entry.dir ? 'd' : 'f')
+  if (entry.dir) { field(hash, Buffer.alloc(0)); continue }
+  let content = fs.readFileSync(path.join(root, entry.rel))
+  if (entry.rel === 'PACK.yaml') content = Buffer.from(content.toString('utf8').replace(/(^\s*checksum:\s*).+$/m, '$1"pending-release"'))
+  field(hash, content)
 }
 const reference = `sha256:${hash.digest('hex')}`
 if (reference !== engineChecksum) {
@@ -204,11 +214,18 @@ NODE
 # must agree about ignoring it: if only the walk skipped it, the file would
 # install unvalidated and outside the checksum, and hidden content could then
 # change a Pack without changing its identity.
+#
+# Junk is a fact about who wrote the file, not about whether its name starts
+# with a dot: Finder also writes Icon\r for a custom folder icon and Explorer
+# writes Thumbs.db, none of which the author chose.
 cp -R "$source_pack" "$tmpdir/junked-pack"
 printf 'Mac Finder junk\0' > "$tmpdir/junked-pack/.DS_Store"
 mkdir -p "$tmpdir/junked-pack/updates"
 printf 'more junk\0' > "$tmpdir/junked-pack/updates/.DS_Store"
-printf 'hidden\n' > "$tmpdir/junked-pack/.hidden-note.md"
+printf 'icon junk' > "$tmpdir/junked-pack/$(printf 'Icon\r')"
+printf 'thumb junk' > "$tmpdir/junked-pack/Thumbs.db"
+printf 'ini junk' > "$tmpdir/junked-pack/desktop.ini"
+printf 'apple double' > "$tmpdir/junked-pack/._overview"
 
 node "$pack_cli" inspect "$tmpdir/junked-pack" > "$tmpdir/junked-inspect.json" \
   || fail "a Pack containing .DS_Store failed to inspect"
@@ -228,15 +245,76 @@ node "$pack_cli" install "$tmpdir/junked-pack" --manifest "$tmpdir/junk-manifest
 test -f "$tmpdir/junk-packs/contextcake/0.1.0/PACK.yaml" || fail "the Pack did not install"
 test -e "$tmpdir/junk-packs/contextcake/0.1.0/.DS_Store" && fail "install copied a file the checksum never covered"
 test -e "$tmpdir/junk-packs/contextcake/0.1.0/updates/.DS_Store" && fail "install copied nested junk the checksum never covered"
-test -e "$tmpdir/junk-packs/contextcake/0.1.0/.hidden-note.md" && fail "install copied a hidden file outside the checksum"
+test -e "$tmpdir/junk-packs/contextcake/0.1.0/Thumbs.db" && fail "install copied Windows junk the checksum never covered"
 
-# The guardrail that must survive: a packed repository is still an error, not
-# incidental junk to wave through.
-cp -R "$source_pack" "$tmpdir/repo-pack"
-mkdir -p "$tmpdir/repo-pack/.git"
-printf 'ref: refs/heads/main\n' > "$tmpdir/repo-pack/.git/HEAD"
-if node "$pack_cli" inspect "$tmpdir/repo-pack" > /dev/null 2>&1; then
-  fail "a Pack containing .git inspected cleanly; the packed-repo guardrail is gone"
+# Hidden is NOT the same as incidental. An author who ships .claude/skills or a
+# dotfile chose that content, and dropping it silently would change the Pack's
+# checksum — which breaks rollback and re-attach on an ALREADY INSTALLED Pack,
+# because both re-verify against the checksum recorded in the manifest.
+cp -R "$source_pack" "$tmpdir/hidden-pack"
+printf '# authored\n' > "$tmpdir/hidden-pack/.hidden-note.md"
+mkdir -p "$tmpdir/hidden-pack/.claude/skills"
+printf '# skill\n' > "$tmpdir/hidden-pack/.claude/skills/review.md"
+node "$pack_cli" inspect "$tmpdir/hidden-pack" > "$tmpdir/hidden-inspect.json" \
+  || fail "a Pack shipping hidden authored content failed to inspect"
+node - "$tmpdir/inspect.json" "$tmpdir/hidden-inspect.json" <<'NODE' || fail "authored hidden content was dropped from the Pack — it must be validated, checksummed and installed"
+const fs = require('node:fs')
+const clean = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+const hidden = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
+if (!hidden.files.includes('.hidden-note.md')) process.exit(1)
+if (!hidden.files.includes('.claude/skills/review.md')) process.exit(1)
+if (clean.checksum === hidden.checksum) process.exit(1)
+NODE
+
+# The checksum must name exactly one tree. The old framing was
+# `path \0 content \0`, and content can contain NUL — so a file's bytes could
+# carry the framing of a second file and two different trees hashed alike. A
+# Pack is context injected into an agent's graph: "an extra file appears
+# without the identity changing" is the thing this checksum exists to stop.
+cp -R "$source_pack" "$tmpdir/smuggle-a"
+cp -R "$source_pack" "$tmpdir/smuggle-b"
+printf 'Reviewed, benign.\n\0zz-b.md\0# INJECTED\n' > "$tmpdir/smuggle-a/zz-a.md"
+printf 'Reviewed, benign.\n' > "$tmpdir/smuggle-b/zz-a.md"
+printf '# INJECTED\n' > "$tmpdir/smuggle-b/zz-b.md"
+node "$pack_cli" inspect "$tmpdir/smuggle-a" > "$tmpdir/smuggle-a.json" || fail "smuggle fixture A failed to inspect"
+reviewed_checksum=$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).checksum)' "$tmpdir/smuggle-a.json")
+if node "$pack_cli" inspect "$tmpdir/smuggle-b" --checksum "$reviewed_checksum" > /dev/null 2>&1; then
+  fail "a Pack carrying an extra file passed under the reviewed Pack's checksum — the checksum framing is forgeable"
 fi
 
-echo "pack test passed (trust validation + immutable install + profile assignment + reviewed update + rollback + retained removal + deterministic checksum + OS junk ignored consistently + schema/contract parity)"
+# An empty directory is installed by the copy, so it has to appear in the
+# identity of what was installed.
+cp -R "$source_pack" "$tmpdir/ghost-pack"
+mkdir -p "$tmpdir/ghost-pack/ghost-section"
+node "$pack_cli" inspect "$tmpdir/ghost-pack" > "$tmpdir/ghost-inspect.json" || fail "a Pack with an empty directory failed to inspect"
+node - "$tmpdir/inspect.json" "$tmpdir/ghost-inspect.json" <<'NODE' || fail "an empty directory installs without changing the checksum"
+const fs = require('node:fs')
+if (JSON.parse(fs.readFileSync(process.argv[2],'utf8')).checksum === JSON.parse(fs.readFileSync(process.argv[3],'utf8')).checksum) process.exit(1)
+NODE
+
+# The guardrail that must survive: a packed repository is still an error, not
+# incidental junk to wave through — including .GIT, which IS the git directory
+# on a case-insensitive volume, and .git as a file (a submodule checkout).
+#
+# Asserting only that inspect FAILS is not enough here: a guard that misses
+# .GIT still fails, by walking into it and blaming HEAD's content type. The
+# error has to name the packed repository, or the guardrail is gone and the
+# author is sent to fix the wrong thing.
+for repo_entry in .git .GIT; do
+  rm -rf "$tmpdir/repo-pack"
+  cp -R "$source_pack" "$tmpdir/repo-pack"
+  mkdir -p "$tmpdir/repo-pack/$repo_entry"
+  printf 'ref: refs/heads/main\n' > "$tmpdir/repo-pack/$repo_entry/HEAD"
+  node "$pack_cli" inspect "$tmpdir/repo-pack" > "$tmpdir/repo-out.json" 2>&1 \
+    && fail "a Pack containing $repo_entry inspected cleanly; the packed-repo guardrail is gone"
+  grep -q "not allowed in a Pack" "$tmpdir/repo-out.json" \
+    || fail "$repo_entry was blamed on its content type instead of naming the packed repository"
+done
+rm -rf "$tmpdir/repo-pack"
+cp -R "$source_pack" "$tmpdir/repo-pack"
+printf 'gitdir: ../elsewhere\n' > "$tmpdir/repo-pack/.git"
+node "$pack_cli" inspect "$tmpdir/repo-pack" > "$tmpdir/repo-file.json" 2>&1 && fail "a Pack containing a .git file inspected cleanly"
+grep -q "not allowed in a Pack" "$tmpdir/repo-file.json" \
+  || fail "a .git file was blamed on its content type instead of naming the packed repository"
+
+echo "pack test passed (trust validation + immutable install + profile assignment + reviewed update + rollback + retained removal + deterministic checksum + OS junk ignored consistently + authored hidden content kept + unforgeable checksum framing + schema/contract parity)"

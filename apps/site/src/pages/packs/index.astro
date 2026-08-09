@@ -49,7 +49,7 @@ const structurePreview = `profession-pack/
 				<div class="catalog-controls">
 					<label class="search-control">
 						<span>Search</span>
-						<input type="search" placeholder="Name, workflow, or tool" autocomplete="off" data-pack-search />
+						<input type="search" placeholder="Name, workflow, or profession" autocomplete="off" data-pack-search />
 					</label>
 					<label class="sort-control">
 						<span>Stage</span>
@@ -75,7 +75,7 @@ const structurePreview = `profession-pack/
 				<div class="catalog-head" role="row">
 					<span role="columnheader">Pack</span>
 					<span role="columnheader">Best for</span>
-					<span role="columnheader">License</span>
+					<span role="columnheader">License / target</span>
 					<span role="columnheader">Stage</span>
 					<span role="columnheader" class="sr-only">Open</span>
 				</div>
@@ -92,7 +92,7 @@ const structurePreview = `profession-pack/
 							data-search={[pack.name, pack.creator, pack.category, pack.audience, pack.summary, pack.workflow, pack.kind === 'published' ? pack.formats.join(' ') : ''].join(' ').toLocaleLowerCase()}
 						>
 							<div class="pack-cell pack-identity" role="cell">
-								<p class="pack-status"><i aria-hidden="true"></i>{pack.status}<span>· by {pack.creator}</span></p>
+								<p class="pack-status"><i aria-hidden="true"></i>{pack.status}<span>{pack.kind === 'published' ? `· by ${pack.creator}` : '· seeking a creator'}</span></p>
 								<h3><a href={pack.href}>{pack.name}</a></h3>
 								<p>{pack.summary}</p>
 							</div>
@@ -105,7 +105,7 @@ const structurePreview = `profession-pack/
 								{pack.teamPrice !== pack.price && <span>{pack.teamPrice}</span>}
 							</div>
 							<div class="pack-cell pack-reviewed" role="cell">
-								{pack.kind === 'published' ? <time datetime={pack.reviewedSort}>{pack.reviewedAt}</time> : <strong>Unpublished</strong>}
+								{pack.kind === 'published' ? <strong>Reviewed <time datetime={pack.reviewedSort}>{pack.reviewedAt}</time></strong> : <strong>Unpublished</strong>}
 								<span>{pack.updateCadence}</span>
 							</div>
 							<div class="pack-open" role="cell"><a href={pack.href} aria-label={`Open ${pack.name}`}>View <span aria-hidden="true">→</span></a></div>
@@ -115,9 +115,9 @@ const structurePreview = `profession-pack/
 			</div>
 
 			<div class="empty-state" data-empty-state hidden>
-				<strong>No Packs match that search.</strong>
+				<strong>No Packs or briefs match those filters.</strong>
 				<p>Try a broader workflow, profession, tool name, or stage.</p>
-				<button type="button" data-empty-clear>Clear search</button>
+				<button type="button" data-empty-clear>Clear filters</button>
 			</div>
 			<footer class="catalog-footer">
 				<p>Open briefs are invitations to create, not products. Ratings appear only after verified purchases.</p>
@@ -305,6 +305,9 @@ const structurePreview = `profession-pack/
 		for (const button of clearButtons) button.addEventListener('click', () => {
 			if (!search) return;
 			search.value = '';
+			// The empty state can be caused by the stage filter alone, so its button
+			// clears both. The toolbar Clear sits beside Search and only clears that.
+			if (stage && button.hasAttribute('data-empty-clear')) stage.value = 'all';
 			updateCatalog();
 			search.focus();
 		});

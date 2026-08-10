@@ -145,4 +145,41 @@ describe('IndexingSettings', () => {
     await type(field('sourceBudgetMs'), '2')
     expect(container.textContent).toContain('120000 ms = 2 min')
   })
+
+  // Regression: the field used to be controlled by a value re-derived from
+  // rounded ms on every keystroke, which silently stripped an in-progress
+  // trailing decimal point — typing "1.5" landed as "15" (a silent 10x
+  // error) because the "." never survived the render between keystrokes.
+  // `type()` dispatches one native input event per call, same as a real
+  // keystroke, so this only catches the bug because it types incrementally.
+  it('preserves an in-progress fractional value instead of silently rounding it away', async () => {
+    await act(async () => root.render(<IndexingSettings />))
+
+    await type(field('sourceBudgetMs'), '1')
+    expect(field('sourceBudgetMs').value).toBe('1')
+    await type(field('sourceBudgetMs'), '1.')
+    expect(field('sourceBudgetMs').value).toBe('1.') // must not snap back to "1"
+    await type(field('sourceBudgetMs'), '1.5')
+    expect(field('sourceBudgetMs').value).toBe('1.5')
+
+    await act(async () => blur(field('sourceBudgetMs')))
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/settings', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ sourceBudgetMs: 90000 }), // 1.5 min, not 15
+    }))
+  })
+
+  it('converts the typed value when the unit is switched, rather than reinterpreting the same digits', async () => {
+    await act(async () => root.render(<IndexingSettings />))
+
+    await type(field('sourceBudgetMs'), '90')
+    const unitSelect = field('sourceBudgetMs').nextElementSibling as HTMLSelectElement
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+      setter?.call(unitSelect, 'hr')
+      unitSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    expect(field('sourceBudgetMs').value).toBe('1.5') // 90 min == 1.5 hr, not still "90"
+  })
 })

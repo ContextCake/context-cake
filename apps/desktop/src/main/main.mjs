@@ -203,8 +203,25 @@ async function pingEngine(signal) {
   // Drain the body: an undrained response holds its socket, and this runs
   // forever. The status code itself is not the signal — ANY answer means the
   // engine's loop is turning, which is the only thing being measured here.
-  await res.text().catch(() => '')
+  const body = await res.text().catch(() => '')
+  reportEngineMemory(body)
   return res.status
+}
+
+// The watchdog's own ping already fetches /api/status, which carries the
+// engine's memory-pressure level (memory-pressure.mjs, surfaced through
+// service.mjs). Piggybacking here gives the renderer a live backpressure
+// signal — throttle its own polling, show a banner — at zero extra request
+// cost. Only the level crosses the bridge, and only on change: this is not a
+// second channel worth of traffic, just the one field of a response the
+// watchdog needed anyway.
+let lastReportedMemoryLevel = null
+function reportEngineMemory(rawBody) {
+  let level
+  try { level = JSON.parse(rawBody)?.memory } catch { return }
+  if (typeof level !== 'string' || level === lastReportedMemoryLevel) return
+  lastReportedMemoryLevel = level
+  trustedWindows.broadcast('engine:memory', { level }, ['main'])
 }
 
 function startEngineWatchdog() {
@@ -283,6 +300,10 @@ async function relaunchEngine() {
   relaunchingEngine = true
   try {
     shutdownEngine()
+    // A fresh engine's memory level is worth reporting even if it happens to
+    // land on the same word the old one last reported — the renderer's state
+    // otherwise describes a process that no longer exists.
+    lastReportedMemoryLevel = null
     if (!(await startEngine())) return { ok: false, reason: 'shutting-down' }
     await pushGithubTokens()
     const targets = [[win, `${service.origin}/console/`]]

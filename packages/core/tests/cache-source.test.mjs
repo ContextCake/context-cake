@@ -117,3 +117,89 @@ test("an aborted listing is not cached as an answer", async () => {
   await assert.rejects(() => cached.listConceptIds({ signal: controller.signal }));
   assert.deepEqual(await cached.listConceptIds({}), ["a"], "the failure poisoned the cache");
 });
+
+test("the memory cache evicts the least-recently-used entry rather than growing forever", async () => {
+  // A key touched once and never revisited stayed in `memory` for the life of
+  // the process — TTL alone only ever invalidates a key on a read that hits
+  // it again. maxEntries bounds that: a long-running desktop session reading
+  // through thousands of distinct concept ids must not hold all of them
+  // forever just because each one was read exactly once.
+  let loads = 0;
+  const source = {
+    name: "count", level: 1,
+    async loadConcept(id) { loads += 1; return { id, sections: [] }; },
+    async listConceptIds() { return []; },
+    close() {},
+  };
+  const cached = withCache(source, { ttlMs: 60_000, maxEntries: 2 });
+  await cached.loadConcept("a");
+  await cached.loadConcept("b");
+  assert.equal(loads, 2, "sanity: two distinct ids, two loads so far");
+
+  // A third distinct key pushes the cache over its cap of 2 — "a" (the
+  // least recently touched) must be the one evicted, not "b".
+  await cached.loadConcept("c");
+  assert.equal(loads, 3);
+
+  await cached.loadConcept("b"); // still cached
+  assert.equal(loads, 3, "b was evicted when it should not have been");
+
+  await cached.loadConcept("a"); // evicted — must re-load from the source
+  assert.equal(loads, 4, "a was not evicted despite being the least recently used");
+});
+
+test("reading an entry counts as using it, so a hot key survives eviction", async () => {
+  let loads = 0;
+  const source = {
+    name: "count", level: 1,
+    async loadConcept(id) { loads += 1; return { id, sections: [] }; },
+    async listConceptIds() { return []; },
+    close() {},
+  };
+  const cached = withCache(source, { ttlMs: 60_000, maxEntries: 2 });
+
+  await cached.loadConcept("a");
+  await cached.loadConcept("b");
+  await cached.loadConcept("a"); // touch "a" again — "b" is now the LRU one
+  assert.equal(loads, 2);
+
+  await cached.loadConcept("c"); // over cap: evicts "b", not "a"
+  assert.equal(loads, 3);
+
+  await cached.loadConcept("a"); // still cached — was touched most recently
+  assert.equal(loads, 3, "a was evicted despite being the most recently used");
+
+  await cached.loadConcept("b"); // evicted
+  assert.equal(loads, 4);
+});
+
+test("a full index sweep never evicts the listing itself", async () => {
+  // A sweep calls listConceptIds exactly once, then loadConcept once per id —
+  // so "list.v2" is always the OLDEST entry in an LRU ordered purely by
+  // insertion. On a source with >= maxEntries concepts, capping the listing
+  // alongside per-concept entries would throw the listing away first, on
+  // every single pass: precisely the most expensive thing withCache exists to
+  // save (a full GitHub tree sweep, an MCP list_nodes call) on the remote
+  // workload it targets. The listing must survive regardless of how many
+  // concept ids get read after it.
+  let listLoads = 0;
+  let conceptLoads = 0;
+  const ids = Array.from({ length: 10 }, (_, i) => `n${i}`);
+  const source = {
+    name: "sweep", level: 1,
+    async listConceptIds() { listLoads += 1; return ids; },
+    async loadConcept(id) { conceptLoads += 1; return { id, sections: [] }; },
+    close() {},
+  };
+  const cached = withCache(source, { ttlMs: 60_000, maxEntries: 3 }); // cap well under ids.length
+
+  await cached.listConceptIds({});
+  for (const id of ids) await cached.loadConcept(id);
+  assert.equal(listLoads, 1, "the listing loaded once");
+  assert.equal(conceptLoads, 10, "every concept loaded once, sanity check");
+
+  // A second full sweep: the listing must still be a cache hit even though
+  // ten concept reads happened after it, well past the per-source cap of 3.
+  await cached.listConceptIds({});
+  assert.equal(listLoads, 1, "the listing was evicted by unrelated concept reads");
+});

@@ -51,6 +51,7 @@ import { createDiscrepancyPriorityStore } from "./discrepancy-priorities.mjs";
 import { resolveLiveLayer } from "./sources/git-sync.mjs";
 import { commitPathsWithMutation, push as pushGit } from "./sources/git-core.mjs";
 import { indexEntryKeys, layerIdentity } from "./index-keys.mjs";
+import { memoryPressureLevel } from "./memory-pressure.mjs";
 import {
   classifyManifest,
   getManifestProfileLayers,
@@ -337,7 +338,9 @@ export function createEngineService({
   consoleDist = null,    // optional: dir of a built console app to serve at /console/
   token = null,          // optional: when set, every /api/* request must carry
                          //   Authorization: Bearer <token> — else 401
-  allowMutations = true, // when false, mutating /api routes return 405
+  allowMutations = true, // when false, mutating /api routes return 405 — except
+                         //   POST /api/active-source, a scheduling hint that
+                         //   never touches the manifest (see its route handler)
   tokens = {},           // optional: alias -> {secret, host} for remote sources.
                          //   Injected by the caller that owns the OS keychain;
                          //   the engine never reads a keychain itself and never
@@ -544,6 +547,8 @@ export function createEngineService({
     closed = true;
     clearTimeout(automaticTimer);
     automaticTimer = null;
+    clearTimeout(memoryRetryTimer);
+    memoryRetryTimer = null;
     closeWatchers();
     const prev = cache;
     cache = null;
@@ -553,6 +558,116 @@ export function createEngineService({
     searchMemo = null;
     conceptTokens = new Map();
     if (prev) for (const s of prev.sources) s.close?.();
+  }
+
+  // ---- indexing concurrency --------------------------------------------------
+  //
+  // ensureIndexes used to call startIndex for every source with nothing
+  // throttling how many ran at once — a manifest with a dozen layers meant a
+  // dozen simultaneous folder walks, git clones, and MCP child spawns
+  // competing for disk and CPU the instant the app opened. The queue below
+  // makes `maxConcurrentIndexing` (settings.mjs) real: a pass waits here,
+  // reported as `phase: "queued"`, until a slot frees up.
+  //
+  // Bounds when a NEW pass may start, not how long an already-running one
+  // stays alive: a pass that blows its time budget frees its slot the moment
+  // `withDeadline` rejects (see releaseIndexSlot below), but the abandoned
+  // `listConceptIds()` call underneath keeps running until IT notices the
+  // abort. okf-local's walk checks the signal every directory; github.mjs and
+  // mcp.mjs currently don't check it at all during listing, so a timed-out
+  // remote source's scanning phase can keep running in the background after
+  // its slot — and the queued source that took it — have both moved on. Wiring
+  // signal support into those two adapters would close that gap; out of scope
+  // here since it touches files this change otherwise doesn't.
+  //
+  // Queueing costs nothing for a refreshing source — it keeps serving
+  // `previousSnap` and stays `status: "ready"` the whole time, exactly as
+  // before.
+  let runningIndexCount = 0;
+  const indexQueue = []; // { sourceName, run }
+  // A hint from the client (setActiveSource) naming the layer currently on
+  // screen. Purely a scheduling tie-breaker — never rejected, never required —
+  // so the source the user is looking at claims the next free slot instead of
+  // waiting behind background layers it arrived after.
+  let activeSourceName = null;
+  // Set while a memory-pressure retry is pending, so a burst of releases and
+  // enqueues under sustained pressure doesn't stack one timer per call.
+  let memoryRetryTimer = null;
+  const MEMORY_RETRY_MS = 1500;
+
+  function pumpIndexQueue(limit) {
+    // Floored at 1 regardless of what `limit` says: settings.mjs's env-var
+    // path rounds rather than rejects (CONTEXTCAKE_MAX_CONCURRENT_INDEXING=0.4
+    // resolves to 0), and a cap of 0 would mean nothing ever starts, forever
+    // — the queue would accept work and never drain it.
+    const normalCap = Math.max(1, limit);
+    // Under critical memory pressure, no NEW pass may start — a pass already
+    // running is left to finish (aborting mid-walk loses the work it already
+    // paid for and frees nothing until GC runs anyway). At least one pass is
+    // still allowed through even under pressure: with `runningIndexCount` at
+    // 0 the alternative is the queue simply never draining, since nothing
+    // already in flight exists to trigger the next pump via releaseIndexSlot.
+    const cap = memoryPressureLevel() === "critical"
+      ? Math.min(normalCap, runningIndexCount > 0 ? runningIndexCount : 1)
+      : normalCap;
+    while (runningIndexCount < cap && indexQueue.length) {
+      let i = 0;
+      if (activeSourceName) {
+        const preferred = indexQueue.findIndex((item) => item.sourceName === activeSourceName);
+        if (preferred !== -1) i = preferred;
+      }
+      const [item] = indexQueue.splice(i, 1);
+      runningIndexCount += 1;
+      item.run();
+    }
+    // Only pressure can leave work queued here with nothing running to
+    // trigger the next pump via releaseIndexSlot — ordinary saturation at the
+    // configured limit already gets re-pumped for free the moment any
+    // in-flight pass finishes, so arming a timer for that case would just be
+    // a redundant wakeup that never actually did anything pressure-related.
+    if (indexQueue.length && cap < normalCap && runningIndexCount >= cap && !memoryRetryTimer) {
+      memoryRetryTimer = setTimeout(() => {
+        memoryRetryTimer = null;
+        pumpIndexQueue(limit);
+      }, MEMORY_RETRY_MS);
+      memoryRetryTimer.unref?.();
+    }
+  }
+
+  function releaseIndexSlot(limit) {
+    runningIndexCount = Math.max(0, runningIndexCount - 1);
+    pumpIndexQueue(limit);
+  }
+
+  // Resolves once a concurrency slot is free. A signal that aborts while still
+  // queued removes the waiter and rejects without ever occupying a slot — a
+  // source cancelled or superseded before its turn never touches disk.
+  function acquireIndexSlot(sourceName, signal, limit) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(signal.reason ?? new Error("Indexing cancelled")); return; }
+      const item = {
+        sourceName,
+        run: () => { signal?.removeEventListener?.("abort", onAbort); resolve(); },
+      };
+      const onAbort = () => {
+        const i = indexQueue.indexOf(item);
+        if (i !== -1) indexQueue.splice(i, 1);
+        reject(signal.reason ?? new Error("Indexing cancelled"));
+      };
+      signal?.addEventListener?.("abort", onAbort);
+      indexQueue.push(item);
+      pumpIndexQueue(limit);
+    });
+  }
+
+  // Called by the /api/active-source route. Re-pumps immediately so the newly
+  // preferred source can jump a queue it was already waiting in. Clamped to a
+  // real layer-name length: it is only ever compared with === against a
+  // source's own name, never used as a path or a key, so an oversized value
+  // can't do anything but sit in memory for no reason.
+  function setActiveSource(name) {
+    activeSourceName = typeof name === "string" && name ? name.slice(0, 200) : null;
+    try { pumpIndexQueue(openSources().settings.maxConcurrentIndexing); } catch { /* no manifest yet */ }
   }
 
   // ---- background index ------------------------------------------------------
@@ -689,12 +804,14 @@ export function createEngineService({
       },
     };
     const budget = settings.sourceBudgetMs;
-    withDeadline(
-      snapshotSource(source, entry, controller.signal),
-      budget,
-      `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
-      () => controller.abort(new Error("Indexing timed out")),
-    )
+    const limit = settings.maxConcurrentIndexing;
+    acquireIndexSlot(source.name, controller.signal, limit)
+      .then(() => withDeadline(
+        snapshotSource(source, entry, controller.signal),
+        budget,
+        `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
+        () => controller.abort(new Error("Indexing timed out")),
+      ).finally(() => releaseIndexSlot(limit)))
       .then((snap) => {
         if (indexes.get(entry.key) !== entry) return; // superseded by a newer config
         entry.snap = snap;
@@ -1111,6 +1228,16 @@ export function createEngineService({
           return true;
         }
       }
+      if (p === "/api/active-source" && req.method === "POST") {
+        // A scheduling hint, not a mutation: which layer the client currently
+        // has on screen, so it claims the next free indexing slot instead of
+        // waiting behind sources the user isn't looking at. Never persisted,
+        // never gated by allowMutations — nothing here touches the manifest.
+        const body = parseJson(await readBody(req));
+        setActiveSource(typeof body?.name === "string" ? body.name : null);
+        json(res, 200, { ok: true });
+        return true;
+      }
       if (p === "/api/files") { json(res, 200, await listFilesApi(fileRoots(), walkLimits())); return true; }
       if (p === "/api/file") {
         if (req.method === "PUT" || req.method === "POST") {
@@ -1464,6 +1591,11 @@ export function createEngineService({
       indexing: pending.length > 0,
       indexingSources: pending,
       sources,
+      // "normal" | "elevated" | "critical" — see memory-pressure.mjs. A host
+      // embedding this engine (the desktop app's utility process, in
+      // particular) can use this to throttle its own polling or show a
+      // banner without adding its own watermark logic.
+      memory: memoryPressureLevel(),
     };
   }
 

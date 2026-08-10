@@ -76,6 +76,15 @@ export interface DataSource {
   patchDiscrepancyRule(id: string, changes: { mode?: 'recommend' | 'automatic'; enabled?: boolean }): Promise<DiscrepancyRule>
   promoteDiscrepancyRule(id: string, confirm: boolean): Promise<Record<string, unknown>>
   setDiscrepancyPriority(id: string, priority: string): Promise<void>
+  /**
+   * A scheduling hint: which layer is currently on screen (e.g. the Files
+   * view scoped to one source), so the engine's indexing queue lets that
+   * source claim the next free concurrency slot instead of waiting behind
+   * layers the user isn't looking at. Fire-and-forget — never awaited, never
+   * throws, and a no-op against an engine too old to have the route or in
+   * demo mode where nothing indexes.
+   */
+  setActiveSource(name: string | null): void
 }
 
 // ---- Transport --------------------------------------------------------------
@@ -243,6 +252,7 @@ class DemoSource implements DataSource {
   async patchDiscrepancyRule(): Promise<DiscrepancyRule> { throw new LiveDataError('bad-status', 'Automatic rules never run in simulation.', 405) }
   async promoteDiscrepancyRule(): Promise<Record<string, unknown>> { throw new LiveDataError('bad-status', 'Simulation cannot promote team rules.', 405) }
   async setDiscrepancyPriority(): Promise<void> { /* simulation-only local state is owned by the store */ }
+  setActiveSource(): void { /* the demo bundle is pre-resolved — nothing to schedule */ }
   async resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord> {
     const prior = request.resolutionId
       ? this.resolutions.find((item) => item.id === request.resolutionId)
@@ -403,6 +413,14 @@ class LiveSource implements DataSource {
     await this.request(`/api/discrepancies?id=${encodeURIComponent(id)}`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ priority }),
     })
+  }
+  setActiveSource(name: string | null): void {
+    // Best-effort: an older engine 404s this route, a stalled network drops
+    // it. Either way the queue just falls back to arrival order, so nothing
+    // here is worth surfacing to the user or retrying.
+    void this.request('/api/active-source', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
+    }).catch(() => {})
   }
   private async get<T>(path: string): Promise<T> {
     return this.request<T>(path, { headers: { accept: 'application/json' } })

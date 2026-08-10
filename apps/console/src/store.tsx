@@ -391,6 +391,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [conceptRouteMode, setConceptRouteMode] = useState<'bare' | 'deep'>(initial.concept ? 'deep' : 'bare')
   const [filesScope, setFilesScopeState] = useState<string | null>(initial.layer ?? null)
   const [filesPath, setFilesPathState] = useState<string | null>(initial.file ?? null)
+  // Tell the engine which layer the user has on screen so its indexing queue
+  // (packages/core/src/service.mjs) lets that source's pass claim the next
+  // free concurrency slot instead of waiting behind ones nobody is looking
+  // at. Fire-and-forget — setActiveSource never throws or returns anything
+  // this view needs. Guarded the same way `source.search` is just below:
+  // several test harnesses stub a partial DataSource with no
+  // `setActiveSource` at all, and this effect runs on every mount.
+  useEffect(() => {
+    if (!source.setActiveSource) return
+    source.setActiveSource(filesScope)
+  }, [source, filesScope])
   const setSelConcept = useCallback((id: string) => {
     setConceptRouteMode('deep')
     setSelConceptState(id)

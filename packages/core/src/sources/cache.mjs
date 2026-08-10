@@ -19,6 +19,15 @@ const DEFAULT_MAX_ENTRIES = 5000;
 
 export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace = null, maxEntries = DEFAULT_MAX_ENTRIES } = {}) {
   const memory = new Map(); // cache key -> { value, storedAt }, insertion order = recency (see touch())
+  // The listing answer lives outside the capped map, on its own. A full index
+  // sweep calls listConceptIds exactly once and loadConcept once per id after
+  // it, so "list.v2" is always the OLDEST entry by the time a source with
+  // >= maxEntries concepts finishes its first sweep — LRU eviction would throw
+  // it away first, on every single pass, which is exactly the single most
+  // expensive thing withCache exists to save (a full GitHub tree sweep, an
+  // MCP list_nodes call) on exactly the remote-adapter workload it targets.
+  // One entry, so there is no cap to enforce here.
+  let listEntry = null;
   // Per-source subdir; encodeURIComponent keeps ids (which may contain "/")
   // as single safe filenames — nothing can traverse out of cacheDir.
   // Profile-aware callers add an opaque source fingerprint before the display
@@ -65,7 +74,12 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
   function touch(scopedKey, entry) {
     memory.delete(scopedKey);
     memory.set(scopedKey, entry);
-    while (memory.size > maxEntries) {
+    // The `size > 0` half is what keeps this from spinning forever if
+    // maxEntries is ever passed as 0 or negative: at size 0 the "oldest key"
+    // is undefined, memory.delete(undefined) is a no-op, and size stays 0
+    // forever without it — a non-positive maxEntries degenerates to
+    // effectively-uncached instead of hanging the process.
+    while (memory.size > maxEntries && memory.size > 0) {
       memory.delete(memory.keys().next().value);
     }
   }
@@ -84,6 +98,18 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
     }
     const value = await load();
     touch(scopedKey, { value, storedAt: Date.now() });
+    writeDisk(key, value);
+    return value;
+  }
+
+  // The listing's own memo, deliberately not routed through cached()/touch()
+  // — see the comment on `listEntry` above.
+  async function cachedList(key, load) {
+    if (listEntry && Date.now() - listEntry.storedAt < ttlMs) return listEntry.value;
+    const disk = readDisk(key);
+    if (disk) { listEntry = disk; return disk.value; }
+    const value = await load();
+    listEntry = { value, storedAt: Date.now() };
     writeDisk(key, value);
     return value;
   }
@@ -113,7 +139,7 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
      */
     async listConceptIds(options = {}) {
       const notes = options?.notes ?? null;
-      const entry = await cached("list.v2", async () => {
+      const entry = await cachedList("list.v2", async () => {
         const collected = { skipped: [], unreadable: [], hidden: 0 };
         const ids = await source.listConceptIds({ ...options, notes: collected });
         return { ids, notes: collected };
@@ -140,6 +166,7 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
     // them too or a user-triggered Sync only clears the outer half.
     sync() {
       memory.clear();
+      listEntry = null;
       if (dir) fs.rmSync(dir, { recursive: true, force: true });
       source.sync?.();
       wrapped.lastSynced = new Date().toISOString();

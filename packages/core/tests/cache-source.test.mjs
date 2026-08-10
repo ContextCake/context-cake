@@ -172,3 +172,34 @@ test("reading an entry counts as using it, so a hot key survives eviction", asyn
   await cached.loadConcept("b"); // evicted
   assert.equal(loads, 4);
 });
+
+test("a full index sweep never evicts the listing itself", async () => {
+  // A sweep calls listConceptIds exactly once, then loadConcept once per id —
+  // so "list.v2" is always the OLDEST entry in an LRU ordered purely by
+  // insertion. On a source with >= maxEntries concepts, capping the listing
+  // alongside per-concept entries would throw the listing away first, on
+  // every single pass: precisely the most expensive thing withCache exists to
+  // save (a full GitHub tree sweep, an MCP list_nodes call) on the remote
+  // workload it targets. The listing must survive regardless of how many
+  // concept ids get read after it.
+  let listLoads = 0;
+  let conceptLoads = 0;
+  const ids = Array.from({ length: 10 }, (_, i) => `n${i}`);
+  const source = {
+    name: "sweep", level: 1,
+    async listConceptIds() { listLoads += 1; return ids; },
+    async loadConcept(id) { conceptLoads += 1; return { id, sections: [] }; },
+    close() {},
+  };
+  const cached = withCache(source, { ttlMs: 60_000, maxEntries: 3 }); // cap well under ids.length
+
+  await cached.listConceptIds({});
+  for (const id of ids) await cached.loadConcept(id);
+  assert.equal(listLoads, 1, "the listing loaded once");
+  assert.equal(conceptLoads, 10, "every concept loaded once, sanity check");
+
+  // A second full sweep: the listing must still be a cache hit even though
+  // ten concept reads happened after it, well past the per-source cap of 3.
+  await cached.listConceptIds({});
+  assert.equal(listLoads, 1, "the listing was evicted by unrelated concept reads");
+});

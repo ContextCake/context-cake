@@ -395,8 +395,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // (packages/core/src/service.mjs) lets that source's pass claim the next
   // free concurrency slot instead of waiting behind ones nobody is looking
   // at. Fire-and-forget — setActiveSource never throws or returns anything
-  // this view needs.
-  useEffect(() => { source.setActiveSource(filesScope) }, [source, filesScope])
+  // this view needs. Guarded the same way `source.search` is just below:
+  // several test harnesses stub a partial DataSource with no
+  // `setActiveSource` at all, and this effect runs on every mount.
+  useEffect(() => {
+    if (!source.setActiveSource) return
+    source.setActiveSource(filesScope)
+  }, [source, filesScope])
   const setSelConcept = useCallback((id: string) => {
     setConceptRouteMode('deep')
     setSelConceptState(id)

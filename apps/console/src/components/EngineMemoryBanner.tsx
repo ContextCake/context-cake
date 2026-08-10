@@ -3,12 +3,13 @@
 // Desktop-only, and inert everywhere else: in a browser there is no
 // `__CC_DESKTOP`, so this renders nothing and subscribes to nothing.
 //
-// "elevated" is deliberately silent here — it is the threshold that slows
-// new indexing passes from starting (packages/core/src/service.mjs), not one
-// worth interrupting the user over. Only "critical" — the level at which the
-// engine itself has paused starting new work rather than risk an OOM kill —
+// "elevated" is deliberately silent here — nothing in the engine changes
+// behavior at that level yet (packages/core/src/memory-pressure.mjs calls it
+// a signal a caller MAY act on), so surfacing it would just be noise. Only
+// "critical" — the level at which the engine itself has paused starting new
+// indexing passes rather than risk an OOM kill (service.mjs's indexQueue) —
 // surfaces as a banner, and it explains itself: indexing is paused, not
-// broken, and it resumes on its own once memory frees up.
+// broken, and it resumes on its own once memory pressure drops.
 import { useEffect, useState } from 'react'
 import { C, css } from '../theme'
 

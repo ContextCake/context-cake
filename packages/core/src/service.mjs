@@ -338,7 +338,9 @@ export function createEngineService({
   consoleDist = null,    // optional: dir of a built console app to serve at /console/
   token = null,          // optional: when set, every /api/* request must carry
                          //   Authorization: Bearer <token> — else 401
-  allowMutations = true, // when false, mutating /api routes return 405
+  allowMutations = true, // when false, mutating /api routes return 405 — except
+                         //   POST /api/active-source, a scheduling hint that
+                         //   never touches the manifest (see its route handler)
   tokens = {},           // optional: alias -> {secret, host} for remote sources.
                          //   Injected by the caller that owns the OS keychain;
                          //   the engine never reads a keychain itself and never
@@ -565,9 +567,22 @@ export function createEngineService({
   // dozen simultaneous folder walks, git clones, and MCP child spawns
   // competing for disk and CPU the instant the app opened. The queue below
   // makes `maxConcurrentIndexing` (settings.mjs) real: a pass waits here,
-  // reported as `phase: "queued"`, until a slot frees up. Queueing costs
-  // nothing for a refreshing source — it keeps serving `previousSnap` and
-  // stays `status: "ready"` the whole time, exactly as before.
+  // reported as `phase: "queued"`, until a slot frees up.
+  //
+  // Bounds when a NEW pass may start, not how long an already-running one
+  // stays alive: a pass that blows its time budget frees its slot the moment
+  // `withDeadline` rejects (see releaseIndexSlot below), but the abandoned
+  // `listConceptIds()` call underneath keeps running until IT notices the
+  // abort. okf-local's walk checks the signal every directory; github.mjs and
+  // mcp.mjs currently don't check it at all during listing, so a timed-out
+  // remote source's scanning phase can keep running in the background after
+  // its slot — and the queued source that took it — have both moved on. Wiring
+  // signal support into those two adapters would close that gap; out of scope
+  // here since it touches files this change otherwise doesn't.
+  //
+  // Queueing costs nothing for a refreshing source — it keeps serving
+  // `previousSnap` and stays `status: "ready"` the whole time, exactly as
+  // before.
   let runningIndexCount = 0;
   const indexQueue = []; // { sourceName, run }
   // A hint from the client (setActiveSource) naming the layer currently on
@@ -580,19 +595,21 @@ export function createEngineService({
   let memoryRetryTimer = null;
   const MEMORY_RETRY_MS = 1500;
 
-  // Under critical memory pressure, no NEW pass may start — a pass already
-  // running is left to finish (aborting mid-walk loses the work it already
-  // paid for and frees nothing until GC runs anyway). At least one pass
-  // running is still allowed through even under pressure: with `runningIndexCount`
-  // at 0 the alternative is the queue simply never draining, since nothing already
-  // in flight exists to trigger the next pump via releaseIndexSlot.
-  function effectiveLimit(limit) {
-    if (memoryPressureLevel() !== "critical") return limit;
-    return runningIndexCount > 0 ? runningIndexCount : 1;
-  }
-
   function pumpIndexQueue(limit) {
-    const cap = effectiveLimit(limit);
+    // Floored at 1 regardless of what `limit` says: settings.mjs's env-var
+    // path rounds rather than rejects (CONTEXTCAKE_MAX_CONCURRENT_INDEXING=0.4
+    // resolves to 0), and a cap of 0 would mean nothing ever starts, forever
+    // — the queue would accept work and never drain it.
+    const normalCap = Math.max(1, limit);
+    // Under critical memory pressure, no NEW pass may start — a pass already
+    // running is left to finish (aborting mid-walk loses the work it already
+    // paid for and frees nothing until GC runs anyway). At least one pass is
+    // still allowed through even under pressure: with `runningIndexCount` at
+    // 0 the alternative is the queue simply never draining, since nothing
+    // already in flight exists to trigger the next pump via releaseIndexSlot.
+    const cap = memoryPressureLevel() === "critical"
+      ? Math.min(normalCap, runningIndexCount > 0 ? runningIndexCount : 1)
+      : normalCap;
     while (runningIndexCount < cap && indexQueue.length) {
       let i = 0;
       if (activeSourceName) {
@@ -603,9 +620,12 @@ export function createEngineService({
       runningIndexCount += 1;
       item.run();
     }
-    // Pressure held work back this round — nothing already running exists to
-    // call pumpIndexQueue again on release, so arm a retry ourselves.
-    if (indexQueue.length && cap <= runningIndexCount && !memoryRetryTimer) {
+    // Only pressure can leave work queued here with nothing running to
+    // trigger the next pump via releaseIndexSlot — ordinary saturation at the
+    // configured limit already gets re-pumped for free the moment any
+    // in-flight pass finishes, so arming a timer for that case would just be
+    // a redundant wakeup that never actually did anything pressure-related.
+    if (indexQueue.length && cap < normalCap && runningIndexCount >= cap && !memoryRetryTimer) {
       memoryRetryTimer = setTimeout(() => {
         memoryRetryTimer = null;
         pumpIndexQueue(limit);
@@ -641,9 +661,12 @@ export function createEngineService({
   }
 
   // Called by the /api/active-source route. Re-pumps immediately so the newly
-  // preferred source can jump a queue it was already waiting in.
+  // preferred source can jump a queue it was already waiting in. Clamped to a
+  // real layer-name length: it is only ever compared with === against a
+  // source's own name, never used as a path or a key, so an oversized value
+  // can't do anything but sit in memory for no reason.
   function setActiveSource(name) {
-    activeSourceName = name || null;
+    activeSourceName = typeof name === "string" && name ? name.slice(0, 200) : null;
     try { pumpIndexQueue(openSources().settings.maxConcurrentIndexing); } catch { /* no manifest yet */ }
   }
 

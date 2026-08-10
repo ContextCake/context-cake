@@ -12,6 +12,7 @@ import { Concepts } from './views/Concepts'
 import { Files } from './views/Files'
 import { ChatPanel } from './components/ChatPanel'
 import { EngineBanner } from './components/EngineBanner'
+import { EngineMemoryBanner } from './components/EngineMemoryBanner'
 import { SetupWizard } from './components/SetupWizard'
 import { ConnectAgentDialog } from './components/ConnectAgentDialog'
 import { SettingsView } from './components/SettingsView'
@@ -386,6 +387,7 @@ export function App() {
               app-wide render never runs for it.
             */}
             <EngineBanner />
+            <EngineMemoryBanner />
             {load.refreshError && load.refreshError.message !== dismissedRefreshError && (
               <div role="status" style={css(`display:flex; align-items:center; gap:10px; padding:8px 16px; background:${C.amberFill}; border-bottom:1px solid ${C.amberStroke}; font-size:12px; color:${C.amberText};`)}>
                 <span aria-hidden="true">⚠</span>

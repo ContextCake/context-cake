@@ -65,6 +65,10 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   // this window at its new origin; the app, its windows and its config survive.
   engine: {
     onStatus: (cb) => subscribe('engine:status', cb),
+    // Backpressure from the engine's own memory-pressure watermark
+    // (packages/core/src/memory-pressure.mjs), piggybacked on the same
+    // /api/status ping the watchdog above already makes every 10s.
+    onMemory: (cb) => subscribe('engine:memory', cb),
     relaunch: () => ipcRenderer.invoke('contextcake:engine-relaunch'),
   },
   chooseFolder: () => ipcRenderer.invoke('contextcake:choose-folder'),

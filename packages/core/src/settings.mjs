@@ -42,6 +42,19 @@ export const SETTING_DEFS = {
     label: "Time budget per source",
     help: "How long one source may take to index before it is marked unavailable. Raise if a large vault on cloud storage times out.",
   },
+  maxConcurrentIndexing: {
+    // A manifest with many layers used to start every source's index pass at
+    // once — N folder walks, git clones, and MCP child processes competing for
+    // disk and CPU simultaneously. Capping this keeps a big manifest from
+    // spiking resource use on load; excess passes wait their turn in the
+    // "queued" phase rather than running unbounded.
+    default: 4,
+    min: 1,
+    max: 32,
+    env: "CONTEXTCAKE_MAX_CONCURRENT_INDEXING",
+    label: "Sources indexed at once",
+    help: "How many sources may index in parallel. Lower this if indexing a large manifest makes the app feel sluggish.",
+  },
 };
 
 export const SETTING_KEYS = Object.keys(SETTING_DEFS);

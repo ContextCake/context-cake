@@ -122,6 +122,12 @@ declare global {
        */
       engine?: {
         onStatus?(cb: (state: import('./components/EngineBanner').EngineHealth) => void): () => void
+        /**
+         * The engine's memory-pressure watermark ("normal" | "elevated" |
+         * "critical"), piggybacked on the same liveness ping as onStatus.
+         * Older packaged builds won't call this back at all.
+         */
+        onMemory?(cb: (state: import('./components/EngineMemoryBanner').EngineMemory) => void): () => void
         /** Restart the engine process and reload this window at its new origin. */
         relaunch?(): Promise<{ ok: boolean; reason?: string }>
       }

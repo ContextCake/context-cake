@@ -7,8 +7,18 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace = null } = {}) {
-  const memory = new Map(); // cache key -> { value, storedAt }
+// Entries per source, in memory, before the least-recently-used one is
+// evicted. Without a cap the memory Map grows for the life of the process: a
+// TTL only invalidates a key on the read that happens to hit it again, so a
+// concept id read once and never revisited (an MCP graph churning over a
+// long-running desktop session, say) stayed in memory forever. The number is
+// generous on purpose — a layer's own document count is the natural ceiling
+// for how much this ever needs to hold, and evicting a live source's cache
+// mid-use would just turn into extra reads through it, not a correctness bug.
+const DEFAULT_MAX_ENTRIES = 5000;
+
+export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace = null, maxEntries = DEFAULT_MAX_ENTRIES } = {}) {
+  const memory = new Map(); // cache key -> { value, storedAt }, insertion order = recency (see touch())
   // Per-source subdir; encodeURIComponent keeps ids (which may contain "/")
   // as single safe filenames — nothing can traverse out of cacheDir.
   // Profile-aware callers add an opaque source fingerprint before the display
@@ -48,17 +58,32 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
     }
   }
 
+  // Marks `entry` as the most recently used: re-inserting a Map key moves it
+  // to the end of iteration order, which is what lets eviction below just
+  // drop from the front. Then evicts down to `maxEntries` if this push was
+  // the one that went over — a single cap check per write, never a sweep.
+  function touch(scopedKey, entry) {
+    memory.delete(scopedKey);
+    memory.set(scopedKey, entry);
+    while (memory.size > maxEntries) {
+      memory.delete(memory.keys().next().value);
+    }
+  }
+
   async function cached(key, load) {
     const scopedKey = memoryKey(key);
     const hit = memory.get(scopedKey);
-    if (hit && Date.now() - hit.storedAt < ttlMs) return hit.value;
+    if (hit && Date.now() - hit.storedAt < ttlMs) {
+      touch(scopedKey, hit); // a read counts as recent use
+      return hit.value;
+    }
     const disk = readDisk(key);
     if (disk) {
-      memory.set(scopedKey, disk);
+      touch(scopedKey, disk);
       return disk.value;
     }
     const value = await load();
-    memory.set(scopedKey, { value, storedAt: Date.now() });
+    touch(scopedKey, { value, storedAt: Date.now() });
     writeDisk(key, value);
     return value;
   }

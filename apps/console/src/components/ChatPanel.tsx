@@ -119,7 +119,7 @@ function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: 
                       {m.cites.map((ci, j) => {
                         const col = lc(ci.layer)
                         return (
-                          <span key={j} style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:10.5px; font-weight:500; padding:4px 9px; border-radius:999px; background:${col.fill}; color:${col.text}; border:1px solid ${col.strokeE};`)}>
+                          <span key={j} style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:10.5px; font-weight:500; padding:4px 9px; border-radius:999px; background:${col.fill}; color:${col.text};`)}>
                             <span style={css(`display:inline-block; width:6px; height:6px; border-radius:999px; margin-right:6px; background:${col.strokeE};`)} />{ci.label}
                           </span>
                         )
@@ -147,7 +147,7 @@ function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: 
         {canAsk && <div style={css('padding:14px 16px; border-top:1px solid #D8D6CC;')}>
           <div style={css('display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;')}>
             {SUGGESTIONS.map((t) => (
-              <button key={t} className="cc-h-bluefill2" onClick={() => send(t)} style={css('font:inherit; font-size:11.5px; color:#3D6E9E; background:#EAF3FC; border:1px solid #C6DEF6; border-radius:999px; padding:5px 11px; cursor:pointer;')}>{t}</button>
+              <button key={t} className="cc-h-bluefill2" onClick={() => send(t)} style={css('font:inherit; font-size:11.5px; color:#3D6E9E; background:#EAF3FC; border-radius:999px; padding:5px 11px; cursor:pointer;')}>{t}</button>
             ))}
           </div>
           <div style={css('display:flex; align-items:flex-end; gap:8px; background:#FFFFFF; border:1px solid #C3C1B8; border-radius:11px; padding:8px 8px 8px 12px;')}>

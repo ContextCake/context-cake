@@ -23,6 +23,23 @@ function isMillisecondSetting(key: string): boolean {
   return key.endsWith('Ms')
 }
 
+type MsUnit = 'min' | 'hr'
+const MS_PER_UNIT: Record<MsUnit, number> = { min: 60_000, hr: 3_600_000 }
+
+/** Whichever unit divides `ms` evenly and reads smallest — minutes below an
+ *  hour, hours at or above one, falling back to minutes for anything under a
+ *  minute (sub-minute budgets are a headless/test concern, not a UI one). */
+function unitFor(ms: number): MsUnit {
+  return ms >= MS_PER_UNIT.hr && ms % MS_PER_UNIT.hr === 0 ? 'hr' : 'min'
+}
+
+/** An ms value formatted in the given unit, for seeding/converting the field —
+ *  never fed back into the field while the user is still typing (see the
+ *  ms-field onChange below), only on load and on an explicit unit switch. */
+function formatUnitValue(ms: number, unit: MsUnit): string {
+  return String(Math.round((ms / MS_PER_UNIT[unit]) * 100) / 100)
+}
+
 /**
  * "120000 ms = 2 min" — the human-scale reading beside the raw number. The
  * engine's catalog (settings.mjs) supplies `label`/`help` and never a unit or
@@ -42,12 +59,28 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
   const [payload, setPayload] = useState<SettingsPayload | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [rows, setRows] = useState<Record<string, RowState>>({})
+  // Ms-suffixed settings are edited in minutes/hours, not raw ms — this holds
+  // the unit each such field is currently displayed in. `rows[key].value` for
+  // an ms field is the raw text the user is editing IN THIS UNIT (never ms
+  // directly) — same "just hold what was typed" contract the non-ms fields
+  // already use, which is what lets an in-progress "1." survive a re-render
+  // instead of being silently rounded back to "1" before the next digit lands.
+  const [units, setUnits] = useState<Record<string, MsUnit>>({})
 
+  // Not memoized: a plain closure recreated each render, always reading the
+  // current `units` state directly (not via a setUnits updater) so a save
+  // right after this component mounts still sees the freshest selection.
   const apply = (data: SettingsPayload) => {
     setPayload(data)
-    setRows(Object.fromEntries(
-      data.catalog.map((d) => [d.key, { value: format(data.settings[d.key] ?? d.default), error: null, saving: false }]),
-    ))
+    const nextUnits = Object.fromEntries(
+      data.catalog.filter((d) => isMillisecondSetting(d.key)).map((d) => [d.key, units[d.key] ?? unitFor(data.settings[d.key] ?? d.default)]),
+    )
+    setUnits(nextUnits)
+    setRows(Object.fromEntries(data.catalog.map((d) => {
+      const ms = data.settings[d.key] ?? d.default
+      const value = isMillisecondSetting(d.key) ? formatUnitValue(ms, nextUnits[d.key]) : format(ms)
+      return [d.key, { value, error: null, saving: false }]
+    })))
   }
 
   useEffect(() => {
@@ -69,6 +102,13 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
     setRows((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
   }
 
+  /** Format an ms bound (def.min/def.max) in whichever unit the field is
+   *  currently showing, for a validation message that matches what the user typed. */
+  const formatBound = (ms: number, unit: MsUnit): string => {
+    const n = ms / MS_PER_UNIT[unit]
+    return `${Number.isInteger(n) ? n : Math.round(n * 100) / 100} ${unit === 'hr' ? 'hr' : 'min'}`
+  }
+
   const commit = async (def: SettingDef, raw: number | null) => {
     setRow(def.key, { saving: true, error: null })
     try {
@@ -86,17 +126,23 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
     }
   }
 
-  /** Save on blur — the value is only sent once the user is done typing. */
+  /** Save on blur — the value is only sent once the user is done typing. For
+   *  an ms field, `row.value` is in the selected unit and gets converted to
+   *  ms here, at the single point where the typed text turns back into a number. */
   const save = (def: SettingDef) => {
     const row = rows[def.key]
     if (!row) return
-    const value = Number(row.value)
-    if (!Number.isFinite(value)) {
+    const isMs = isMillisecondSetting(def.key)
+    const typed = Number(row.value)
+    if (!Number.isFinite(typed)) {
       setRow(def.key, { error: 'Enter a number.' })
       return
     }
+    const value = isMs ? Math.round(typed * MS_PER_UNIT[units[def.key] ?? 'min']) : typed
     if (value < def.min || value > def.max) {
-      setRow(def.key, { error: `Enter a value between ${def.min.toLocaleString()} and ${def.max.toLocaleString()}.` })
+      const unit = units[def.key]
+      const range = unit ? `${formatBound(def.min, unit)} and ${formatBound(def.max, unit)}` : `${def.min.toLocaleString()} and ${def.max.toLocaleString()}`
+      setRow(def.key, { error: `Enter a value between ${range}.` })
       return
     }
     if (value === (payload?.settings[def.key] ?? def.default)) return // no change
@@ -122,8 +168,10 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
           const row = rows[def.key]
           const isDefault = payload.stored[def.key] === undefined
           const isMs = isMillisecondSetting(def.key)
-          const rowValue = row ? Number(row.value) : NaN
-          const humanized = isMs && Number.isFinite(rowValue) ? humanizeMs(rowValue) : null
+          const unit = units[def.key] ?? 'min'
+          const typedValue = row ? Number(row.value) : NaN
+          const msValue = isMs && Number.isFinite(typedValue) ? typedValue * MS_PER_UNIT[unit] : NaN
+          const humanized = isMs && Number.isFinite(msValue) ? humanizeMs(msValue) : null
           return (
             <div key={def.key} className="cc-settings-row">
               <div>
@@ -131,7 +179,7 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
                   <label htmlFor={`cc-set-${def.key}`}>{def.label}</label>
                 </strong>
                 <span>{def.help}</span>
-                {humanized && <p className="cc-settings-hint">{row?.value} ms = {humanized}</p>}
+                {humanized && <p className="cc-settings-hint">{Math.round(msValue)} ms = {humanized}</p>}
                 {row?.error && <p className="cc-settings-rowerr">{row.error}</p>}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -141,25 +189,48 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
                     className="cc-settings-reset"
                     onClick={() => void commit(def, null)}
                     disabled={row?.saving}
-                    title={`Reset to the default (${def.default.toLocaleString()})`}
+                    title={`Reset to the default (${isMs ? humanizeMs(def.default) : def.default.toLocaleString()})`}
                   >Reset</button>
                 )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <input
                     id={`cc-set-${def.key}`}
                     className="cc-settings-number"
-                    type="number"
-                    inputMode="numeric"
-                    min={def.min}
-                    max={def.max}
-                    aria-describedby={isMs ? `cc-set-${def.key}-unit` : undefined}
+                    // type="text" for ms fields, not "number": a number input's
+                    // built-in value-sanitization algorithm rejects an
+                    // in-progress "1." (not a complete floating-point number)
+                    // even on a scripted/React-driven value assignment,
+                    // silently reverting it to "" — losing exactly the
+                    // fractional entry this field needs to support. Validation
+                    // stays fully manual either way (see save()), so a plain
+                    // text field with a numeric keyboard hint is the honest fit.
+                    type={isMs ? 'text' : 'number'}
+                    inputMode="decimal"
+                    {...(isMs ? {} : { min: def.min, max: def.max })}
                     value={row?.value ?? ''}
                     disabled={row?.saving}
                     onChange={(e) => setRow(def.key, { value: e.target.value, error: null })}
                     onBlur={() => save(def)}
                     onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
                   />
-                  {isMs && <span id={`cc-set-${def.key}-unit`} className="cc-settings-unit">ms</span>}
+                  {isMs ? (
+                    <select
+                      id={`cc-set-${def.key}-unit`}
+                      className="cc-settings-unit-select"
+                      aria-label={`${def.label} unit`}
+                      value={unit}
+                      disabled={row?.saving}
+                      onChange={(e) => {
+                        const nextUnit = e.target.value as MsUnit
+                        const currentMs = Number.isFinite(typedValue) ? typedValue * MS_PER_UNIT[unit] : NaN
+                        setUnits((prev) => ({ ...prev, [def.key]: nextUnit }))
+                        if (Number.isFinite(currentMs)) setRow(def.key, { value: formatUnitValue(currentMs, nextUnit) })
+                      }}
+                    >
+                      <option value="min">minutes</option>
+                      <option value="hr">hours</option>
+                    </select>
+                  ) : null}
                 </div>
               </div>
             </div>

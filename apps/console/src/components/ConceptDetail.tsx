@@ -143,7 +143,7 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
                       <div key={`${d.layer}-${i}`} style={css('display:flex; align-items:flex-start; gap:9px; padding:10px 12px; background:#FBF0DD; border:1px solid #E8C88C; border-radius:9px;')}>
                         <svg style={{ flex: '0 0 auto', marginTop: 1 }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" strokeWidth="2.2" strokeLinecap="round"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></svg>
                         <div style={css('flex:1; font-size:12px; color:#5A3D12; line-height:1.45;')}>
-                          <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:1px 6px; border-radius:999px; background:#FFFFFF; color:${dc.text}; border:1px solid ${dc.strokeE}; margin-right:2px;`)}>{d.sourceLayer}</span> says <span style={{ color: 'var(--cc-amber-text2)' }}>"{d.value}"</span> — overridden here.
+                          <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:1px 6px; border-radius:999px; background:#FFFFFF; color:${dc.text}; margin-right:2px;`)}>{d.sourceLayer}</span> says <span style={{ color: 'var(--cc-amber-text2)' }}>"{d.value}"</span> — overridden here.
                         </div>
                         {d.updated && <span style={css(`flex:0 0 auto; font-family:${MONO}; font-size:10px; color:${C.amberText2};`)}>{d.updated}</span>}
                         <OpenFile layer={d.sourceLayer} path={fileFor(d.sourceLayer)} conceptId={concept.id} />

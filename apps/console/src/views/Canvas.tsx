@@ -1,17 +1,31 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { C, css, lc, MONO, type LayerId } from '../theme'
-import { layerLevel, layerName, layers, type Concept } from '../data'
+import { layerLevel, layerName, layers, type Concept, type Conflict } from '../data'
 import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
+import { ConflictQuickResolve } from '../components/ConflictQuickResolve'
 import { useStoreData } from '../store'
+
+// Statuses a conflict can still be acted on from — matches Overview.tsx's
+// "Needs Attention" actionable filter. A resolved/acknowledged conflict keeps
+// its badge read-only rather than offering dispositions that no longer apply.
+const ACTIONABLE_DISCREPANCY_STATUSES = new Set(['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'])
 
 // ---- layout constants (world coordinates) ----
 const NODE_W = 214, NODE_H = 96
 const GHOST_W = 196, GHOST_H = 66
 const GAP_X = 28, START_X = 138, END_X = 24
-const LANE_TOP = 60, LANE_H = 196, LANE_GAP = 16
-const LANE_INNER = LANE_H - LANE_GAP
-const NODE_DY = 46, GHOST_DY = 62
+const LANE_TOP = 60, LANE_GAP = 16
+// A lane no longer lays its nodes out in one ever-widening row — that made a
+// saturated lane's Fit shrink cards toward MIN_SCALE just to keep the whole
+// row on screen (see MAX_NODES_PER_LANE's derivation for the exact numbers
+// this replaced). Nodes wrap into a grid instead: a fixed number of columns,
+// as many rows as a lane needs, trading horizontal sprawl for lane height.
+const COLS_PER_ROW = 6
+const ROW_GAP_Y = 20
+// Vertical padding inside a lane box, and the gap between a lane's primary
+// row(s) and its ghost (dissent) row(s) when it has both.
+const LANE_PAD_TOP = 46, LANE_PAD_BOTTOM = 24, GHOST_BAND_GAP = 24
 
 // A real-DOM canvas with no virtualization: every node is a live element in
 // the pan/zoom transform, so a vault with thousands of concepts in one lane
@@ -19,27 +33,25 @@ const NODE_DY = 46, GHOST_DY = 62
 // rendered rather than let the browser choke on it — Knowledge (unpaginated,
 // list-based) is where the rest is still reachable.
 //
-// The cap is sized so a fully-saturated lane's Fit never needs to drop below
-// MIN_SCALE on a normal desktop viewport (see MIN_SCALE below for both
-// numbers' arithmetic) — a smaller cap than the DOM could technically still
-// render, chosen for legibility rather than raw capacity. The "Showing N of
-// M · Browse everything in Knowledge" banner already tells the user this is
-// a partial view, which is what makes a smaller cap honest rather than a
-// silent loss.
+// Grid-wrapping (above) moves the binding dimension from worldW to worldH: a
+// worst case of every concept landing in ONE lane (same reasoning as before —
+// nodes sharing a primary lane always conflict, so N nodes in a single lane
+// still cost N columns, just wrapped into ceil(N / COLS_PER_ROW) rows instead
+// of N side-by-side) makes worldH, not worldW, grow with N:
+//   pRows(N) = ceil(N / COLS_PER_ROW)
+//   worldH(N) = LANE_TOP + [LANE_PAD_TOP + pRows*NODE_H + (pRows-1)*ROW_GAP_Y + LANE_PAD_BOTTOM]
+//               + 2 * (LANE_GAP + LANE_PAD_TOP + LANE_PAD_BOTTOM)   // the other two lanes, empty
+// worldW is now bounded regardless of N (at most COLS_PER_ROW columns), so it
+// is never the constraint MIN_SCALE has to protect against.
 //
-// Worst case for layout is every concept landing in ONE lane: nodes that
-// share a primary lane always conflict (computeLayout never reuses a column
-// between two nodes with the same occupied-layer set), so N nodes in a
-// single lane cost N columns — there is no sharing to fall back on. That
-// makes worldW a function of N alone:
-//   worldW(N) = START_X + N*NODE_W + (N-1)*GAP_X + END_X = 134 + 242*N
-// Solving worldW(N) * MIN_SCALE <= (viewport width - 48) for the narrow end
-// of a normal desktop viewport (1280px, from the "~1280-1440px" range this
-// was measured against) gives N <= 24.9 — MAX_NODES_PER_LANE=25 lands at
-// scale 0.1992 (just under the floor); 24 lands at 0.2073, comfortably
-// above it at 1280px and with more room at 1440px. worldH is fixed at 648px
-// (3 lanes) regardless of N, so height is never the binding constraint here.
-export const MAX_NODES_PER_LANE = 24
+// This cap is deliberately NOT raised to the point where Fit would need
+// MIN_SCALE — it's a render-cost ceiling now (this is still a real-DOM canvas
+// with no virtualization), not a legibility floor. 60 (2.5x the old cap of
+// 24) keeps the DOM node increase modest while landing Fit at ~0.52 on a
+// 1280px-wide viewport even at its fully-saturated worst case (pRows=10,
+// worldH=1442, scale = 752/1442) — more than double the old cap's ~0.21,
+// comfortably clear of the floor with headroom to spare.
+export const MAX_NODES_PER_LANE = 60
 // The ONE floor shared by Fit and manual zoom (wheel / +/- controls). These
 // used to differ (Fit ~0, manual 0.1): a 3,000-concept vault's Fit landed at
 // scale 0.023 — cards rendered sub-pixel, the screenshot was a blank canvas
@@ -50,14 +62,15 @@ export const MAX_NODES_PER_LANE = 24
 // lower.
 //
 // Derivation: a card narrower than ~40 screen px reads as a sliver, not a
-// rectangle — at MAX_NODES_PER_LANE's fully-saturated worst case, NODE_W
-// (214px) needs to render at >= ~40px for the card to be a visible,
-// color-coded shape (border + lane accent) rather than noise:
+// rectangle — NODE_W (214px) needs to render at >= ~40px for the card to be a
+// visible, color-coded shape (border + lane accent) rather than noise:
 //   40 / 214 ≈ 0.187, rounded up to 0.2 for a clean shared constant.
-// With the cap above, a saturated lane's Fit lands at ~0.207-0.234 (see its
-// derivation) — comfortably above 0.2, so in practice Fit never needs the
-// floor at all; it exists purely as the shared backstop both Fit and manual
-// zoom respect, so neither can ever clamp past the other.
+// With grid-wrapping, MAX_NODES_PER_LANE's fully-saturated worst case lands
+// Fit at ~0.52 (see its derivation) — comfortably above 0.2, so in practice
+// Fit never needs the floor at all; it exists purely as the shared backstop
+// both Fit and manual zoom respect (and as the floor a shrunk browser window
+// can still legitimately hit — see computeFitScale's "crops rather than
+// shrinking" test), so neither can ever clamp past the other.
 export const MIN_SCALE = 0.2
 const MAX_SCALE = 2
 
@@ -65,8 +78,6 @@ const NUM = new Intl.NumberFormat()
 
 // lanes top→bottom: highest precedence (Personal) on top so "up = wins"
 const LANE_ORDER: LayerId[] = ['personal', 'team', 'company']
-const laneIndex = (id: LayerId) => LANE_ORDER.indexOf(id)
-const laneY = (i: number) => LANE_TOP + i * LANE_H
 const primaryLayer = (c: Concept): LayerId =>
   c.layers.slice().sort((a, b) => layerLevel(b) - layerLevel(a))[0]
 
@@ -101,8 +112,8 @@ export function capConceptsPerLane(concepts: Concept[], max = MAX_NODES_PER_LANE
   const byLane: Record<LayerId, Concept[]> = { company: [], team: [], personal: [] }
   // primaryLayer(c) is undefined for a concept with an empty `layers` array
   // (sort()[0] of []) despite its declared LayerId return type — a chaos
-  // input computeLayout already tolerates (it lays such a concept out off
-  // canvas via laneIndex's -1). Here it indexed straight into `byLane` and
+  // input computeLayout also tolerates (its own `primaryLayer(c) ?? 'company'`
+  // falls back the same way). Here it indexed straight into `byLane` and
   // called .push on the resulting undefined, unmounting the whole view.
   // Falling back to the company lane matches that existing tolerance.
   for (const c of concepts) (byLane[primaryLayer(c)] ?? byLane.company).push(c)
@@ -134,12 +145,16 @@ export function countByLane(concepts: Concept[]): Record<LayerId, number> {
 interface NodePos { c: Concept; x: number; y: number; conflict: boolean }
 interface GhostPos { key: string; parent: NodePos; layer: LayerId; value: string; x: number; y: number }
 
+export interface LaneGeometry { top: number; height: number }
+
 export function computeLayout(concepts: Concept[]) {
   // A concept occupies its winning lane plus every lane where it has a
   // dissent card. Reuse a column whenever those occupied lanes do not overlap;
-  // this keeps sparse cascades compact without allowing cards to collide.
+  // this keeps sparse cascades compact without allowing cards to collide. The
+  // column index is global (shared across lanes) — unchanged from before
+  // grid-wrapping — it's what a lane's rows are wrapped from below.
   const columnLayers: Array<Set<LayerId>> = []
-  const nodes: NodePos[] = concepts.map((c) => {
+  const assigned = concepts.map((c) => {
     const occupied = new Set<LayerId>([primaryLayer(c)])
     for (const section of c.sections) {
       for (const dissent of section.dissents ?? []) occupied.add(dissent.layer)
@@ -151,29 +166,88 @@ export function computeLayout(concepts: Concept[]) {
       columnLayers.push(new Set())
     }
     for (const layer of occupied) columnLayers[column].add(layer)
+    return { c, column }
+  })
+  const rowOf = (column: number) => Math.floor(column / COLS_PER_ROW)
+  const colOf = (column: number) => column % COLS_PER_ROW
 
-    const x = START_X + column * (NODE_W + GAP_X)
-    const y = laneY(laneIndex(primaryLayer(c))) + NODE_DY
+  // How many primary-node rows and ghost (dissent) rows each lane needs, from
+  // the column assignments above — a ghost keeps its parent's global column
+  // (so it stays x-aligned under the parent regardless of row), stacked in
+  // its own band below the lane's primary rows. Two concepts' occupied-lane
+  // sets always overlap when one dissents into the other's lane or a shared
+  // primary lane, so the column reservation above already guarantees a
+  // ghost's (lane, column) can never coincide with a primary node's there —
+  // stacking ghost rows after primary rows cannot introduce a new collision.
+  const primaryRows: Record<LayerId, number> = { personal: 0, team: 0, company: 0 }
+  const ghostRows: Record<LayerId, number> = { personal: 0, team: 0, company: 0 }
+  for (const { c, column } of assigned) {
+    // primaryLayer(c) is undefined for a concept with an empty `layers` array
+    // (sort()[0] of []) — falls back to company, matching capConceptsPerLane
+    // and countByLane's existing tolerance for the same chaos input.
+    const lane = primaryLayer(c) ?? 'company'
+    primaryRows[lane] = Math.max(primaryRows[lane], rowOf(column) + 1)
+    const seen = new Set<LayerId>()
+    for (const s of c.sections) {
+      for (const d of s.dissents ?? []) {
+        if (seen.has(d.layer)) continue
+        seen.add(d.layer)
+        ghostRows[d.layer] = Math.max(ghostRows[d.layer], rowOf(column) + 1)
+      }
+    }
+  }
+
+  // Stack lanes top→bottom, each sized to its own row counts rather than a
+  // fixed height — an empty or sparse lane no longer inherits a saturated
+  // one's height, and a saturated lane grows down instead of pushing worldW out.
+  const laneTop: Record<LayerId, number> = { personal: 0, team: 0, company: 0 }
+  const laneHeight: Record<LayerId, number> = { personal: 0, team: 0, company: 0 }
+  const primaryBandH: Record<LayerId, number> = { personal: 0, team: 0, company: 0 }
+  let cursor = LANE_TOP
+  for (const id of LANE_ORDER) {
+    const pRows = primaryRows[id], gRows = ghostRows[id]
+    const pBand = pRows > 0 ? pRows * NODE_H + (pRows - 1) * ROW_GAP_Y : 0
+    const gBand = gRows > 0 ? gRows * GHOST_H + (gRows - 1) * ROW_GAP_Y : 0
+    primaryBandH[id] = pBand
+    laneTop[id] = cursor
+    laneHeight[id] = LANE_PAD_TOP + pBand + (gRows > 0 ? GHOST_BAND_GAP + gBand : 0) + LANE_PAD_BOTTOM
+    cursor += laneHeight[id] + LANE_GAP
+  }
+  const worldH = cursor - LANE_GAP
+
+  const nodes: NodePos[] = assigned.map(({ c, column }) => {
+    const lane = primaryLayer(c) ?? 'company'
+    const x = START_X + colOf(column) * (NODE_W + GAP_X)
+    const y = laneTop[lane] + LANE_PAD_TOP + rowOf(column) * (NODE_H + ROW_GAP_Y)
     return { c, x, y, conflict: c.sections.some((s) => (s.dissents?.length ?? 0) > 0) }
   })
+
   const ghosts: GhostPos[] = []
-  for (const n of nodes) {
+  assigned.forEach(({ c, column }, i) => {
     const seen = new Set<LayerId>()
-    for (const s of n.c.sections) {
+    for (const s of c.sections) {
       for (const d of s.dissents ?? []) {
         if (seen.has(d.layer)) continue
         seen.add(d.layer)
         ghosts.push({
-          key: `${n.c.id}:${d.layer}`, parent: n, layer: d.layer, value: d.value,
-          x: n.x + (NODE_W - GHOST_W) / 2, y: laneY(laneIndex(d.layer)) + GHOST_DY,
+          key: `${c.id}:${d.layer}`, parent: nodes[i], layer: d.layer, value: d.value,
+          x: START_X + colOf(column) * (NODE_W + GAP_X) + (NODE_W - GHOST_W) / 2,
+          y: laneTop[d.layer] + LANE_PAD_TOP + primaryBandH[d.layer] + GHOST_BAND_GAP + rowOf(column) * (GHOST_H + ROW_GAP_Y),
         })
       }
     }
+  })
+
+  // worldW is bounded at COLS_PER_ROW columns regardless of N (fewer when the
+  // cascade is sparse, so a small cascade carries no dead whitespace).
+  const colsUsed = Math.min(Math.max(1, columnLayers.length), COLS_PER_ROW)
+  const worldW = START_X + colsUsed * NODE_W + Math.max(0, colsUsed - 1) * GAP_X + END_X
+  const lanes: Record<LayerId, LaneGeometry> = {
+    personal: { top: laneTop.personal, height: laneHeight.personal },
+    team: { top: laneTop.team, height: laneHeight.team },
+    company: { top: laneTop.company, height: laneHeight.company },
   }
-  const columns = Math.max(1, columnLayers.length)
-  const worldW = START_X + columns * NODE_W + Math.max(0, columns - 1) * GAP_X + END_X
-  const worldH = laneY(LANE_ORDER.length - 1) + LANE_H
-  return { nodes, ghosts, worldW, worldH }
+  return { nodes, ghosts, worldW, worldH, lanes }
 }
 
 /** Cubic bezier between two vertically-separated anchor points. */
@@ -190,7 +264,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   // there is no separate ghost list to cap.
   const capped = useMemo(() => capConceptsPerLane(concepts), [concepts])
   // Memoized: pan/zoom re-renders every pointermove — don't re-lay-out for those.
-  const { nodes, ghosts, worldW, worldH } = useMemo(() => computeLayout(capped.concepts), [capped.concepts])
+  const { nodes, ghosts, worldW, worldH, lanes } = useMemo(() => computeLayout(capped.concepts), [capped.concepts])
   // Full counts, not the capped subset — the lane header's "N concepts" stays
   // an honest total even while the canvas itself only renders some of them.
   const laneCounts = useMemo(() => countByLane(concepts), [concepts])
@@ -209,6 +283,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   const [view, setViewT] = useState({ tx: 40, ty: 20, scale: 1 })
   const [openId, setOpenId] = useState<string | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
+  const [quickResolve, setQuickResolve] = useState<{ conflict: Conflict; anchorEl: HTMLElement } | null>(null)
   const [dragging, setDragging] = useState(false)
   const [wideInspector, setWideInspector] = useState(false)
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null)
@@ -277,9 +352,15 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
     setOpenId(null)
     requestAnimationFrame(() => inspectorOpener.current?.focus())
   }
-  const openConflictFor = (conceptId: string) => {
+  const openConflictFor = (conceptId: string, anchorEl: HTMLElement) => {
     const cf = conflicts.find((c) => c.concept === conceptId)
-    if (cf) { setSelConflict(cf.id); setView('conflicts') }
+    if (!cf) return
+    const status = cf.discrepancyStatus ?? (cf.status === 'open' ? 'needs_review' : 'resolved')
+    if (ACTIONABLE_DISCREPANCY_STATUSES.has(status)) {
+      setQuickResolve({ conflict: cf, anchorEl })
+    } else {
+      setSelConflict(cf.id); setView('conflicts')
+    }
   }
 
   // Escape closes the node slide-over.
@@ -332,7 +413,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
               each lane, not the static trio (F3): a level-1 source that ranks
               into 'team' should say so, and two sources sharing a lane should
               both be named rather than only the lane's generic blurb. */}
-          {LANE_ORDER.map((id, i) => {
+          {LANE_ORDER.map((id) => {
             const L = layers.find((l) => l.id === id)!
             const col = lc(id)
             const rows = laneSourceRows[id]
@@ -342,10 +423,10 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
             const primary = conventional || rows.length === 0 ? L.name : `L${levels.join('/')}`
             const detail = rows.length ? rows.map((r) => r.name).join(', ') : L.members
             return (
-              <div key={id} style={{ position: 'absolute', left: 0, top: laneY(i), width: worldW, height: LANE_INNER }}>
+              <div key={id} style={{ position: 'absolute', left: 0, top: lanes[id].top, width: worldW, height: lanes[id].height }}>
                 <div style={css(`position:absolute; inset:0; background:var(--cc-lane-bg); border:1px solid var(--cc-lane-line); border-radius:16px;`)} />
                 <div style={css(`position:absolute; left:18px; top:14px; display:flex; align-items:center; gap:10px;`)}>
-                  <span style={css(`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${C.raised}; border:2px solid ${col.strokeE}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:12px;`)}>{badgeText}</span>
+                  <span style={css(`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${col.fill}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:12px;`)}>{badgeText}</span>
                   <div style={{ lineHeight: 1.15 }}>
                     <div style={css(`font-size:13px; font-weight:600; color:${col.text};`)}>{primary}</div>
                     <div style={css(`font-size:10.5px; color:${C.caption}; font-family:${MONO};`)}>{detail} · {laneCounts[id]} concept{laneCounts[id] === 1 ? '' : 's'}</div>
@@ -380,7 +461,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
               <button
                 key={g.key}
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => openConflictFor(g.parent.c.id)}
+                onClick={(event) => openConflictFor(g.parent.c.id, event.currentTarget)}
                 onMouseEnter={() => setHoverId(g.parent.c.id)}
                 onMouseLeave={() => setHoverId(null)}
                 title="Layers disagree — open the conflict"
@@ -405,16 +486,27 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
               <button
                 key={n.c.id}
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={(event) => openConcept(n.c, event.currentTarget)}
+                onClick={(event) => {
+                  // The conflict badge is a click hit-region within this single
+                  // button, not a nested interactive element (a <button> cannot
+                  // validly contain another one) — a mouse click there opens the
+                  // quick-resolve popover directly; everyone else (including
+                  // keyboard/screen-reader users) still reaches resolution
+                  // through the concept detail's "Layers disagree here" button,
+                  // so this is a mouse-only shortcut, not the only path.
+                  const badge = (event.target as HTMLElement).closest<HTMLElement>('[data-role="conflict-badge"]')
+                  if (badge && n.conflict) { openConflictFor(n.c.id, badge); return }
+                  openConcept(n.c, event.currentTarget)
+                }}
                 onMouseEnter={() => setHoverId(n.c.id)}
                 onMouseLeave={() => setHoverId(null)}
                 aria-label={`${n.c.title} — ${layerName(primaryLayer(n.c))}${n.conflict ? ', has conflict' : n.c.draft ? ', draft' : ''}`}
                 style={{ position: 'absolute', left: n.x, top: n.y, width: NODE_W, height: NODE_H, boxShadow: glow, ...css(`display:flex; flex-direction:column; gap:0; text-align:left; padding:12px 14px; background:${C.raised}; border:1px solid ${selected ? col.strokeE : C.line}; border-left:3px solid ${col.strokeE}; border-radius:12px; cursor:pointer; font:inherit;`) }}
               >
                 <div style={css('display:flex; align-items:center; gap:8px;')}>
-                  <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 7px; border-radius:6px; color:${col.text}; border:1px solid ${col.strokeE}; background:${col.fill};`)}>{n.c.type}</span>
+                  <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 7px; border-radius:6px; color:${col.text}; background:${col.fill};`)}>{n.c.type}</span>
                   {n.conflict && (
-                    <span style={css(`display:inline-flex; align-items:center; gap:4px; margin-left:auto; font-size:9.5px; font-weight:600; color:${C.amberText};`)}>
+                    <span data-role="conflict-badge" title="Layers disagree — click to resolve" style={css(`display:inline-flex; align-items:center; gap:4px; margin-left:auto; font-size:9.5px; font-weight:600; color:${C.amberText}; cursor:pointer;`)}>
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></svg>conflict
                     </span>
                   )}
@@ -488,7 +580,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
             <div style={css('flex:1; overflow-y:auto; padding:6px 22px 22px;')}>
               <ConceptDetail concept={openConceptObj} />
               {openHasConflict && (
-                <button className="cc-h-bd-amber2" onClick={() => openConflictFor(openConceptObj.id)} style={css('display:flex; align-items:center; gap:9px; width:100%; margin-top:18px; padding:12px 14px; background:#FBF0DD; border:1px solid #D69A3F; border-radius:10px; cursor:pointer; font:inherit; text-align:left;')}>
+                <button className="cc-h-bd-amber2" onClick={(event) => openConflictFor(openConceptObj.id, event.currentTarget)} style={css('display:flex; align-items:center; gap:9px; width:100%; margin-top:18px; padding:12px 14px; background:#FBF0DD; border:1px solid #D69A3F; border-radius:10px; cursor:pointer; font:inherit; text-align:left;')}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" strokeWidth="2" strokeLinecap="round"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></svg>
                   <span style={css('flex:1; font-size:12.5px; color:#5A3D12; line-height:1.35;')}><strong style={css('font-weight:600;')}>Layers disagree here.</strong> Open the resolver.</span>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" strokeWidth="2" strokeLinecap="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
@@ -497,6 +589,19 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
             </div>
           </aside>
         </div>
+      )}
+
+      {quickResolve && (
+        <ConflictQuickResolve
+          conflict={quickResolve.conflict}
+          anchorEl={quickResolve.anchorEl}
+          onClose={() => setQuickResolve(null)}
+          onOpenFullResolver={() => {
+            setSelConflict(quickResolve.conflict.id)
+            setView('conflicts')
+            setQuickResolve(null)
+          }}
+        />
       )}
     </div>
   )

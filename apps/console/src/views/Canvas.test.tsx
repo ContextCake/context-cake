@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Concept } from '../data'
+import type { Concept, Conflict } from '../data'
 import { capConceptsPerLane, clampZoom, computeFitScale, computeLayout, countByLane, MAX_NODES_PER_LANE, MIN_SCALE } from './Canvas'
 
 function concept(id: string, layer: Concept['layers'][number], dissent?: Concept['layers'][number]): Concept {
@@ -33,6 +33,61 @@ describe('computeLayout', () => {
     expect(positions['team-b']).not.toBe(positions['team-a'])
     expect(positions['company-b']).toBe(positions['team-b'])
     expect(layout.ghosts[0]?.x).toBe(positions['personal-with-company-dissent'] + 9)
+  })
+
+  it('wraps a lane past COLS_PER_ROW into a second row instead of widening worldW forever', () => {
+    // 7 same-lane, dissent-free concepts always cost 7 distinct global
+    // columns (same reasoning MAX_NODES_PER_LANE's derivation relies on) —
+    // with COLS_PER_ROW=6 that's 6 in row 0, 1 alone in row 1.
+    const seven = Array.from({ length: 7 }, (_, i) => concept(`p-${i}`, 'personal'))
+    const layout = computeLayout(seven)
+    const ys = [...new Set(layout.nodes.map((n) => n.y))]
+    expect(ys).toHaveLength(2)
+    // worldW stays bounded at COLS_PER_ROW columns — it must NOT keep growing
+    // with N the way the old single-row layout did.
+    const sixColumns = computeLayout(Array.from({ length: 6 }, (_, i) => concept(`q-${i}`, 'personal'))).worldW
+    expect(layout.worldW).toBe(sixColumns)
+  })
+
+  it('stacks ghost rows below a lane\'s own primary rows, never overlapping them', () => {
+    // A concept that owns the company lane directly, plus 8 team concepts
+    // that each dissent into company — every one of the 8 needs its own
+    // global column (their occupied-lane set {team, company} always overlaps
+    // another {team, company} concept's), so company's ghost band wraps into
+    // 2 rows while its primary band (the one company-native concept) is 1.
+    const concepts = [
+      concept('company-own', 'company'),
+      ...Array.from({ length: 8 }, (_, i) => concept(`team-${i}`, 'team', 'company')),
+    ]
+    const layout = computeLayout(concepts)
+    const companyPrimary = layout.nodes.find((n) => n.c.id === 'company-own')!
+    const companyGhosts = layout.ghosts.filter((g) => g.layer === 'company')
+    expect(companyGhosts).toHaveLength(8)
+    expect(new Set(companyGhosts.map((g) => g.y)).size).toBe(2) // wrapped into 2 ghost rows
+    for (const g of companyGhosts) expect(g.y).toBeGreaterThan(companyPrimary.y)
+  })
+
+  it('collapses an empty lane to its padding rather than inheriting a saturated lane\'s height', () => {
+    const layout = computeLayout(Array.from({ length: 12 }, (_, i) => concept(`p-${i}`, 'personal')))
+    // team and company have zero nodes and zero ghosts here — same minimal
+    // height regardless of how tall the saturated personal lane grew.
+    expect(layout.lanes.team.height).toBe(layout.lanes.company.height)
+    expect(layout.lanes.team.height).toBeLessThan(layout.lanes.personal.height)
+  })
+
+  it('keeps a shared global column x-aligned across lanes even though each lane wraps its own rows independently', () => {
+    // personal and team never share an occupied lane, so 8 personal-only and
+    // 8 team-only concepts (interleaved) reuse the SAME 8 global columns —
+    // same x per corresponding index in both lanes, even though each lane's
+    // OWN row heights differ from what the other lane computed for itself.
+    const concepts: Concept[] = []
+    for (let i = 0; i < 8; i += 1) {
+      concepts.push(concept(`personal-${i}`, 'personal'))
+      concepts.push(concept(`team-${i}`, 'team'))
+    }
+    const layout = computeLayout(concepts)
+    const byId = Object.fromEntries(layout.nodes.map((n) => [n.c.id, n.x]))
+    for (let i = 0; i < 8; i += 1) expect(byId[`personal-${i}`]).toBe(byId[`team-${i}`])
   })
 })
 
@@ -263,6 +318,94 @@ describe('the canvas legend', () => {
     expect(legend!.style.getPropertyValue('backdrop-filter')).toBe('blur(10px)')
     // An opaque background would make the blur pointless even if it survived.
     expect(legend!.style.getPropertyValue('background')).toBe('var(--cc-header-bg)')
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+})
+
+describe('inline conflict quick-resolve', () => {
+  afterEach(() => {
+    vi.doUnmock('../store')
+    vi.resetModules()
+  })
+
+  const CONFLICTED = concept('doc-a', 'personal', 'company')
+  const CONFLICT_RECORD: Conflict = {
+    id: 'cf1', concept: 'doc-a', sectionKey: 'summary', section: 'summary', title: 'doc-a',
+    status: 'open', winner: 'personal', safe: true, history: [],
+    contributions: [
+      { layer: 'personal', sourceLayer: 'personal', value: 'doc-a', updated: '' },
+      { layer: 'company', sourceLayer: 'company', value: 'doc-a-dissent', updated: '' },
+    ],
+    discrepancyStatus: 'needs_review',
+    revision: 'r1',
+  }
+
+  async function renderWithConflict(decideDiscrepancy: ReturnType<typeof vi.fn>, conflict: Conflict = CONFLICT_RECORD) {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const state = {
+        mode: 'live', concepts: [CONFLICTED], conflicts: [conflict], sources: [],
+        setSelConcept: noop, setSelConflict: noop, setView: noop,
+        decideDiscrepancy, resolvingConflict: null, resolutionError: null,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+    return { container, root, act }
+  }
+
+  it('opens a resolve popover from the ghost card instead of navigating away, for an actionable conflict', async () => {
+    const decideDiscrepancy = vi.fn(async () => {})
+    const { container, root, act } = await renderWithConflict(decideDiscrepancy)
+
+    const ghost = Array.from(container.querySelectorAll('button')).find((b) => b.getAttribute('title') === 'Layers disagree — open the conflict')
+    expect(ghost, 'ghost card not found').toBeTruthy()
+    await act(async () => ghost!.click())
+
+    expect(container.textContent).toContain('Use personal’s answer everywhere')
+    expect(container.textContent).toContain('Use company’s answer everywhere')
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('resolves via decideDiscrepancy when a contribution is chosen, and closes', async () => {
+    const decideDiscrepancy = vi.fn(async () => {})
+    const { container, root, act } = await renderWithConflict(decideDiscrepancy)
+
+    const ghost = Array.from(container.querySelectorAll('button')).find((b) => b.getAttribute('title') === 'Layers disagree — open the conflict')
+    await act(async () => ghost!.click())
+    const useCompany = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.startsWith('Use company’s answer everywhere'))
+    await act(async () => { useCompany!.click() })
+
+    expect(decideDiscrepancy).toHaveBeenCalledWith({ discrepancyId: 'cf1', revision: 'r1', action: 'choose_contribution', selectedSource: 'company' })
+    expect(container.textContent).not.toContain('Open full resolver')
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('leaves a resolved/acknowledged conflict on the navigate-to-Review path instead of offering dispositions', async () => {
+    const decideDiscrepancy = vi.fn(async () => {})
+    const resolved: Conflict = { ...CONFLICT_RECORD, discrepancyStatus: 'resolved', status: 'resolved' }
+    const { container, root, act } = await renderWithConflict(decideDiscrepancy, resolved)
+
+    const ghost = Array.from(container.querySelectorAll('button')).find((b) => b.getAttribute('title') === 'Layers disagree — open the conflict')
+    await act(async () => ghost!.click())
+
+    expect(container.textContent).not.toContain('Use personal’s answer everywhere')
 
     await act(async () => root.unmount())
     container.remove()

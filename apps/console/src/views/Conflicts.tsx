@@ -4,6 +4,7 @@ import type { AcknowledgementReason, DiscrepancyStatus } from '../types'
 import { Markdown } from '../components/Markdown'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import { useDetailSurface } from '../components/useDetailSurface'
+import { reasonOptionsFor } from '../conflict-reasons'
 
 const STATUS_LABEL: Record<DiscrepancyStatus, string> = {
   needs_review: 'Needs review', reopened: 'Needs review', recommended: 'Recommendations',
@@ -13,17 +14,6 @@ const KIND_LABEL: Record<string, string> = {
   section_content: 'Section content', frontmatter_value: 'Frontmatter value',
   broken_link: 'Broken link', changed_after_decision: 'Changed after decision',
 }
-const REASONS: { value: AcknowledgementReason; label: string }[] = [
-  { value: 'different_scopes', label: 'Different scopes' },
-  { value: 'temporary_migration', label: 'Temporary migration' },
-  { value: 'source_specific_authority', label: 'Source-specific authority' },
-  { value: 'other', label: 'Other' },
-]
-// Broken-link-only: acknowledging why a link target doesn't exist yet is a
-// distinct reason from the general four above. The engine's allowedReasons
-// set (service.mjs) already accepts this value — verified before adding it
-// here, since the UI must never offer a reason the API would 400.
-const TARGET_MISSING_REASON: { value: AcknowledgementReason; label: string } = { value: 'target_missing', label: 'Target not created yet' }
 
 function formatDate(value?: string | null) {
   if (!value) return 'Date not recorded'
@@ -163,9 +153,7 @@ function DecisionPanel({ conflict, onClose }: { conflict: Conflict; onClose: () 
   const isFrontmatterValue = conflict.kind === 'frontmatter_value'
   const winningSource = conflict.effectiveSource ?? conflict.contributions[0]?.sourceLayer ?? null
   const winningValue = conflict.contributions.find((item) => item.sourceLayer === winningSource)?.value
-  const reasonOptions = conflict.kind === 'broken_link'
-    ? [...REASONS.slice(0, -1), TARGET_MISSING_REASON, REASONS[REASONS.length - 1]]
-    : REASONS
+  const reasonOptions = reasonOptionsFor(conflict.kind)
 
   useEffect(() => {
     setAction('choose_contribution')

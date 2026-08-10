@@ -43,6 +43,25 @@ it('shows a calm resolved state when nothing needs review', async () => {
   expect(container.textContent).toContain('Nothing needs review')
 })
 
+// The MCP connect entry point only exists where App.tsx wires it in (desktop
+// mode) — Overview must stay silent about it otherwise rather than offering a
+// dead button.
+it('offers no agent-connect entry point when onConnectAgent is not supplied', async () => {
+  mocks.useStore.mockReturnValue({ mode: 'demo', setView: mocks.setView, signals: [], conflicts: [], sources: [], concepts: [], activity: [], loadErrors: [] })
+  await act(async () => root.render(<Overview />))
+  expect(container.textContent).not.toContain('Connect an agent')
+})
+
+it('surfaces a prominent Connect an agent CTA when onConnectAgent is supplied', async () => {
+  mocks.useStore.mockReturnValue({ mode: 'demo', setView: mocks.setView, signals: [], conflicts: [], sources: [], concepts: [], activity: [], loadErrors: [] })
+  const onConnectAgent = vi.fn()
+  await act(async () => root.render(<Overview onConnectAgent={onConnectAgent} />))
+  const cta = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Connect an agent')
+  expect(cta).toBeDefined()
+  await act(async () => cta?.click())
+  expect(onConnectAgent).toHaveBeenCalledOnce()
+})
+
 // F3: the Cascade summary used to render the static company/team/personal
 // blurb and level no matter what actually fed a lane. A level-1 source with
 // no name matching its lane should read as itself — its real name and level —

@@ -187,6 +187,10 @@ function matchRules(item, rules) {
     && rule.match?.kind === item.kind
     && rule.match?.conceptType === item.conceptType
     && rule.match?.key === item.key
+    // A broken_link rule is pinned to the exact target it was evidenced
+    // against — matching by section alone would auto-acknowledge any other
+    // dangling link that happens to share a concept type and section.
+    && (item.kind !== "broken_link" || rule.match?.target === item.target)
     && [...(rule.match?.sources ?? [])].sort().join("|") === sources);
   const actions = new Set(matches.map((rule) => stable(rule.action)));
   return { rules: matches, conflict: actions.size > 1 };

@@ -1960,6 +1960,12 @@ export function createEngineService({
       learningPattern: {
         kind: originalKind, conceptType: discrepancy.conceptType, key: discrepancy.key,
         sources: discrepancy.contributions.map((item) => item.source).sort(),
+        // A broken link's identity IS the missing target — unlike section_content/
+        // frontmatter_value, where the same key across many concepts of a type is a
+        // meaningful pattern, generalizing a broken-link rule across targets would
+        // auto-acknowledge a future, unrelated dangling link (e.g. a typo) that was
+        // never reviewed. Scope broken_link evidence to the exact target.
+        ...(originalKind === "broken_link" ? { target: discrepancy.target } : {}),
       },
       ruleAction: action === "choose_contribution"
         ? { type: "prefer_source", source: selectedSource }

@@ -116,15 +116,32 @@ export function suggestDiscrepancyRules(decisions, existing = []) {
 function validateRule(rule) {
   if (!rule || typeof rule.id !== "string" || !rule.match || !rule.action) throw new Error("Invalid discrepancy rule");
   if (rule.mode !== "recommend" && rule.mode !== "automatic") throw new Error("Invalid discrepancy rule mode");
-  const { kind, conceptType, key, sources } = rule.match;
-  if (!["section_content", "frontmatter_value"].includes(kind)
+  const { kind, conceptType, key, sources, target } = rule.match;
+  const isBrokenLink = kind === "broken_link";
+  // A broken link has exactly one contributing source (the section that
+  // links out) rather than two-plus contributors disagreeing, so it can't
+  // meet the multi-source minimum the content-conflict kinds require.
+  const minSources = isBrokenLink ? 1 : 2;
+  if (!["section_content", "frontmatter_value", "broken_link"].includes(kind)
     || typeof conceptType !== "string" || !conceptType
     || typeof key !== "string" || !key
-    || !Array.isArray(sources) || sources.length < 2
+    || !Array.isArray(sources) || sources.length < minSources
     || sources.some((source) => typeof source !== "string" || !source)) {
     throw new Error("Invalid discrepancy rule match");
   }
+  // A broken link's identity IS the missing target, unlike section_content/
+  // frontmatter_value where the same key recurring across concepts of a type
+  // is itself the meaningful pattern. Without pinning the target, a rule
+  // would auto-acknowledge any future, unrelated dangling link in that
+  // section — including a genuine typo nobody has reviewed.
+  if (isBrokenLink && (typeof target !== "string" || !target)) throw new Error("A broken-link rule must name the missing target");
+  if (!isBrokenLink && target !== undefined) throw new Error("Only a broken-link rule may name a target");
   if (rule.action.type === "prefer_source") {
+    // service.mjs 409s a prefer_source (choose_contribution) decision against
+    // a broken_link discrepancy — there's no alternate source to prefer, only
+    // the one dangling link — so a rule offering it would validate here and
+    // then never be able to auto-apply.
+    if (isBrokenLink) throw new Error("A broken link has no source to prefer — acknowledge it instead");
     if (typeof rule.action.source !== "string" || !sources.includes(rule.action.source)) throw new Error("Invalid preferred source");
   } else if (rule.action.type === "acknowledge") {
     if (!["different_scopes", "temporary_migration", "source_specific_authority", "target_missing", "other"].includes(rule.action.reasonCode)) {
@@ -138,7 +155,7 @@ function validateRule(rule) {
   return {
     id: rule.id, scope: rule.scope === "team" ? "team" : "local",
     mode: rule.mode, enabled: rule.enabled !== false,
-    match: { kind, conceptType, key, sources: [...new Set(sources)].sort() },
+    match: { kind, conceptType, key, sources: [...new Set(sources)].sort(), ...(isBrokenLink ? { target } : {}) },
     action: rule.action.type === "prefer_source"
       ? { type: "prefer_source", source: rule.action.source }
       : { type: "acknowledge", reasonCode: rule.action.reasonCode },

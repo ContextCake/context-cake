@@ -288,7 +288,7 @@ export interface DiscrepancyRule {
   scope: 'local' | 'team'
   mode: 'recommend' | 'automatic'
   enabled: boolean
-  match: { kind: DiscrepancyKind; conceptType: string; key: string; sources: string[] }
+  match: { kind: DiscrepancyKind; conceptType: string; key: string; sources: string[]; target?: string }
   action: { type: 'prefer_source'; source: string } | { type: 'acknowledge'; reasonCode: AcknowledgementReason }
   evidenceDecisionIds: string[]
 }

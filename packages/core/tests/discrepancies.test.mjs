@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildDiscrepancies, discrepancyRevision, fingerprint } from "../src/discrepancies.mjs";
-import { serializeRuleDocument, suggestDiscrepancyRules } from "../src/discrepancy-rules.mjs";
+import { parseRuleDocument, serializeRuleDocument, suggestDiscrepancyRules } from "../src/discrepancy-rules.mjs";
 import { mergeConcepts } from "../src/resolver.mjs";
 
 const concept = {
@@ -205,6 +205,67 @@ test("active-discrepancy decoration still finds a decision by its legacy id", ()
   const result = buildDiscrepancies([concept], { decisions, coverageComplete: false });
   const section = result.discrepancies.find((item) => item.originalKind === "section_content");
   assert.equal(section.status, "acknowledged");
+});
+
+test("a broken_link rule accepts its single contributing source, requires a pinned target, and only the acknowledge action", () => {
+  const rule = {
+    id: "r1", scope: "team", mode: "automatic", enabled: true,
+    match: { kind: "broken_link", conceptType: "decision", key: "choice", sources: ["team"], target: "runbooks/missing" },
+    action: { type: "acknowledge", reasonCode: "target_missing" }, evidenceDecisionIds: ["d1", "d2", "d3"],
+  };
+  const [parsed] = parseRuleDocument(serializeRuleDocument([rule]));
+  assert.deepEqual(parsed.match, rule.match);
+  assert.deepEqual(parsed.action, rule.action);
+  assert.throws(() => serializeRuleDocument([{ ...rule, action: { type: "prefer_source", source: "team" } }]),
+    /has no source to prefer/);
+  assert.throws(() => serializeRuleDocument([{ ...rule, match: { ...rule.match, sources: [] } }]),
+    /Invalid discrepancy rule match/);
+  // The target is what makes a broken-link rule safe to automate — omitting
+  // it (or supplying it for a content-conflict kind) is rejected outright.
+  assert.throws(() => serializeRuleDocument([{ ...rule, match: { ...rule.match, target: undefined } }]),
+    /must name the missing target/);
+  assert.throws(() => serializeRuleDocument([{
+    id: "r2", scope: "team", mode: "recommend", enabled: true,
+    match: { kind: "section_content", conceptType: "decision", key: "choice", sources: ["company", "team"], target: "irrelevant" },
+    action: { type: "prefer_source", source: "team" },
+  }]), /Only a broken-link rule may name a target/);
+});
+
+test("an automatic broken_link acknowledge rule matches its exact target and marks the link auto_ready", () => {
+  const rules = [{
+    id: "r1", scope: "team", mode: "automatic", enabled: true,
+    match: { kind: "broken_link", conceptType: "decision", key: "choice", sources: ["team"], target: "runbooks/missing" },
+    action: { type: "acknowledge", reasonCode: "target_missing" },
+  }];
+  const link = buildDiscrepancies([concept], { rules, coverageComplete: true })
+    .discrepancies.find((item) => item.kind === "broken_link");
+  assert.equal(link.status, "auto_ready");
+  assert.equal(link.ruleConflict, false);
+  assert.equal(link.matchingRules[0].action.reasonCode, "target_missing");
+});
+
+test("a broken_link rule pinned to one target does not swallow a different dangling link in the same section", () => {
+  // Two concepts, same conceptType/key/source, but different missing
+  // targets — a rule evidenced against the first must not silently
+  // auto-acknowledge the second, unreviewed one (the failure mode a
+  // target-blind match would produce: a typo'd link never surfaces).
+  const otherConcept = {
+    ...concept, id: "decisions/other",
+    sections: [{ ...concept.sections[0], content: "Use Postgres. See [[runbooks/typo]].", conflicts: [] }],
+    frontmatterConflicts: [],
+  };
+  const rules = [{
+    id: "r1", scope: "team", mode: "automatic", enabled: true,
+    match: { kind: "broken_link", conceptType: "decision", key: "choice", sources: ["team"], target: "runbooks/missing" },
+    action: { type: "acknowledge", reasonCode: "target_missing" },
+  }];
+  const links = buildDiscrepancies([concept, otherConcept], { rules, coverageComplete: true })
+    .discrepancies.filter((item) => item.kind === "broken_link");
+  const matched = links.find((item) => item.target === "runbooks/missing");
+  const unrelated = links.find((item) => item.target === "runbooks/typo");
+  assert.equal(matched.status, "auto_ready");
+  assert.equal(unrelated.status, "needs_review");
+  assert.equal(unrelated.matchingRules.length, 0);
 });
 
 test("serialized shared rules contain structural metadata only", () => {

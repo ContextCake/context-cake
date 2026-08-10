@@ -418,7 +418,7 @@ export function App() {
               </main>
             ) : (
               <main className="cc-main">
-                {view === 'overview' && <Overview />}
+                {view === 'overview' && <Overview onConnectAgent={isDesktop ? openConnect : undefined} />}
                 {view === 'sources' && <Sources onAddSource={mode === 'live' ? reopenWizard : undefined} />}
                 {view === 'triage' && <Triage />}
                 {view === 'conflicts' && <Conflicts />}

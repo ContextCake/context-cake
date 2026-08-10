@@ -29,15 +29,19 @@ export const SETTING_DEFS = {
     help: "How many files and folders ContextCake will look through while searching for documents. Raise this for deep folder trees.",
   },
   sourceBudgetMs: {
-    // Two minutes, not thirty seconds. The old default was set against test
-    // corpora and cost real users their real vaults: a large folder on iCloud
-    // or Dropbox spends most of its first index waiting on the file provider,
-    // trips the budget, and comes back as an error row that reads like a bug in
-    // the app rather than "this took a while". Indexing is background work that
-    // nothing blocks on, so a longer ceiling costs patience, not responsiveness.
-    default: 120_000,
+    // Thirty minutes, not two. Two minutes was already a step up from the
+    // original thirty-second default (set against test corpora), but it's
+    // still not enough for a real personal vault: a large knowledge graph on
+    // iCloud or Dropbox can spend most of its first index waiting on the file
+    // provider alone, trips the budget, and comes back as an error row that
+    // reads like a bug in the app rather than "this took a while". Indexing is
+    // background work that nothing blocks on, so a longer ceiling costs
+    // patience, not responsiveness. The max is raised to 2 hours alongside it
+    // so the settings UI has headroom above the new default, not a ceiling
+    // just above it.
+    default: 1_800_000,
     min: 1_000,
-    max: 600_000,
+    max: 7_200_000,
     env: "CONTEXTCAKE_SOURCE_BUDGET_MS",
     label: "Time budget per source",
     help: "How long one source may take to index before it is marked unavailable. Raise if a large vault on cloud storage times out.",

@@ -122,11 +122,15 @@ describe('IndexingSettings', () => {
     expect(container.textContent).toContain('running ContextCake engine')
   })
 
-  it('labels a millisecond setting with its unit and a human-scale reading, and leaves a count setting alone', async () => {
+  it('labels a millisecond setting with a minutes/hours picker and a human-scale reading, and leaves a count setting alone', async () => {
     await act(async () => root.render(<IndexingSettings />))
 
-    // sourceBudgetMs (30000 in the default payload): unitless before this fix.
-    expect(field('sourceBudgetMs').nextElementSibling?.textContent).toBe('ms')
+    // sourceBudgetMs (30000 in the default payload, sub-minute): edited in
+    // minutes, so the field shows 0.5, next to a unit <select> (not a plain "ms" label).
+    const unitSelect = field('sourceBudgetMs').nextElementSibling as HTMLSelectElement
+    expect(unitSelect.tagName).toBe('SELECT')
+    expect(unitSelect.value).toBe('min')
+    expect(field('sourceBudgetMs').value).toBe('0.5')
     expect(container.textContent).toContain('30000 ms = 30 sec')
 
     // maxDocFiles is a count, not a duration — no unit, no invented reading.
@@ -134,10 +138,11 @@ describe('IndexingSettings', () => {
     expect(container.textContent).not.toContain('10000 ms')
   })
 
-  it('updates the human-scale reading as the field is edited', async () => {
+  it('updates the human-scale reading as the field is edited, converting from the displayed unit to ms', async () => {
     await act(async () => root.render(<IndexingSettings />))
 
-    await type(field('sourceBudgetMs'), '120000')
+    // Typed in minutes (the field's unit): 2 min => 120000 ms underneath.
+    await type(field('sourceBudgetMs'), '2')
     expect(container.textContent).toContain('120000 ms = 2 min')
   })
 })

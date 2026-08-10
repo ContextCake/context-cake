@@ -152,7 +152,7 @@ function LiveMarker() {
   return (
     <span
       title="This layer captures and shares team context. Removing or renaming it disables team capture for this machine."
-      style={css(`display:inline-flex; align-items:center; gap:5px; font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:${C.amberFill}; color:${C.amberText}; border:1px solid ${C.amberStroke};`)}
+      style={css(`display:inline-flex; align-items:center; gap:5px; font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:${C.amberFill}; color:${C.amberText};`)}
     >
       <span aria-hidden="true" style={css(`width:5px; height:5px; border-radius:999px; background:${C.amberStrokeE};`)} />
       live team layer

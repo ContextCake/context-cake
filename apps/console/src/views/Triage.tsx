@@ -87,7 +87,7 @@ function TriageInner() {
                 </div>
                 <div style={css('display:flex; align-items:center; gap:10px; margin-top:11px; padding-top:11px; border-top:1px solid #EDEAE0;')}>
                   {col && (
-                    <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:2px 7px; border-radius:999px; background:${col.fill}; color:${col.text}; border:1px solid ${col.strokeE}; flex:0 0 auto;`)}>{layerName(s.landLayer!)}</span>
+                    <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9.5px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:2px 7px; border-radius:999px; background:${col.fill}; color:${col.text}; flex:0 0 auto;`)}>{layerName(s.landLayer!)}</span>
                   )}
                   <span style={css('font-size:11.5px; color:#57564F; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;')}>{s.reasons[0][1]}</span>
                   {s.conflict && (
@@ -138,7 +138,7 @@ function TriageInner() {
                         const isT = selSig.landLayer === id
                         return (
                           <div key={id} style={css(`display:flex; align-items:center; gap:11px; padding:9px 12px; background:${isT ? col.fill : '#FFFFFF'}; border:1px solid ${isT ? col.stroke : C.line}; border-radius:9px;`)}>
-                            <div style={css(`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${isT ? '#FFFFFF' : C.surface}; border:2px solid ${isT ? col.strokeE : C.line}; color:${isT ? col.text : C.caption}; font-family:${MONO}; font-weight:600; font-size:12px; flex:0 0 auto;`)}>{L.level}</div>
+                            <div style={css(`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${isT ? col.fill : C.surface}; color:${isT ? col.text : C.caption}; font-family:${MONO}; font-weight:600; font-size:12px; flex:0 0 auto;`)}>{L.level}</div>
                             <span style={css(`font-weight:${isT ? 600 : 500}; font-size:13px; color:${isT ? col.text : C.caption};`)}>{L.name}</span>
                             {isT && <code style={css(`margin-left:auto; font-family:${MONO}; font-size:11px; color:${col.text};`)}>{selSig.landPath}</code>}
                           </div>

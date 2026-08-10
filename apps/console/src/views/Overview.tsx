@@ -3,9 +3,10 @@ import { progressLabel, progressPercent } from '../api'
 import { layerName, layers } from '../data'
 import { useStoreData } from '../store'
 import { LayerChip } from '../components/LayerChip'
-import { EmptyState, StatusBadge } from '../components/ui'
+import { EmptyState, StatusBadge, Button } from '../components/ui'
+import { AgentIcon } from '../components/icons'
 
-function OverviewInner() {
+function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
   const { mode, setView, signals, conflicts, sources, concepts, activity, loadErrors } = useStoreData()
   const queue = signals.filter((signal) => signal.route === 'review_required')
   const openConflicts = conflicts.filter((conflict) => ['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'].includes(conflict.discrepancyStatus ?? (conflict.status === 'open' ? 'needs_review' : 'resolved')))
@@ -25,6 +26,19 @@ function OverviewInner() {
 
   return (
     <div className="cc-home">
+      {onConnectAgent && (
+        <section className="cc-workspace-section cc-connect-cta" aria-labelledby="cc-connect-agent">
+          <div className="cc-section-heading">
+            <div>
+              <h2 id="cc-connect-agent">Connect an AI agent</h2>
+              <p>Give Claude, Copilot, Cursor, or any other MCP-aware tool one governed view of this cascade — pick your tool and we'll walk you through it.</p>
+            </div>
+            <AgentIcon size={20} />
+          </div>
+          <Button type="button" variant="primary" onClick={onConnectAgent}>Connect an agent</Button>
+        </section>
+      )}
+
       <section className="cc-workspace-section" aria-labelledby="cc-needs-attention">
         <div className="cc-section-heading"><div><h2 id="cc-needs-attention">Needs Attention</h2><p>Work that may need a decision or recovery.</p></div>{attention.length > 0 && <StatusBadge tone="attention">{attention.length}</StatusBadge>}</div>
         {attention.length === 0 ? <EmptyState title="Nothing needs review">Your cascade is resolving cleanly.</EmptyState> : (

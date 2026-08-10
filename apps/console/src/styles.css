@@ -1038,9 +1038,9 @@ button { font-family: inherit; }
 .cc-ui-search svg { width: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; color: var(--cc-caption); }
 .cc-ui-search input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--cc-ink); font: inherit; }
 .cc-ui-status { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border: 1px solid var(--cc-line); border-radius: 999px; color: var(--cc-caption); font-size: 11px; font-weight: 600; }
-.cc-ui-status--success { border-color: var(--cc-teal-badge-bd); background: var(--cc-teal-fill); color: var(--cc-teal-text); }
-.cc-ui-status--attention { border-color: var(--cc-amber-stroke); background: var(--cc-amber-fill); color: var(--cc-amber-text); }
-.cc-ui-status--info { border-color: var(--cc-blue-stroke); background: var(--cc-blue-fill); color: var(--cc-blue-text); }
+.cc-ui-status--success { border-color: transparent; background: var(--cc-teal-fill); color: var(--cc-teal-text); }
+.cc-ui-status--attention { border-color: transparent; background: var(--cc-amber-fill); color: var(--cc-amber-text); }
+.cc-ui-status--info { border-color: transparent; background: var(--cc-blue-fill); color: var(--cc-blue-text); }
 /* Background activity: the shell's one always-visible progress affordance.
    Sized and weighted like a toolbar status control, not a call to action —
    it reports, it does not ask for anything. */
@@ -1133,6 +1133,12 @@ button { font-family: inherit; }
 
 /* Home uses aligned desktop sections instead of floating dashboard cards. */
 .cc-home { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+.cc-connect-cta {
+  padding: 16px 18px; border: 1px solid var(--cc-teal-stroke); border-radius: 12px; background: var(--cc-teal-fill);
+}
+.cc-connect-cta .cc-section-heading { margin-bottom: 12px; }
+.cc-connect-cta .cc-section-heading p { color: var(--cc-teal-text); }
+.cc-connect-cta .cc-section-heading svg { color: var(--cc-teal-stroke-e); flex-shrink: 0; }
 .cc-workspace-section { min-width: 0; }
 .cc-section-heading { min-height: 34px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 9px; }
 .cc-section-heading h2 { margin: 0; color: var(--cc-ink); font-size: 15px; font-weight: 600; }
@@ -1246,7 +1252,7 @@ button { font-family: inherit; }
 .cc-tree-count { margin-left: auto; padding-left: 8px; color: var(--cc-faint); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; font-weight: 400; text-transform: none; letter-spacing: 0; }
 
 .cc-files-scope { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 8px 6px; border-bottom: 1px solid var(--cc-line); }
-.cc-scope-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 3px 3px 9px; border: 1px solid var(--cc-teal-stroke); border-radius: 999px; background: var(--cc-teal-fill); color: var(--cc-teal-text); font-size: 11px; font-weight: 600; }
+.cc-scope-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 3px 3px 9px; border-radius: 999px; background: var(--cc-teal-fill); color: var(--cc-teal-text); font-size: 11px; font-weight: 600; }
 .cc-scope-chip > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .cc-scope-chip > button { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 13px; line-height: 1; }
 .cc-scope-chip > button:hover { background: var(--cc-teal-fill2); }
@@ -1569,7 +1575,6 @@ textarea:focus-visible,
   align-items: center;
   gap: 6px;
   padding: 0 10px;
-  border: 1px solid var(--cc-teal-badge-bd);
   border-radius: 999px;
   background: var(--cc-teal-fill);
   color: var(--cc-teal-text);
@@ -1802,7 +1807,7 @@ textarea:focus-visible,
 .cc-eyebrow { color: var(--cc-teal-text); font-size: 10px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
 .cc-discrepancy-header h2 { margin: 5px 0 4px; color: var(--cc-ink); font-size: clamp(22px, 2.2vw, 30px); letter-spacing: -.035em; }
 .cc-discrepancy-header p { margin: 0; color: var(--cc-caption); font-size: 12.5px; }
-.cc-actionable-count { min-width: 48px; min-height: 48px; display: grid; place-items: center; border: 1px solid var(--cc-amber-stroke); border-radius: 14px; background: var(--cc-amber-fill); color: var(--cc-amber-text); font-size: 19px; font-weight: 750; }
+.cc-actionable-count { min-width: 48px; min-height: 48px; display: grid; place-items: center; border-radius: 14px; background: var(--cc-amber-fill); color: var(--cc-amber-text); font-size: 19px; font-weight: 750; }
 .cc-discrepancy-guide { display: flex; align-items: center; gap: 18px; padding: 11px 14px; border-block: 1px solid var(--cc-line); color: var(--cc-body); }
 .cc-discrepancy-guide > strong { flex: 0 0 auto; color: var(--cc-ink); font-size: 12px; }
 .cc-discrepancy-guide ol { display: flex; flex: 1; gap: 18px; margin: 0; padding: 0; list-style: none; }
@@ -1960,7 +1965,7 @@ textarea:focus-visible,
 .cc-md-wikilink {
   font-family: var(--cc-mono, ui-monospace, monospace); font-size: 0.9em;
   color: var(--cc-teal-text); background: var(--cc-teal-fill);
-  border: 1px solid var(--cc-teal-stroke); border-radius: 5px; padding: 0.05em 0.35em;
+  border-radius: 5px; padding: 0.05em 0.35em;
 }
 /* Wide tables scroll inside their own box — the page never scrolls sideways. */
 .cc-md-tablewrap { overflow-x: auto; margin: 0 0 1em; }
@@ -1977,6 +1982,11 @@ textarea:focus-visible,
 }
 .cc-settings-number:disabled { opacity: 0.55; cursor: not-allowed; }
 .cc-settings-unit { color: var(--cc-caption); font-size: 11.5px; font-weight: 600; }
+.cc-settings-unit-select {
+  padding: 7px 8px; border-radius: 8px; border: 1px solid var(--cc-line);
+  background: var(--cc-raised); color: var(--cc-ink); font: inherit; font-size: 12.5px;
+}
+.cc-settings-unit-select:disabled { opacity: 0.55; cursor: not-allowed; }
 .cc-settings-hint { margin: 6px 0 0; font-size: 11.5px; color: var(--cc-caption); }
 .cc-settings-rowerr { margin: 6px 0 0; font-size: 11.5px; color: var(--cc-amber-text); }
 .cc-settings-reset {
@@ -1984,6 +1994,45 @@ textarea:focus-visible,
   font-size: 12px; font-weight: 600;
   border: 1px solid var(--cc-line); background: transparent; color: var(--cc-caption);
 }
+
+/* ---- Cascade inline conflict quick-resolve popover ------------------------ */
+.cc-conflict-popover {
+  position: fixed; z-index: var(--cc-z-popover); display: flex; flex-direction: column; gap: 10px;
+  padding: 14px; border: 1px solid var(--cc-line-strong); border-radius: var(--cc-radius-xl);
+  background: var(--cc-raised); box-shadow: 0 18px 44px var(--cc-shadow);
+}
+.cc-conflict-popover-head { display: flex; flex-direction: column; gap: 2px; }
+.cc-conflict-popover-head strong { color: var(--cc-ink); font-size: 13px; font-weight: 650; }
+.cc-conflict-popover-head span { color: var(--cc-caption); font-size: 11px; font-family: var(--cc-mono, ui-monospace, monospace); }
+.cc-conflict-popover-error { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--cc-amber-fill); color: var(--cc-amber-text); font-size: 11.5px; line-height: 1.4; }
+.cc-conflict-popover-note { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--cc-neutral-fill); color: var(--cc-body); font-size: 11.5px; line-height: 1.45; }
+.cc-conflict-popover-choices { display: grid; gap: 6px; }
+.cc-conflict-popover-choices button {
+  display: flex; flex-direction: column; gap: 3px; align-items: flex-start; padding: 8px 10px;
+  border: 1px solid var(--cc-line); border-radius: 8px; background: var(--cc-surface); color: var(--cc-body);
+  font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.cc-conflict-popover-choices button:hover:not(:disabled) { border-color: var(--cc-teal-stroke-e); background: var(--cc-teal-fill); }
+.cc-conflict-popover-choices button:disabled { opacity: 0.55; cursor: not-allowed; }
+.cc-conflict-popover-choices code { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cc-caption); font-size: 10.5px; font-weight: 400; }
+.cc-conflict-popover-secondary, .cc-conflict-popover-full {
+  padding: 8px 10px; border: 1px solid var(--cc-line); border-radius: 8px; background: transparent;
+  color: var(--cc-body); font: inherit; font-size: 11.5px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.cc-conflict-popover-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
+.cc-conflict-popover-full { color: var(--cc-caption); border: none; padding: 0; }
+.cc-conflict-popover-acknowledge { display: grid; gap: 6px; }
+.cc-conflict-popover-acknowledge select, .cc-conflict-popover-acknowledge textarea {
+  width: 100%; border: 1px solid var(--cc-line); border-radius: 8px; background: var(--cc-raised);
+  color: var(--cc-ink); font: inherit; font-size: 12px; box-sizing: border-box;
+}
+.cc-conflict-popover-acknowledge select { min-height: 36px; padding: 0 8px; }
+.cc-conflict-popover-acknowledge textarea { min-height: 60px; padding: 8px; line-height: 1.4; resize: vertical; }
+.cc-conflict-popover-acknowledge button {
+  min-height: 34px; padding: 0 12px; border: 1px solid var(--cc-teal-stroke-e); border-radius: 8px;
+  background: var(--cc-teal-text); color: var(--cc-raised); font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer;
+}
+.cc-conflict-popover-acknowledge button:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* ---- Conflict resolution ------------------------------------------------- */
 .cc-sr-only {

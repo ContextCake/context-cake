@@ -86,6 +86,13 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   // source — this bridge cannot carry an absolute path, so the main process is
   // the only thing that ever decides where on disk Finder is pointed.
   revealFile: (layer, rel) => ipcRenderer.invoke('contextcake:reveal-file', { layer: String(layer ?? ''), rel: String(rel ?? '') }),
+  // Show the app's own configuration folder in Finder. The path is fixed on
+  // the main-process side; no arguments cross this bridge.
+  revealConfigDir: () => ipcRenderer.invoke('contextcake:reveal-config-dir'),
+  settingsFile: {
+    export: () => ipcRenderer.invoke('contextcake:settings-export'),
+    reset: () => ipcRenderer.invoke('contextcake:settings-reset'),
+  },
   cli: {
     getStatus: () => ipcRenderer.invoke('contextcake:cli-status'),
     install: () => ipcRenderer.invoke('contextcake:cli-install'),

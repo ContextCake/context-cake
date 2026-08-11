@@ -159,6 +159,25 @@ declare global {
        * answering `{ ok: false, error }` rather than throwing.
        */
       revealFile?: (layer: string, rel: string) => Promise<{ ok: boolean; error?: string }>
+      /**
+       * Show the app's configuration folder (~/Library/Application Support/
+       * ContextCake) in Finder. The path is fixed on the main-process side —
+       * no arguments cross the bridge.
+       */
+      revealConfigDir?: () => Promise<{ ok: boolean; error?: string }>
+      /**
+       * The local preferences file (settings.json), for support flows. Export
+       * opens a native save dialog and writes a copy — the renderer never
+       * names a path. Reset confirms natively in the main process, then
+       * returns every local preference to its default; the resulting
+       * preference state arrives through `preferences.onChanged` like any
+       * other change. Both resolve `{ok: false, canceled: true}` when the
+       * user backs out of the native dialog.
+       */
+      settingsFile?: {
+        export(): Promise<{ ok: boolean; canceled?: boolean; path?: string; error?: string }>
+        reset(): Promise<{ ok: boolean; canceled?: boolean }>
+      }
       /** Fixed native operations for ContextCake's own command-line tool. */
       cli: {
         getStatus: () => Promise<CliResult>

@@ -7,6 +7,7 @@ import { AccountPanel } from './AccountPanel'
 import { IndexingSettings } from './IndexingSettings'
 import { IntegrationsPanel } from './IntegrationsPanel'
 import { AccountIcon, ConnectionsIcon, IndexingIcon, PrivacyIcon, SettingsIcon } from './icons'
+import { ShortcutsReference } from './ShortcutsReference'
 import { Button, SegmentedControl } from './ui'
 
 export type SettingsPane = 'general' | 'indexing' | 'integrations' | 'account' | 'privacy'
@@ -98,6 +99,85 @@ function UpdateControl({ appMode }: { appMode: Mode }) {
   )
 }
 
+type CliToolStatus = 'loading' | 'installed' | 'missing' | 'stale' | 'conflict' | 'blocked' | 'development'
+
+function describeCliStatus(status: CliToolStatus): string {
+  switch (status) {
+    case 'loading': return 'Checking the contextcake command…'
+    case 'installed': return 'The contextcake command is installed in /usr/local/bin.'
+    case 'missing': return 'Adds the contextcake command to /usr/local/bin for terminals and agent harnesses.'
+    case 'stale': return 'The installed contextcake command points at another copy of ContextCake. Reinstall to fix it.'
+    case 'conflict': return 'Another program owns /usr/local/bin/contextcake, and ContextCake will not replace a real file.'
+    case 'blocked': return 'ContextCake is running from the disk image or a quarantine location. Move it to Applications, reopen it, then install.'
+    case 'development': return 'Command-line tool installation is available in packaged builds.'
+  }
+}
+
+/**
+ * "Install Command Line Tool" beside the app's other lifecycle controls — the
+ * same IPC the ContextCake menu item and the Connect Agent dialog already use
+ * (window.__CC_DESKTOP.cli). Desktop only; hidden in browsers like the
+ * config-folder row. The refusal states (blocked/conflict/permissions) get
+ * their native dialogs from the main process (cli-install.mjs), so this row
+ * only reports status and outcomes.
+ */
+function CliControl() {
+  const bridge = window.__CC_DESKTOP?.cli
+  const [status, setStatus] = useState<CliToolStatus>('loading')
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!bridge) return
+    let active = true
+    // An older preload may not define getStatus at all, in which case the CALL
+    // throws synchronously — before any promise exists to reject. There is no
+    // error boundary in this app, so a throw out of an effect unmounts the
+    // whole React root: a blank Settings window rather than a missing row.
+    // try/catch is what actually covers that; a bare .catch() does not.
+    void (async () => {
+      try {
+        const result = await bridge.getStatus()
+        if (active) setStatus(result?.status ?? 'missing')
+      } catch {
+        if (active) setStatus('missing')
+      }
+    })()
+    return () => { active = false }
+  }, [bridge])
+
+  if (!bridge) return null
+
+  const install = async () => {
+    if (busy) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      const result = await bridge.install()
+      if (result) {
+        setStatus(result.status)
+        setNotice(result.message || null)
+      }
+    } catch {
+      setNotice('ContextCake could not start the installer. Use ContextCake → Install Command Line Tool… and try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const canInstall = status === 'missing' || status === 'stale'
+  return (
+    <div className="cc-settings-row">
+      <div><strong>Command-line tool</strong><span>{notice ?? describeCliStatus(status)}</span></div>
+      {canInstall && (
+        <Button type="button" variant="secondary" disabled={busy} onClick={() => void install()}>
+          {busy ? 'Installing…' : status === 'stale' ? 'Reinstall' : 'Install'}
+        </Button>
+      )}
+    </div>
+  )
+}
+
 function focusables(root: HTMLElement | null) {
   return Array.from(root?.querySelectorAll<HTMLElement>('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') ?? [])
 }
@@ -114,6 +194,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
   const [updatesEnabled, setUpdatesEnabled] = useState(() => isUpdateCheckEnabled(appMode))
   const [metricsEnabled, setMetricsEnabled] = useState<boolean | null>(null)
   const [writeFailed, setWriteFailed] = useState(false)
+  const [revealError, setRevealError] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const { preference: theme, density, setPreference: setTheme, setDensity, transparency, systemReducedTransparency, setTransparency, saveFailed } = useThemeMode()
   // Appearance writes and this view's own toggles hit the same file for the same
@@ -216,6 +297,61 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
     if (surface === 'window') window.__CC_DESKTOP?.data?.requestReload().catch(() => {})
   }
 
+  // Desktop only, and absent rather than disabled on the web — same doctrine
+  // as Reveal in Finder for layer files (src/reveal.ts).
+  //
+  // Gated on the window's ROLE, not just on the bridge being present. One
+  // preload serves both windows, so these three functions exist in the main
+  // window too — but their IPC channels are `['settings']`-only, so a click
+  // there would answer "Untrusted IPC sender", and for Reset that error would
+  // raise the "could not be saved" banner while nothing had been reset. The
+  // main window never renders this overlay today; this keeps that an
+  // implementation detail rather than the only thing holding the row shut.
+  const isSettingsWindow = window.__CC_DESKTOP?.windowRole === 'settings'
+  const canRevealConfig = isSettingsWindow && typeof window.__CC_DESKTOP?.revealConfigDir === 'function'
+  const settingsFile = isSettingsWindow ? window.__CC_DESKTOP?.settingsFile : undefined
+  const [exportNote, setExportNote] = useState<string | null>(null)
+  const [resetBusy, setResetBusy] = useState(false)
+
+  const exportSettings = async () => {
+    if (!settingsFile) return
+    try {
+      const result = await settingsFile.export()
+      if (result.ok) setExportNote(result.path ? `Saved to ${result.path}.` : 'Settings exported.')
+      else if (!result.canceled) setExportNote(result.error ?? 'The settings could not be exported.')
+    } catch (e) {
+      setExportNote(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  // The confirmation dialog is native and lives in the main process; a
+  // rejected invoke means the reset applied but could not be written, which
+  // is exactly what the unsaved-settings banner exists to say. The new
+  // preference values arrive through preferences.onChanged like any other
+  // change, so there is nothing to re-read here.
+  const resetSettingsFile = async () => {
+    if (!settingsFile || resetBusy) return
+    setResetBusy(true)
+    try {
+      const result = await settingsFile.reset()
+      if (result.ok) setWriteFailed(false)
+    } catch {
+      setWriteFailed(true)
+    } finally {
+      setResetBusy(false)
+    }
+  }
+  const showConfigFolder = async () => {
+    const bridge = window.__CC_DESKTOP?.revealConfigDir
+    if (!bridge) return
+    try {
+      const result = await bridge()
+      setRevealError(result?.ok ? null : result?.error ?? 'The folder could not be shown.')
+    } catch (e) {
+      setRevealError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   return (
     <div ref={rootRef} className="cc-settings-screen" role={surface === 'overlay' ? 'dialog' : undefined} aria-modal={surface === 'overlay' || undefined} aria-label="ContextCake Settings" data-surface={surface}>
       <header className="cc-settings-toolbar">
@@ -253,8 +389,13 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
                 <div className="cc-settings-row"><div><strong>Automatic update checks</strong><span>{desktop ? 'Check for new desktop releases automatically.' : 'Check GitHub for new ContextCake releases.'}</span></div><label className="cc-switch"><input type="checkbox" checked={updatesEnabled} onChange={toggleUpdates} aria-label="Check for updates automatically" /><span aria-hidden="true" /></label></div>
                 <div className="cc-settings-row"><div><strong>Installed version</strong><span>The version of ContextCake currently running.</span></div><span className="cc-settings-value">{window.__CC_DESKTOP?.version || __APP_VERSION__}</span></div>
                 <UpdateControl appMode={appMode} />
+                <CliControl />
+                {canRevealConfig && <div className="cc-settings-row"><div><strong>Configuration folder</strong><span>{revealError ?? 'Settings and the source list live in ~/Library/Application Support/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showConfigFolder()}>Show in Finder</Button></div>}
+                {settingsFile && <div className="cc-settings-row"><div><strong>Export settings</strong><span>{exportNote ?? 'Save a copy of ContextCake’s local preferences — useful in a bug report. Never includes credentials or your documents.'}</span></div><Button type="button" variant="secondary" onClick={() => void exportSettings()}>Export…</Button></div>}
+                {settingsFile && <div className="cc-settings-row"><div><strong>Reset settings</strong><span>Return appearance, update, window, and view settings on this Mac to their defaults. Sources and knowledge are not affected.</span></div><Button type="button" variant="secondary" disabled={resetBusy} onClick={() => void resetSettingsFile()}>{resetBusy ? 'Resetting…' : 'Reset…'}</Button></div>}
               </div>
             </section>
+            <ShortcutsReference appMode={appMode} />
           </>}
 
           {pane === 'indexing' && <><header className="cc-settings-header"><h1>Indexing</h1><span>Global limits for how much ContextCake reads from every source.</span></header><IndexingSettings onChanged={indexingChanged} /></>}

@@ -27,6 +27,7 @@ export function ConflictQuickResolve({
   const [showAcknowledge, setShowAcknowledge] = useState(false)
   const [reasonCode, setReasonCode] = useState<AcknowledgementReason | ''>('')
   const [note, setNote] = useState('')
+  const [attempted, setAttempted] = useState(false)
   const busy = resolvingConflict === conflict.id
   // Broken links require a source edit — the same disqualifier DecisionPanel
   // uses for "use this answer everywhere" / "write a reconciled answer".
@@ -83,6 +84,7 @@ export function ConflictQuickResolve({
 
   const useAnswer = async (sourceLayer: string) => {
     if (!conflict.revision || busy) return
+    setAttempted(true)
     try {
       await decideDiscrepancy({ discrepancyId: conflict.id, revision: conflict.revision, action: 'choose_contribution', selectedSource: sourceLayer })
       onClose()
@@ -91,8 +93,24 @@ export function ConflictQuickResolve({
 
   const acknowledge = async () => {
     if (!conflict.revision || !reasonCode || busy) return
+    setAttempted(true)
     try {
       await decideDiscrepancy({ discrepancyId: conflict.id, revision: conflict.revision, action: 'acknowledge', reasonCode, note })
+      onClose()
+    } catch { /* resolutionError renders below; stay open */ }
+  }
+
+  const acknowledgeMissingTarget = async () => {
+    if (!conflict.revision || busy) return
+    setAttempted(true)
+    try {
+      await decideDiscrepancy({
+        discrepancyId: conflict.id,
+        revision: conflict.revision,
+        action: 'acknowledge',
+        reasonCode: 'target_missing',
+        note: '',
+      })
       onClose()
     } catch { /* resolutionError renders below; stay open */ }
   }
@@ -112,9 +130,12 @@ export function ConflictQuickResolve({
         <strong>{conflict.title}</strong>
         <span>{conflict.section}</span>
       </div>
-      {resolutionError && <p className="cc-conflict-popover-error" role="alert">{resolutionError.message}</p>}
+      {attempted && resolutionError && <p className="cc-conflict-popover-error" role="alert">{resolutionError.message}</p>}
       {cannotWrite ? (
-        <p className="cc-conflict-popover-note">Broken links require a source edit — acknowledge below, or open the full resolver to reach the contributing file.</p>
+        <div className="cc-conflict-popover-broken-link">
+          <p className="cc-conflict-popover-note">Keep the link without changing files. ContextCake will record <strong>Target not created yet</strong> and recheck when sources change.</p>
+          <button type="button" disabled={busy} onClick={() => void acknowledgeMissingTarget()}>{busy ? 'Applying…' : 'Acknowledge for now'}</button>
+        </div>
       ) : (
         <div className="cc-conflict-popover-choices">
           {conflict.contributions.map((c) => (
@@ -125,7 +146,7 @@ export function ConflictQuickResolve({
           ))}
         </div>
       )}
-      {!showAcknowledge ? (
+      {!cannotWrite && (!showAcknowledge ? (
         <button type="button" className="cc-conflict-popover-secondary" disabled={busy} onClick={() => setShowAcknowledge(true)}>Keep both — acknowledge</button>
       ) : (
         <div className="cc-conflict-popover-acknowledge">
@@ -136,7 +157,7 @@ export function ConflictQuickResolve({
           <textarea aria-label="Optional local note" placeholder="Optional local note (never learned into a rule)" value={note} disabled={busy} onChange={(e) => setNote(e.target.value)} />
           <button type="button" disabled={busy || !reasonCode} onClick={() => void acknowledge()}>{busy ? 'Applying…' : 'Acknowledge difference'}</button>
         </div>
-      )}
+      ))}
       <button type="button" className="cc-conflict-popover-full" onClick={onOpenFullResolver}>Open full resolver →</button>
     </div>
   )

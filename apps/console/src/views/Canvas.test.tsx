@@ -342,15 +342,21 @@ describe('inline conflict quick-resolve', () => {
     revision: 'r1',
   }
 
-  async function renderWithConflict(decideDiscrepancy: ReturnType<typeof vi.fn>, conflict: Conflict = CONFLICT_RECORD) {
+  async function renderWithConflict(
+    decideDiscrepancy: ReturnType<typeof vi.fn>,
+    conflict: Conflict | Conflict[] = CONFLICT_RECORD,
+    resolutionError: { message: string; partial: boolean } | null = null,
+    renderedConcept: Concept = CONFLICTED,
+  ) {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     vi.resetModules()
     vi.doMock('../store', () => {
       const noop = () => {}
+      const conflicts = Array.isArray(conflict) ? conflict : [conflict]
       const state = {
-        mode: 'live', concepts: [CONFLICTED], conflicts: [conflict], sources: [],
+        mode: 'live', concepts: [renderedConcept], conflicts, sources: [],
         setSelConcept: noop, setSelConflict: noop, setView: noop,
-        decideDiscrepancy, resolvingConflict: null, resolutionError: null,
+        decideDiscrepancy, resolvingConflict: null, resolutionError,
       }
       const useState = () => state
       return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
@@ -392,6 +398,81 @@ describe('inline conflict quick-resolve', () => {
 
     expect(decideDiscrepancy).toHaveBeenCalledWith({ discrepancyId: 'cf1', revision: 'r1', action: 'choose_contribution', selectedSource: 'company' })
     expect(container.textContent).not.toContain('Open full resolver')
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('uses the same one-click waiting action for broken links as the full resolver', async () => {
+    const decideDiscrepancy = vi.fn(async () => {})
+    const brokenLink: Conflict = {
+      ...CONFLICT_RECORD,
+      id: 'broken-link-1',
+      kind: 'broken_link',
+      target: 'runbooks/missing',
+      contributions: [CONFLICT_RECORD.contributions[0]],
+    }
+    const { container, root, act } = await renderWithConflict(decideDiscrepancy, brokenLink, null, concept('doc-a', 'personal'))
+
+    const badge = container.querySelector<HTMLElement>('[data-role="conflict-badge"]')
+    expect(badge, 'standalone discrepancy badge not found').toBeTruthy()
+    await act(async () => badge!.click())
+    expect(container.textContent).toContain('Target not created yet')
+    expect(container.textContent).not.toContain('Choose a required reason')
+
+    const acknowledge = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Acknowledge for now')
+    await act(async () => acknowledge!.click())
+    expect(decideDiscrepancy).toHaveBeenCalledWith({
+      discrepancyId: 'broken-link-1',
+      revision: 'r1',
+      action: 'acknowledge',
+      reasonCode: 'target_missing',
+      note: '',
+    })
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('opens the discrepancy for the clicked dissent section when a concept has several discrepancies', async () => {
+    const decideDiscrepancy = vi.fn(async () => {})
+    const unrelatedBrokenLink: Conflict = {
+      ...CONFLICT_RECORD,
+      id: 'broken-link-elsewhere',
+      sectionKey: 'references',
+      section: 'references',
+      kind: 'broken_link',
+      target: 'runbooks/missing',
+      contributions: [CONFLICT_RECORD.contributions[0]],
+    }
+    // Put the unrelated item first to prove the clicked summary ghost does
+    // not inherit Array.find() ordering.
+    const { container, root, act } = await renderWithConflict(decideDiscrepancy, [unrelatedBrokenLink, CONFLICT_RECORD])
+
+    const ghost = Array.from(container.querySelectorAll('button')).find((button) => button.getAttribute('title') === 'Layers disagree — open the conflict')
+    await act(async () => ghost!.click())
+    expect(container.textContent).toContain('Use company’s answer everywhere')
+    expect(container.textContent).not.toContain('Target not created yet')
+
+    const useCompany = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith('Use company’s answer everywhere'))
+    await act(async () => useCompany!.click())
+    expect(decideDiscrepancy).toHaveBeenCalledWith(expect.objectContaining({ discrepancyId: 'cf1' }))
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('does not show a stale error from another discrepancy before the user attempts this one', async () => {
+    const decideDiscrepancy = vi.fn(async () => {})
+    const { container, root, act } = await renderWithConflict(
+      decideDiscrepancy,
+      CONFLICT_RECORD,
+      { message: 'A different item failed', partial: false },
+    )
+
+    const ghost = Array.from(container.querySelectorAll('button')).find((button) => button.getAttribute('title') === 'Layers disagree — open the conflict')
+    await act(async () => ghost!.click())
+    expect(container.textContent).not.toContain('A different item failed')
 
     await act(async () => root.unmount())
     container.remove()

@@ -143,7 +143,7 @@ export function countByLane(concepts: Concept[]): Record<LayerId, number> {
 }
 
 interface NodePos { c: Concept; x: number; y: number; conflict: boolean }
-interface GhostPos { key: string; parent: NodePos; layer: LayerId; value: string; x: number; y: number }
+interface GhostPos { key: string; parent: NodePos; layer: LayerId; value: string; sectionKey: string; x: number; y: number }
 
 export interface LaneGeometry { top: number; height: number }
 
@@ -231,6 +231,7 @@ export function computeLayout(concepts: Concept[]) {
         seen.add(d.layer)
         ghosts.push({
           key: `${c.id}:${d.layer}`, parent: nodes[i], layer: d.layer, value: d.value,
+          sectionKey: s.key ?? s.name,
           x: START_X + colOf(column) * (NODE_W + GAP_X) + (NODE_W - GHOST_W) / 2,
           y: laneTop[d.layer] + LANE_PAD_TOP + primaryBandH[d.layer] + GHOST_BAND_GAP + rowOf(column) * (GHOST_H + ROW_GAP_Y),
         })
@@ -268,6 +269,11 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   // Full counts, not the capped subset — the lane header's "N concepts" stays
   // an honest total even while the canvas itself only renders some of them.
   const laneCounts = useMemo(() => countByLane(concepts), [concepts])
+  const conflictsByConcept = useMemo(() => {
+    const grouped = new Map<string, Conflict[]>()
+    for (const conflict of conflicts) grouped.set(conflict.concept, [...(grouped.get(conflict.concept) ?? []), conflict])
+    return grouped
+  }, [conflicts])
   // Real (source name, level) pairs behind each lane, for honest lane headers
   // (Fix F3): demo mode's sources are already the canonical company/team/
   // personal trio, so this reduces to the static labels there — the fallback
@@ -352,9 +358,21 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
     setOpenId(null)
     requestAnimationFrame(() => inspectorOpener.current?.focus())
   }
-  const openConflictFor = (conceptId: string, anchorEl: HTMLElement) => {
-    const cf = conflicts.find((c) => c.concept === conceptId)
-    if (!cf) return
+  const openConflictFor = (conceptId: string, anchorEl: HTMLElement, sectionKey?: string) => {
+    const candidates = conflictsByConcept.get(conceptId) ?? []
+    const cf = sectionKey
+      ? candidates.find((conflict) => conflict.sectionKey === sectionKey)
+      : candidates.length === 1 ? candidates[0] : null
+    // A concept-level badge can represent several different discrepancies.
+    // Never make a one-click decision on an arbitrary first match: hand the
+    // ambiguous case to Review, where every candidate is visible.
+    if (!cf) {
+      if (candidates[0]) {
+        setSelConflict(candidates[0].id)
+        setView('conflicts')
+      }
+      return
+    }
     const status = cf.discrepancyStatus ?? (cf.status === 'open' ? 'needs_review' : 'resolved')
     if (ACTIONABLE_DISCREPANCY_STATUSES.has(status)) {
       setQuickResolve({ conflict: cf, anchorEl })
@@ -461,7 +479,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
               <button
                 key={g.key}
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={(event) => openConflictFor(g.parent.c.id, event.currentTarget)}
+                onClick={(event) => openConflictFor(g.parent.c.id, event.currentTarget, g.sectionKey)}
                 onMouseEnter={() => setHoverId(g.parent.c.id)}
                 onMouseLeave={() => setHoverId(null)}
                 title="Layers disagree — open the conflict"
@@ -481,6 +499,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
           {nodes.map((n) => {
             const col = lc(primaryLayer(n.c))
             const selected = openId === n.c.id
+            const hasConflict = n.conflict || conflictsByConcept.has(n.c.id)
             const glow = selected ? `0 0 0 2px ${col.strokeE}, 0 10px 30px var(--cc-node-glow)` : `0 2px 10px var(--cc-shadow)`
             return (
               <button
@@ -495,22 +514,22 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
                   // through the concept detail's "Layers disagree here" button,
                   // so this is a mouse-only shortcut, not the only path.
                   const badge = (event.target as HTMLElement).closest<HTMLElement>('[data-role="conflict-badge"]')
-                  if (badge && n.conflict) { openConflictFor(n.c.id, badge); return }
+                  if (badge && hasConflict) { openConflictFor(n.c.id, badge); return }
                   openConcept(n.c, event.currentTarget)
                 }}
                 onMouseEnter={() => setHoverId(n.c.id)}
                 onMouseLeave={() => setHoverId(null)}
-                aria-label={`${n.c.title} — ${layerName(primaryLayer(n.c))}${n.conflict ? ', has conflict' : n.c.draft ? ', draft' : ''}`}
+                aria-label={`${n.c.title} — ${layerName(primaryLayer(n.c))}${hasConflict ? ', has conflict' : n.c.draft ? ', draft' : ''}`}
                 style={{ position: 'absolute', left: n.x, top: n.y, width: NODE_W, height: NODE_H, boxShadow: glow, ...css(`display:flex; flex-direction:column; gap:0; text-align:left; padding:12px 14px; background:${C.raised}; border:1px solid ${selected ? col.strokeE : C.line}; border-left:3px solid ${col.strokeE}; border-radius:12px; cursor:pointer; font:inherit;`) }}
               >
                 <div style={css('display:flex; align-items:center; gap:8px;')}>
                   <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 7px; border-radius:6px; color:${col.text}; background:${col.fill};`)}>{n.c.type}</span>
-                  {n.conflict && (
+                  {hasConflict && (
                     <span data-role="conflict-badge" title="Layers disagree — click to resolve" style={css(`display:inline-flex; align-items:center; gap:4px; margin-left:auto; font-size:9.5px; font-weight:600; color:${C.amberText}; cursor:pointer;`)}>
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></svg>conflict
                     </span>
                   )}
-                  {n.c.draft && !n.conflict && <span style={css(`margin-left:auto; font-size:10px; font-family:${MONO}; color:${C.amberText2};`)}>draft</span>}
+                  {n.c.draft && !hasConflict && <span style={css(`margin-left:auto; font-size:10px; font-family:${MONO}; color:${C.amberText2};`)}>draft</span>}
                 </div>
                 <div style={css(`font-weight:600; font-size:13.5px; margin-top:9px; color:${C.ink}; line-height:1.25;`)}>{n.c.title}</div>
                 <code style={css(`font-family:${MONO}; font-size:10.5px; color:${C.caption}; margin-top:auto;`)}>{n.c.id}</code>
@@ -593,6 +612,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
 
       {quickResolve && (
         <ConflictQuickResolve
+          key={quickResolve.conflict.id}
           conflict={quickResolve.conflict}
           anchorEl={quickResolve.anchorEl}
           onClose={() => setQuickResolve(null)}

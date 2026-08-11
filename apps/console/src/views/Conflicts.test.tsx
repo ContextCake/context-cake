@@ -24,11 +24,11 @@ function storeWith(conflicts: Conflict[], selConflict: string) {
     resolveConflict: vi.fn(),
     resolveSafeConflicts: vi.fn(),
     resolvingConflict: null,
-    resolutionError: null,
+    resolutionError: null as { message: string; partial: boolean } | null,
     discrepancyRules: [], discrepancyRuleSuggestions: [],
     decideDiscrepancy: vi.fn(), setDiscrepancyPriority: vi.fn(),
     approveRuleSuggestion: vi.fn(), updateDiscrepancyRule: vi.fn(), promoteDiscrepancyRule: vi.fn(),
-    openFilesScope: vi.fn(),
+    openFilesScope: vi.fn(), openConcept: vi.fn(),
   }
 }
 
@@ -160,9 +160,10 @@ describe('Discrepancy Center', () => {
     await act(async () => root.render(<Conflicts />))
 
     const guide = container.querySelector('[aria-label="How to resolve a discrepancy"]')
-    expect(guide?.textContent).toContain('Compare every source')
-    expect(guide?.textContent).toContain('Choose a winner or keep distinct scopes')
-    expect(guide?.textContent).toContain('Review affected files before applying')
+    expect(guide?.textContent).toContain('Review the evidence')
+    expect(guide?.textContent).toContain('Choose the safest next step')
+    expect(guide?.textContent).toContain('Confirm what changes')
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('.cc-status-tabs button')).find((button) => button.textContent === 'Needs review')?.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('badges the flagged dissent card as newer than the effective value', async () => {
@@ -195,6 +196,8 @@ describe('Discrepancy Center', () => {
 
     expect(container.querySelector('.cc-line-diff [data-change="removed"]')?.textContent).toContain('3000')
     expect(container.querySelector('.cc-line-diff [data-change="added"]')?.textContent).toContain('8080')
+    expect(container.querySelector('.cc-line-diff [data-change="removed"]')?.textContent).toContain('Removed:')
+    expect(container.querySelector('.cc-line-diff [data-change="added"]')?.textContent).toContain('Added:')
   })
 
   it('labels every demo action as a simulation and never offers automatic execution', async () => {
@@ -354,13 +357,74 @@ describe('Discrepancy Center', () => {
     expect(container.textContent).not.toContain('Preview Markdown')
   })
 
-  it('offers "Target not created yet" for a broken-link discrepancy', async () => {
+  it('turns a broken link into a clear one-click recommendation instead of selecting an impossible winner action', async () => {
+    const store = storeWith([brokenLinkConflict], brokenLinkConflict.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+
+    expect(container.textContent).toContain('Keep the link for now')
+    expect(container.textContent).toContain('No files change; this moves the item to Acknowledged.')
+    expect(container.textContent).not.toContain('Use personal everywhere')
+    expect(container.textContent).not.toContain('Choose a safe disposition')
+    expect(container.textContent).not.toContain('Leave open')
+    expect(container.querySelector<HTMLDetailsElement>('.cc-review-details')?.open).toBe(false)
+    expect(container.querySelector<HTMLDetailsElement>('.cc-more-options')?.open).toBe(false)
+
+    const recommended = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Simulate acknowledging')!
+    await act(async () => recommended.click())
+    expect(store.decideDiscrepancy).toHaveBeenCalledWith({
+      discrepancyId: brokenLinkConflict.id,
+      revision: brokenLinkConflict.revision,
+      action: 'acknowledge',
+      reasonCode: 'target_missing',
+      note: '',
+    })
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Acknowledged “decisions/missing” as Target not created yet. No files changed.')
+    expect(container.textContent).toContain('View in Acknowledged')
+  })
+
+  it('keeps a broken-link decision failure in the panel for retry instead of leaking a rejected promise', async () => {
+    const store = storeWith([brokenLinkConflict], brokenLinkConflict.id)
+    store.decideDiscrepancy = vi.fn().mockRejectedValue(new Error('Revision changed'))
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+
+    const recommended = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Simulate acknowledging')!
+    await act(async () => recommended.click())
+    expect(store.decideDiscrepancy).toHaveBeenCalledOnce()
+    expect(container.textContent).not.toContain('View in Acknowledged')
+  })
+
+  it('does not carry a previous discrepancy error into an item the user has not attempted', async () => {
+    const store = storeWith([brokenLinkConflict], brokenLinkConflict.id)
+    store.resolutionError = { message: 'A different item failed', partial: false }
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+
+    expect(container.textContent).not.toContain('A different item failed')
+  })
+
+  it('routes a broken link directly to its source concept for an immediate edit', async () => {
+    const store = storeWith([brokenLinkConflict], brokenLinkConflict.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+
+    const openSource = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Open source concept')!
+    await act(async () => openSource.click())
+    expect(store.openConcept).toHaveBeenCalledWith(brokenLinkConflict.concept)
+  })
+
+  it('keeps alternative acknowledgement reasons available for a broken link', async () => {
     mocks.useStore.mockReturnValue(storeWith([brokenLinkConflict], brokenLinkConflict.id))
     await act(async () => root.render(<Conflicts />))
-    const acknowledgeRadio = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find((input) => input.parentElement?.textContent?.includes('Keep the scoped difference'))!
-    await act(async () => acknowledgeRadio.click())
     const options = Array.from(container.querySelectorAll<HTMLOptionElement>('[aria-label="Acknowledgement reason"] option')).map((option) => option.textContent)
     expect(options).toContain('Target not created yet')
+    const moreOptions = container.querySelector<HTMLDetailsElement>('.cc-more-options')!
+    await act(async () => {
+      moreOptions.open = true
+      moreOptions.dispatchEvent(new Event('toggle'))
+    })
+    expect(container.querySelector<HTMLSelectElement>('[aria-label="Acknowledgement reason"]')?.value).toBe('')
   })
 
   it('never offers "Target not created yet" for a non-broken-link discrepancy', async () => {

@@ -135,5 +135,7 @@ npm run build
 npx wrangler pages deploy dist --project-name=contextcake-console --branch=preview-local
 ```
 
-The original design handoff remains under `project/`; see
-`project/HANDOFF.md` for provenance.
+The console's visual design started as an HTML/CSS prototype exported from
+Claude Design and was rebuilt in React here. The prototype bundle and its
+chat transcripts are no longer carried in the repo — see history before
+the repo cleanup if you need them.

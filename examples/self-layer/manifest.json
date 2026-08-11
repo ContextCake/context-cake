@@ -1,0 +1,5 @@
+{
+  "layers": [
+    { "name": "contextcake", "level": 2, "path": "./layer" }
+  ]
+}

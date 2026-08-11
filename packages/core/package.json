@@ -1,0 +1,25 @@
+{
+  "name": "@contextcake/core",
+  "version": "0.1.0",
+  "description": "The ContextCake cascade engine: sources, resolver, search, MCP server, and write path. Node built-ins only.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "//": "Deliberately not an npm workspace. Declaring workspaces here would force an `npm install` at the repo root, and the engine's defining constraint is that it runs on plain Node with no root install. Consumers (apps/desktop, the root CLI shims, tests) import by relative path; this file exists to give the directory a real identity, pin the module type locally, and document the public surface below.",
+  "exports": {
+    ".": "./src/resolver.mjs",
+    "./resolver": "./src/resolver.mjs",
+    "./search": "./src/search.mjs",
+    "./service": "./src/service.mjs",
+    "./manifest": "./src/manifest.mjs",
+    "./settings": "./src/settings.mjs",
+    "./layer-files": "./src/layer-files.mjs",
+    "./capture": "./src/capture.mjs",
+    "./sources": "./src/sources/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}

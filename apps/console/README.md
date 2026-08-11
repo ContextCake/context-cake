@@ -50,7 +50,8 @@ playground/service command documented in the repository instructions.
   meaning-changing conflicts as direct answer choices. In live/Desktop mode,
   choosing an answer preflights every contributing writable local layer,
   updates them together, and appends the original answers and decision to
-  `.contextcake/conflict-resolutions.ndjson` beside the manifest. History can
+  `.contextcake/profiles/<profile-id>/conflict-resolutions.ndjson` beside the
+  manifest. History can
   be reopened to choose a different saved answer later. The service refuses
   the whole change if a source is remote, missing, or changed since review.
 - **Concepts** shows the effective concept with per-section provenance, and each

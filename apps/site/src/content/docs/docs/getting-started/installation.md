@@ -39,7 +39,7 @@ contains the matching ZIP and checksums.
 
 ## Prerequisites for the source route
 
-- Node.js ≥ 18
+- Node.js ≥ 22
 - One download route: a browser, `curl`, GitHub CLI, or Git
 
 ## Choose a route

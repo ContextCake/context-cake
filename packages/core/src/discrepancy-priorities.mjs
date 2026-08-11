@@ -1,14 +1,16 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { ensureSidecarMigrated, sidecarDir } from "./sidecar-state.mjs";
 
 const ALLOWED = new Set(["unassigned", "high", "medium", "low"]);
 
-export function createDiscrepancyPriorityStore(manifestPath) {
-  const dir = path.join(path.dirname(path.resolve(manifestPath)), ".contextcake");
+export function createDiscrepancyPriorityStore(manifestPath, { profileId = "default" } = {}) {
+  const dir = sidecarDir(manifestPath, profileId);
   const file = path.join(dir, "discrepancy-priorities.json");
 
   async function list() {
+    await ensureSidecarMigrated(manifestPath);
     try {
       const value = JSON.parse(await fsp.readFile(file, "utf8"));
       if (value?.version !== 1 || !value.priorities || Array.isArray(value.priorities)) throw new Error("unsupported document");

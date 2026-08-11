@@ -1334,7 +1334,7 @@ async function smokeCheck() {
       // 4. …and the app is still recoverable afterwards.
       const recovered = await relaunchEngine()
       if (recovered?.ok !== true) failures.push(`recovery: relaunch answered ${JSON.stringify(recovered)}`)
-      if (!win.webContents.getURL().startsWith(service?.origin ?? ' ')) {
+      if (!win.webContents.getURL().startsWith(service?.origin ?? '')) {
         failures.push('recovery: the window was not re-pointed at the new engine')
       }
 

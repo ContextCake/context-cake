@@ -128,6 +128,11 @@ function persistSettings(patch, changedFields) {
     const dirtyFields = [...new Set([...(current._sync?.dirtyFields ?? []), ...changedFields])]
     next._sync = { ...next._sync, dirty: true, dirtyFields, localUpdatedAt: new Date().toISOString() }
   }
+  return queueWrite(next)
+}
+
+/** Hand a fully-formed settings object to the write queue. */
+function queueWrite(next) {
   unflushed = next
   const seq = (issuedSeq += 1)
   const written = schedule().then(() => (
@@ -149,6 +154,45 @@ export function writeLocalSettings(patch) {
 
 export function markSettingsDirty(fields) {
   return persistSettings({}, fields)
+}
+
+/**
+ * Return local preferences to their defaults — a replacement, not a merged
+ * patch: uiState and any stale keys go too, which persistSettings (a spread
+ * over the current file) cannot express.
+ *
+ * Three things deliberately survive, because a reset is not what any of them
+ * responds to:
+ *
+ * - `_sync`, with the revision bumped and the account-synced fields marked
+ *   dirty, so a signed-in account learns about the reset instead of writing
+ *   the old values straight back on the next pull. `ownerUserId` in
+ *   particular MUST survive: settings-sync gates the dirty-push on it
+ *   matching the session, so dropping it turns the next pull into a merge
+ *   that restores exactly what was just reset.
+ * - `anonymousMetrics`, a privacy decision rather than a preference. Clearing
+ *   it would silently discard a consent answer and re-ask at the next launch
+ *   (metrics-consent.mjs prompts on `undefined`), which is not something a
+ *   "reset my appearance settings" action should ever cause.
+ * - `mainWindow`, the window geometry. The live window writes its bounds back
+ *   on close and on quit regardless, so clearing it here would be undone
+ *   within seconds — a reset that reports success and visibly does nothing.
+ *   Not promising it is honest; the dialog copy says so too.
+ */
+export function resetSettings() {
+  const current = readSettings()
+  const next = {
+    _sync: {
+      ...(current._sync ?? {}),
+      revision: (current._sync?.revision ?? 0) + 1,
+      dirty: true,
+      dirtyFields: [...new Set([...(current._sync?.dirtyFields ?? []), 'theme', 'density', 'updateCheck'])],
+      localUpdatedAt: new Date().toISOString(),
+    },
+  }
+  if (typeof current.anonymousMetrics === 'boolean') next.anonymousMetrics = current.anonymousMetrics
+  if (current.mainWindow !== undefined) next.mainWindow = current.mainWindow
+  return queueWrite(next)
 }
 
 /**

@@ -128,6 +128,79 @@ test('flushSettingsSync reports a write it could not land, and keeps it', async 
   assert.equal(readFile().theme, 'light')
 })
 
+test('resetSettings replaces the file with defaults instead of merging over it', async () => {
+  await settings.flushSettings()
+  settings.writeSettings({ theme: 'dark', density: 'compact' })
+  settings.writeLocalSettings({ uiState: { lastView: 'files' } })
+  await settings.flushSettings()
+  const before = readFile()
+
+  const { written } = settings.resetSettings()
+  // Readable immediately, like any queued write.
+  const now = settings.readSettings()
+  assert.equal(now.theme, 'system')
+  assert.equal(now.density, 'comfortable')
+  assert.deepEqual(await written, { ok: true })
+
+  const after = readFile()
+  // A replacement, not a patch: keys outside DEFAULTS are gone, not inherited.
+  assert.equal(Object.hasOwn(after, 'uiState'), false, 'uiState must not survive a reset')
+  assert.equal(Object.hasOwn(after, 'theme'), false, 'defaults are derived at read time, not stored')
+  // Sync bookkeeping survives with the synced preferences marked dirty, so an
+  // account would learn about the reset rather than restoring the old values.
+  assert.equal(after._sync.revision, before._sync.revision + 1)
+  assert.equal(after._sync.dirty, true)
+  for (const field of ['theme', 'density', 'updateCheck']) {
+    assert.ok(after._sync.dirtyFields.includes(field), `${field} must be marked dirty`)
+  }
+})
+
+test('resetSettings keeps the account identity, the privacy choice, and the window', async () => {
+  await settings.flushSettings()
+  // Asserting the revision alone cannot see any of this: with the whole
+  // `_sync` carry-over deleted, the earlier test still passes. What breaks in
+  // the real app is subtler — settings-sync gates its dirty-push on
+  // `_sync.ownerUserId` matching the session, so losing it turns the next pull
+  // into a merge that restores precisely the values just reset.
+  // Seeded on disk rather than through writeLocalSettings, because
+  // persistSettings recomputes `_sync` from the current file and would discard
+  // a patch that tried to set it. settings-sync.mjs writes this file directly
+  // for the same reason, so this is the shape the reset really meets.
+  fs.writeFileSync(settingsFile, `${JSON.stringify({
+    theme: 'dark',
+    anonymousMetrics: false,
+    mainWindow: { bounds: { x: 10, y: 20, width: 900, height: 700 } },
+    _sync: {
+      revision: 7,
+      ownerUserId: 'user-abc',
+      shadow: { theme: 'dark', sources: [{ name: 'team', kind: 'files' }] },
+      serverUpdatedAt: '2026-08-01T00:00:00.000Z',
+    },
+  }, null, 2)}\n`)
+  assert.equal(settings.readSettings()._sync.ownerUserId, 'user-abc', 'the seed must be what resetSettings reads')
+
+  const { written } = settings.resetSettings()
+  assert.deepEqual(await written, { ok: true })
+  const after = readFile()
+
+  assert.equal(after._sync.ownerUserId, 'user-abc', 'the account identity must survive, or the next pull undoes the reset')
+  assert.deepEqual(after._sync.shadow.sources, [{ name: 'team', kind: 'files' }], 'the sync merge base must survive')
+  assert.equal(after._sync.serverUpdatedAt, '2026-08-01T00:00:00.000Z')
+  assert.equal(after._sync.revision, 8)
+
+  // A consent answer is not a preference: clearing it would silently discard
+  // the user's decision and re-ask at the next launch (metrics-consent.mjs
+  // prompts on `undefined`).
+  assert.equal(after.anonymousMetrics, false, 'the privacy choice must survive a preferences reset')
+  // The live window writes its bounds back on close and quit regardless, so
+  // clearing this would be undone within seconds — a reset that reports
+  // success and visibly does nothing.
+  assert.deepEqual(after.mainWindow.bounds, { x: 10, y: 20, width: 900, height: 700 })
+  // …while the preferences themselves are still genuinely reset.
+  assert.equal(Object.hasOwn(after, 'theme'), false)
+  assert.equal(settings.readSettings().theme, 'system')
+})
+
 test('reducedTransparency defaults to null — the OS setting decides', () => {
   assert.equal(Object.hasOwn(settings.readSettings(), 'reducedTransparency'), true)
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-settings-empty-'))

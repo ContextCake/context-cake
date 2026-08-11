@@ -130,15 +130,17 @@ node scripts/test.mjs --bail          # stop at the first failure
 `npm test` reports every failure rather than stopping at the first, and prints
 the exact rerun command for whatever broke.
 
-### Set a UTF-8 locale
+### Never let a NUL byte into a source file
 
-Work with `LANG` set to a UTF-8 locale (`export LANG=en_US.UTF-8`). Several
-source files contain typographic characters, and with `LANG` unset — which
-happens in bare CI containers and some agent sandboxes — BSD `grep` classifies
-those files as binary and silently returns **no matches** rather than an error.
-`packages/core/src/service.mjs` and `apps/desktop/src/main/main.mjs` both hit
-this today, so a search for a symbol can come back empty while the symbol is
-right there. This matters most for AI contributors, who navigate by search.
+A single stray NUL byte makes `grep` treat a whole text file as binary: it
+returns **no matches** instead of an error, so a search for a symbol comes back
+empty while the symbol is right there. `service.mjs` and `main.mjs` both
+carried one until #132 removed them, which hid the 2,700-line core of the engine
+from every plain `grep`. This bites AI contributors hardest, since they navigate
+by search and read silence as absence.
+
+`npm test` now fails on a full run if any tracked source file contains one, so
+you will hear about it before a reviewer does.
 
 For AI contributors: state which commands you ran, include failures honestly,
 and avoid broad rewrites unrelated to the issue. Agent-assisted commits are

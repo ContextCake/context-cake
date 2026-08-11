@@ -1,14 +1,16 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { ensureSidecarMigrated, sidecarDir } from "./sidecar-state.mjs";
 
 const VERSION = 1;
 
-export function createDiscrepancyRuleStore(manifestPath) {
-  const dir = path.join(path.dirname(path.resolve(manifestPath)), ".contextcake");
+export function createDiscrepancyRuleStore(manifestPath, { profileId = "default" } = {}) {
+  const dir = sidecarDir(manifestPath, profileId);
   const file = path.join(dir, "discrepancy-rules.json");
 
   async function list() {
+    await ensureSidecarMigrated(manifestPath);
     try {
       const parsed = JSON.parse(await fsp.readFile(file, "utf8"));
       return parsed?.version === VERSION && Array.isArray(parsed.rules) ? parsed.rules.map(validateRule) : [];

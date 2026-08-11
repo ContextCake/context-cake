@@ -33,6 +33,12 @@ The chosen content is written through the existing section replacement path. The
 
 Records append to `.contextcake/conflict-resolutions.ndjson` beside the manifest. The directory is local, hidden from the Files browser, and created only on the first resolution.
 
+> **Amended 2026-08-11 (control-plane milestone 1):** sidecar state is now
+> profile-scoped — records live at
+> `.contextcake/profiles/<profile-id>/conflict-resolutions.ndjson`, with
+> pre-existing unscoped files migrated to `profiles/default/` on first access
+> (`packages/core/src/sidecar-state.mjs`).
+
 Each record contains:
 
 - schema version and unique id;

@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/ContextCake/context-cake/actions/workflows/ci.yml"><img src="https://github.com/ContextCake/context-cake/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-18%2B-339933?logo=nodedotjs&logoColor=white" alt="Node.js 18 or later" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22 or later" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4B5563" alt="MIT license" /></a>
   <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-ready-0F766E" alt="Model Context Protocol ready" /></a>
 </p>
@@ -93,7 +93,7 @@ Learn the model in more depth: [layer cake](https://contextcake.com/docs/concept
 
 ## Quick start
 
-**Prerequisite:** [Node.js 18+](https://nodejs.org/). The core has no runtime npm dependencies, install scripts, or network fetches.
+**Prerequisite:** [Node.js 22+](https://nodejs.org/). The core has no runtime npm dependencies, install scripts, or network fetches.
 
 ```bash
 git clone https://github.com/ContextCake/context-cake.git

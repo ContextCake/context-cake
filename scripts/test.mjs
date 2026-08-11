@@ -18,7 +18,8 @@
 // Default is continue-on-failure with a summary at the end. One run should tell
 // you everything that is broken, not just the first thing.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,6 +46,7 @@ const SUITES = [
   { group: "unit", name: "layer-files", ...node("layer-files.test.mjs") },
   { group: "unit", name: "search", ...node("search.test.mjs") },
   { group: "unit", name: "conflict-resolutions", ...node("conflict-resolutions.test.mjs") },
+  { group: "unit", name: "sidecar-state", ...node("sidecar-state.test.mjs") },
   { group: "unit", name: "discrepancies", ...node("discrepancies.test.mjs") },
   { group: "unit", name: "discrepancy-transactions", ...node("discrepancy-transactions.test.mjs") },
 
@@ -123,6 +125,29 @@ function fail(message) {
   process.exit(2);
 }
 
+// A test file on disk that no suite names would never run, and nothing would
+// say so — the gate would just get quietly narrower. That is not theoretical:
+// sidecar-state.test.mjs landed on main while this runner was being written,
+// and an unguarded merge would have dropped it silently. Checked only on a full
+// run, so a filtered run stays fast.
+function assertEverySuiteRegistered() {
+  const registered = new Set(SUITES.flatMap((suite) => suite.args.filter((arg) => arg.includes("/"))));
+  const orphans = [];
+  for (const dir of ["packages/core/tests", "scripts/tests"]) {
+    for (const entry of fs.readdirSync(path.join(ROOT, dir))) {
+      if (!/(-test\.sh|\.test\.mjs)$/.test(entry)) continue;
+      const rel = `${dir}/${entry}`;
+      if (!registered.has(rel)) orphans.push(rel);
+    }
+  }
+  if (orphans.length) {
+    fail(
+      `These test files exist but no suite runs them:\n${orphans.map((o) => `  ${o}`).join("\n")}\n` +
+        "Add them to SUITES in scripts/test.mjs.",
+    );
+  }
+}
+
 function select({ groups, only }) {
   let selected = SUITES;
   if (groups.length) selected = selected.filter((suite) => groups.includes(suite.group));
@@ -142,9 +167,40 @@ function run(suite) {
   });
 }
 
+// One NUL byte makes grep call a whole text file binary: it reports no matches
+// rather than an error, so the file drops out of every search silently. Two of
+// them hid service.mjs and main.mjs until #132; that cost a PR to find, and
+// nothing stopped the next one. Cheap to check, so check it.
+function assertNoNulBytes() {
+  const listed = spawnSync("git", ["ls-files", "-z", "*.mjs", "*.js", "*.cjs", "*.ts", "*.tsx", "*.md", "*.json"], {
+    cwd: ROOT,
+    encoding: "buffer",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (listed.status !== 0) return; // not a git checkout — not this gate's problem
+  const offenders = [];
+  for (const rel of listed.stdout.toString("utf8").split("\0")) {
+    if (!rel) continue;
+    const full = path.join(ROOT, rel);
+    if (!fs.existsSync(full)) continue;
+    if (fs.readFileSync(full).includes(0)) offenders.push(rel);
+  }
+  if (offenders.length) {
+    fail(
+      `These text files contain a NUL byte, which makes grep skip them entirely:\n` +
+        `${offenders.map((o) => `  ${o}`).join("\n")}\n` +
+        `Strip it: LC_ALL=C tr -d '\\000' < FILE > FILE.tmp && mv FILE.tmp FILE`,
+    );
+  }
+}
+
 const options = parseArgs(process.argv.slice(2));
 const suites = select(options);
 
+if (!options.groups.length && !options.only) {
+  assertEverySuiteRegistered();
+  assertNoNulBytes();
+}
 if (!suites.length) fail("No suites matched.");
 
 if (options.list) {

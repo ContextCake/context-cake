@@ -1652,7 +1652,7 @@ export function createEngineService({
     if (tokenizeQuery(query).length === 0) return { hits: [], indexing, indexingSources: pending };
     const key = contributingKey(contributing);
     if (!searchMemo || searchMemo.key !== key) searchMemo = { key, hits: new Map() };
-    const cacheKey = `${query} ${limit}`;
+    const cacheKey = `${query}\u0000${limit}`;
     let promise = searchMemo.hits.get(cacheKey);
     if (!promise) {
       const views = contributing.map((p) => searchSnapshotView(p.source, p.snap));

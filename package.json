@@ -22,7 +22,7 @@
     "test:release-workflow": "node --test scripts/release-workflow.test.mjs scripts/verify-release-surfaces.test.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "license": "MIT"
 }

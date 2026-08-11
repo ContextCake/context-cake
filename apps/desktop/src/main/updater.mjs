@@ -143,9 +143,25 @@ export async function checkForUpdatesFromRenderer() {
   }
 }
 
-/** The Settings "Update Now" button. A no-op unless a download actually completed. */
-export function installNow() {
+/**
+ * The Settings "Update Now" button. A no-op unless a download actually
+ * completed. Confirms with the same native dialog checkInteractive() already
+ * uses for the menu path — quitAndInstall() is an instant, unprompted quit
+ * otherwise, which would blindside a user mid-task and (an adversarial review
+ * on PR #128 flagged this) gives any script running in a trusted renderer an
+ * unconfirmed way to force the app to quit.
+ */
+export async function installNow(win) {
   if (status.state !== 'downloaded') return { installed: false }
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'info',
+    message: `ContextCake ${status.version ? `${status.version} ` : ''}is ready to install.`,
+    detail: 'ContextCake will quit and relaunch to apply the update.',
+    buttons: ['Relaunch to Update', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+  })
+  if (response !== 0) return { installed: false }
   autoUpdater.quitAndInstall()
   return { installed: true }
 }

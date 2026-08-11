@@ -822,7 +822,7 @@ handleTrustedIpc('contextcake:cli-install', ({ window }) => installCli(window, {
 registerRendererUpdates(sendToRenderer)
 handleTrustedIpc('updates:get-status', () => getUpdateStatus())
 handleTrustedIpc('updates:check', () => checkForUpdatesFromRenderer())
-handleTrustedIpc('updates:install', () => installNow())
+handleTrustedIpc('updates:install', ({ window }) => installNow(window))
 
 // What the renderer is told when a preference it just set did not reach disk.
 // It travels as a rejected `invoke`, which is what every caller in the console

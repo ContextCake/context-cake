@@ -397,6 +397,36 @@ describe('inline conflict quick-resolve', () => {
     container.remove()
   })
 
+  it('uses the same one-click waiting action for broken links as the full resolver', async () => {
+    const decideDiscrepancy = vi.fn(async () => {})
+    const brokenLink: Conflict = {
+      ...CONFLICT_RECORD,
+      id: 'broken-link-1',
+      kind: 'broken_link',
+      target: 'runbooks/missing',
+      contributions: [CONFLICT_RECORD.contributions[0]],
+    }
+    const { container, root, act } = await renderWithConflict(decideDiscrepancy, brokenLink)
+
+    const ghost = Array.from(container.querySelectorAll('button')).find((button) => button.getAttribute('title') === 'Layers disagree — open the conflict')
+    await act(async () => ghost!.click())
+    expect(container.textContent).toContain('Target not created yet')
+    expect(container.textContent).not.toContain('Choose a required reason')
+
+    const acknowledge = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Acknowledge for now')
+    await act(async () => acknowledge!.click())
+    expect(decideDiscrepancy).toHaveBeenCalledWith({
+      discrepancyId: 'broken-link-1',
+      revision: 'r1',
+      action: 'acknowledge',
+      reasonCode: 'target_missing',
+      note: '',
+    })
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
   it('leaves a resolved/acknowledged conflict on the navigate-to-Review path instead of offering dispositions', async () => {
     const decideDiscrepancy = vi.fn(async () => {})
     const resolved: Conflict = { ...CONFLICT_RECORD, discrepancyStatus: 'resolved', status: 'resolved' }

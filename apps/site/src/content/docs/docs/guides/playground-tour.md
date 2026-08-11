@@ -90,9 +90,9 @@ resolver's section conflicts and also reports authored frontmatter
 disagreements, broken links when source coverage is settled, and contributors
 that changed after a prior decision.
 
-Each item explains why it exists, why the effective value won, source health,
-owner, freshness, affected links, and every original value. Choose one explicit
-disposition:
+Each item explains why it exists, the relevant source evidence, source health,
+owner, freshness, affected links, and every original value. For disagreements,
+choose one explicit disposition:
 
 - **Use this answer everywhere** propagates an existing contribution to every
   writable contributor.
@@ -100,7 +100,12 @@ disposition:
 - **Keep the scoped difference** writes no source content and requires a reason.
 - **Open source files** hands unsupported, remote, and read-only values to the
   file/source workflow.
-- **Leave open** records nothing.
+
+Broken links use a shorter flow because there is no competing answer to choose.
+The recommended one-click action keeps the link, records **Target not created
+yet**, changes no files, and moves the item to **Acknowledged**. You can instead
+open the source concept to edit the link immediately, or expand **More options**
+to choose another acknowledgement reason or priority.
 
 Live decisions re-check the revision, stage recoverable originals, write under
 the profile lock, and retain an append-only audit trail. The public Web Demo

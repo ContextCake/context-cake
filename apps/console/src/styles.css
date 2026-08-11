@@ -2468,6 +2468,9 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .cc-settings-row strong { display: block; color: var(--cc-body); font-size: 13px; font-weight: 500; }
 .cc-settings-row > div:first-child > span { display: block; max-width: 530px; margin-top: 3px; color: var(--cc-caption); font-size: 12px; line-height: 1.45; }
 .cc-settings-value { flex: 0 0 auto; color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; }
+.cc-settings-subhead { margin: 0 0 6px; color: var(--cc-faint); font-size: 11px; font-weight: 600; }
+.cc-shortcut-group + .cc-shortcut-group { margin-top: 14px; }
+.cc-settings-row--compact { min-height: 0; padding: 8px 15px; }
 .cc-settings-doc-link { display: inline-flex; margin-top: 12px; color: var(--cc-teal-text); font-size: 12px; font-weight: 500; }
 
 .cc-account h2, .cc-account h3, .cc-account p { margin-top: 0; }

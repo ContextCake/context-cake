@@ -456,6 +456,186 @@ describe('SettingsView', () => {
     }
   })
 
+  it('desktop: shows the configuration folder in Finder, and reports a refusal in place', async () => {
+    const revealConfigDir = vi.fn().mockResolvedValue({ ok: true })
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '0.0.0-test',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      revealConfigDir,
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(container.textContent).toContain('~/Library/Application Support/ContextCake')
+
+    await act(async () => button('Show in Finder').click())
+    expect(revealConfigDir).toHaveBeenCalledOnce()
+    expect(container.textContent).not.toContain('could not be shown')
+
+    // A refusal travels as data, and the row says so instead of doing nothing.
+    revealConfigDir.mockResolvedValue({ ok: false, error: 'The configuration folder does not exist yet.' })
+    await act(async () => button('Show in Finder').click())
+    expect(container.textContent).toContain('The configuration folder does not exist yet.')
+  })
+
+  it('desktop: surfaces Install Command Line Tool and reports the install outcome', async () => {
+    const cli = {
+      getStatus: vi.fn().mockResolvedValue({ status: 'missing', message: '', shimPath: null }),
+      install: vi.fn().mockResolvedValue({ status: 'installed', message: "Installed 'contextcake' in /usr/local/bin.", shimPath: '/Applications/ContextCake.app/Contents/Resources/bin/contextcake' }),
+    }
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '0.0.0-test',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      cli,
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(container.textContent).toContain('Command-line tool')
+    expect(container.textContent).toContain('Adds the contextcake command')
+
+    await act(async () => button('Install').click())
+    expect(cli.install).toHaveBeenCalledOnce()
+    // The outcome message replaces the description, and an installed tool
+    // offers no second Install.
+    expect(container.textContent).toContain("Installed 'contextcake' in /usr/local/bin.")
+    expect(findButton('Install')).toBeUndefined()
+  })
+
+  it('desktop: offers Reinstall when the contextcake command is stale', async () => {
+    const cli = {
+      getStatus: vi.fn().mockResolvedValue({ status: 'stale', message: '', shimPath: null }),
+      install: vi.fn(),
+    }
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '0.0.0-test',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      cli,
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(container.textContent).toContain('points at another copy of ContextCake')
+    expect(findButton('Reinstall')).toBeDefined()
+  })
+
+  it('offers no command-line tool row outside the Mac app', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" onClose={vi.fn()} /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(container.textContent).not.toContain('Command-line tool')
+  })
+
+  it('offers no configuration-folder control outside the Mac app', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" onClose={vi.fn()} /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(findButton('Show in Finder')).toBeUndefined()
+  })
+
+  it('desktop: exports the settings file and reports where it went, staying quiet on cancel', async () => {
+    const settingsFile = {
+      export: vi.fn().mockResolvedValue({ ok: false, canceled: true }),
+      reset: vi.fn(),
+    }
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '0.0.0-test',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      settingsFile,
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+
+    // Backing out of the native save dialog is not an outcome to report.
+    await act(async () => button('Export…').click())
+    expect(container.textContent).not.toContain('Saved to')
+
+    settingsFile.export.mockResolvedValue({ ok: true, path: '/Users/me/Desktop/ContextCake-settings.json' })
+    await act(async () => button('Export…').click())
+    expect(container.textContent).toContain('Saved to /Users/me/Desktop/ContextCake-settings.json.')
+
+    settingsFile.export.mockResolvedValue({ ok: false, error: 'That folder is read-only.' })
+    await act(async () => button('Export…').click())
+    expect(container.textContent).toContain('That folder is read-only.')
+  })
+
+  it('desktop: resets the settings file, reporting only a write that could not land', async () => {
+    const settingsFile = {
+      export: vi.fn(),
+      reset: vi.fn().mockResolvedValue({ ok: true }),
+    }
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '0.0.0-test',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      settingsFile,
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+
+    // Confirmation is the main process's native dialog — this click is the
+    // whole renderer side, and a clean reset needs no banner.
+    await act(async () => button('Reset…').click())
+    expect(settingsFile.reset).toHaveBeenCalledOnce()
+    expect(container.textContent).not.toContain('could not be saved to this Mac')
+
+    // A rejected invoke means "applied but not persisted" — the same story
+    // every other failed settings write tells, through the same banner.
+    settingsFile.reset.mockRejectedValue(new Error('ContextCake could not save that change.'))
+    await act(async () => button('Reset…').click())
+    expect(container.textContent).toContain('could not be saved to this Mac')
+  })
+
+  it('offers no settings export or reset outside the Mac app', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" onClose={vi.fn()} /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(findButton('Export…')).toBeUndefined()
+    expect(findButton('Reset…')).toBeUndefined()
+  })
+
+  it('lists the keyboard shortcuts on the General pane', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" onClose={vi.fn()} /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+
+    expect(container.textContent).toContain('Keyboard shortcuts')
+    // One entry from each binding site: menu navigation, the palette, the
+    // Review queue's single-key routing, and the Files editor.
+    expect(container.textContent).toContain('Go to Cascade')
+    expect(container.textContent).toContain('⌘K')
+    expect(container.textContent).toContain('Store to shared context')
+    expect(container.textContent).toContain('Save the open file')
+  })
+
   it('offers no update control in demo mode', async () => {
     await act(async () => root.render(
       <ThemeModeProvider><SettingsView appMode="demo" onClose={vi.fn()} /></ThemeModeProvider>,

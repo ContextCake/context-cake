@@ -25,12 +25,23 @@ export const TRUSTED_IPC_ROLES = Object.freeze({
   'updates:install': BOTH_ROLES,
   'ui-state:set': BOTH_ROLES,
   'contextcake:get-api-token': BOTH_ROLES,
-  'contextcake:cli-status': Object.freeze(['main']),
-  'contextcake:cli-install': Object.freeze(['main']),
+  // The Connect Agent dialog (main window) and Settings → General both surface
+  // the command-line tool; the install itself only ever symlinks the bundled
+  // shim (see cli-install.mjs), whichever window asks.
+  'contextcake:cli-status': BOTH_ROLES,
+  'contextcake:cli-install': BOTH_ROLES,
   'contextcake:choose-folder': Object.freeze(['main']),
   // Only the main window browses files, and the payload is a layer name plus a
   // relative path — never a path the renderer chose (see reveal.mjs).
   'contextcake:reveal-file': Object.freeze(['main']),
+  // The app's own config folder — a fixed path with no renderer input at all.
+  // Settings is the surface that offers it.
+  'contextcake:reveal-config-dir': Object.freeze(['settings']),
+  // Export writes settings.json to a destination chosen in a native save
+  // dialog (no renderer path); reset confirms natively before writing. Both
+  // are Settings-surface actions.
+  'contextcake:settings-export': Object.freeze(['settings']),
+  'contextcake:settings-reset': Object.freeze(['settings']),
   // Restarting the engine reloads the main window at a new origin, so only the
   // window that owns the wedge banner may ask for it.
   'contextcake:engine-relaunch': Object.freeze(['main']),

@@ -115,6 +115,45 @@ describe('IndexingSettings', () => {
     }))
   })
 
+  it('offers Reset All only when at least one limit is stored, and resets every key in one PATCH', async () => {
+    const onChanged = vi.fn()
+    mocks.apiFetch.mockImplementation(async () => payload({ maxDocFiles: 50000 }, { maxDocFiles: 50000 }))
+    await act(async () => root.render(<IndexingSettings onChanged={onChanged} />))
+
+    const resetAll = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Reset All')
+    expect(resetAll).toBeDefined()
+
+    mocks.apiFetch.mockImplementation(async () => payload({}))
+    await act(async () => resetAll?.click())
+    // Every catalog key rides one request as null — one round trip, one
+    // re-index, rather than a PATCH per field.
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/settings', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ maxDocFiles: null, sourceBudgetMs: null }),
+    }))
+    expect(onChanged).toHaveBeenCalledOnce()
+    // Everything is default again, so the control has nothing left to reset.
+    expect(Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Reset All')).toBeUndefined()
+  })
+
+  it('hides Reset All when every limit is already the default', async () => {
+    await act(async () => root.render(<IndexingSettings />))
+    expect(Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Reset All')).toBeUndefined()
+  })
+
+  it('surfaces a Reset All failure instead of silently keeping the stored values', async () => {
+    mocks.apiFetch.mockImplementation(async () => payload({ maxDocFiles: 50000 }, { maxDocFiles: 50000 }))
+    await act(async () => root.render(<IndexingSettings />))
+
+    mocks.apiFetch.mockImplementation(async () => json({ error: 'Settings were not saved: a source in your manifest is invalid' }, 409))
+    const resetAll = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Reset All')
+    await act(async () => resetAll?.click())
+
+    expect(container.textContent).toContain('Settings were not saved')
+    // The stored value is still stored, so the control stays available.
+    expect(Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Reset All')).toBeDefined()
+  })
+
   it('explains when the engine is unreachable instead of showing blank fields', async () => {
     mocks.apiFetch.mockImplementation(async () => json({ error: 'nope' }, 500))
     await act(async () => root.render(<IndexingSettings />))

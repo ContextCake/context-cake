@@ -128,6 +128,34 @@ test('flushSettingsSync reports a write it could not land, and keeps it', async 
   assert.equal(readFile().theme, 'light')
 })
 
+test('resetSettings replaces the file with defaults instead of merging over it', async () => {
+  await settings.flushSettings()
+  settings.writeSettings({ theme: 'dark', density: 'compact' })
+  settings.writeLocalSettings({ uiState: { lastView: 'files' }, anonymousMetrics: true })
+  await settings.flushSettings()
+  const before = readFile()
+
+  const { written } = settings.resetSettings()
+  // Readable immediately, like any queued write.
+  const now = settings.readSettings()
+  assert.equal(now.theme, 'system')
+  assert.equal(now.density, 'comfortable')
+  assert.deepEqual(await written, { ok: true })
+
+  const after = readFile()
+  // A replacement, not a patch: keys outside DEFAULTS are gone, not inherited.
+  assert.equal(Object.hasOwn(after, 'uiState'), false, 'uiState must not survive a reset')
+  assert.equal(Object.hasOwn(after, 'anonymousMetrics'), false, 'the metrics choice must not survive a reset')
+  assert.equal(Object.hasOwn(after, 'theme'), false, 'defaults are derived at read time, not stored')
+  // Sync bookkeeping survives with the synced preferences marked dirty, so an
+  // account would learn about the reset rather than restoring the old values.
+  assert.equal(after._sync.revision, before._sync.revision + 1)
+  assert.equal(after._sync.dirty, true)
+  for (const field of ['theme', 'density', 'updateCheck']) {
+    assert.ok(after._sync.dirtyFields.includes(field), `${field} must be marked dirty`)
+  }
+})
+
 test('reducedTransparency defaults to null — the OS setting decides', () => {
   assert.equal(Object.hasOwn(settings.readSettings(), 'reducedTransparency'), true)
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-settings-empty-'))

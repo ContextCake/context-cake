@@ -66,6 +66,8 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
   // already use, which is what lets an in-progress "1." survive a re-render
   // instead of being silently rounded back to "1" before the next digit lands.
   const [units, setUnits] = useState<Record<string, MsUnit>>({})
+  const [resettingAll, setResettingAll] = useState(false)
+  const [resetAllError, setResetAllError] = useState<string | null>(null)
 
   // Not memoized: a plain closure recreated each render, always reading the
   // current `units` state directly (not via a setUnits updater) so a save
@@ -147,6 +149,30 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
     }
     if (value === (payload?.settings[def.key] ?? def.default)) return // no change
     void commit(def, value)
+  }
+
+  /** One PATCH with every catalog key set to null — the engine treats null as
+   *  "drop the stored value" per key, so a single round trip returns every
+   *  limit to its default (and one re-index, not one per field). */
+  const resetAll = async () => {
+    if (!payload || resettingAll) return
+    setResettingAll(true)
+    setResetAllError(null)
+    try {
+      const res = await apiFetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(Object.fromEntries(payload.catalog.map((d) => [d.key, null]))),
+      })
+      const data = await res.json().catch(() => ({}) as { error?: string })
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? `Server returned ${res.status}`)
+      apply(data as SettingsPayload)
+      onChanged?.()
+    } catch (e) {
+      setResetAllError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setResettingAll(false)
+    }
   }
 
   if (loadError) {
@@ -236,6 +262,21 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
             </div>
           )
         })}
+        {payload.catalog.some((d) => payload.stored[d.key] !== undefined) && (
+          <div className="cc-settings-row">
+            <div>
+              <strong>Reset to defaults</strong>
+              <span>Return every limit above to its default value.</span>
+              {resetAllError && <p className="cc-settings-rowerr">{resetAllError}</p>}
+            </div>
+            <button
+              type="button"
+              className="cc-settings-reset"
+              onClick={() => void resetAll()}
+              disabled={resettingAll}
+            >{resettingAll ? 'Resetting…' : 'Reset All'}</button>
+          </div>
+        )}
       </div>
       <p style={{ margin: '12px 2px 0', fontSize: 11.5, lineHeight: 1.5, color: 'var(--cc-caption)' }}>
         Changing a limit re-indexes your sources in the background. ContextCake stays usable while it works.

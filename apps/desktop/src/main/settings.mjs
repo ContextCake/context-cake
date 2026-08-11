@@ -128,6 +128,11 @@ function persistSettings(patch, changedFields) {
     const dirtyFields = [...new Set([...(current._sync?.dirtyFields ?? []), ...changedFields])]
     next._sync = { ...next._sync, dirty: true, dirtyFields, localUpdatedAt: new Date().toISOString() }
   }
+  return queueWrite(next)
+}
+
+/** Hand a fully-formed settings object to the write queue. */
+function queueWrite(next) {
   unflushed = next
   const seq = (issuedSeq += 1)
   const written = schedule().then(() => (
@@ -149,6 +154,28 @@ export function writeLocalSettings(patch) {
 
 export function markSettingsDirty(fields) {
   return persistSettings({}, fields)
+}
+
+/**
+ * Return every local preference to its default — a replacement, not a merged
+ * patch: reset means uiState, window geometry, the metrics choice, and any
+ * stale keys go too, which persistSettings (a spread over the current file)
+ * cannot express. The sync bookkeeping alone survives, with the revision
+ * bumped and the account-synced preference fields marked dirty, so a signed-in
+ * account learns about the reset instead of writing the old values straight
+ * back over it on the next pull.
+ */
+export function resetSettings() {
+  const current = readSettings()
+  return queueWrite({
+    _sync: {
+      ...(current._sync ?? {}),
+      revision: (current._sync?.revision ?? 0) + 1,
+      dirty: true,
+      dirtyFields: [...new Set([...(current._sync?.dirtyFields ?? []), 'theme', 'density', 'updateCheck'])],
+      localUpdatedAt: new Date().toISOString(),
+    },
+  })
 }
 
 /**

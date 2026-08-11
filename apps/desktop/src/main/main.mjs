@@ -9,7 +9,7 @@ import { createGithubConnections, verifyGithubToken } from './github-connections
 import { buildMenu } from './menu.mjs'
 import { configDir, enginePaths, manifestPath, settingsPath } from './paths.mjs'
 import { resolveRevealTarget } from './reveal.mjs'
-import { flushSettings, flushSettingsSync, markSettingsDirty, readSettings, writeLocalSettings, writeSettings } from './settings.mjs'
+import { flushSettings, flushSettingsSync, markSettingsDirty, readSettings, resetSettings, writeLocalSettings, writeSettings } from './settings.mjs'
 import { createAuthManager } from './auth.mjs'
 import {
   combineManifestSources,
@@ -920,6 +920,63 @@ handleTrustedIpc('contextcake:reveal-file', async ({ layer, rel } = {}) => {
     // console can render it verbatim instead of Electron's wrapper text.
     return { ok: false, error: err?.message ?? 'That file could not be revealed.' }
   }
+})
+
+// The app's own configuration folder (settings.json, manifest.json). Unlike
+// reveal-file above there is no renderer input at all: the path is fixed to
+// userData, so the only folder this can ever show is the one the app owns.
+handleTrustedIpc('contextcake:reveal-config-dir', () => {
+  const dir = configDir()
+  if (!fs.existsSync(dir)) return { ok: false, error: 'The configuration folder does not exist yet.' }
+  shell.showItemInFolder(dir)
+  return { ok: true }
+})
+
+// Export a copy of settings.json for a support thread. The destination is
+// chosen in a native save dialog here — the renderer supplies nothing. The
+// queue is flushed first so the copy is what this process believes, not one
+// patch behind; the file holds preferences and window/view state only, never
+// credentials (settings.mjs, first paragraph).
+handleTrustedIpc('contextcake:settings-export', async ({ window }) => {
+  await flushSettings()
+  const result = await dialog.showSaveDialog(window, {
+    title: 'Export ContextCake Settings',
+    defaultPath: 'ContextCake-settings.json',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  })
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true }
+  try {
+    await fs.promises.writeFile(result.filePath, `${JSON.stringify(readSettings(), null, 2)}\n`)
+    return { ok: true, path: result.filePath }
+  } catch (err) {
+    return { ok: false, error: err?.message ?? 'The settings could not be exported.' }
+  }
+})
+
+// Reset local preferences to their defaults. Confirmation is native and lives
+// here, beside the destructive act, so no renderer state can skip it. The
+// same side effects as preferences:set follow the write: appearance re-applies
+// and broadcasts, the updater re-reads its enable flag, and the menu rebuilds.
+handleTrustedIpc('contextcake:settings-reset', async ({ window }) => {
+  const { response } = await dialog.showMessageBox(window, {
+    type: 'warning',
+    message: 'Reset ContextCake’s local preferences?',
+    detail: 'Appearance, update, window, and view settings on this Mac return to their defaults. '
+      + 'Your sources, knowledge, and connected accounts are not affected.',
+    buttons: ['Reset Preferences', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+  })
+  if (response !== 0) return { ok: false, canceled: true }
+  const { written } = resetSettings()
+  applyNativeAppearance()
+  initUpdater()
+  installApplicationMenu()
+  // The metrics choice is gone with the rest, so any pending first-launch
+  // report no longer has a persisted consent behind it.
+  cancelAnonymousFirstLaunch()
+  if (!(await settleSettingsWrites([written]))) throw new Error(SETTINGS_WRITE_FAILED)
+  return { ok: true }
 })
 
 // The shell's own recovery action for a wedged engine. It is a restart of the

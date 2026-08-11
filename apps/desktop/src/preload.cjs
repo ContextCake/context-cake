@@ -19,8 +19,18 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   // Per-launch bearer token the local engine service requires on /api/*. It is
   // fetched through trusted IPC, never renderer argv (visible through `ps`).
   getApiToken: () => ipcRenderer.invoke('contextcake:get-api-token'),
-  // App version, for display. Updates are owned by the native updater.
+  // App version, for display.
   version: arg('cc-version'),
+  // Update status/actions, backed by the native autoUpdater (see
+  // src/main/updater.mjs). Settings polls getStatus() on open and subscribes
+  // to onStatus() for live progress; the menu's "Check for Updates…" dialog
+  // flow drives the same underlying check independently.
+  updates: {
+    getStatus: () => ipcRenderer.invoke('updates:get-status'),
+    check: () => ipcRenderer.invoke('updates:check'),
+    install: () => ipcRenderer.invoke('updates:install'),
+    onStatus: (cb) => subscribe('updates:status', cb),
+  },
   // Initial, non-PII snapshot. The live state (including optional email) is
   // delivered through __CC_AUTH so it never appears in process arguments.
   authState: { signedIn: arg('cc-signed-in') === '1', available: arg('cc-accounts') === '1' },

@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ThemeModeProvider } from '../theme-mode'
+import { __resetUpdateCheckCache } from '../update'
 import { SettingsView } from './SettingsView'
 
 let container: HTMLDivElement
@@ -390,5 +391,76 @@ describe('SettingsView', () => {
 
     await act(async () => button('General').click())
     expect(cancelSignIn).toHaveBeenCalledOnce()
+  })
+
+  it('desktop: checks for updates via the native updater and installs once a download completes', async () => {
+    let statusListener: ((status: UpdateStatus) => void) | undefined
+    const updates = {
+      getStatus: vi.fn().mockResolvedValue({ state: 'idle' } satisfies UpdateStatus),
+      check: vi.fn().mockImplementation(async () => {
+        statusListener?.({ state: 'downloaded', version: '1.2.3' })
+        return { state: 'downloaded', version: '1.2.3' }
+      }),
+      install: vi.fn().mockResolvedValue({ installed: true }),
+      onStatus: vi.fn((cb: (status: UpdateStatus) => void) => {
+        statusListener = cb
+        return () => { statusListener = undefined }
+      }),
+    }
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '1.2.2',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      updates,
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" onClose={vi.fn()} /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(updates.getStatus).toHaveBeenCalledOnce()
+    expect(findButton('Update Now')).toBeUndefined()
+
+    await act(async () => button('Check for Updates').click())
+    expect(updates.check).toHaveBeenCalledOnce()
+    await act(async () => {})
+
+    expect(container.textContent).toContain('v1.2.3')
+    await act(async () => button('Update Now').click())
+    expect(updates.install).toHaveBeenCalledOnce()
+  })
+
+  it('browser/live: manually checking links to a newly published release', async () => {
+    __resetUpdateCheckCache()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{ tag_name: 'app-v9.9.9', html_url: 'https://example.com/9.9.9' }],
+    }))
+    try {
+      await act(async () => root.render(
+        <ThemeModeProvider><SettingsView appMode="live" onClose={vi.fn()} /></ThemeModeProvider>,
+      ))
+      await act(async () => {})
+      expect(findButton('Update Now')).toBeUndefined()
+
+      await act(async () => button('Check for Updates').click())
+      await act(async () => {})
+
+      expect(container.textContent).toContain('v9.9.9')
+      const link = Array.from(container.querySelectorAll('a')).find((a) => a.textContent === 'View release')
+      expect(link?.getAttribute('href')).toBe('https://example.com/9.9.9')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('offers no update control in demo mode', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="demo" onClose={vi.fn()} /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(findButton('Check for Updates')).toBeUndefined()
   })
 })

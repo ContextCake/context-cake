@@ -12,6 +12,22 @@ const SIX_HOURS = 6 * 60 * 60 * 1000
 let timer = null
 let quitHookRegistered = false
 
+// ---- Renderer-facing status (Settings → "Check for Updates" / "Update Now") -
+//
+// Separate from checkInteractive()'s native dialogs on purpose: the Settings
+// pane wants a persistent, pollable status a user can look at after opening
+// the window, not a one-shot dialog. Both paths drive the same autoUpdater
+// singleton, so a check started from either surface updates both.
+let status = { state: 'unsupported' }
+let notify = null
+let rendererListenersRegistered = false
+
+function setStatus(next) {
+  status = next
+  notify?.('updates:status', status)
+  return status
+}
+
 export function initUpdater() {
   // KNOWN CONSTRAINT (tracked): electron-updater's GitHub provider reads
   // github.com/ContextCake/context-cake/releases/latest for the WHOLE repo. If
@@ -84,4 +100,68 @@ export async function checkInteractive(win) {
       detail: String(err?.message ?? err),
     })
   }
+}
+
+/**
+ * Wire autoUpdater's events into `status` and push each change to every
+ * trusted renderer via `notifyFn` (main.mjs's `sendToRenderer`). Idempotent
+ * and safe to call more than once — only the first call in a packaged app
+ * attaches listeners; unpackaged builds stay `unsupported` forever, since
+ * unsigned dev builds can't apply an update anyway (see initUpdater above).
+ */
+export function registerRendererUpdates(notifyFn) {
+  notify = notifyFn
+  if (rendererListenersRegistered || !app.isPackaged) return
+  rendererListenersRegistered = true
+  status = { state: 'idle' }
+  autoUpdater.on('checking-for-update', () => setStatus({ state: 'checking' }))
+  autoUpdater.on('update-available', (info) => setStatus({ state: 'downloading', version: info?.version, percent: 0 }))
+  autoUpdater.on('update-not-available', () => setStatus({ state: 'not-available' }))
+  autoUpdater.on('download-progress', (progress) => setStatus({ state: 'downloading', version: status.version, percent: Math.round(progress?.percent ?? 0) }))
+  autoUpdater.on('update-downloaded', (info) => setStatus({ state: 'downloaded', version: info?.version ?? status.version }))
+  autoUpdater.on('error', (err) => setStatus({ state: 'error', error: String(err?.message ?? err) }))
+}
+
+/** Current status for a renderer that just opened Settings and missed earlier events. */
+export function getUpdateStatus() {
+  return app.isPackaged ? status : { state: 'unsupported' }
+}
+
+/**
+ * Renderer-initiated check (the Settings "Check for Updates" button). Ignores
+ * the `updateCheck` preference on purpose — same as checkInteractive() — a
+ * manual check is a distinct action from the periodic background one.
+ */
+export async function checkForUpdatesFromRenderer() {
+  if (!app.isPackaged) return setStatus({ state: 'unsupported' })
+  setStatus({ state: 'checking' })
+  try {
+    await autoUpdater.checkForUpdates()
+    return status
+  } catch (err) {
+    return setStatus({ state: 'error', error: String(err?.message ?? err) })
+  }
+}
+
+/**
+ * The Settings "Update Now" button. A no-op unless a download actually
+ * completed. Confirms with the same native dialog checkInteractive() already
+ * uses for the menu path — quitAndInstall() is an instant, unprompted quit
+ * otherwise, which would blindside a user mid-task and (an adversarial review
+ * on PR #128 flagged this) gives any script running in a trusted renderer an
+ * unconfirmed way to force the app to quit.
+ */
+export async function installNow(win) {
+  if (status.state !== 'downloaded') return { installed: false }
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'info',
+    message: `ContextCake ${status.version ? `${status.version} ` : ''}is ready to install.`,
+    detail: 'ContextCake will quit and relaunch to apply the update.',
+    buttons: ['Relaunch to Update', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+  })
+  if (response !== 0) return { installed: false }
+  autoUpdater.quitAndInstall()
+  return { installed: true }
 }

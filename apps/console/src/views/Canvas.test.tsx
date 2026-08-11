@@ -342,7 +342,11 @@ describe('inline conflict quick-resolve', () => {
     revision: 'r1',
   }
 
-  async function renderWithConflict(decideDiscrepancy: ReturnType<typeof vi.fn>, conflict: Conflict = CONFLICT_RECORD) {
+  async function renderWithConflict(
+    decideDiscrepancy: ReturnType<typeof vi.fn>,
+    conflict: Conflict = CONFLICT_RECORD,
+    resolutionError: { message: string; partial: boolean } | null = null,
+  ) {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     vi.resetModules()
     vi.doMock('../store', () => {
@@ -350,7 +354,7 @@ describe('inline conflict quick-resolve', () => {
       const state = {
         mode: 'live', concepts: [CONFLICTED], conflicts: [conflict], sources: [],
         setSelConcept: noop, setSelConflict: noop, setView: noop,
-        decideDiscrepancy, resolvingConflict: null, resolutionError: null,
+        decideDiscrepancy, resolvingConflict: null, resolutionError,
       }
       const useState = () => state
       return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
@@ -422,6 +426,22 @@ describe('inline conflict quick-resolve', () => {
       reasonCode: 'target_missing',
       note: '',
     })
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('does not show a stale error from another discrepancy before the user attempts this one', async () => {
+    const decideDiscrepancy = vi.fn(async () => {})
+    const { container, root, act } = await renderWithConflict(
+      decideDiscrepancy,
+      CONFLICT_RECORD,
+      { message: 'A different item failed', partial: false },
+    )
+
+    const ghost = Array.from(container.querySelectorAll('button')).find((button) => button.getAttribute('title') === 'Layers disagree — open the conflict')
+    await act(async () => ghost!.click())
+    expect(container.textContent).not.toContain('A different item failed')
 
     await act(async () => root.unmount())
     container.remove()

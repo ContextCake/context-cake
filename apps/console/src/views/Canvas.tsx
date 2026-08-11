@@ -593,6 +593,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
 
       {quickResolve && (
         <ConflictQuickResolve
+          key={quickResolve.conflict.id}
           conflict={quickResolve.conflict}
           anchorEl={quickResolve.anchorEl}
           onClose={() => setQuickResolve(null)}

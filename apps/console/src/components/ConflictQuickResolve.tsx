@@ -27,6 +27,7 @@ export function ConflictQuickResolve({
   const [showAcknowledge, setShowAcknowledge] = useState(false)
   const [reasonCode, setReasonCode] = useState<AcknowledgementReason | ''>('')
   const [note, setNote] = useState('')
+  const [attempted, setAttempted] = useState(false)
   const busy = resolvingConflict === conflict.id
   // Broken links require a source edit — the same disqualifier DecisionPanel
   // uses for "use this answer everywhere" / "write a reconciled answer".
@@ -83,6 +84,7 @@ export function ConflictQuickResolve({
 
   const useAnswer = async (sourceLayer: string) => {
     if (!conflict.revision || busy) return
+    setAttempted(true)
     try {
       await decideDiscrepancy({ discrepancyId: conflict.id, revision: conflict.revision, action: 'choose_contribution', selectedSource: sourceLayer })
       onClose()
@@ -91,6 +93,7 @@ export function ConflictQuickResolve({
 
   const acknowledge = async () => {
     if (!conflict.revision || !reasonCode || busy) return
+    setAttempted(true)
     try {
       await decideDiscrepancy({ discrepancyId: conflict.id, revision: conflict.revision, action: 'acknowledge', reasonCode, note })
       onClose()
@@ -99,6 +102,7 @@ export function ConflictQuickResolve({
 
   const acknowledgeMissingTarget = async () => {
     if (!conflict.revision || busy) return
+    setAttempted(true)
     try {
       await decideDiscrepancy({
         discrepancyId: conflict.id,
@@ -126,7 +130,7 @@ export function ConflictQuickResolve({
         <strong>{conflict.title}</strong>
         <span>{conflict.section}</span>
       </div>
-      {resolutionError && <p className="cc-conflict-popover-error" role="alert">{resolutionError.message}</p>}
+      {attempted && resolutionError && <p className="cc-conflict-popover-error" role="alert">{resolutionError.message}</p>}
       {cannotWrite ? (
         <div className="cc-conflict-popover-broken-link">
           <p className="cc-conflict-popover-note">Keep the link without changing files. ContextCake will record <strong>Target not created yet</strong> and recheck when sources change.</p>

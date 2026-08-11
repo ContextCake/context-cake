@@ -31,10 +31,11 @@ assigned by a user and does not affect resolver precedence.
 
 Acknowledgement reason codes are `different_scopes`, `temporary_migration`,
 `source_specific_authority`, `target_missing`, and `other`. `target_missing`
-is available only for `broken_link` discrepancies. Acknowledgement writes no
-source content. Write actions preflight every writable target, journal a prepared
-transaction, keep recoverable originals beside each file, and either commit
-the complete set or report rollback/recovery state precisely.
+is the console's dedicated reason for `broken_link` discrepancies.
+Acknowledgement writes no source content. Write actions preflight every writable
+target, journal a prepared transaction, keep recoverable originals beside each
+file, and either commit the complete set or report rollback/recovery state
+precisely.
 
 Records append as schema v2 to
 `.contextcake/profiles/<profile-id>/conflict-resolutions.ndjson` (the default

@@ -6,8 +6,8 @@ querying, editing, discrepancy resolution, Packs, team sync, capture, and
 promotion. MCP remains the knowledge plane.
 
 **Date:** 2026-08-11
-**Status:** Drafted — §8 decisions accepted by John 2026-08-11 (plan-approval
-session); spec awaiting final sign-off before implementation
+**Status:** Signed off 2026-08-11 (§8 records the accepted decisions) —
+milestone 1 of the design's delivery sequence implemented in the same change
 **Workflow:** Design-First — the engine, manifest formats, profile runtime, and
 distribution decisions are predetermined constraints; requirements derive from
 them. Companion design: `specs/contextcake-control-plane/design.md`.
@@ -118,18 +118,27 @@ auditable CLI — never in tools an agent can invoke implicitly.
   and a ControlError with a stable `code`; context fields MAY be `null` only
   when failure precedes manifest/profile selection.
 - [ ] WHEN any error, log, or envelope is produced THE SYSTEM SHALL redact
-  secret-shaped values before serialization; secrets SHALL never appear in
-  argv, manifests, JSON output, logs, or telemetry.
+  secret values before serialization; secrets SHALL never appear in argv,
+  manifests, JSON output, logs, or telemetry. Redaction covers three
+  testable classes: (a) exact-match scrubbing of every value obtained from a
+  credential source (registry-resolved secrets, `tokenEnv` values, the
+  injected token map) anywhere it appears in an error or output, (b) strings
+  matching known provider token prefixes (e.g. `ghp_`, `github_pat_`,
+  `sk-`, `AKIA`), and (c) `Authorization`-header values.
 - [ ] WHEN `help --json` runs THE SYSTEM SHALL enumerate canonical command
   IDs, accepted inputs, mutation class, required preconditions, possible
   error codes, output schema, and the per-family stability marker.
 - [ ] WHEN `mcp` is invoked THE SYSTEM SHALL accept only its documented
   serving flags and reject `--json`, `--quiet`, `--timeout`, and any other
   flag that could corrupt or half-kill a long-lived stdio session.
+- [ ] WHEN `account status` runs in an accounts-disabled build THE SYSTEM
+  SHALL exit `0` and report a typed "disabled in this build" state rather
+  than omitting the command (§8.6).
 - [ ] WHEN `--timeout` is supplied to a mutating command THE SYSTEM SHALL
-  either refuse it or enforce it strictly before the point of no return; a
-  timeout SHALL never abort between a journal write and its completion
-  marker.
+  refuse it with exit `2`, except for mutating commands whose design
+  explicitly accepts it, where it SHALL be enforced only before the point of
+  no return; a timeout SHALL never abort between a journal write and its
+  completion marker.
 
 ### 5.2 Exit codes and coverage
 
@@ -163,8 +172,13 @@ auditable CLI — never in tools an agent can invoke implicitly.
   directory without deleting it; `profile purge-state --confirm` SHALL be the
   separate destructive action.
 - [ ] WHEN sidecar state exists unscoped from before namespacing THE SYSTEM
-  SHALL first recover any incomplete journals, then atomically migrate the
-  unscoped state to `.contextcake/profiles/default/`.
+  SHALL migrate it to `.contextcake/profiles/default/` via same-filesystem
+  renames before any store access, with journal recovery running afterward
+  through its normal startup path (equivalent to recovering first, because
+  journal records carry absolute target paths — the journal file's own
+  location never participates in recovery); a migration interrupted by a
+  crash SHALL complete on the next run, and state present in both layouts
+  SHALL be refused, never merged by guess.
 
 ### 5.4 Sources
 
@@ -324,7 +338,10 @@ auditable CLI — never in tools an agent can invoke implicitly.
   a protected GitHub environment, automatic provenance, 2FA, token
   publishing disabled, no lifecycle scripts, and a minimal `files`
   allowlist verified via `npm pack --dry-run` in CI — and SHALL update the
-  site's "Why isn't this on npm?" page in the same release.
+  site's install messaging in the same release (the "Why a source archive?"
+  section of `apps/site/src/content/docs/docs/getting-started/installation.md`
+  and `apps/site/src/pages/install.astro`, which currently explain why npm is
+  unavailable).
 - [ ] WHEN a wave publishes THE SYSTEM SHALL include only contract-complete
   families in the dispatcher (absent, not broken); `help --json` stability
   markers SHALL govern what agents may rely on.
@@ -389,7 +406,8 @@ Accepted by John 2026-08-11 (plan-approval session):
    stores despite the prior "never let a token reach the login keychain"
    doctrine; mitigations are contractual (§5.5): shared delete path, host
    bindings carried, uninstall documentation.
-4. **Node engines `>=22`** on the published package (repo currently `>=18`).
+4. **Node engines `>=22`** on the published package (bumped from `>=18` in
+   the milestone-1 change).
 
 Inherited from `specs/contextcake-distribution/spec.md` §8: npm name
 `contextcake` with `context-cake` reserved as a pointer package; npm gated

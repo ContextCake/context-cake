@@ -36,9 +36,10 @@ transaction, keep recoverable originals beside each file, and either commit
 the complete set or report rollback/recovery state precisely.
 
 Records append as schema v2 to
-`.contextcake/conflict-resolutions.ndjson`. Existing schema-v1 records are read
-unchanged. Transaction states append to
-`.contextcake/discrepancy-transactions.ndjson`.
+`.contextcake/profiles/<profile-id>/conflict-resolutions.ndjson` (the default
+profile uses `profiles/default/`; pre-profile files migrate there on first
+access). Existing schema-v1 records are read unchanged. Transaction states
+append to `.contextcake/profiles/<profile-id>/discrepancy-transactions.ndjson`.
 
 ## Governed rules
 

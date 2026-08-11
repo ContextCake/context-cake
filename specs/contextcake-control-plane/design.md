@@ -158,7 +158,7 @@ no return; mutating commands refuse it otherwise.
   through the existing capture pipeline; `capture discard` deletes only the
   request. Expired requests are inert and reaped lazily.
 - The MCP server's in-process two-phase flow and tool schemas stay
-  byte-identical to `fixtures/mcp-tools-baseline.json`.
+  byte-identical to `packages/core/fixtures/mcp-tools-baseline.json`.
 
 ## 9. Coexistence with the running app
 
@@ -189,7 +189,8 @@ Every operational CLI command forks a second engine beside the app's warm one
   read B's sources or credentials).
 - Writes: stale-revision refusal, dry-run diffs, discrepancy
   rollback/recovery, capture expiry/tampering/permissions, telemetry
-  content-free invariant, byte-identical MCP baseline.
+  content-free invariant, byte-identical MCP baseline
+  (`packages/core/fixtures/mcp-tools-baseline.json`).
 - End-to-end: native macOS and Linux scenarios (init, source CRUD, locking,
   MCP lifecycle, credential backend present/absent, durable paths). Windows
   e2e arrives with the Windows milestone.

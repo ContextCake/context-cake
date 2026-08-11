@@ -53,7 +53,6 @@ import { indexEntryKeys, layerIdentity } from "./index-keys.mjs";
 import { memoryPressureLevel } from "./memory-pressure.mjs";
 import {
   getManifestProfileLayers,
-  readContextManifest,
   readContextManifestQuarantined,
   stableJson,
   withManifestLockAsync,
@@ -378,17 +377,14 @@ export function createEngineService({
     }
   }
 
-  function readManifest() {
-    return readContextManifest(MANIFEST, { allowMissing: false });
-  }
-
   // The read path's manifest, where a single malformed layer is quarantined
   // rather than fatal: validation used to throw inside every route's
   // openSources(), so one bad layer answered 500 on /api/settings and
   // /api/graph — the two screens a user needs to see the problem and fix it.
   // The quarantined layers are NOT in the manifest this returns: they cannot be
   // built, watched, or reached by the file APIs, only shown as broken rows.
-  // Mutations keep using readManifest(), so nothing invalid is ever written.
+  // Mutations live in control/sources.mjs and read strictly there, so nothing
+  // invalid is ever written.
   function readManifestForRead() {
     return readContextManifestQuarantined(MANIFEST, { allowMissing: false });
   }

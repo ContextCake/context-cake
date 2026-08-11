@@ -396,13 +396,17 @@ Inherited from `specs/contextcake-distribution/spec.md` §8: npm name
 behind the supply-chain-hardening review; site `/install` updated in the same
 release.
 
+Resolved 2026-08-11 (spec sign-off session):
+
+5. **Homebrew ships in the same wave as npm** — one release publishes both
+   channels together.
+6. **`account status` exists with a typed "disabled" state** while builds
+   ship accounts-disabled, reporting that accounts are disabled in this
+   build rather than omitting the family.
+
 ## 9. Open Questions
 
-- [NEEDS CLARIFICATION: Does the CLI also ship via the Homebrew formula in the
-  same wave as npm, or does Homebrew continue to track the desktop app only?]
-- [NEEDS CLARIFICATION: What should `account status` report while builds ship
-  accounts-disabled (`{"accounts":"disabled"}` marker) — a typed "disabled in
-  this build" state, or omission of the family until accounts ship?]
+None — all markers resolved (§8).
 
 ## 10. Dependencies
 

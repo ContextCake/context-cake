@@ -200,8 +200,8 @@ Every operational CLI command forks a second engine beside the app's warm one
 3. First publication: hardening gate (OIDC trusted publishing, provenance,
    2FA, no lifecycle scripts, `files` allowlist verified by
    `npm pack --dry-run` in CI), site `/install` update, version alignment
-   across root/desktop/MCP. Wave A ships as `0.x`; absent families are
-   absent, not broken.
+   across root/desktop/MCP. Wave A ships as `0.x` on npm and Homebrew
+   together (spec §8.5); absent families are absent, not broken.
 4. Wave B as contracts freeze: writes, discrepancies, Packs, team sync,
    persistent capture approval — each family a minor release.
 5. Credential broker (macOS/Linux) + engine-wide MCP env hardening +

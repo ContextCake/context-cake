@@ -126,11 +126,13 @@ describe('IndexingSettings', () => {
     mocks.apiFetch.mockImplementation(async () => payload({}))
     await act(async () => resetAll?.click())
     // Every catalog key rides one request as null — one round trip, one
-    // re-index, rather than a PATCH per field.
-    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/settings', expect.objectContaining({
-      method: 'PATCH',
-      body: JSON.stringify({ maxDocFiles: null, sourceBudgetMs: null }),
-    }))
+    // re-index, rather than a PATCH per field. Parsed rather than compared as
+    // a string: key order is meaningless to the engine, so asserting the
+    // serialization would fail on a harmless catalog reordering.
+    const calls = mocks.apiFetch.mock.calls as [string, RequestInit][]
+    const [, init] = calls[calls.length - 1]
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(String(init.body))).toEqual({ maxDocFiles: null, sourceBudgetMs: null })
     expect(onChanged).toHaveBeenCalledOnce()
     // Everything is default again, so the control has nothing left to reset.
     expect(Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Reset All')).toBeUndefined()

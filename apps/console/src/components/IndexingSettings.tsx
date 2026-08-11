@@ -214,7 +214,7 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
                     type="button"
                     className="cc-settings-reset"
                     onClick={() => void commit(def, null)}
-                    disabled={row?.saving}
+                    disabled={row?.saving || resettingAll}
                     title={`Reset to the default (${isMs ? humanizeMs(def.default) : def.default.toLocaleString()})`}
                   >Reset</button>
                 )}
@@ -234,7 +234,11 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
                     inputMode="decimal"
                     {...(isMs ? {} : { min: def.min, max: def.max })}
                     value={row?.value ?? ''}
-                    disabled={row?.saving}
+                    // Disabled during a reset as well as a save: mousedown on
+                    // Reset All blurs whatever field is focused, which fires
+                    // save() — so an edited-but-uncommitted value raced the
+                    // reset as a second PATCH, and whichever landed last won.
+                    disabled={row?.saving || resettingAll}
                     onChange={(e) => setRow(def.key, { value: e.target.value, error: null })}
                     onBlur={() => save(def)}
                     onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
@@ -245,7 +249,7 @@ export function IndexingSettings({ onChanged }: { onChanged?: () => void }) {
                       className="cc-settings-unit-select"
                       aria-label={`${def.label} unit`}
                       value={unit}
-                      disabled={row?.saving}
+                      disabled={row?.saving || resettingAll}
                       onChange={(e) => {
                         const nextUnit = e.target.value as MsUnit
                         const currentMs = Number.isFinite(typedValue) ? typedValue * MS_PER_UNIT[unit] : NaN

@@ -130,10 +130,19 @@ function CliControl() {
   useEffect(() => {
     if (!bridge) return
     let active = true
-    // Promise.resolve tolerates an older preload whose getStatus is a stub.
-    Promise.resolve(bridge.getStatus())
-      .then((result) => { if (active && result) setStatus(result.status) })
-      .catch(() => { if (active) setStatus('missing') })
+    // An older preload may not define getStatus at all, in which case the CALL
+    // throws synchronously — before any promise exists to reject. There is no
+    // error boundary in this app, so a throw out of an effect unmounts the
+    // whole React root: a blank Settings window rather than a missing row.
+    // try/catch is what actually covers that; a bare .catch() does not.
+    void (async () => {
+      try {
+        const result = await bridge.getStatus()
+        if (active) setStatus(result?.status ?? 'missing')
+      } catch {
+        if (active) setStatus('missing')
+      }
+    })()
     return () => { active = false }
   }, [bridge])
 
@@ -290,8 +299,17 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
 
   // Desktop only, and absent rather than disabled on the web — same doctrine
   // as Reveal in Finder for layer files (src/reveal.ts).
-  const canRevealConfig = typeof window.__CC_DESKTOP?.revealConfigDir === 'function'
-  const settingsFile = window.__CC_DESKTOP?.settingsFile
+  //
+  // Gated on the window's ROLE, not just on the bridge being present. One
+  // preload serves both windows, so these three functions exist in the main
+  // window too — but their IPC channels are `['settings']`-only, so a click
+  // there would answer "Untrusted IPC sender", and for Reset that error would
+  // raise the "could not be saved" banner while nothing had been reset. The
+  // main window never renders this overlay today; this keeps that an
+  // implementation detail rather than the only thing holding the row shut.
+  const isSettingsWindow = window.__CC_DESKTOP?.windowRole === 'settings'
+  const canRevealConfig = isSettingsWindow && typeof window.__CC_DESKTOP?.revealConfigDir === 'function'
+  const settingsFile = isSettingsWindow ? window.__CC_DESKTOP?.settingsFile : undefined
   const [exportNote, setExportNote] = useState<string | null>(null)
   const [resetBusy, setResetBusy] = useState(false)
 
@@ -377,7 +395,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
                 {settingsFile && <div className="cc-settings-row"><div><strong>Reset settings</strong><span>Return appearance, update, window, and view settings on this Mac to their defaults. Sources and knowledge are not affected.</span></div><Button type="button" variant="secondary" disabled={resetBusy} onClick={() => void resetSettingsFile()}>{resetBusy ? 'Resetting…' : 'Reset…'}</Button></div>}
               </div>
             </section>
-            <ShortcutsReference />
+            <ShortcutsReference appMode={appMode} />
           </>}
 
           {pane === 'indexing' && <><header className="cc-settings-header"><h1>Indexing</h1><span>Global limits for how much ContextCake reads from every source.</span></header><IndexingSettings onChanged={indexingChanged} /></>}

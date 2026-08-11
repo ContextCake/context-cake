@@ -461,6 +461,7 @@ describe('SettingsView', () => {
     window.__CC_DESKTOP = {
       getApiToken: vi.fn().mockResolvedValue('token'),
       version: '0.0.0-test',
+      windowRole: 'settings',
       authState: { signedIn: false, available: false },
       preferences: preferences(),
       revealConfigDir,
@@ -532,6 +533,57 @@ describe('SettingsView', () => {
     expect(findButton('Reinstall')).toBeDefined()
   })
 
+  // The states the main process refuses outright (cli-install.mjs answers each
+  // with a native dialog explaining why). Offering Install for them would
+  // promise an action that cannot happen — apps/desktop/CLAUDE.md calls
+  // keeping this gate out explicitly.
+  for (const [status, expected] of [
+    ['blocked', 'Move it to Applications'],
+    ['conflict', 'Another program owns'],
+    ['development', 'available in packaged builds'],
+    ['installed', 'is installed in /usr/local/bin'],
+  ] as const) {
+    it(`desktop: offers no install action while the command-line tool is ${status}`, async () => {
+      window.__CC_DESKTOP = {
+        getApiToken: vi.fn().mockResolvedValue('token'),
+        version: '0.0.0-test',
+        windowRole: 'settings',
+        authState: { signedIn: false, available: false },
+        preferences: preferences(),
+        cli: { getStatus: vi.fn().mockResolvedValue({ status, message: '', shimPath: null }), install: vi.fn() },
+      } as unknown as typeof window.__CC_DESKTOP
+
+      await act(async () => root.render(
+        <ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>,
+      ))
+      await act(async () => {})
+      expect(container.textContent).toContain(expected)
+      expect(findButton('Install')).toBeUndefined()
+      expect(findButton('Reinstall')).toBeUndefined()
+    })
+  }
+
+  it('desktop: survives a preload too old to expose getStatus at all', async () => {
+    // The call throws synchronously, before any promise exists to reject.
+    // There is no error boundary in this app, so an unhandled throw out of the
+    // effect blanks the entire Settings window rather than one row.
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '0.0.0-test',
+      windowRole: 'settings',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      cli: {},
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(container.querySelector('h1')?.textContent).toBe('General')
+    expect(container.textContent).toContain('Adds the contextcake command')
+  })
+
   it('offers no command-line tool row outside the Mac app', async () => {
     await act(async () => root.render(
       <ThemeModeProvider><SettingsView appMode="live" onClose={vi.fn()} /></ThemeModeProvider>,
@@ -556,6 +608,7 @@ describe('SettingsView', () => {
     window.__CC_DESKTOP = {
       getApiToken: vi.fn().mockResolvedValue('token'),
       version: '0.0.0-test',
+      windowRole: 'settings',
       authState: { signedIn: false, available: false },
       preferences: preferences(),
       settingsFile,
@@ -567,9 +620,13 @@ describe('SettingsView', () => {
     ))
     await act(async () => {})
 
-    // Backing out of the native save dialog is not an outcome to report.
+    // Backing out of the native save dialog is not an outcome to report. The
+    // assertion is that the ORIGINAL description survives — "no 'Saved to'"
+    // passes just as well when cancel wrongly renders an error, which is the
+    // defect this case exists to catch.
     await act(async () => button('Export…').click())
-    expect(container.textContent).not.toContain('Saved to')
+    expect(container.textContent).toContain('Save a copy of ContextCake')
+    expect(container.textContent).not.toContain('could not be exported')
 
     settingsFile.export.mockResolvedValue({ ok: true, path: '/Users/me/Desktop/ContextCake-settings.json' })
     await act(async () => button('Export…').click())
@@ -588,6 +645,7 @@ describe('SettingsView', () => {
     window.__CC_DESKTOP = {
       getApiToken: vi.fn().mockResolvedValue('token'),
       version: '0.0.0-test',
+      windowRole: 'settings',
       authState: { signedIn: false, available: false },
       preferences: preferences(),
       settingsFile,
@@ -603,6 +661,13 @@ describe('SettingsView', () => {
     // whole renderer side, and a clean reset needs no banner.
     await act(async () => button('Reset…').click())
     expect(settingsFile.reset).toHaveBeenCalledOnce()
+    expect(container.textContent).not.toContain('could not be saved to this Mac')
+
+    // Cancel is the most common outcome of a confirmation dialog, and it must
+    // stay silent. Treating it as a failure would raise the alarming
+    // "in effect but could not be saved" banner every time someone backs out.
+    settingsFile.reset.mockResolvedValue({ ok: false, canceled: true })
+    await act(async () => button('Reset…').click())
     expect(container.textContent).not.toContain('could not be saved to this Mac')
 
     // A rejected invoke means "applied but not persisted" — the same story
@@ -628,12 +693,25 @@ describe('SettingsView', () => {
     await act(async () => {})
 
     expect(container.textContent).toContain('Keyboard shortcuts')
-    // One entry from each binding site: menu navigation, the palette, the
-    // Review queue's single-key routing, and the Files editor.
+    // One entry from each binding site that exists in live mode: menu
+    // navigation, the palette, and the Files editor.
     expect(container.textContent).toContain('Go to Cascade')
-    expect(container.textContent).toContain('⌘K')
-    expect(container.textContent).toContain('Store to shared context')
+    expect(container.textContent).toContain('Open the command palette')
     expect(container.textContent).toContain('Save the open file')
+
+    // Routing a signal is demo-only — store.route() returns immediately unless
+    // mode is 'demo', and live mode carries no signals at all. Listing S/R/D
+    // here would document three keys that cannot fire in the Mac app.
+    expect(container.textContent).not.toContain('Store to shared context')
+  })
+
+  it('lists the Review-queue keys only in the mode where they actually route', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="demo" onClose={vi.fn()} /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(container.textContent).toContain('Store to shared context')
+    expect(container.textContent).toContain('Keep in review')
   })
 
   it('offers no update control in demo mode', async () => {

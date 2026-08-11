@@ -938,7 +938,6 @@ handleTrustedIpc('contextcake:reveal-config-dir', () => {
 // patch behind; the file holds preferences and window/view state only, never
 // credentials (settings.mjs, first paragraph).
 handleTrustedIpc('contextcake:settings-export', async ({ window }) => {
-  await flushSettings()
   const result = await dialog.showSaveDialog(window, {
     title: 'Export ContextCake Settings',
     defaultPath: 'ContextCake-settings.json',
@@ -946,7 +945,22 @@ handleTrustedIpc('contextcake:settings-export', async ({ window }) => {
   })
   if (result.canceled || !result.filePath) return { ok: false, canceled: true }
   try {
-    await fs.promises.writeFile(result.filePath, `${JSON.stringify(readSettings(), null, 2)}\n`)
+    // Flushed AFTER the dialog, not before: the user can sit in a save panel
+    // for a minute and change a preference in another window meanwhile, and
+    // the copy should be the state at Save, not at Export….
+    await flushSettings()
+    // `_sync` is stripped, not exported. It is bookkeeping no support thread
+    // can use, and it carries the account UUID (`ownerUserId`) plus the last
+    // synced blob (`shadow`) — which holds layer names and repo slugs that
+    // survive `scrubSettings`. Both are empty in an accounts-disabled build,
+    // so this is a leak that would arrive silently on the day accounts ship.
+    // The row's own copy promises a file that is safe to attach to a bug
+    // report; this is what keeps that true.
+    const { _sync: _bookkeeping, ...exported } = readSettings()
+    // 0600, matching every other writer of this content (settings.mjs,
+    // settings-sync.mjs) — an export to a shared folder must not be the one
+    // copy other local accounts can read.
+    await fs.promises.writeFile(result.filePath, `${JSON.stringify(exported, null, 2)}\n`, { mode: 0o600 })
     return { ok: true, path: result.filePath }
   } catch (err) {
     return { ok: false, error: err?.message ?? 'The settings could not be exported.' }
@@ -961,8 +975,9 @@ handleTrustedIpc('contextcake:settings-reset', async ({ window }) => {
   const { response } = await dialog.showMessageBox(window, {
     type: 'warning',
     message: 'Reset ContextCake’s local preferences?',
-    detail: 'Appearance, update, window, and view settings on this Mac return to their defaults. '
-      + 'Your sources, knowledge, and connected accounts are not affected.',
+    detail: 'Appearance, update, and view settings on this Mac return to their defaults. '
+      + 'Your sources, knowledge, connected accounts, window position, and privacy '
+      + 'choices are not affected.',
     buttons: ['Reset Preferences', 'Cancel'],
     defaultId: 1,
     cancelId: 1,
@@ -972,10 +987,11 @@ handleTrustedIpc('contextcake:settings-reset', async ({ window }) => {
   applyNativeAppearance()
   initUpdater()
   installApplicationMenu()
-  // The metrics choice is gone with the rest, so any pending first-launch
-  // report no longer has a persisted consent behind it.
-  cancelAnonymousFirstLaunch()
   if (!(await settleSettingsWrites([written]))) throw new Error(SETTINGS_WRITE_FAILED)
+  // Same rule as preferences:set — a reset we could not save locally must not
+  // be pushed, and one we did save must be, or a second Mac keeps pulling the
+  // pre-reset values until something else happens to write.
+  scheduleSettingsPush()
   return { ok: true }
 })
 

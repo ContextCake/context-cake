@@ -3,9 +3,13 @@
 ## Commands
 
 ```bash
-# Run all tests (the chain lives in package.json "test" — read it there rather
-# than mirroring it here, which is how the two drifted apart before)
+# Run all tests. The suite list lives in scripts/test.mjs — read it there
+# rather than mirroring it here, which is how the two drifted apart before.
 npm test
+npm run test:list          # every suite and the group it belongs to
+npm run test:unit          # or test:integration / test:release / test:slow
+node scripts/test.mjs --only search   # one suite by name
+node scripts/test.mjs --bail          # stop at the first failure
 
 # Run one suite while iterating
 bash packages/core/tests/resolver-test.sh

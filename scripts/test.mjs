@@ -102,8 +102,15 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--bail") bail = true;
     else if (arg === "--list") list = true;
-    else if (arg === "--only") only = argv[++i];
-    else if (arg.startsWith("--only=")) only = arg.slice("--only=".length);
+    // An empty `--only` must fail loudly, in both spellings. `only` was tested
+    // for truthiness downstream, so a missing value (`--only` at the end of
+    // argv) or an empty one (`--only=`) skipped the filter and quietly ran all
+    // 32 suites — the opposite of what was asked for, and slow enough that you
+    // only notice after the gate has been running for two minutes.
+    else if (arg === "--only" || arg.startsWith("--only=")) {
+      only = arg === "--only" ? argv[++i] : arg.slice("--only=".length);
+      if (!only) fail("--only needs a suite name. Try --list to see them.");
+    }
     else if (arg.startsWith("-")) fail(`Unknown flag: ${arg}`);
     else if (GROUPS.includes(arg)) groups.push(arg);
     else fail(`Unknown group: ${arg}. Known groups: ${GROUPS.join(", ")}`);

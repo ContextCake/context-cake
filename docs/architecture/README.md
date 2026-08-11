@@ -5,12 +5,18 @@
 > Group layer, and same-level DAG recency described below are **removed**. This document is kept
 > for historical design rationale; do not treat its mechanics (notably §3–§4 merge/precedence and
 > §6 shadow-staleness detection) as current — shadow detection no longer exists.
+>
+> For why the *current* engine works the way it does — section dating, index keys,
+> status polling, the index queue, manifest validation — see
+> [`notes/`](notes/README.md).
 
 # Team Context Radar — Cascading Knowledge Layers Architecture
 
 **Date:** 2026-06-18
 **Status:** Design locked. Read-path resolver implemented and wired into MCP server. Write-path (`write.mjs`: signals → OKF layer bundle) implemented. Decisions A–D implemented. Promotion-up-the-stack is the next slice.
-**Supersedes the layering question in:** `docs/team-knowledge-system-handoff.md`
+**Supersedes the layering question in:** the original handoff doc, which was
+never committed under that name and no longer ships in the tree — see
+`docs/archive/handoff.md` in history before the repo cleanup.
 
 ---
 

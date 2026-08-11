@@ -7,6 +7,7 @@
 
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { ensureSidecarMigrated, sidecarDir } from "./sidecar-state.mjs";
 
 const SCHEMA_VERSION = 1;
 const SUPPORTED_SCHEMA_VERSIONS = new Set([1, 2]);
@@ -34,18 +35,20 @@ function trivialSignature(value) {
   return tokens?.length ? tokens.join("\u001f") : null;
 }
 
-export function createConflictResolutionLog(manifestPath) {
-  const dir = path.join(path.dirname(path.resolve(manifestPath)), ".contextcake");
+export function createConflictResolutionLog(manifestPath, { profileId = "default" } = {}) {
+  const dir = sidecarDir(manifestPath, profileId);
   const file = path.join(dir, "conflict-resolutions.ndjson");
   let appendTail = Promise.resolve();
 
   async function prepare() {
+    await ensureSidecarMigrated(manifestPath);
     await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
     const handle = await fsp.open(file, "a", 0o600);
     await handle.close();
   }
 
   async function list() {
+    await ensureSidecarMigrated(manifestPath);
     let text;
     try { text = await fsp.readFile(file, "utf8"); }
     catch (err) {
@@ -83,12 +86,13 @@ export function createConflictResolutionLog(manifestPath) {
   return { file, prepare, list, append, find };
 }
 
-export function createDiscrepancyTransactionJournal(manifestPath) {
-  const dir = path.join(path.dirname(path.resolve(manifestPath)), ".contextcake");
+export function createDiscrepancyTransactionJournal(manifestPath, { profileId = "default" } = {}) {
+  const dir = sidecarDir(manifestPath, profileId);
   const file = path.join(dir, "discrepancy-transactions.ndjson");
   let appendTail = Promise.resolve();
 
   async function append(record) {
+    await ensureSidecarMigrated(manifestPath);
     await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
     appendTail = appendTail.then(() => fsp.appendFile(file, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 }));
     await appendTail;
@@ -96,6 +100,7 @@ export function createDiscrepancyTransactionJournal(manifestPath) {
   }
 
   async function list() {
+    await ensureSidecarMigrated(manifestPath);
     let text;
     try { text = await fsp.readFile(file, "utf8"); }
     catch (error) { if (error.code === "ENOENT") return []; throw error; }

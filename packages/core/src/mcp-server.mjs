@@ -61,7 +61,9 @@ if ((args.capture || args.telemetry) && !liveLayer) {
 }
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
-const discrepancyDecisions = runtime ? createConflictResolutionLog(runtime.manifestPath) : null;
+const discrepancyDecisions = runtime
+  ? createConflictResolutionLog(runtime.manifestPath, { profileId: selection.profileId })
+  : null;
 const serverInfo = { name: "contextcake", version: "0.5.0" };
 const serverInstructions = [
   "Consult ContextCake before answering project-specific questions.",

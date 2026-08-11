@@ -352,10 +352,14 @@ export function createEngineService({
   const CONSOLE_DIR = consoleDist ? path.resolve(consoleDist) : null;
   // Git-backed sources clone next to the manifest that declares them.
   const CACHE_DIR = path.join(MANIFEST_DIR, ".cache", "repos");
-  const conflictResolutionLog = createConflictResolutionLog(MANIFEST);
-  const discrepancyTransactionJournal = createDiscrepancyTransactionJournal(MANIFEST);
-  const discrepancyRuleStore = createDiscrepancyRuleStore(MANIFEST);
-  const discrepancyPriorityStore = createDiscrepancyPriorityStore(MANIFEST);
+  // The service serves the default profile view (see openSources), so its
+  // decision history, rules, priorities, and journal are default's — a
+  // control operation selecting another profile constructs its own stores.
+  const SERVICE_PROFILE_ID = "default";
+  const conflictResolutionLog = createConflictResolutionLog(MANIFEST, { profileId: SERVICE_PROFILE_ID });
+  const discrepancyTransactionJournal = createDiscrepancyTransactionJournal(MANIFEST, { profileId: SERVICE_PROFILE_ID });
+  const discrepancyRuleStore = createDiscrepancyRuleStore(MANIFEST, { profileId: SERVICE_PROFILE_ID });
+  const discrepancyPriorityStore = createDiscrepancyPriorityStore(MANIFEST, { profileId: SERVICE_PROFILE_ID });
   let discrepancyRecovery = null;
   let automaticTimer = null;
   let automaticTail = Promise.resolve();

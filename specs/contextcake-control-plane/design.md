@@ -71,9 +71,14 @@ technology choices; the spec owns behavior.
 - Sidecar state namespaces to `.contextcake/profiles/<profile-id>/`
   (rules, priorities, resolution history, transaction journals, recovery
   state, trust records, pending capture requests).
-- Migration order is contractual: recover any incomplete journals under the
-  old unscoped layout first, then atomically move unscoped state to
-  `profiles/default/`, leaving a completion marker. Re-running is a no-op.
+- Migration moves the unscoped files into `profiles/default/` via same-fs
+  renames, then writes a completion marker; journal recovery runs afterward
+  through its normal startup path. (Moving before recovering is equivalent to
+  the reverse order because journal records carry absolute target paths — the
+  journal file's own location never participates in recovery.) Re-running is
+  a no-op; a crash mid-move completes on the next run; state present in both
+  layouts is a refusal, never a guess — it means an older engine kept writing
+  the unscoped path after a newer one migrated, and the fork needs a human.
 - Profile delete retires (renames) the sidecar dir; `profile purge-state
   --confirm` deletes it.
 - OS locations per spec §5.12; the macOS pair is shared with the app and

@@ -19,7 +19,7 @@ import {
   selectSyncSettings,
 } from './settings-sync.mjs'
 import { loadSupabaseConfig } from './supabase-config.mjs'
-import { initUpdater } from './updater.mjs'
+import { checkForUpdatesFromRenderer, getUpdateStatus, initUpdater, installNow, registerRendererUpdates } from './updater.mjs'
 import { isEngineOrigin } from './navigation.mjs'
 import { createTrustedWindowRegistry, trustedRolesForChannel } from './trusted-windows.mjs'
 import { getCliStatus, installCli } from './cli-install.mjs'
@@ -814,6 +814,16 @@ registerIntegrationIpc()
 
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
 handleTrustedIpc('contextcake:cli-install', ({ window }) => installCli(window, { showSuccess: false }))
+
+// Renderer-facing update status (Settings → "Check for Updates" / "Update
+// Now"), alongside the menu's dialog-driven checkInteractive(). Both drive the
+// same autoUpdater singleton; this just also pushes status to any trusted
+// window so Settings can render it inline instead of a native dialog.
+registerRendererUpdates(sendToRenderer)
+handleTrustedIpc('updates:get-status', () => getUpdateStatus())
+handleTrustedIpc('updates:check', () => checkForUpdatesFromRenderer())
+handleTrustedIpc('updates:install', () => installNow())
+
 // What the renderer is told when a preference it just set did not reach disk.
 // It travels as a rejected `invoke`, which is what every caller in the console
 // already handles — and is what the synchronous write used to do by throwing,

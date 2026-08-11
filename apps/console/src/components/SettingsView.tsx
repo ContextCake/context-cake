@@ -1,18 +1,102 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useThemeMode } from '../theme-mode'
-import { isUpdateCheckEnabled, setUpdateCheckEnabled } from '../update'
+import { checkForUpdate, isUpdateCheckEnabled, setUpdateCheckEnabled, type UpdateInfo } from '../update'
 import type { Mode } from '../api'
 import { C, css } from '../theme'
 import { AccountPanel } from './AccountPanel'
 import { IndexingSettings } from './IndexingSettings'
 import { IntegrationsPanel } from './IntegrationsPanel'
 import { AccountIcon, ConnectionsIcon, IndexingIcon, PrivacyIcon, SettingsIcon } from './icons'
-import { SegmentedControl } from './ui'
+import { Button, SegmentedControl } from './ui'
 
 export type SettingsPane = 'general' | 'indexing' | 'integrations' | 'account' | 'privacy'
 
 const DOCUMENTATION_URL = 'https://contextcake.com/docs/reference/updates-and-privacy/'
 const VALID_PANES = new Set<SettingsPane>(['general', 'indexing', 'integrations', 'account', 'privacy'])
+
+function describeUpdateStatus(status: UpdateStatus): string {
+  switch (status.state) {
+    case 'unsupported': return 'Updates are unavailable in development builds.'
+    case 'idle': return 'No check has run yet this session.'
+    case 'checking': return 'Checking for updates…'
+    case 'not-available': return 'You’re up to date.'
+    case 'downloading': return status.percent
+      ? `Downloading ${status.version ? `v${status.version} ` : ''}(${status.percent}%)…`
+      : 'Update found — starting download…'
+    case 'downloaded': return `${status.version ? `v${status.version} ` : 'The update '}is ready to install.`
+    case 'error': return status.error ? `Could not check for updates: ${status.error}` : 'Could not check for updates.'
+    default: return ''
+  }
+}
+
+/**
+ * "Check for Updates" / "Update Now". Desktop drives the native autoUpdater
+ * through window.__CC_DESKTOP.updates (see apps/desktop/src/main/updater.mjs);
+ * there is nothing to install in a browser, so live mode instead offers a
+ * manual GitHub-releases check with a link out, and demo mode gets nothing —
+ * matching UpdatePill's existing per-mode gating.
+ */
+function UpdateControl({ appMode }: { appMode: Mode }) {
+  const bridge = window.__CC_DESKTOP?.updates
+  const [status, setStatus] = useState<UpdateStatus | null>(null)
+  const [webChecking, setWebChecking] = useState(false)
+  const [webChecked, setWebChecked] = useState(false)
+  const [webInfo, setWebInfo] = useState<UpdateInfo | null>(null)
+
+  useEffect(() => {
+    if (!bridge) return
+    let active = true
+    bridge.getStatus().then((value) => { if (active) setStatus(value) }).catch(() => {})
+    const unsubscribe = bridge.onStatus((value) => { if (active) setStatus(value) })
+    return () => { active = false; unsubscribe() }
+  }, [bridge])
+
+  if (bridge) {
+    const state = status?.state ?? 'idle'
+    const busy = state === 'checking' || state === 'downloading'
+    return (
+      <div className="cc-settings-row">
+        <div><strong>Updates</strong><span>{status ? describeUpdateStatus(status) : 'Loading…'}</span></div>
+        <div style={css('display:flex; gap:8px;')}>
+          {state === 'downloaded' ? (
+            <Button type="button" variant="primary" onClick={() => void bridge.install()}>Update Now</Button>
+          ) : state !== 'unsupported' && (
+            <Button type="button" variant="secondary" disabled={busy} onClick={() => void bridge.check()}>
+              {state === 'checking' ? 'Checking…' : 'Check for Updates'}
+            </Button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  if (appMode !== 'live') return null
+
+  const runWebCheck = async () => {
+    setWebChecking(true)
+    try {
+      setWebInfo(await checkForUpdate(__APP_VERSION__, { force: true }))
+      setWebChecked(true)
+    } finally {
+      setWebChecking(false)
+    }
+  }
+
+  return (
+    <div className="cc-settings-row">
+      <div>
+        <strong>Updates</strong>
+        <span>{!webChecked ? 'Check GitHub for a newer ContextCake release.' : webInfo ? `A new version (v${webInfo.latest}) is available.` : 'You’re on the latest version.'}</span>
+      </div>
+      <div style={css('display:flex; align-items:center; gap:8px;')}>
+        {webInfo && <a href={webInfo.url} target="_blank" rel="noreferrer">View release</a>}
+        <Button type="button" variant="secondary" disabled={webChecking} onClick={() => void runWebCheck()}>
+          {webChecking ? 'Checking…' : 'Check for Updates'}
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 function focusables(root: HTMLElement | null) {
   return Array.from(root?.querySelectorAll<HTMLElement>('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') ?? [])
@@ -168,6 +252,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
               <div className="cc-settings-group">
                 <div className="cc-settings-row"><div><strong>Automatic update checks</strong><span>{desktop ? 'Check for new desktop releases automatically.' : 'Check GitHub for new ContextCake releases.'}</span></div><label className="cc-switch"><input type="checkbox" checked={updatesEnabled} onChange={toggleUpdates} aria-label="Check for updates automatically" /><span aria-hidden="true" /></label></div>
                 <div className="cc-settings-row"><div><strong>Installed version</strong><span>The version of ContextCake currently running.</span></div><span className="cc-settings-value">{window.__CC_DESKTOP?.version || __APP_VERSION__}</span></div>
+                <UpdateControl appMode={appMode} />
               </div>
             </section>
           </>}

@@ -79,13 +79,32 @@ declare global {
     createdAt: string
   }
 
+  /** Status pushed by apps/desktop/src/main/updater.mjs over `updates:status`. */
+  type UpdateStatus =
+    | { state: 'unsupported' | 'idle' | 'checking' | 'not-available' }
+    | { state: 'downloading'; version?: string; percent?: number }
+    | { state: 'downloaded'; version?: string }
+    | { state: 'error'; error?: string }
+
   interface Window {
     __CC_DESKTOP?: {
       windowRole?: 'main' | 'settings'
       /** Fetch the per-launch engine bearer through the desktop's trusted IPC gate. */
       getApiToken: () => Promise<string>
-      /** Desktop app version. Update UX is owned by the app's native updater. */
+      /** Desktop app version. */
       version: string
+      /**
+       * Update status backed by the native autoUpdater. Optional a second
+       * time within itself: a packaged app older than this channel exposes
+       * `__CC_DESKTOP` without it, and Settings must hide the control rather
+       * than throw.
+       */
+      updates?: {
+        getStatus(): Promise<UpdateStatus>
+        check(): Promise<UpdateStatus>
+        install(): Promise<{ installed: boolean }>
+        onStatus(cb: (status: UpdateStatus) => void): () => void
+      }
       /** Initial auth snapshot; subscribe through __CC_AUTH for live state. */
       authState: DesktopAuthState
       /** True only when the macOS window supplies native translucent material. */

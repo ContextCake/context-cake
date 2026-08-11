@@ -133,6 +133,19 @@ describe('checkForUpdate', () => {
 
     expect(fetch).toHaveBeenCalledTimes(1)
   })
+
+  it('force bypasses the session cache — a manual recheck sees a newly published release', async () => {
+    mockReleases([{ tag_name: 'app-v1.0.0', html_url: 'https://example.com/1.0.0' }])
+    await expect(checkForUpdate('1.0.0')).resolves.toBeNull() // up to date, cached
+
+    mockReleases([{ tag_name: 'app-v1.1.0', html_url: 'https://example.com/1.1.0' }])
+    await expect(checkForUpdate('1.0.0')).resolves.toBeNull() // still cached, no new fetch
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    const result = await checkForUpdate('1.0.0', { force: true })
+    expect(result).toEqual({ latest: '1.1.0', url: 'https://example.com/1.1.0' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('isUpdateCheckEnabled / setUpdateCheckEnabled', () => {

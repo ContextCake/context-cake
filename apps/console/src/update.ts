@@ -46,7 +46,8 @@ function compareVersions(a: string, b: string): number {
  */
 export const UPDATE_CHECK_TIMEOUT_MS = 10_000
 
-export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo | null> {
+export async function checkForUpdate(currentVersion: string, opts: { force?: boolean } = {}): Promise<UpdateInfo | null> {
+  if (opts.force) cached = undefined
   if (cached !== undefined) return cached
 
   let res: Response

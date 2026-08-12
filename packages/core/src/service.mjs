@@ -137,9 +137,24 @@ async function streamResolveAll(res, payload) {
   if (!closed) res.end();
 }
 
-// Reads one source end to end, reporting progress into `entry` as it goes so
-// the UI can show "Indexed 340 of 1,500" instead of an opaque spinner.
-async function snapshotSource(source, entry, signal = null) {
+// Reads one source, reporting progress into `entry` as it goes so the UI can
+// show "Indexed 340 of 1,500" instead of an opaque spinner.
+//
+// INCREMENTAL against `previousSnap` when the adapter can fingerprint its
+// listing (listEntries — local folders): a document whose (rel, ext, size,
+// mtimeMs) is unchanged carries its parsed concept and token count forward
+// without a read, so a one-note edit in a 4,000-note vault costs one walk +
+// one file read + one BPE encode instead of a full corpus re-read. Every pass
+// is still a full SWEEP — the walk is the correctness backstop that catches
+// what fs.watch dropped — deliberately not a scoped delta: at 20k files the
+// walk is sub-second, and a scope protocol would buy those milliseconds at
+// the price of a second coalescing state machine.
+//
+// Adapters without listEntries (github, mcp, cached) take the old full-read
+// path unchanged; carry-forward safety is structural — previousSnap only
+// reaches this function through the entry's own key, and any settings or
+// credential change re-keys and drops the entry first (index-keys.mjs).
+async function snapshotSource(source, entry, signal = null, previousSnap = null) {
   const throwIfAborted = () => {
     if (signal?.aborted) throw signal.reason ?? new Error("Indexing cancelled");
   };
@@ -159,7 +174,16 @@ async function snapshotSource(source, entry, signal = null) {
   // Optional and idempotent to release; adapters without it are unaffected.
   const releaseBatch = typeof source.beginBatch === "function" ? source.beginBatch() : null;
   try {
-  const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds({ signal, notes }) : [];
+  const fingerprinted = typeof source.listEntries === "function";
+  let ids;
+  let items; // [{ id, rel, ext, size, mtimeMs }] when fingerprinted
+  if (fingerprinted) {
+    items = await source.listEntries({ signal, notes });
+    ids = items.map((item) => item.id);
+  } else {
+    ids = typeof source.listConceptIds === "function" ? await source.listConceptIds({ signal, notes }) : [];
+    items = ids.map((id) => ({ id }));
+  }
   throwIfAborted();
   entry.phase = "loading";
   entry.total = ids.length;
@@ -169,30 +193,84 @@ async function snapshotSource(source, entry, signal = null) {
   // over the whole merged corpus on every request — 14 seconds on a 139MB
   // vault. Keeping the number here is what makes that rebuild cheap.
   const tokensById = new Map();
+  const fileMeta = fingerprinted ? new Map() : null;
+  const prevMeta = fingerprinted ? previousSnap?.fileMeta ?? null : null;
+  const stats = { carried: 0, read: 0, tokenized: 0, removed: 0 };
   let tokens = 0;
   let n = 0;
-  for (const id of ids) {
+  for (const item of items) {
     throwIfAborted();
-    const concept = await source.loadConcept(id);
-    throwIfAborted();
-    concepts.set(id, concept);
-    tokens += tokenizeConcept(source, id, concept, tokensById);
+    const prev = prevMeta?.get(item.id);
+    if (
+      prev
+      && prev.rel === item.rel && prev.ext === item.ext
+      && prev.size === item.size && prev.mtimeMs === item.mtimeMs
+      && previousSnap.concepts.has(item.id)
+    ) {
+      // Unchanged on disk: the parsed concept object itself carries forward —
+      // same identity, which is what lets downstream caches (the search
+      // index's per-doc analysis) recognize it without re-work.
+      concepts.set(item.id, previousSnap.concepts.get(item.id));
+      const prevTokens = previousSnap.tokensById.get(item.id);
+      if (prevTokens !== undefined) {
+        tokensById.set(item.id, prevTokens);
+        tokens += prevTokens;
+      }
+      fileMeta.set(item.id, prev);
+      stats.carried += 1;
+    } else {
+      const concept = await source.loadConcept(item.id, item.ext ? { ext: item.ext } : undefined);
+      throwIfAborted();
+      concepts.set(item.id, concept);
+      tokens += tokenizeConcept(source, item.id, concept, tokensById);
+      stats.read += 1;
+      stats.tokenized += 1;
+      if (fileMeta && item.rel !== undefined) {
+        fileMeta.set(item.id, { rel: item.rel, ext: item.ext, size: item.size, mtimeMs: item.mtimeMs });
+      }
+    }
     if (++n % YIELD_EVERY === 0) {
       entry.loaded = n;
       await yieldNow();
     }
   }
   entry.loaded = n;
+  if (previousSnap && fingerprinted) {
+    for (const id of previousSnap.ids) if (!concepts.has(id)) stats.removed += 1;
+  }
+  // A pass that changed NOTHING returns the previous snapshot itself — same
+  // object, same generation — so the graph/search/corpus memos stay warm and
+  // the status generation only moves for the progress counter, never for
+  // content that did not change. The notes must agree too: a warning
+  // appearing or clearing is payload the row reports from the snapshot.
+  if (
+    previousSnap && fingerprinted
+    && stats.read === 0 && stats.removed === 0
+    && previousSnap.ids.length === ids.length
+    && sameNotes(previousSnap, notes)
+  ) {
+    entry.passStats = stats;
+    return previousSnap;
+  }
+  entry.passStats = stats;
   // A generation, assigned once, never reused. Snapshots are immutable after
   // this returns, so "same generation" is the same content — which is what lets
   // buildGraph key a memo on live state instead of on invalidation events.
   return {
-    ids, concepts, tokens, tokensById, gen: ++SNAPSHOT_SEQ,
+    ids, concepts, tokens, tokensById, gen: ++SNAPSHOT_SEQ, fileMeta,
     skipped: notes.skipped, unreadable: notes.unreadable, hidden: notes.hidden,
   };
   } finally {
     releaseBatch?.();
   }
+}
+
+// Snapshot-note equality for the identity-reuse check above. Order-stable by
+// construction: both sides come from the same sorted walk.
+function sameNotes(previousSnap, notes) {
+  return previousSnap.hidden === notes.hidden
+    && JSON.stringify(previousSnap.skipped) === JSON.stringify(notes.skipped)
+    && JSON.stringify(previousSnap.unreadable) === JSON.stringify(notes.unreadable);
 }
 
 let SNAPSHOT_SEQ = 0;
@@ -895,7 +973,7 @@ export function createEngineService({
         // died" answerable after the fact.
         console.error(`[index] ${source.name}: pass ${entry.passes} start${refreshing ? " (refresh)" : ""}`);
         return withDeadline(
-          snapshotSource(source, entry, controller.signal),
+          snapshotSource(source, entry, controller.signal, previousSnap),
           budget,
           `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
           () => controller.abort(new Error("Indexing timed out")),
@@ -1081,6 +1159,17 @@ export function createEngineService({
         scheduleFollowUp(previous);
         return;
       }
+      // Idle, but only just: an entry whose last pass finished inside its own
+      // quiet window schedules a follow-up instead of starting now. The
+      // incremental index made passes fast enough that sustained editing
+      // started finding the entry idle between edits — and "idle → start
+      // immediately" then runs one full sweep per watcher event, which is a
+      // busy loop with extra steps. A genuinely quiet vault still refreshes
+      // immediately: its last pass finished ages ago.
+      if (previous?.finishedAt && Date.now() - previous.finishedAt < followUpQuietMs(previous)) {
+        scheduleFollowUp(previous);
+        return;
+      }
       indexes.set(key, startIndex(source, key, open.settings, {
         validity: open.validities[i],
         previousSnap: previous?.snap ?? null,
@@ -1189,6 +1278,10 @@ export function createEngineService({
       // How many passes this entry has run, carried across refreshes. Cheap to
       // report and the only way to see a re-index storm from outside.
       passes: entry.passes ?? 1,
+      // What the last completed pass actually did — additive, and the visible
+      // proof of incrementality: an edited note shows read:1 carried:N-1.
+      // Absent until a pass with the skip gate has landed.
+      ...(entry.passStats ? { passStats: entry.passStats } : {}),
     };
   }
 
@@ -1693,6 +1786,9 @@ export function createEngineService({
         // count visible, never what is inside them. Additive, and already
         // computed by the walk, so it costs nothing on this cheap route.
         skippedHidden: snap?.hidden ?? 0,
+        // The last pass's work breakdown (see indexProgress) — additive, three
+        // small integers, and how a test proves an edit cost one read.
+        passStats: progress.passStats ?? null,
       };
     });
     // A source with nothing to serve yet. A source refreshing behind a good

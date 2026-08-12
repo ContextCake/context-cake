@@ -170,6 +170,18 @@ export function createOkfLocalSource({ name, level, root, limits = null }) {
       );
     },
     /**
+     * The listing with the change-detection fingerprint the walk already paid
+     * for: [{ id, rel, ext, size, mtimeMs }]. The index's skip gate compares
+     * these against the previous snapshot to carry unchanged documents
+     * forward without re-reading them. Same walk, same order, same notes as
+     * listConceptIds — an adapter must never disagree with itself about what
+     * exists.
+     */
+    async listEntries({ signal = null, notes = null } = {}) {
+      const entries = await walkDocEntries(root, [".md"], limits, { signal, notes });
+      return entries.map((entry) => ({ ...entry, id: entry.rel.replace(/\.md$/i, "") }));
+    },
+    /**
      * Pin the git-history memo for the duration of a batch read (an index
      * pass). Returns a release function; releases are idempotent, and a batch
      * that forgets to release only pins until the next beginBatch. See the

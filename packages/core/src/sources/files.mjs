@@ -10,7 +10,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import {
   parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading,
-  walkDocs, withDocumentDate, localDate, MAX_DOC_BYTES,
+  walkDocs, walkDocEntries, withDocumentDate, localDate, MAX_DOC_BYTES,
 } from "./okf-local.mjs";
 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
@@ -72,6 +72,23 @@ export function createFilesSource({ name, level, root, limits = null }) {
         toPosix(path.relative(root, filePath)).replace(/\.(md|mdx|txt)$/, ""),
       );
       return [...new Set(ids)];
+    },
+    /**
+     * The fingerprinted listing (see okf-local's listEntries). An id collision
+     * (notes.md + notes.txt) keeps the entry loadConcept's precedence order
+     * would win, so the fingerprint always describes the file actually read.
+     */
+    async listEntries({ signal = null, notes = null } = {}) {
+      const walked = await walkDocEntries(root, FILES_EXTENSIONS, limits, { signal, notes });
+      const byId = new Map();
+      for (const entry of walked) {
+        const id = entry.rel.replace(/\.(md|mdx|txt)$/, "");
+        const existing = byId.get(id);
+        if (!existing || FILES_EXTENSIONS.indexOf(entry.ext) < FILES_EXTENSIONS.indexOf(existing.ext)) {
+          byId.set(id, { ...entry, id });
+        }
+      }
+      return [...byId.values()];
     },
     close() {},
   };

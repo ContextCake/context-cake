@@ -156,7 +156,7 @@ async function streamResolveAll(res, payload) {
 // path unchanged; carry-forward safety is structural — previousSnap only
 // reaches this function through the entry's own key, and any settings or
 // credential change re-keys and drops the entry first (index-keys.mjs).
-async function snapshotSource(source, entry, signal = null, previousSnap = null, tokenCache = null) {
+async function snapshotSource(source, entry, signal = null, previousSnap = null, tokenCache = null, carrySeed = null) {
   const throwIfAborted = () => {
     if (signal?.aborted) throw signal.reason ?? new Error("Indexing cancelled");
   };
@@ -175,8 +175,16 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
   // work (okf-local pins its git-history memo) gets told one is starting.
   // Optional and idempotent to release; adapters without it are unaffected.
   const releaseBatch = typeof source.beginBatch === "function" ? source.beginBatch() : null;
-  try {
+  // Hoisted above the try: the catch snapshots these as the retry seed.
   const fingerprinted = typeof source.listEntries === "function";
+  const concepts = new Map();
+  // Per-concept token counts, kept rather than only summed. The index already
+  // pays one BPE encode per document, and buildGraph used to pay a second one
+  // over the whole merged corpus on every request — 14 seconds on a 139MB
+  // vault. Keeping the number here is what makes that rebuild cheap.
+  const tokensById = new Map();
+  const fileMeta = fingerprinted ? new Map() : null;
+  try {
   let ids;
   let items; // [{ id, rel, ext, size, mtimeMs }] when fingerprinted
   if (fingerprinted) {
@@ -189,36 +197,32 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
   throwIfAborted();
   entry.phase = "loading";
   entry.total = ids.length;
-  const concepts = new Map();
-  // Per-concept token counts, kept rather than only summed. The index already
-  // pays one BPE encode per document, and buildGraph used to pay a second one
-  // over the whole merged corpus on every request — 14 seconds on a 139MB
-  // vault. Keeping the number here is what makes that rebuild cheap.
-  const tokensById = new Map();
-  const fileMeta = fingerprinted ? new Map() : null;
   const prevMeta = fingerprinted ? previousSnap?.fileMeta ?? null : null;
+  // Partial progress from an aborted predecessor (entry.carrySeed): consulted
+  // BEHIND the served snapshot, so a retry resumes what the failed attempt
+  // already read without ever trusting it over newer disk state.
+  const seedMeta = fingerprinted ? carrySeed?.fileMeta ?? null : null;
   const stats = { carried: 0, read: 0, tokenized: 0, removed: 0 };
   let tokens = 0;
   let n = 0;
   for (const item of items) {
     throwIfAborted();
-    const prev = prevMeta?.get(item.id);
-    if (
-      prev
-      && prev.rel === item.rel && prev.ext === item.ext
-      && prev.size === item.size && prev.mtimeMs === item.mtimeMs
-      && previousSnap.concepts.has(item.id)
-    ) {
+    const fromPrev = matchesFingerprint(prevMeta?.get(item.id), item) && previousSnap.concepts.has(item.id)
+      ? previousSnap : null;
+    const fromSeed = !fromPrev && matchesFingerprint(seedMeta?.get(item.id), item) && carrySeed.concepts.has(item.id)
+      ? carrySeed : null;
+    const carryFrom = fromPrev ?? fromSeed;
+    if (carryFrom) {
       // Unchanged on disk: the parsed concept object itself carries forward —
       // same identity, which is what lets downstream caches (the search
       // index's per-doc analysis) recognize it without re-work.
-      concepts.set(item.id, previousSnap.concepts.get(item.id));
-      const prevTokens = previousSnap.tokensById.get(item.id);
+      concepts.set(item.id, carryFrom.concepts.get(item.id));
+      const prevTokens = carryFrom.tokensById.get(item.id);
       if (prevTokens !== undefined) {
         tokensById.set(item.id, prevTokens);
         tokens += prevTokens;
       }
-      fileMeta.set(item.id, prev);
+      fileMeta.set(item.id, carryFrom.fileMeta.get(item.id));
       stats.carried += 1;
     } else {
       const concept = await source.loadConcept(item.id, item.ext ? { ext: item.ext } : undefined);
@@ -262,12 +266,27 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
     skipped: notes.skipped, unreadable: notes.unreadable, hidden: notes.hidden,
     truncated: notes.truncated ?? null,
   };
+  } catch (err) {
+    // An interrupted pass leaves its partial progress as a seed for the retry
+    // (never served — only entry.snap is): whatever it read is real,
+    // fingerprinted work the next attempt should not repeat.
+    if (fingerprinted && concepts.size > 0 && signal?.aborted) {
+      entry.carrySeed = { fileMeta, concepts, tokensById };
+    }
+    throw err;
   } finally {
     releaseBatch?.();
     // Land the counts this pass added; awaited nowhere on purpose — the cache
     // must never make a pass slower or able to fail.
     tokenCache?.flush();
   }
+}
+
+// The fingerprint match the skip gate uses, shared by both carry tables.
+function matchesFingerprint(prev, item) {
+  return Boolean(prev)
+    && prev.rel === item.rel && prev.ext === item.ext
+    && prev.size === item.size && prev.mtimeMs === item.mtimeMs;
 }
 
 // Snapshot-note equality for the identity-reuse check above. Order-stable by
@@ -943,6 +962,7 @@ export function createEngineService({
 
   function startIndex(source, key, settings, {
     validity = null, previousSnap = null, previousSuccessAt = null, previousHealth = null, passes = 1,
+    carrySeed = null, retries = 0,
   } = {}) {
     const controller = new AbortController();
     const refreshing = previousSnap !== null;
@@ -986,9 +1006,22 @@ export function createEngineService({
       error: null,
       startedAt: Date.now(),
       finishedAt: null,
+      // Partial progress from an aborted/timed-out predecessor: a second-
+      // priority carry table the pass consults behind previousSnap, so a
+      // retry resumes where the last attempt stopped instead of starting
+      // over. Never served — only snap is.
+      carrySeed,
+      // How many retryable failures this entry has absorbed, and when the
+      // armed retry will run. Surfaced additively via indexProgress.
+      retries,
+      retryTimer: null,
+      nextRetryAt: null,
       cancel: () => {
         clearTimeout(entry.followUp);
         entry.followUp = null;
+        clearTimeout(entry.retryTimer);
+        entry.retryTimer = null;
+        entry.nextRetryAt = null;
         controller.abort(new Error("Indexing superseded"));
       },
     };
@@ -1002,10 +1035,14 @@ export function createEngineService({
         // died" answerable after the fact.
         console.error(`[index] ${source.name}: pass ${entry.passes} start${refreshing ? " (refresh)" : ""}`);
         return withDeadline(
-          snapshotSource(source, entry, controller.signal, previousSnap, tokenCache),
+          snapshotSource(source, entry, controller.signal, previousSnap, tokenCache, carrySeed),
           budget,
           `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
-          () => controller.abort(new Error("Indexing timed out")),
+          () => {
+            const reason = new Error("Indexing timed out");
+            reason.code = "CONTEXTCAKE_TIMEOUT"; // same class as the withDeadline rejection
+            controller.abort(reason);
+          },
         ).finally(() => releaseIndexSlot(limit));
       })
       .then((snap) => {
@@ -1023,6 +1060,8 @@ export function createEngineService({
         const health = typeof source.health === "function" ? source.health() : null;
         if (health) entry.lastHealth = health;
         if (!health || health.ok !== false) entry.lastSuccessAt = new Date().toISOString();
+        entry.carrySeed = null; // resumed and landed — the partial is obsolete
+        entry.retries = 0;
         console.error(`[index] ${source.name}: pass ${entry.passes} done in ${Date.now() - entry.startedAt}ms — ${snap.ids.length} concepts`);
       })
       .catch((err) => {
@@ -1035,6 +1074,26 @@ export function createEngineService({
         // actually explains the state.
         entry.error = quarantinedIndexNames.has(source.name) ? QUARANTINE_ERROR : err.message;
         console.error(`[index] ${source.name}: pass ${entry.passes} failed after ${Date.now() - entry.startedAt}ms — ${entry.error}`);
+        // A transient failure retries itself on a backoff instead of parking
+        // until something happens to invalidate — a fresh vault whose first
+        // pass timed out used to sit at zero concepts FOREVER. Only failures
+        // that can pass on a repeat qualify; a missing folder or a scan-cap
+        // throw needs the user, not a timer. Status stays "error" between
+        // retries (honest), and awaitIndexes never counts a parked retry as
+        // unsettled, so ?wait= cannot hang on a backoff window.
+        if (isRetryableIndexError(err) && !quarantinedIndexNames.has(source.name)) {
+          const backoff = RETRY_BACKOFFS_MS[Math.min(entry.retries, RETRY_BACKOFFS_MS.length - 1)];
+          if (entry.retries < RETRY_MAX) {
+            entry.nextRetryAt = Date.now() + backoff;
+            entry.retryTimer = setTimeout(() => {
+              entry.retryTimer = null;
+              entry.nextRetryAt = null;
+              retryIndex(entry);
+            }, backoff);
+            entry.retryTimer.unref?.();
+            console.error(`[index] ${source.name}: retry ${entry.retries + 1}/${RETRY_MAX} in ${backoff}ms`);
+          }
+        }
       })
       .finally(() => {
         entry.running = false;
@@ -1088,6 +1147,42 @@ export function createEngineService({
       restartIndex(entry);
     }, quiet);
     entry.followUp.unref?.();
+  }
+
+  // Retry cadence for transient index failures. Injectable so the retry test
+  // does not wait out real backoffs; the env override is test-only surface.
+  const RETRY_BACKOFFS_MS = (process.env.CONTEXTCAKE_RETRY_BACKOFFS_MS ?? "")
+    .split(",").map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (RETRY_BACKOFFS_MS.length === 0) RETRY_BACKOFFS_MS.push(30_000, 120_000, 480_000, 1_800_000);
+  const RETRY_MAX = Number(process.env.CONTEXTCAKE_RETRY_MAX) > 0 ? Number(process.env.CONTEXTCAKE_RETRY_MAX) : 5;
+
+  function isRetryableIndexError(err) {
+    if (err?.code === "CONTEXTCAKE_TIMEOUT") return true;
+    if (["EBUSY", "EAGAIN", "ENFILE", "EMFILE", "EIO"].includes(err?.code)) return true;
+    return false;
+  }
+
+  // The retry pass a transient failure armed. Same re-resolution rules as
+  // restartIndex below, plus the partial-progress seed rides forward so the
+  // attempt RESUMES rather than starting over.
+  function retryIndex(entry) {
+    if (closed) return;
+    let open;
+    try { open = openSources(); } catch { return; }
+    const key = entry.key;
+    if (indexes.get(key) !== entry) return; // dropped or superseded while parked
+    if (entry.running || entry.followUp) return;
+    const i = open.keys.indexOf(key);
+    if (i === -1) return;
+    indexes.set(key, startIndex(open.sources[i], key, open.settings, {
+      validity: open.validities[i],
+      previousSnap: entry.snap,
+      previousSuccessAt: entry.lastSuccessAt,
+      previousHealth: entry.lastHealth,
+      passes: entry.passes + 1,
+      carrySeed: entry.carrySeed,
+      retries: entry.retries + 1,
+    }));
   }
 
   // The follow-up pass a coalesced invalidation asked for. The adapter is
@@ -1199,12 +1294,21 @@ export function createEngineService({
         scheduleFollowUp(previous);
         return;
       }
+      // A parked retry is superseded by this fresh invalidation — real new
+      // evidence beats the backoff clock, and its timer must not fire against
+      // a replaced entry.
+      if (previous?.retryTimer) {
+        clearTimeout(previous.retryTimer);
+        previous.retryTimer = null;
+        previous.nextRetryAt = null;
+      }
       indexes.set(key, startIndex(source, key, open.settings, {
         validity: open.validities[i],
         previousSnap: previous?.snap ?? null,
         previousSuccessAt: previous?.lastSuccessAt ?? null,
         previousHealth: previous?.lastHealth ?? null,
         passes: (previous?.passes ?? 0) + 1,
+        carrySeed: previous?.carrySeed ?? null,
       }));
     });
   }
@@ -1311,6 +1415,9 @@ export function createEngineService({
       // proof of incrementality: an edited note shows read:1 carried:N-1.
       // Absent until a pass with the skip gate has landed.
       ...(entry.passStats ? { passStats: entry.passStats } : {}),
+      // Transient-failure retry state — additive; absent while healthy.
+      ...(entry.retries ? { retries: entry.retries } : {}),
+      ...(entry.nextRetryAt ? { nextRetryAt: entry.nextRetryAt } : {}),
     };
   }
 

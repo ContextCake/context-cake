@@ -63,3 +63,20 @@ flip a usable source — or the console's spinner — back to unready.
 A pass dirtied mid-flight owes exactly one follow-up, and that follow-up waits
 out a quiet period as long as the last pass took (clamped 1–15s). Without the
 quiet period, sustained editing chained a full re-walk per keystroke, forever.
+The quiet window also gates the IDLE invalidation path: incremental passes
+are fast enough that sustained editing finds the entry idle between edits,
+and "idle → start immediately" was one sweep per watcher event.
+
+## Failure is no longer terminal
+
+A first pass that fails transiently (a `CONTEXTCAKE_TIMEOUT` budget expiry,
+EMFILE-class fs errors) used to park the source at `error` /
+`conceptCount: 0` until something else invalidated. It now retries on a
+bounded backoff (30s/2m/8m/30m, five attempts, then parked until an
+invalidation), and an aborted pass leaves its partial progress as a carry
+seed the retry RESUMES from — a vault too big for its time budget converges
+across attempts instead of failing identically forever. Status stays
+`error` between retries (honest), `awaitIndexes` counts only
+`running || followUp`, so `?wait=` never blocks on a parked retry; a real
+invalidation supersedes the backoff clock. Walk caps, missing folders and
+quarantines are NOT retryable — they need the user, not a timer.

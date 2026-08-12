@@ -96,6 +96,7 @@ const SUITES = [
   { group: "slow", name: "resolve-all-scale", ...sh("resolve-all-scale-test.sh") },
   { group: "slow", name: "index-incremental", ...sh("index-incremental-test.sh") },
   { group: "slow", name: "index-scale", ...sh("index-scale-test.sh") },
+  { group: "slow", name: "index-retry", ...sh("index-retry-test.sh") },
 ];
 
 const GROUPS = [...new Set(SUITES.map((suite) => suite.group))];

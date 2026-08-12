@@ -209,5 +209,8 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   nodes, so source content cannot become markup. Link/image URLs still go
   through a scheme allowlist. Preserve that no-HTML boundary when extending it
   — see `markdown.test.ts` and `components/Markdown.test.tsx`.
-- `project/` holds the original Claude Design handoff (prototype HTML, chat,
-  assets). It's provenance, not part of the build — don't import from it.
+- **Dependencies belong in `apps/console/package.json`.** Never add one to the
+  repo root: the engine runs on plain Node with no root install, and a root
+  dependency would quietly end that.
+- **`src/generated/` is generated and gitignored.** Don't hand-edit it; the
+  dev/build/typecheck/test pre-hooks rewrite it.

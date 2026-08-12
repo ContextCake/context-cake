@@ -8,17 +8,24 @@ surfaces. Keep those boundaries intact when you make changes.
 ```text
 packages/core/        Dependency-free resolver, MCP server, source adapters, ingest/write/promote tools
 apps/console/         React + Vite console app
+apps/desktop/         Electron shell for the Mac app
 apps/site/            Astro marketing and docs site
 apps/playground/      Dependency-free local playground server and UI
 apps/control-surface/ Local generated-signal dashboard
-apps/okf-browser/     Local OKF graph browser
-examples/             Mock MCP source and team-demo scripts
+examples/             Mock MCP source, team demo, capture pack, and ContextCake's own layer
+scripts/              Release and metrics tooling; scripts/tests/ covers it
 specs/                Product and implementation specs
+supabase/             Settings-sync backend for the Mac app; owned by apps/desktop/
 docs/                 Architecture notes, release docs, and contributor guidance
 ```
 
-The root `.mjs` files are compatibility wrappers. Canonical core code lives in
-`packages/core/src/`.
+The nine root `.mjs` files are the public CLI surface — `resolver.mjs`,
+`mcp-server.mjs`, `classify-context.mjs`, `ingest.mjs`, `write.mjs`,
+`promote.mjs`, `team-activity.mjs`, `profile.mjs`, `pack.mjs`. Each is a
+three-line wrapper that calls `runCoreCli()` in
+`packages/core/src/bin-shim.mjs`; canonical code lives in `packages/core/src/`.
+Don't move or rename them without a documented migration path, and add a new one
+by adding a `runCoreCli` call rather than re-inlining the wrapper body.
 
 ## Setup
 
@@ -106,6 +113,34 @@ run `git commit -s`.
 Run the smallest relevant checks while developing, then run the broader gates
 before opening a PR. `npm test` starts a local playground server, so it needs a
 local environment where binding to `127.0.0.1` is allowed.
+
+The suite is grouped, so you rarely need all of it while iterating:
+
+```bash
+npm run test:list          # every suite and its group
+npm run test:unit          # pure units, no ports, no temp dirs
+npm run test:integration   # the shell suites: sources, sync, servers
+npm run test:slow          # indexing behaviour over time — the slowest group
+npm test                   # everything, which is what CI runs
+
+node scripts/test.mjs --only search   # one suite by name
+node scripts/test.mjs --bail          # stop at the first failure
+```
+
+`npm test` reports every failure rather than stopping at the first, and prints
+the exact rerun command for whatever broke.
+
+### Never let a NUL byte into a source file
+
+A single stray NUL byte makes `grep` treat a whole text file as binary: it
+returns **no matches** instead of an error, so a search for a symbol comes back
+empty while the symbol is right there. `service.mjs` and `main.mjs` both
+carried one until #132 removed them, which hid the 2,700-line core of the engine
+from every plain `grep`. This bites AI contributors hardest, since they navigate
+by search and read silence as absence.
+
+`npm test` now fails on a full run if any tracked source file contains one, so
+you will hear about it before a reviewer does.
 
 For AI contributors: state which commands you ran, include failures honestly,
 and avoid broad rewrites unrelated to the issue. Agent-assisted commits are

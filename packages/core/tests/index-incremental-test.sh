@@ -138,8 +138,22 @@ else
   fail "touch pass reported '$FOURTH' (expected '1 $CARRIED2')"
 fi
 
+# ---- 5. a restart re-reads but never re-encodes (the persistent count cache)
+kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null; PID=""
+node "$TMP/host.mjs" "$PORT" "$TMP/layers.json" & PID=$!
+STATUS="$(settle)"
+FIFTH="$(printf '%s' "$STATUS" | JQ '(() => { const s = d.sources[0]; return `${s.conceptCount} ${s.passStats?.read} ${s.passStats?.tokenized}` })()')"
+if [ "$FIFTH" = "$LEFT $LEFT 0" ]; then
+  pass "a fresh engine re-read the vault with ZERO re-encodes (token-count cache warm)"
+else
+  fail "restart pass reported '$FIFTH' (expected '$LEFT $LEFT 0') — the persistent token cache missed"
+fi
+[ -f "$TMP/.cache/index/token-counts.v1.ndjson" ] \
+  && pass "the count cache lives beside the manifest (.cache/index)" \
+  || fail "no token-count cache file was written"
+
 if [ "$FAILED" -eq 0 ]; then
-  echo "index incremental test passed (skip gate + identity reuse + honest removal)"
+  echo "index incremental test passed (skip gate + identity reuse + honest removal + warm restart)"
   exit 0
 fi
 echo "index incremental test FAILED"

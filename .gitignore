@@ -16,6 +16,8 @@ apps/site/public/demo-app/
 
 # Local layer manifests may contain absolute paths — don't commit
 layers.json
+# Engine-generated state beside a manifest (git clones, token-count cache)
+.cache/
 
 # Plans are never committed
 docs/plans/

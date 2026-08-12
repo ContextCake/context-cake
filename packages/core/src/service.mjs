@@ -32,6 +32,7 @@ import { mergeConcepts, resolveConcept } from "./resolver.mjs";
 import { tokenizeQuery } from "./search.mjs";
 import { createSearchIndex } from "./search-index.mjs";
 import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
+import { createTokenCountCache } from "./token-count-cache.mjs";
 import { resolveSettings, walkLimitsFrom } from "./settings.mjs";
 import {
   assertInsideRoot, guardMutatingRequest, httpError, json, MIME, parseJson, readBody,
@@ -155,7 +156,7 @@ async function streamResolveAll(res, payload) {
 // path unchanged; carry-forward safety is structural — previousSnap only
 // reaches this function through the entry's own key, and any settings or
 // credential change re-keys and drops the entry first (index-keys.mjs).
-async function snapshotSource(source, entry, signal = null, previousSnap = null) {
+async function snapshotSource(source, entry, signal = null, previousSnap = null, tokenCache = null) {
   const throwIfAborted = () => {
     if (signal?.aborted) throw signal.reason ?? new Error("Indexing cancelled");
   };
@@ -223,9 +224,8 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null)
       const concept = await source.loadConcept(item.id, item.ext ? { ext: item.ext } : undefined);
       throwIfAborted();
       concepts.set(item.id, concept);
-      tokens += tokenizeConcept(source, item.id, concept, tokensById);
+      tokens += tokenizeConcept(source, item.id, concept, tokensById, tokenCache, stats);
       stats.read += 1;
-      stats.tokenized += 1;
       if (fileMeta && item.rel !== undefined) {
         fileMeta.set(item.id, { rel: item.rel, ext: item.ext, size: item.size, mtimeMs: item.mtimeMs });
       }
@@ -263,6 +263,9 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null)
   };
   } finally {
     releaseBatch?.();
+    // Land the counts this pass added; awaited nowhere on purpose — the cache
+    // must never make a pass slower or able to fail.
+    tokenCache?.flush();
   }
 }
 
@@ -292,7 +295,7 @@ let SNAPSHOT_SEQ = 0;
 // failing the whole index; that concept simply stays out of tokensById and
 // buildGraph counts it itself, rather than inheriting a number derived
 // differently from every other row.
-function tokenizeConcept(source, id, concept, tokensById) {
+function tokenizeConcept(source, id, concept, tokensById, tokenCache = null, stats = null) {
   try {
     const contributor = {
       layer: source.name,
@@ -300,12 +303,30 @@ function tokenizeConcept(source, id, concept, tokensById) {
       updated: concept.frontmatter.updated ?? null,
       ...concept,
     };
-    const count = countTokens(conceptText(mergeConcepts([contributor])));
+    const count = countText(conceptText(mergeConcepts([contributor])), tokenCache, stats);
     tokensById.set(id, count);
     return count;
   } catch {
-    return countTokens(conceptText(concept));
+    return countText(conceptText(concept), tokenCache, stats);
   }
+}
+
+// One counted string, through the persistent cache when one is wired
+// (token-count-cache.mjs): the count is a pure function of the text, so a
+// hash hit skips the ~193–280ms/MB BPE encode entirely — which is what makes
+// an engine restart over an unchanged vault cost a re-read, not a re-encode.
+function countText(text, tokenCache, stats) {
+  if (!tokenCache) {
+    if (stats) stats.tokenized += 1;
+    return countTokens(text);
+  }
+  const hash = tokenCache.hash(text);
+  const cached = tokenCache.get(hash);
+  if (cached !== undefined) return cached;
+  if (stats) stats.tokenized += 1;
+  const count = countTokens(text);
+  tokenCache.put(hash, count);
+  return count;
 }
 
 // What a source could not read, said in the words a person would use. The
@@ -419,6 +440,13 @@ export function createEngineService({
   const CONSOLE_DIR = consoleDist ? path.resolve(consoleDist) : null;
   // Git-backed sources clone next to the manifest that declares them.
   const CACHE_DIR = path.join(MANIFEST_DIR, ".cache", "repos");
+  // Persistent BPE token counts (token-count-cache.mjs): restarts re-read a
+  // vault but never re-encode unchanged text. Shared with the CLI's second
+  // engine by design — the file tolerates concurrent writers.
+  const tokenCache = createTokenCountCache({
+    file: path.join(MANIFEST_DIR, ".cache", "index", "token-counts.v1.ndjson"),
+    tokenizer: TOKENIZER,
+  });
   // The service serves the default profile view (see openSources), so its
   // decision history, rules, priorities, and journal are default's — a
   // control operation selecting another profile constructs its own stores.
@@ -968,7 +996,7 @@ export function createEngineService({
         // died" answerable after the fact.
         console.error(`[index] ${source.name}: pass ${entry.passes} start${refreshing ? " (refresh)" : ""}`);
         return withDeadline(
-          snapshotSource(source, entry, controller.signal, previousSnap),
+          snapshotSource(source, entry, controller.signal, previousSnap, tokenCache),
           budget,
           `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
           () => controller.abort(new Error("Indexing timed out")),

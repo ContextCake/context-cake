@@ -47,6 +47,7 @@ const SUITES = [
   { group: "unit", name: "layer-files", ...node("layer-files.test.mjs") },
   { group: "unit", name: "search", ...node("search.test.mjs") },
   { group: "unit", name: "search-index", ...node("search-index.test.mjs") },
+  { group: "unit", name: "token-count-cache", ...node("token-count-cache.test.mjs") },
   { group: "unit", name: "conflict-resolutions", ...node("conflict-resolutions.test.mjs") },
   { group: "unit", name: "sidecar-state", ...node("sidecar-state.test.mjs") },
   { group: "unit", name: "discrepancies", ...node("discrepancies.test.mjs") },

@@ -28,6 +28,8 @@ const FIELDS = [
   { key: "body", boost: 1, b: 0.75 },
 ];
 const K1 = 1.2;
+// The field arity, exported for the incremental index's stat arrays.
+export const FIELD_COUNT = FIELDS.length;
 
 // Raw query words, kept unstemmed for snippet highlighting — a snippet has to
 // point at text the reader can actually see.
@@ -84,6 +86,33 @@ function conceptFields(doc) {
     String(doc.frontmatter.tags ?? ""),
     doc.body,
   ];
+}
+
+/** A concept's body exactly as collectDocuments concatenates it. */
+export function conceptBody(concept) {
+  return concept.sections.map((section) => sectionText(section)).join("\n");
+}
+
+/**
+ * The per-document half of buildIndex for a concept, exposed so the
+ * incremental index (search-index.mjs) analyzes a document with EXACTLY the
+ * arithmetic searchConcepts uses — same analyze(), same field order, same
+ * integer lengths. Bit-identical ranking depends on this staying shared.
+ */
+export function analyzeConceptFields(id, concept) {
+  const values = [
+    id,
+    concept.frontmatter.title ?? "",
+    concept.frontmatter.description ?? "",
+    String(concept.frontmatter.tags ?? ""),
+    conceptBody(concept),
+  ];
+  return values.map((value) => {
+    const terms = analyze(value);
+    const frequencies = new Map();
+    for (const term of terms) frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
+    return { frequencies, length: terms.length };
+  });
 }
 
 function captureFields(doc) {

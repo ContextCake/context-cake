@@ -29,7 +29,8 @@ import { createSourceOperations, normalizeRepo } from "./control/sources.mjs";
 import { patchSettings, settingsView } from "./control/settings.mjs";
 import { withDeadline } from "./control/util.mjs";
 import { mergeConcepts, resolveConcept } from "./resolver.mjs";
-import { searchConcepts, tokenizeQuery } from "./search.mjs";
+import { tokenizeQuery } from "./search.mjs";
+import { createSearchIndex } from "./search-index.mjs";
 import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
 import { resolveSettings, walkLimitsFrom } from "./settings.mjs";
 import {
@@ -334,18 +335,8 @@ function snapshotView(source, snap) {
   };
 }
 
-// The same idea, shaped for search.mjs's adapter contract instead of
-// resolveConcept's: searchConcepts walks listConceptIds() itself (it has no
-// other way to know what to score), so this view answers that from the
-// snapshot's own id list rather than reopening the source it was read from.
-function searchSnapshotView(source, snap) {
-  return {
-    name: source.name,
-    level: source.level,
-    async listConceptIds() { return snap.ids; },
-    async loadConcept(id) { return snap.concepts.get(id) ?? null; },
-  };
-}
+// (searchSnapshotView used to live here — the search route now hands the
+// incremental index the snapshot's ids/concepts directly; search-index.mjs.)
 
 // The identity a memoized read is keyed on: which sources contributed, and
 // which generation of each. A snapshot is immutable once assigned, so this
@@ -486,6 +477,9 @@ export function createEngineService({
   // flight join it instead of running the corpus scan twice.
   let searchMemo = null;
   const SEARCH_MEMO_CAP = 200; // distinct queries per content generation before the map is dropped, not the search
+  // The incremental BM25F index behind /api/search (search-index.mjs): built
+  // once, updated by delta as snapshots move, idle-evicted like corpusMemo.
+  const searchIndex = createSearchIndex();
   // { key, promise, evictTimer } — the resolved corpus behind /api/resolve-all
   // and /api/discrepancies. Same live-key correctness story as graphMemo, plus
   // a residency bound the others don't need: unlike graph rows (compact) or
@@ -667,6 +661,7 @@ export function createEngineService({
     indexes = new Map();
     graphMemo = null;
     searchMemo = null;
+    searchIndex.close();
     if (corpusMemo) clearTimeout(corpusMemo.evictTimer);
     corpusMemo = null;
     conceptTokens = new Map();
@@ -1875,8 +1870,13 @@ export function createEngineService({
     const cacheKey = `${query}\u0000${limit}`;
     let promise = searchMemo.hits.get(cacheKey);
     if (!promise) {
-      const views = contributing.map((p) => searchSnapshotView(p.source, p.snap));
-      promise = searchConcepts(views, { query, limit }).catch((err) => {
+      // The incremental index replaces the per-query corpus rebuild
+      // (search-index.mjs: same scores by construction, differential-tested).
+      // Wrapped in an async IIFE so the memo keeps holding promises.
+      const snapshots = contributing.map((p) => ({
+        name: p.source.name, level: p.source.level, gen: p.snap.gen, ids: p.snap.ids, concepts: p.snap.concepts,
+      }));
+      promise = (async () => searchIndex.search(snapshots, { query, limit }))().catch((err) => {
         if (searchMemo?.hits.get(cacheKey) === promise) searchMemo.hits.delete(cacheKey);
         throw err;
       });

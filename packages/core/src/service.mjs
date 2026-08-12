@@ -204,6 +204,11 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
   // already read without ever trusting it over newer disk state.
   const seedMeta = fingerprinted ? carrySeed?.fileMeta ?? null : null;
   const stats = { carried: 0, read: 0, tokenized: 0, removed: 0 };
+  // Of the carries, how many came from the SEED rather than the served
+  // snapshot. Not part of passStats (the payload counts work, not where a
+  // carry came from) — it exists for the reuse guard below, which must not
+  // mistake "a predecessor already read this" for "nothing changed".
+  let carriedFromSeed = 0;
   let tokens = 0;
   let n = 0;
   for (const item of items) {
@@ -225,6 +230,7 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
       }
       fileMeta.set(item.id, carryFrom.fileMeta.get(item.id));
       stats.carried += 1;
+      if (fromSeed) carriedFromSeed += 1;
     } else {
       const concept = await source.loadConcept(item.id, item.ext ? { ext: item.ext } : undefined);
       throwIfAborted();
@@ -232,7 +238,12 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
       tokens += tokenizeConcept(source, item.id, concept, tokensById, tokenCache, stats);
       stats.read += 1;
       if (fileMeta && item.rel !== undefined) {
-        fileMeta.set(item.id, { rel: item.rel, ext: item.ext, size: item.size, mtimeMs: item.mtimeMs });
+        fileMeta.set(item.id, {
+          rel: item.rel, ext: item.ext, size: item.size, mtimeMs: item.mtimeMs,
+          // Present only where the adapter derives a date from something other
+          // than the file itself (okf-local's git history) — see listEntries.
+          authoredDate: item.authoredDate,
+        });
       }
     }
     if (++n % YIELD_EVERY === 0) {
@@ -244,17 +255,7 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
   if (previousSnap && fingerprinted) {
     for (const id of previousSnap.ids) if (!concepts.has(id)) stats.removed += 1;
   }
-  // A pass that changed NOTHING returns the previous snapshot itself — same
-  // object, same generation — so the graph/search/corpus memos stay warm and
-  // the status generation only moves for the progress counter, never for
-  // content that did not change. The notes must agree too: a warning
-  // appearing or clearing is payload the row reports from the snapshot.
-  if (
-    previousSnap && fingerprinted
-    && stats.read === 0 && stats.removed === 0
-    && previousSnap.ids.length === ids.length
-    && sameNotes(previousSnap, notes)
-  ) {
+  if (fingerprinted && canReuseSnapshot(previousSnap, { stats, carriedFromSeed, idCount: ids.length, notes })) {
     entry.passStats = stats;
     return previousSnap;
   }
@@ -283,11 +284,40 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
   }
 }
 
+/**
+ * May a pass return the PREVIOUS snapshot object instead of its own?
+ *
+ * When it may, the graph/search/corpus memos stay warm and the status
+ * generation moves only for the progress counter, never for content that did
+ * not change. Every clause is a way the two could disagree: a document read,
+ * a document gone, a count that moved, or a warning that appeared or cleared
+ * (the notes are payload the row reports from the snapshot).
+ *
+ * `carriedFromSeed` is the clause that is easy to miss and expensive to get
+ * wrong. A carry from the retry seed means an ABORTED predecessor had already
+ * read that document — its content is newer than the served snapshot even
+ * though this pass read nothing. Reusing the previous snapshot there discards
+ * the edit and reports a clean pass, and because the served snapshot then
+ * disagrees with disk, nothing re-reads it until some unrelated change or a
+ * restart. Exported (and unit-tested) because that failure is silent.
+ */
+export function canReuseSnapshot(previousSnap, { stats, carriedFromSeed = 0, idCount, notes }) {
+  return Boolean(previousSnap)
+    && stats.read === 0 && stats.removed === 0 && carriedFromSeed === 0
+    && previousSnap.ids.length === idCount
+    && sameNotes(previousSnap, notes);
+}
+
 // The fingerprint match the skip gate uses, shared by both carry tables.
+// `authoredDate` is absent for adapters whose dates come from the file alone
+// (files.mjs) and compares equal on both sides there; okf-local sets it so a
+// commit — which changes a document's date without changing the document —
+// re-reads instead of carrying a date the repo no longer supports.
 function matchesFingerprint(prev, item) {
   return Boolean(prev)
     && prev.rel === item.rel && prev.ext === item.ext
-    && prev.size === item.size && prev.mtimeMs === item.mtimeMs;
+    && prev.size === item.size && prev.mtimeMs === item.mtimeMs
+    && prev.authoredDate === item.authoredDate;
 }
 
 // Snapshot-note equality for the identity-reuse check above. Order-stable by
@@ -1052,7 +1082,6 @@ export function createEngineService({
     else {
       pausedIndexNames.delete(name);
       pausedIndexNames.delete(PAUSE_ALL); // resuming one source ends a pause-all for the rest too — least surprising reading of "resume"
-      if (pausedIndexNames.has(PAUSE_ALL)) pausedIndexNames = new Set();
     }
     pushEngineEvent(`[control] resume ${name ?? "all sources"}`);
     for (const entry of [...indexes.values()]) {

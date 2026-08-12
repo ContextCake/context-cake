@@ -179,7 +179,20 @@ export function createOkfLocalSource({ name, level, root, limits = null }) {
      */
     async listEntries({ signal = null, notes = null } = {}) {
       const entries = await walkDocEntries(root, [".md"], limits, { signal, notes });
-      return entries.map((entry) => ({ ...entry, id: entry.rel.replace(/\.md$/i, "") }));
+      // The authored date belongs in the fingerprint, because a document's
+      // date can move without the document moving: committing a note gives it
+      // an authored date (and takes it out of the untracked/mtime branch)
+      // while leaving the file byte-identical. Without this, a carried concept
+      // would keep an mtime-derived date forever in a git-backed layer — the
+      // exact substitution section-dating exists to prevent — and the stale
+      // date would go on feeding conflict freshness.
+      const { dates, inRepo, tracked } = await commitHistory();
+      return entries.map((entry) => ({
+        ...entry,
+        id: entry.rel.replace(/\.md$/i, ""),
+        authoredDate: dates.get(entry.rel)
+          ?? (inRepo && (tracked === null || tracked.has(entry.rel)) ? null : undefined),
+      }));
     },
     /**
      * Pin the git-history memo for the duration of a batch read (an index

@@ -42,6 +42,7 @@ const SUITES = [
   { group: "unit", name: "manifest", ...node("manifest.test.mjs") },
   { group: "unit", name: "index-keys", ...node("index-keys.test.mjs") },
   { group: "unit", name: "walk", ...node("walk.test.mjs") },
+  { group: "unit", name: "snapshot-reuse", ...node("snapshot-reuse.test.mjs") },
   { group: "unit", name: "memory-pressure", ...node("memory-pressure.test.mjs") },
   { group: "unit", name: "cache-source", ...node("cache-source.test.mjs") },
   { group: "unit", name: "layer-files", ...node("layer-files.test.mjs") },

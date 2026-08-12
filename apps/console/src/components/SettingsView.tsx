@@ -44,16 +44,20 @@ function describeUpdateStatus(status: UpdateStatus): string {
  * console can self-diagnose without filesystem access. Live mode only;
  * fetched on demand, never polled.
  */
+const ENGINE_EVENTS_NOTE = 'The engine’s recent pass outcomes, retries and control actions.'
 function EngineEvents({ appMode }: { appMode: Mode }) {
   const [events, setEvents] = useState<IndexingActivity['events'] | null>(null)
-  const [note, setNote] = useState('The engine’s recent pass outcomes, retries and control actions.')
+  const [note, setNote] = useState(ENGINE_EVENTS_NOTE)
   const refresh = async () => {
     try {
       const res = await apiFetch('/api/indexing/activity')
       if (!res.ok) { setNote('This engine does not report indexing activity.'); return }
       const parsed = (await res.json()) as IndexingActivity
       setEvents(parsed.events.slice(-12).reverse())
-      if (parsed.events.length === 0) setNote('No engine events yet this session.')
+      // A refresh that worked clears whatever the last failure said: an
+      // "engine could not be reached" line above a list of engine events is
+      // the page contradicting itself.
+      setNote(parsed.events.length === 0 ? 'No engine events yet this session.' : ENGINE_EVENTS_NOTE)
     } catch {
       setNote('The engine could not be reached.')
     }

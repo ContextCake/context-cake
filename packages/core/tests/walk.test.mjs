@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { probeDocs, walkDocEntries, walkDocs } from "../src/sources/okf-local.mjs";
+import { execFileSync } from "node:child_process";
+import { createOkfLocalSource, probeDocs, walkDocEntries, walkDocs } from "../src/sources/okf-local.mjs";
 
 function tmpdir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-walk-"));
@@ -31,6 +32,30 @@ test("walkDocEntries carries path, rel, ext, size and mtime, sorted by path", as
   // The wrapper keeps its original shape: bare paths.
   const paths = await walkDocs(root, [".md", ".txt"], { maxFiles: 100, maxEntries: 100 });
   assert.deepEqual(paths, entries.map((e) => e.path));
+});
+
+test("listEntries fingerprints the authored date, so a commit re-reads an unchanged file", async (t) => {
+  // A document's date can move without the document moving: committing a note
+  // gives it an authored date while leaving the bytes and the mtime alone. If
+  // the fingerprint could not see that, the incremental pass would carry an
+  // mtime-derived date forward forever inside a git-backed layer.
+  const root = tmpdir(t);
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
+  git("init", "-q");
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "Test");
+  fs.writeFileSync(path.join(root, "note.md"), "# Note\n\n## Body {#body}\n\nhello\n");
+  const source = createOkfLocalSource({ name: "vault", level: 3, root });
+
+  const [before] = await source.listEntries({});
+  git("add", "note.md");
+  git("commit", "-q", "-m", "add note");
+  source.sync(); // the memo drop a live layer performs after a pull
+  const [after] = await source.listEntries({});
+
+  assert.equal(before.size, after.size);
+  assert.equal(before.mtimeMs, after.mtimeMs); // the file itself did not move
+  assert.notEqual(before.authoredDate, after.authoredDate); // its date did
 });
 
 test("an abort lands MID-directory in a flat vault, not only at directory boundaries", async (t) => {

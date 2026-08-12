@@ -324,7 +324,7 @@ import { withCache } from "${sources_dir}/cache.mjs";
 import fs from "node:fs";
 const root = process.argv[2];
 const doc = root + "/notes.txt";
-const body = (c) => c.sections[0].lines.join("\n");
+const body = (c) => c.sections[0].text;
 
 // Stale-while-cached, then sync() forces a fresh read.
 fs.writeFileSync(doc, "version one");

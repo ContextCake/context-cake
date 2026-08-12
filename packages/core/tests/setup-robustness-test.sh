@@ -77,9 +77,14 @@ node -e '
 ' "$TMP"
 
 OUT="$(node --input-type=module -e "
-import { walkDocs, probeDocs } from '$SRC/sources/okf-local.mjs';
-try { await walkDocs('$TMP/many', ['.md'], { maxFiles: 5 }); console.log('NO-ERROR'); }
-catch (e) { console.log(e.message); }
+import { walkDocEntries, walkDocs, probeDocs } from '$SRC/sources/okf-local.mjs';
+// The document cap TRUNCATES (an over-cap vault indexes its first N with a
+// visible partial marker — it used to fail the whole source); the scan cap
+// still throws (blowing through it means a home directory, and no prefix of
+// that is an answer).
+const notes = { skipped: [], unreadable: [], hidden: 0 };
+const capped = await walkDocEntries('$TMP/many', ['.md'], { maxFiles: 5 }, { notes });
+console.log('file-cap:' + JSON.stringify({ count: capped.length, truncated: notes.truncated ?? null }));
 try { await walkDocs('$TMP/wide', ['.md'], { maxEntries: 10 }); console.log('NO-ERROR'); }
 catch (e) { console.log(e.message); }
 console.log(JSON.stringify(await walkDocs('$TMP/many', ['.md'])));
@@ -87,19 +92,19 @@ console.log(JSON.stringify(await walkDocs('$TMP/many', ['.md'])));
 console.log('probe-many:' + JSON.stringify(await probeDocs('$TMP/many', ['.md'])));
 console.log('probe-wide:' + JSON.stringify(await probeDocs('$TMP/wide', ['.md'])));
 ")"
-grep -q 'too many documents' <<<"$OUT" || fail "file cap should reject with an actionable message ($OUT)"
+grep -q 'file-cap:{"count":5,"truncated":{"cap":5}}' <<<"$OUT" || fail "file cap should truncate at the cap with a marker ($OUT)"
 grep -q 'too large to index' <<<"$OUT" || fail "entry cap should reject with an actionable message ($OUT)"
 grep -q 'doc-29' <<<"$OUT" || fail "in-bounds folder should list fully ($OUT)"
-grep -q 'too many documents' <<<"$OUT" && grep -q 'too large to index' <<<"$OUT" && grep -q 'doc-29' <<<"$OUT" && pass "walk caps enforced with actionable messages, in-bounds walk complete"
+grep -q 'file-cap:{"count":5' <<<"$OUT" && grep -q 'too large to index' <<<"$OUT" && grep -q 'doc-29' <<<"$OUT" && pass "file cap truncates visibly, entry cap rejects, in-bounds walk complete"
 grep -q 'probe-many:{"found":true' <<<"$OUT" && pass "probeDocs finds a document without walking the folder" || fail "probeDocs found ($OUT)"
 grep -q 'probe-wide:{"found":false' <<<"$OUT" && pass "probeDocs reports an empty folder honestly" || fail "probeDocs empty ($OUT)"
 
 OUT="$(CONTEXTCAKE_MAX_DOC_FILES=5 node --input-type=module -e "
 import { createFilesSource } from '$SRC/sources/files.mjs';
 const s = createFilesSource({ name: 'd', level: 2, root: '$TMP/many' });
-try { await s.listConceptIds(); console.log('NO-ERROR'); } catch (e) { console.log(e.message); }
+console.log('env-capped:' + (await s.listConceptIds()).length);
 ")"
-grep -q 'too many documents' <<<"$OUT" && pass "env var still works as the pre-UI default" || fail "adapter env cap ($OUT)"
+grep -q 'env-capped:5' <<<"$OUT" && pass "env var still works as the pre-UI default (truncates at 5)" || fail "adapter env cap ($OUT)"
 
 echo "settings module (manifest > env > default)"
 OUT="$(CONTEXTCAKE_MAX_DOC_FILES=777 node --input-type=module -e "
@@ -121,7 +126,7 @@ OUT="$(CONTEXTCAKE_MAX_DOC_FILES=999999999 node --input-type=module -e "
 import { resolveSettings } from '$SRC/settings.mjs';
 console.log(resolveSettings({}).maxDocFiles);
 ")"
-[ "$OUT" = "10000" ] && pass "out-of-range env values fall back safely" || fail "env range guard ($OUT)"
+[ "$OUT" = "25000" ] && pass "out-of-range env values fall back safely" || fail "env range guard ($OUT)"
 
 echo "per-source time budget (withDeadline)"
 OUT="$(node --input-type=module -e "
@@ -179,12 +184,17 @@ ADD="$(curl -s -X POST -H 'content-type: application/json' -d "{\"kind\":\"files
 [ "$(JQ 'String(d.hasDocuments)' <<<"$ADD")" = "false" ] && pass "an empty folder is accepted but flagged as holding no documents" || fail "empty hasDocuments ($ADD)"
 code 200 "$(C -X DELETE "$BASE/api/sources?name=empty")" "cleanup empty source"
 
-echo "an over-cap folder is added instantly, then reported as a source error"
+echo "an over-cap folder is added instantly, then indexed to the cap with a visible partial marker"
 T="$(ms -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"big\",\"level\":2,\"path\":\"$TMP/many\"}" "$BASE/api/sources")"
 faster_than "$T" 2000 "adding an over-cap folder returns immediately instead of rejecting"
 G="$(curl -s "$BASE/api/graph?wait=15000")"
-[ "$(JQ 'd.sources.find((s) => s.name === "big").status' <<<"$G")" = "error" ] && pass "over-cap source settles into an errored state" || fail "over-cap status ($G)"
-JQ 'd.sources.find((s) => s.name === "big").error' <<<"$G" | grep -q 'more specific folder' && pass "the error tells the user what to do" || fail "over-cap message"
+# Deliberate change with the truncating cap: an over-cap folder used to settle
+# into an error row with nothing behind it; now it serves the first cap-many
+# documents, visibly marked partial. Same instant add, more honest outcome.
+[ "$(JQ '(() => { const s = d.sources.find((s) => s.name === "big"); return `${s.status}:${s.conceptCount}` })()' <<<"$G")" = "ok:10" ] \
+  && pass "over-cap source serves the first cap-many documents" || fail "over-cap status ($G)"
+JQ 'String((d.sources.find((s) => s.name === "big").warningMessages ?? []).join(" | "))' <<<"$G" | grep -q 'Indexed the first 10 documents' \
+  && pass "the partial answer tells the user what happened and what to raise" || fail "over-cap warning missing ($G)"
 [ "$(JQ 'String(d.sources.find((s) => s.name === "vault").conceptCount)' <<<"$G")" = "1" ] && pass "healthy layers keep resolving alongside the errored one" || fail "healthy layer degraded too ($G)"
 [ "$(JQ 'String(d.concepts.some((c) => c.id === "note"))' <<<"$G")" = "true" ] && pass "concepts from healthy layers still appear" || fail "concepts missing ($G)"
 code 200 "$(C -X DELETE "$BASE/api/sources?name=big")" "cleanup over-cap source"
@@ -352,7 +362,7 @@ for _ in $(seq 1 40); do curl -sf "$BASE3/api/settings" >/dev/null 2>&1 && break
 
 echo "settings are configurable from the app, not just the environment"
 S="$(curl -s "$BASE3/api/settings")"
-[ "$(JQ 'String(d.settings.maxDocFiles)' <<<"$S")" = "10000" ] && pass "GET /api/settings reports the effective defaults" || fail "settings defaults ($S)"
+[ "$(JQ 'String(d.settings.maxDocFiles)' <<<"$S")" = "25000" ] && pass "GET /api/settings reports the effective defaults" || fail "settings defaults ($S)"
 [ "$(JQ 'String(d.catalog.length >= 3)' <<<"$S")" = "true" ] && pass "the catalog gives the UI labels, help and ranges" || fail "settings catalog ($S)"
 JQ 'd.catalog[0].help' <<<"$S" | grep -qi 'folder\|source' && pass "help text is written for a person, not a config file" || fail "settings help ($S)"
 code 400 "$(C -X PATCH -H 'content-type: application/json' -d '{"maxDocFiles":1}' "$BASE3/api/settings")" "a below-range value is rejected"
@@ -362,14 +372,17 @@ P="$(curl -s -X PATCH -H 'content-type: application/json' -d '{"maxDocFiles":250
 grep -q '"maxDocFiles": 250' "$TMP/manifest-settings.json" && pass "the change persists in the manifest" || fail "settings not persisted"
 
 # The point of the setting: it has to actually change indexing behavior.
+# (Under the truncating cap "change behavior" means: index exactly the
+# configured number and say the answer is partial.)
 code 200 "$(C -X POST -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"corpus\",\"level\":2,\"path\":\"$TMP/big-corpus\"}" "$BASE3/api/sources")" "add the 1500-doc corpus under a 250-doc limit"
 G="$(curl -s "$BASE3/api/graph?wait=30000")"
-[ "$(JQ 'd.sources.find((s) => s.name === "corpus").status' <<<"$G")" = "error" ] && pass "the corpus exceeds the configured limit and says so" || fail "limit not applied ($G)"
+[ "$(JQ '(() => { const s = d.sources.find((s) => s.name === "corpus"); return `${s.conceptCount}:${s.warnings > 0}` })()' <<<"$G")" = "250:true" ] \
+  && pass "the corpus indexes exactly the configured limit and says the answer is partial" || fail "limit not applied ($G)"
 curl -s -X PATCH -H 'content-type: application/json' -d '{"maxDocFiles":5000}' "$BASE3/api/settings" >/dev/null
 G="$(curl -s "$BASE3/api/graph?wait=30000")"
 [ "$(JQ 'String(d.sources.find((s) => s.name === "corpus").conceptCount)' <<<"$G")" = "1500" ] && pass "raising the limit in settings makes the same source index" || fail "raised limit ($G)"
 R="$(curl -s -X PATCH -H 'content-type: application/json' -d '{"maxDocFiles":null}' "$BASE3/api/settings")"
-[ "$(JQ 'String(d.settings.maxDocFiles)' <<<"$R")" = "10000" ] && pass "null resets a setting to its default" || fail "settings reset ($R)"
+[ "$(JQ 'String(d.settings.maxDocFiles)' <<<"$R")" = "25000" ] && pass "null resets a setting to its default" || fail "settings reset ($R)"
 grep -q 'maxDocFiles' "$TMP/manifest-settings.json" && fail "reset left the value in the manifest" || pass "reset removes the stored value"
 
 # ---- host D: a folder the walk can only read part of --------------------------

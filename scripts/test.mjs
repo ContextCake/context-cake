@@ -41,10 +41,14 @@ const SUITES = [
   { group: "unit", name: "git-auth", ...node("git-auth.test.mjs") },
   { group: "unit", name: "manifest", ...node("manifest.test.mjs") },
   { group: "unit", name: "index-keys", ...node("index-keys.test.mjs") },
+  { group: "unit", name: "walk", ...node("walk.test.mjs") },
+  { group: "unit", name: "snapshot-reuse", ...node("snapshot-reuse.test.mjs") },
   { group: "unit", name: "memory-pressure", ...node("memory-pressure.test.mjs") },
   { group: "unit", name: "cache-source", ...node("cache-source.test.mjs") },
   { group: "unit", name: "layer-files", ...node("layer-files.test.mjs") },
   { group: "unit", name: "search", ...node("search.test.mjs") },
+  { group: "unit", name: "search-index", ...node("search-index.test.mjs") },
+  { group: "unit", name: "token-count-cache", ...node("token-count-cache.test.mjs") },
   { group: "unit", name: "conflict-resolutions", ...node("conflict-resolutions.test.mjs") },
   { group: "unit", name: "sidecar-state", ...node("sidecar-state.test.mjs") },
   { group: "unit", name: "discrepancies", ...node("discrepancies.test.mjs") },
@@ -90,6 +94,11 @@ const SUITES = [
   { group: "slow", name: "index-lifecycle", ...sh("index-lifecycle-test.sh") },
   { group: "slow", name: "index-concurrency", ...sh("index-concurrency-test.sh") },
   { group: "slow", name: "graph-latency", ...sh("graph-latency-test.sh") },
+  { group: "slow", name: "resolve-all-scale", ...sh("resolve-all-scale-test.sh") },
+  { group: "slow", name: "index-incremental", ...sh("index-incremental-test.sh") },
+  { group: "slow", name: "index-scale", ...sh("index-scale-test.sh") },
+  { group: "slow", name: "index-retry", ...sh("index-retry-test.sh") },
+  { group: "slow", name: "index-controls", ...sh("index-controls-test.sh") },
 ];
 
 const GROUPS = [...new Set(SUITES.map((suite) => suite.group))];

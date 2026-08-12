@@ -155,6 +155,10 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
       }
       return entry.ids;
     },
+    // Batch pin passes through untouched: it coordinates work in the WRAPPED
+    // source (okf-local's git-history memo), and the cache in front changes
+    // nothing about when that work should be pinned.
+    ...(typeof source.beginBatch === "function" ? { beginBatch: () => source.beginBatch() } : {}),
     // Deliberately NOT cached: health() reports whether the last real request
     // failed, so answering it from a memo taken before the outage would defeat
     // the one question it exists to answer.

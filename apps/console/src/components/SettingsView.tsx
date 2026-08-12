@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useThemeMode } from '../theme-mode'
 import { checkForUpdate, isUpdateCheckEnabled, setUpdateCheckEnabled, type UpdateInfo } from '../update'
-import type { Mode } from '../api'
-import { C, css } from '../theme'
+import { apiFetch } from '../api'
+import type { IndexingActivity, Mode } from '../api'
+import { C, css, MONO } from '../theme'
 import { AccountPanel } from './AccountPanel'
 import { IndexingSettings } from './IndexingSettings'
 import { IntegrationsPanel } from './IntegrationsPanel'
@@ -37,6 +38,51 @@ function describeUpdateStatus(status: UpdateStatus): string {
  * manual GitHub-releases check with a link out, and demo mode gets nothing —
  * matching UpdatePill's existing per-mode gating.
  */
+/**
+ * The last few engine events (pass outcomes, retries, control actions) —
+ * the in-app tail of what engine.log records on disk, so a browser-served
+ * console can self-diagnose without filesystem access. Live mode only;
+ * fetched on demand, never polled.
+ */
+const ENGINE_EVENTS_NOTE = 'The engine’s recent pass outcomes, retries and control actions.'
+function EngineEvents({ appMode }: { appMode: Mode }) {
+  const [events, setEvents] = useState<IndexingActivity['events'] | null>(null)
+  const [note, setNote] = useState(ENGINE_EVENTS_NOTE)
+  const refresh = async () => {
+    try {
+      const res = await apiFetch('/api/indexing/activity')
+      if (!res.ok) { setNote('This engine does not report indexing activity.'); return }
+      const parsed = (await res.json()) as IndexingActivity
+      setEvents(parsed.events.slice(-12).reverse())
+      // A refresh that worked clears whatever the last failure said: an
+      // "engine could not be reached" line above a list of engine events is
+      // the page contradicting itself.
+      setNote(parsed.events.length === 0 ? 'No engine events yet this session.' : ENGINE_EVENTS_NOTE)
+    } catch {
+      setNote('The engine could not be reached.')
+    }
+  }
+  if (appMode !== 'live') return null
+  return (
+    <div className="cc-settings-row" style={css('align-items:flex-start;')}>
+      <div style={css('min-width:0;')}>
+        <strong>Recent engine events</strong>
+        <span>{note}</span>
+        {events && events.length > 0 && (
+          <ul style={css(`margin:8px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:3px; font-family:${MONO}; font-size:10.5px; line-height:1.5; color:${C.caption};`)}>
+            {events.map((e) => (
+              <li key={`${e.at}-${e.line}`} style={css('overflow-wrap:anywhere;')}>
+                {new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} {e.line}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <Button type="button" variant="secondary" onClick={() => void refresh()}>{events ? 'Refresh' : 'Show'}</Button>
+    </div>
+  )
+}
+
 function UpdateControl({ appMode }: { appMode: Mode }) {
   const bridge = window.__CC_DESKTOP?.updates
   const [status, setStatus] = useState<UpdateStatus | null>(null)
@@ -195,6 +241,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
   const [metricsEnabled, setMetricsEnabled] = useState<boolean | null>(null)
   const [writeFailed, setWriteFailed] = useState(false)
   const [revealError, setRevealError] = useState<string | null>(null)
+  const [logsError, setLogsError] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const { preference: theme, density, setPreference: setTheme, setDensity, transparency, systemReducedTransparency, setTransparency, saveFailed } = useThemeMode()
   // Appearance writes and this view's own toggles hit the same file for the same
@@ -309,6 +356,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
   // implementation detail rather than the only thing holding the row shut.
   const isSettingsWindow = window.__CC_DESKTOP?.windowRole === 'settings'
   const canRevealConfig = isSettingsWindow && typeof window.__CC_DESKTOP?.revealConfigDir === 'function'
+  const canRevealLogs = isSettingsWindow && typeof window.__CC_DESKTOP?.revealLogs === 'function'
   const settingsFile = isSettingsWindow ? window.__CC_DESKTOP?.settingsFile : undefined
   const [exportNote, setExportNote] = useState<string | null>(null)
   const [resetBusy, setResetBusy] = useState(false)
@@ -351,6 +399,16 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
       setRevealError(e instanceof Error ? e.message : String(e))
     }
   }
+  const showEngineLog = async () => {
+    const bridge = window.__CC_DESKTOP?.revealLogs
+    if (!bridge) return
+    try {
+      const result = await bridge()
+      setLogsError(result?.ok ? null : result?.error ?? 'The log could not be shown.')
+    } catch (e) {
+      setLogsError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   return (
     <div ref={rootRef} className="cc-settings-screen" role={surface === 'overlay' ? 'dialog' : undefined} aria-modal={surface === 'overlay' || undefined} aria-label="ContextCake Settings" data-surface={surface}>
@@ -391,6 +449,8 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
                 <UpdateControl appMode={appMode} />
                 <CliControl />
                 {canRevealConfig && <div className="cc-settings-row"><div><strong>Configuration folder</strong><span>{revealError ?? 'Settings and the source list live in ~/Library/Application Support/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showConfigFolder()}>Show in Finder</Button></div>}
+                {canRevealLogs && <div className="cc-settings-row"><div><strong>Engine log</strong><span>{logsError ?? 'What the engine was doing, including each indexing pass — useful in a bug report. Lives in ~/Library/Logs/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showEngineLog()}>Show in Finder</Button></div>}
+                <EngineEvents appMode={appMode} />
                 {settingsFile && <div className="cc-settings-row"><div><strong>Export settings</strong><span>{exportNote ?? 'Save a copy of ContextCake’s local preferences — useful in a bug report. Never includes credentials or your documents.'}</span></div><Button type="button" variant="secondary" onClick={() => void exportSettings()}>Export…</Button></div>}
                 {settingsFile && <div className="cc-settings-row"><div><strong>Reset settings</strong><span>Return appearance, update, window, and view settings on this Mac to their defaults. Sources and knowledge are not affected.</span></div><Button type="button" variant="secondary" disabled={resetBusy} onClick={() => void resetSettingsFile()}>{resetBusy ? 'Resetting…' : 'Reset…'}</Button></div>}
               </div>

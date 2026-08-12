@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Tiktoken } from "./vendor/tiktoken/lite.js";
+import { sectionText } from "./sections.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const TOKENIZER = "o200k_base";
@@ -53,7 +54,7 @@ export function conceptText(entry) {
     .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
     .join("\n");
   const body = (entry.sections ?? [])
-    .map((s) => `${s.heading ?? ""}\n${(s.lines ? s.lines.join("\n") : s.content) ?? ""}`)
+    .map((s) => `${s.heading ?? ""}\n${sectionText(s)}`)
     .join("\n\n");
   return `${fm}\n\n${body}`.trim();
 }

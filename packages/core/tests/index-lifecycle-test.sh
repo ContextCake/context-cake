@@ -296,21 +296,28 @@ P_ROW() { curl -s "${AUTH[@]}" "$BASE3/api/graph" | JQ 'JSON.stringify((d.source
 
 code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":100}' "$BASE3/api/settings")" "lower maxDocFiles below the layer's size"
 # The user just said "index at most 100 documents". Serving 200 after that is
-# wrong at every moment, not only once the re-index has failed.
+# wrong at every moment — the re-key must drop the over-cap snapshot rather
+# than hand it forward. What replaces it changed deliberately with the
+# truncating cap: the fresh pass serves AT MOST the new cap, visibly marked
+# partial, instead of an error row with nothing behind it.
 STILL_200=0
 for _ in $(seq 1 60); do
   ROW="$(P_ROW)"
   [ "$(JQ 'String(d.conceptCount)' <<<"$ROW")" = "200" ] && STILL_200=1
-  [ "$(JQ 'String(d.status)' <<<"$ROW")" = "error" ] && break
+  COUNT="$(JQ 'String(d.conceptCount)' <<<"$ROW")"
+  [ "$(JQ 'String(d.status)' <<<"$ROW")" = "ok" ] && [ "$COUNT" = "100" ] && break
   sleep 0.25
 done
 [ "$STILL_200" = "0" ] \
   && pass "the over-cap answer was never served after the cap was lowered" \
   || fail "the pre-change snapshot survived the settings change (row: $(P_ROW))"
 FINAL="$(P_ROW)"
-[ "$(JQ '`${d.status}:${d.conceptCount}`' <<<"$FINAL")" = "error:0" ] \
-  && pass "the failed re-index reports error with nothing to show, not a stale corpus" \
-  || fail "a failed re-index after a policy change left a stale answer in place ($FINAL)"
+[ "$(JQ '`${d.status}:${d.conceptCount}`' <<<"$FINAL")" = "ok:100" ] \
+  && pass "the re-index serves exactly the new cap, truncated, never the old answer" \
+  || fail "a policy change did not land on the capped truncated answer ($FINAL)"
+grep -q 'Indexed the first 100 documents' <<<"$(JQ 'String((d.warningMessages ?? []).join(" | "))' <<<"$FINAL")" \
+  && pass "and the partial answer says so out loud (truncation warning)" \
+  || fail "a truncated source carries no visible warning ($FINAL)"
 
 # The credential half, in-process: the engine receives secrets by value, so
 # Disconnect is a setTokens({}) call rather than an HTTP route.
@@ -454,15 +461,39 @@ CHURN_DELTA=$((CHURN_AFTER - CHURN_BEFORE))
 [ "$CHURN_DELTA" -ge 1 ] \
   && pass "the churn did reach the index (${CHURN_DELTA} refresh pass(es) over ${CHURN_WINDOW_MS}ms)" \
   || fail "no pass ran during the churn window, so the assertions above prove nothing — $CH_DESC"
-# The bound. Each pass is a full re-walk and re-read of every document: at the
-# ${CTRL_MS}ms this vault takes, an unbounded chain fills the window.
-MAX_PASSES=3
+# The bound, restated for the incremental index. A pass is no longer a full
+# re-read — the fingerprint gate re-reads only the churned file — so the cost
+# model the old "3 passes max" encoded (each pass ~= the whole corpus) is
+# gone. What must still hold: passes are spaced by the quiet window
+# (FOLLOW_UP_MIN_QUIET_MS floor, 1s), so sustained editing costs at most ~one
+# cheap sweep per second, and each of those sweeps must actually BE cheap
+# (carried-dominant), or this is the old pegged core with better bookkeeping.
+MAX_PASSES=$(( CHURN_WINDOW_MS / 1000 + 3 ))
 [ "$CHURN_DELTA" -le "$MAX_PASSES" ] \
-  && pass "and it cost ${CHURN_DELTA} pass(es), not a chain (<= $MAX_PASSES over ${CHURN_WINDOW_MS}ms of ${CHURN_MS}ms edits)" \
-  || fail "sustained editing chained $CHURN_DELTA full re-reads over ${CHURN_WINDOW_MS}ms — $CH_DESC; one pass takes ~${CTRL_MS}ms, so this is a pegged core for as long as the user keeps typing"
-[ "$(JQ 'String(d.refreshingSeen)' <<<"$CHURNED")" = "true" ] \
-  && pass "the refresh was visible as an additive signal (indexing.refreshing)" \
-  || fail "a background refresh ran with no way for a client to know — $CH_DESC"
+  && pass "and it cost ${CHURN_DELTA} pass(es), quiet-window spaced (<= $MAX_PASSES over ${CHURN_WINDOW_MS}ms of ${CHURN_MS}ms edits)" \
+  || fail "sustained editing ran $CHURN_DELTA passes over ${CHURN_WINDOW_MS}ms — $CH_DESC; the quiet window is not holding edits to ~one pass per second"
+CHURN_STATS="$(ROW2 vault-b | JQ '(() => { const p = d.indexing.passStats; return p ? `${p.read} ${p.carried}` : "absent" })()')"
+CHURN_READ="${CHURN_STATS%% *}"
+CHURN_CARRIED="${CHURN_STATS##* }"
+if [ "$CHURN_STATS" != "absent" ] && [ "$CHURN_READ" -le 2 ] 2>/dev/null && [ "$CHURN_CARRIED" -ge $((NOTES - 2)) ] 2>/dev/null; then
+  pass "each churn pass was a fingerprint sweep, not a re-read (last pass: read=$CHURN_READ carried=$CHURN_CARRIED)"
+else
+  fail "churn passes are re-reading the corpus (last pass stats: $CHURN_STATS) — incrementality regressed under sustained editing"
+fi
+# A refresh must be OBSERVABLE as the additive signal, never as a status
+# regression — but the incremental index made refresh passes faster than the
+# poll interval, so a sampler can legitimately miss the ~40ms refreshing=true
+# window. Accept either: the signal was sampled, or the pass demonstrably ran
+# entirely in the background (passes advanced while status never left ok and
+# the indexing flag never rose) — which is the state the signal exists to
+# describe.
+REFRESH_SEEN="$(JQ 'String(d.refreshingSeen)' <<<"$CHURNED")"
+BACKGROUNDED="$(JQ 'String(d.maxPasses > d.minPasses && d.statuses.join("") === "ok" && d.indexingFlagSeen === false)' <<<"$CHURNED")"
+if [ "$REFRESH_SEEN" = "true" ] || [ "$BACKGROUNDED" = "true" ]; then
+  pass "the refresh stayed a background signal (refreshingSeen=$REFRESH_SEEN, sub-poll pass=$BACKGROUNDED)"
+else
+  fail "a background refresh ran with no honest signal — $CH_DESC"
+fi
 
 # The edit still has to land, or "bounded" would just mean "ignored".
 printf '# Note 3 (final)\n\n## Body\n\nthe last edit before the vault goes quiet.\n' > "$TMP/vault/note-3.md"

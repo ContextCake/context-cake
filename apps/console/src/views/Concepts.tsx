@@ -126,8 +126,10 @@ function ConceptsInner() {
                 {c.conflict && <span title="has conflict" style={css('width:7px; height:7px; border-radius:999px; background:#C77D2A;')} />}
                 {c.draft && <span style={css(`font-size:10px; font-family:${MONO}; color:#7A5A28;`)}>draft</span>}
                 {/* No sections to read — a dead end worth flagging here so it's
-                    triageable from the list, not only discovered by opening it. */}
-                {c.sections.length === 0 && <span title="This concept has no sections" style={css(`font-size:10px; font-family:${MONO}; color:#8A8A82;`)}>empty</span>}
+                    triageable from the list, not only discovered by opening it.
+                    Only a LOADED row can make that claim: a compact graph-first
+                    row (detailLoaded false) merely hasn't fetched its document. */}
+                {c.detailLoaded !== false && c.sections.length === 0 && <span title="This concept has no sections" style={css(`font-size:10px; font-family:${MONO}; color:#8A8A82;`)}>empty</span>}
               </div>
               <div style={css('font-weight:600; font-size:13.5px; margin-top:7px;')}>{c.title}</div>
               <code style={css(`display:block; font-family:${MONO}; font-size:11px; color:#8A8A82; margin-top:3px;`)}>{c.id}</code>

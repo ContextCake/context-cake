@@ -14,7 +14,7 @@
 import demoBundleRaw from './generated/demo-cascade.json'
 import type {
   ConflictResolutionRecord, DemoBundle, DiscrepanciesResponse, DiscrepancyDecisionRequest, DiscrepancyRecord,
-  DiscrepancyRule, DiscrepancyRuleSuggestion, GraphSummary, GraphSource, ResolveConflictRequest,
+  DiscrepancyRule, DiscrepancyRuleSuggestion, GraphConcept, GraphSummary, GraphSource, ResolveConflictRequest,
   ResolvedConcept, ResolvedSection, SearchHit, SourceStatus, StatusSummary,
 } from './types'
 import type { Concept, ConceptSection, Conflict, Dissent, Source } from './data'
@@ -85,6 +85,46 @@ export interface DataSource {
    * demo mode where nothing indexes.
    */
   setActiveSource(name: string | null): void
+  /**
+   * The power-user activity feed (GET /api/indexing/activity): per-source
+   * rate/ETA, pass history, warning samples, and the engine's event ring.
+   * `null` against an engine too old to have the route, and in demo mode
+   * (nothing indexes a finished snapshot). Fetched only while a surface that
+   * renders it is open — never part of the steady-state poll.
+   */
+  indexingActivity?(): Promise<IndexingActivity | null>
+  /** POST /api/indexing/<action>. Absent in demo mode — the UI hides the controls. */
+  indexingControl?(action: IndexingControlAction, options?: { source?: string; full?: boolean }): Promise<boolean>
+}
+
+export type IndexingControlAction = 'pause' | 'resume' | 'cancel' | 'reindex'
+
+export interface IndexingActivitySource {
+  name: string
+  level: number
+  status: string
+  phase: string
+  paused: boolean
+  loaded: number
+  total: number | null
+  passes: number
+  rateDocsPerSec: number | null
+  etaMs: number | null
+  passStats: { carried: number; read: number; tokenized: number; removed: number } | null
+  retries: number
+  nextRetryAt: number | null
+  error: string | null
+  lastPasses: { startedAt: number; durationMs: number; outcome: string; concepts?: number; carried?: number; read?: number; error?: string }[]
+  warnings: string[]
+  skippedSamples: string[]
+  unreadableSamples: string[]
+  truncated: { cap: number } | null
+}
+
+export interface IndexingActivity {
+  paused: string[]
+  sources: IndexingActivitySource[]
+  events: { at: number; line: string }[]
 }
 
 // ---- Transport --------------------------------------------------------------
@@ -422,6 +462,24 @@ class LiveSource implements DataSource {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
     }).catch(() => {})
   }
+  async indexingActivity(): Promise<IndexingActivity | null> {
+    try {
+      return await this.get<IndexingActivity>('/api/indexing/activity')
+    } catch (e) {
+      // An engine too old for the route: the panel simply has no detail pane.
+      if (e instanceof LiveDataError && e.kind === 'bad-status' && e.status === 404) return null
+      throw e
+    }
+  }
+  async indexingControl(action: IndexingControlAction, options: { source?: string; full?: boolean } = {}): Promise<boolean> {
+    const body: Record<string, unknown> = {}
+    if (options.source) body.source = options.source
+    if (options.full) body.full = true
+    const out = await this.request<{ ok: boolean }>(`/api/indexing/${action}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    })
+    return out?.ok === true
+  }
   private async get<T>(path: string): Promise<T> {
     return this.request<T>(path, { headers: { accept: 'application/json' } })
   }
@@ -584,10 +642,60 @@ export function adaptConcept(r: ResolvedConcept, buckets: LevelBuckets): Concept
   }
 }
 
+/**
+ * A graph summary row → a compact Concept the shell can render NOW, without
+ * the corpus. Identity, lanes, draft-unknowable (graph rows carry no
+ * frontmatter, so `draft` stays off) and the conflict signal are real;
+ * sections stay empty until `attachConflictStubs` (below) or a full detail
+ * load fills them. This is what lets the console bootstrap from /api/graph
+ * alone instead of downloading a ~150MB resolve-all it renders a list from.
+ */
+export function adaptGraphConcept(row: GraphConcept, levelBySource: Map<string, number>, buckets: LevelBuckets): Concept {
+  const layerIds = orderLayers(row.contributors.map((name) => layerOf(name, levelBySource.get(name) ?? 0, buckets)))
+  return {
+    id: row.id,
+    title: row.title || row.id,
+    type: row.type || 'concept',
+    layers: layerIds,
+    conflict: row.conflictCount > 0,
+    sections: [],
+    contributorLayers: row.contributors,
+    detailLoaded: false,
+  }
+}
+
+/**
+ * Give a compact concept the sections its OPEN conflicts describe, so every
+ * whole-corpus dissent surface — the canvas ghosts, the Files conflict
+ * counts — keeps working without resolve-all. A discrepancy record carries
+ * the same contributions a resolved section's `conflicts[]` would (winner
+ * first via `effectiveSource`), which is exactly the slice of the corpus
+ * those surfaces read. Non-conflicted sections are not represented — the
+ * detail view loads the real document instead of rendering these.
+ */
+export function attachConflictStubs(concept: Concept, conflicts: Conflict[]): Concept {
+  if (concept.detailLoaded !== false) return concept
+  const open = conflicts.filter((c) => c.concept === concept.id && c.status === 'open' && c.contributions.length > 0)
+  if (open.length === 0) return concept.sections.length === 0 ? concept : { ...concept, sections: [] }
+  const sections = open.map((c) => {
+    const effectiveName = c.effectiveSource ?? c.contributions[0].sourceLayer
+    const winner = c.contributions.find((item) => item.sourceLayer === effectiveName) ?? c.contributions[0]
+    const dissents = c.contributions.filter((item) => item !== winner).map((item) => ({
+      layer: item.layer, sourceLayer: item.sourceLayer, value: item.value, updated: item.updated || null,
+    }))
+    return {
+      name: c.section, key: c.sectionKey, winner: c.winner, value: winner.value,
+      sourceLayer: winner.sourceLayer, updated: winner.updated || null, dissents,
+      ...(c.contributions.some((item) => item.fresherDissent) ? { fresherDissent: true } : {}),
+    }
+  })
+  return { ...concept, sections, conflict: true }
+}
+
 /** Phase names the engine reports, in the words a person would use for them. */
 const PHASE_LABELS: Record<string, string> = {
   queued: 'Queued', scanning: 'Scanning', loading: 'Reading', cloning: 'Cloning',
-  ready: 'Ready', error: 'Failed',
+  ready: 'Ready', error: 'Failed', paused: 'Paused',
 }
 export function phaseLabel(phase: string | undefined): string {
   return PHASE_LABELS[phase ?? ''] ?? 'Indexing'

@@ -19,6 +19,7 @@
     "smoke:ui": "CC_SMOKE=1 CC_SMOKE_UI=1 electron .",
     "smoke:ui:artifacts": "node scripts/ui-artifacts.mjs",
     "smoke:bootfail": "node scripts/smoke-bootfail.mjs",
+    "smoke:crash": "node scripts/engine-crash-test.mjs",
     "smoke:relaunch": "CC_SMOKE=1 CC_SMOKE_RELAUNCH=1 electron .",
     "test:isolation": "node scripts/engine-isolation-test.mjs",
     "supabase:config": "node scripts/generate-supabase-config.mjs",

@@ -48,6 +48,28 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   no `electron` module: pass it plain paths via argv. The bearer token travels
   up the engine message port and reaches the preload only through trusted IPC;
   it must never appear in engine or renderer argv (visible in `ps`).
+- **The engine's V8 heap ceiling cannot be raised, only watched.** Probed
+  empirically on Electron 43 (2026-08-12): `utilityProcess.fork` accepts
+  `execArgv: ['--max-old-space-size=…']` but V8 ignores it (the flag reaches
+  `process.execArgv` and does nothing), `NODE_OPTIONS` is likewise ignored,
+  `v8.setFlagsFromString` is too late at child runtime, and `resourceLimits`
+  is a worker_threads option utilityProcess does not have. The ceiling is
+  fixed at ~4.2GB (`heap_size_limit` 4192MB, bundled Node 24.18). Consequences:
+  the engine's memory watermark keys off the measured limit
+  (`packages/core/src/memory-pressure.mjs`), `/api/status` surfaces it as
+  `memoryDetail`, and keeping index/resolve memory bounded is a hard
+  requirement, not a nicety. (Same probe: `node:sqlite` IS available in the
+  utilityProcess as of Electron 43 — recorded for the future, unused today.)
+- **Engine stdio is piped and teed into `~/Library/Logs/ContextCake/engine.log`**
+  (`src/main/engine-log.mjs`, 5MB rotation to `engine.log.1`, redirect with
+  `CC_ENGINE_LOG_DIR` in tests). For a Finder-launched .app the old
+  `stdio: 'inherit'` was /dev/null, so an engine death left no artifact at all
+  — the log is the app's only durable diagnostic trail, which is why the smoke
+  test asserts one gets written and `npm run test:isolation` asserts the
+  `[index]` pass lines land in it. Terminal visibility for `npm run dev` is
+  preserved by forwarding the same chunks to the app's own stdio. The log must
+  never crash the app: every writer is wrapped, an unwritable dir yields a
+  null log, and everything degrades to silence.
 - **Source credentials are separate from accounts, and separate from the API
   bearer.** `src/main/github-connections.mjs` holds GitHub tokens in
   `tokens.enc` (its own file, not `session.enc` — clearing a sign-in must not
@@ -70,18 +92,29 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   `ps`-readable); `GIT_TRACE*`/`GIT_CURL_VERBOSE` are stripped so a tracing var
   already in the user's shell can't dump the exchange. Proven against the real
   git binary in `packages/core/tests/git-auth.test.mjs`.
-- **An engine that EXITS is fatal; an engine that WEDGES is recoverable, and
-  the two must not share a path.** `src/main/engine-watchdog.mjs` pings
-  `GET /api/status` every 10s with a per-ping deadline; more than 3 consecutive
-  misses sends `engine:status` to the main window (the console's
-  `EngineBanner`), and 60s unresponsive additionally offers a restart —
-  `relaunchEngine()` re-forks the engine and calls `loadURL` on the new origin.
-  That re-point works (`npm run smoke:relaunch` proves origin, token, window
-  URL, old-engine death and trusted-IPC revalidation); the older comments
-  claiming a loaded window could not be re-pointed were about the crash path and
-  were wrong as a general statement. An unasked-for exit stays fatal because
-  nothing in the main process knows why the child died, so re-forking could
-  loop. Never route a wedge through `handleFatal`.
+- **A post-boot engine EXIT is restarted on a bounded budget; a WEDGE is
+  offered as a manual restart; a BOOT failure is fatal — three paths, never
+  shared.** The old invariant ("an unasked-for exit stays fatal because
+  re-forking could loop") is replaced: the loop it feared is impossible by
+  construction. `handleEngineCrash` (main.mjs) + `engine-crash-policy.mjs`
+  (pure, unit-tested): at most 2 crash-triggered restarts per 10-minute
+  window (backoff 1s/10s), the budget forgiven after 5 healthy minutes; each
+  crash appends `{at, code, indexingSources}` to `engine-crashes.json` in
+  userData (last 5); when the two most recent in-window crashes were mid-index
+  on exactly ONE shared source, that source is quarantined for the next
+  generation (`sendQuarantine` over the message port → engine
+  `setIndexQuarantine` parks it as an error row — session-scoped, cleared by
+  remove/re-add or app restart; an ambiguous intersection restarts without
+  blaming anyone). Budget exhausted → the app STAYS OPEN behind an honest
+  "Engine Stopped" dialog with the watchdog's Restart Engine banner still
+  live. The most likely healthy-engine death is an OOM mid-index — knowable
+  and recoverable — which is exactly the case the fatal-exit policy used to
+  turn into "the app crashed". `npm run smoke:crash` proves the whole arc
+  (two deaths → quarantine → surviving third generation); boot failures keep
+  `handleFatal` and its boot copy. The wedge path is unchanged:
+  `src/main/engine-watchdog.mjs` pings `GET /api/status` every 10s, >3 misses
+  raises the banner, 60s unresponsive offers `relaunchEngine()` (proven by
+  `npm run smoke:relaunch`). Never route a wedge through `handleFatal`.
 - **`reload()`/`sendTokens()` resolve to `{acked}`, and the flag is the point.**
   `src/main/ack-channel.mjs` resolves `{acked: false, reason}` when the
   message-port deadline expires; the old code resolved the same empty promise

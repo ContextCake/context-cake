@@ -37,6 +37,8 @@ export const TRUSTED_IPC_ROLES = Object.freeze({
   // The app's own config folder — a fixed path with no renderer input at all.
   // Settings is the surface that offers it.
   'contextcake:reveal-config-dir': Object.freeze(['settings']),
+  // The engine log folder — same fixed-path doctrine, same surface.
+  'contextcake:reveal-logs': Object.freeze(['settings']),
   // Export writes settings.json to a destination chosen in a native save
   // dialog (no renderer path); reset confirms natively before writing. Both
   // are Settings-surface actions.

@@ -10,7 +10,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import {
   parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading,
-  walkDocs, withDocumentDate, localDate, MAX_DOC_BYTES,
+  walkDocs, walkDocEntries, withDocumentDate, localDate, MAX_DOC_BYTES,
 } from "./okf-local.mjs";
 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
@@ -25,14 +25,23 @@ export function createFilesSource({ name, level, root, limits = null }) {
   return {
     name,
     level,
-    async loadConcept(id) {
+    /**
+     * `hint.ext` names the extension the walk already matched for this id, so
+     * an index pass costs one stat+read instead of trying the precedence list
+     * (a `.txt` document paid two ENOENT stats per load without it). Live
+     * single-concept reads pass no hint and keep the full fallback walk.
+     */
+    async loadConcept(id, { ext: extHint = null } = {}) {
       let safeId;
       try {
         safeId = normalizeConceptId(id); // throws on traversal (isTraversal guard)
       } catch {
         return null; // an arbitrary folder is user-facing — a bad id is a miss, not a crash
       }
-      for (const ext of FILES_EXTENSIONS) {
+      const order = extHint && FILES_EXTENSIONS.includes(extHint)
+        ? [extHint, ...FILES_EXTENSIONS.filter((known) => known !== extHint)]
+        : FILES_EXTENSIONS;
+      for (const ext of order) {
         const filePath = path.join(root, `${safeId}${ext}`);
         let stat;
         try {
@@ -63,6 +72,23 @@ export function createFilesSource({ name, level, root, limits = null }) {
         toPosix(path.relative(root, filePath)).replace(/\.(md|mdx|txt)$/, ""),
       );
       return [...new Set(ids)];
+    },
+    /**
+     * The fingerprinted listing (see okf-local's listEntries). An id collision
+     * (notes.md + notes.txt) keeps the entry loadConcept's precedence order
+     * would win, so the fingerprint always describes the file actually read.
+     */
+    async listEntries({ signal = null, notes = null } = {}) {
+      const walked = await walkDocEntries(root, FILES_EXTENSIONS, limits, { signal, notes });
+      const byId = new Map();
+      for (const entry of walked) {
+        const id = entry.rel.replace(/\.(md|mdx|txt)$/, "");
+        const existing = byId.get(id);
+        if (!existing || FILES_EXTENSIONS.indexOf(entry.ext) < FILES_EXTENSIONS.indexOf(existing.ext)) {
+          byId.set(id, { ...entry, id });
+        }
+      }
+      return [...byId.values()];
     },
     close() {},
   };
@@ -134,11 +160,14 @@ function parsePlainText(content, stem, mtime) {
   return { frontmatter: { type: "document", title: stem }, sections };
 }
 
-// Same posture as okf-local's pushSection: drop a heading-less section with no content.
+// Same posture as okf-local's pushSection: drop a heading-less section with no
+// content — and the same retained shape: one contiguous string, never a line
+// array (sections.mjs).
 function pushPlainSection(sections, section) {
   const hasContent = section.lines.some((line) => line.trim() !== "");
   if (section.heading === null && !hasContent) return;
-  sections.push(section);
+  const { lines, ...rest } = section;
+  sections.push({ ...rest, text: lines.join("\n") });
 }
 
 function stripAttrs(text) {

@@ -656,9 +656,11 @@ code 200 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"ki
 for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").conceptCount)')" = "120" ] && break; sleep 0.25; done
 GEN_BEFORE="$(GEN4)"
 code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":100}' "$BASE4/api/settings")" "lower maxDocFiles below that layer's size"
-for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "error" ] && break; sleep 0.25; done
-[ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "error" ] \
-  && pass "the settings change re-indexed rather than serving the old snapshot" || fail "a settings change left the previous index in place"
+# The over-cap outcome changed deliberately with the truncating cap: the
+# re-index serves the first 100 with a partial warning, never the old 120.
+for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").conceptCount)')" = "100" ] && break; sleep 0.25; done
+[ "$(G4 | JQ '(() => { const s = d.sources.find((s) => s.name === "d"); return `${s.status}:${s.conceptCount}:${s.warnings > 0}` })()')" = "ok:100:true" ] \
+  && pass "the settings change re-indexed to the truncated cap rather than serving the old snapshot" || fail "a settings change left the previous index in place ($(G4 | JQ 'JSON.stringify(d.sources.find((s) => s.name === "d"))'))"
 [ "$(GEN4)" != "$GEN_BEFORE" ] && pass "generation moved on the settings change" || fail "generation did not move on a settings change"
 code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":10000}' "$BASE4/api/settings")" "restore the limit"
 for _ in $(seq 1 60); do [ "$(G4 | JQ 'String(d.sources.find((s) => s.name === "d").status)')" = "ok" ] && break; sleep 0.25; done

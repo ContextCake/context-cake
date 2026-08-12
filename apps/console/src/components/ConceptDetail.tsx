@@ -108,8 +108,15 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
       </div>
 
       <div style={css('display:flex; flex-direction:column;')}>
-        {concept.sections.length === 0 && <EmptyConcept concept={concept} fileFor={fileFor} />}
-        {concept.sections.map((s) => {
+        {concept.detailLoaded === false && (
+          // A compact graph-first row: the document is being resolved right
+          // now (store.loadConceptDetail follows the selection). Distinct from
+          // EmptyConcept below — an empty answer must never look like a
+          // loading one, and vice versa.
+          <div role="status" style={css('padding:22px 0; font-size:13px; color:#8A8A82;')}>Resolving this concept…</div>
+        )}
+        {concept.detailLoaded !== false && concept.sections.length === 0 && <EmptyConcept concept={concept} fileFor={fileFor} />}
+        {concept.detailLoaded !== false && concept.sections.map((s) => {
           const col = lc(s.winner)
           const dissents = s.dissents ?? []
           // The real source that won this section, not the three-lane bucket it

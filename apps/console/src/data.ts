@@ -108,6 +108,16 @@ export interface Concept {
   id: string; title: string; type: string; layers: LayerId[]
   conflict?: boolean; draft?: boolean; sections: ConceptSection[]
   /**
+   * `false` marks a compact row built from the graph summary: identity,
+   * lanes and conflict signal are real, but `sections` holds at most the
+   * conflict stubs synthesized from the discrepancies payload — not the
+   * resolved document. The full resolve arrives on selection
+   * (store.loadConceptDetail), which replaces the row and drops this flag.
+   * Absent/true means the row carries its full sections (demo bundle, legacy
+   * resolve-all fallback, or a loaded detail).
+   */
+  detailLoaded?: boolean
+  /**
    * The real source names behind this concept, winner first — kept
    * separately from `layers` (the three-lane buckets) because a concept with
    * zero sections has no `ConceptSection.sourceLayer` to read a contributor's

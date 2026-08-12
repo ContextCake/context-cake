@@ -13,12 +13,18 @@
 
 export const SETTING_DEFS = {
   maxDocFiles: {
-    default: 10_000,
+    // 25k, up from 10k — and the over-cap behavior changed with it: the walk
+    // now TRUNCATES at the cap with a visible warning instead of failing the
+    // whole source. A 10k+ vault used to be unindexable outright; the
+    // incremental pass (one edit = one read) is what makes routinely carrying
+    // 25k documents affordable. Note: changing this default re-keys index
+    // validities once per upgrade — one full pass, then incremental forever.
+    default: 25_000,
     min: 100,
     max: 2_000_000,
     env: "CONTEXTCAKE_MAX_DOC_FILES",
     label: "Maximum documents per source",
-    help: "How many .md/.mdx/.txt files ContextCake will index in one folder before it stops and asks for a more specific folder.",
+    help: "How many .md/.mdx/.txt files ContextCake will index in one folder. Past the limit it indexes the first ones it finds and marks the source partial.",
   },
   maxScanEntries: {
     default: 150_000,
@@ -40,13 +46,12 @@ export const SETTING_DEFS = {
     // so the settings UI has headroom above the new default, not a ceiling
     // just above it.
     //
-    // This knob is not indexing-only: waitParam() in service.mjs bounds a
-    // client-supplied /api/graph|resolve-all|search|discrepancies `?wait=`
-    // against this same value ("so ?wait= can never become a new way to
-    // hang"), so raising it also raises how long those reads can block a
-    // caller for — 10 min -> 2 hr at the new max. No caller in this repo
-    // requests anywhere near either ceiling today, but a future one inherits
-    // this wider bound unless it's split onto its own constant.
+    // This knob is no longer the only bound on `?wait=`: waitParam() in
+    // service.mjs clamps a client-supplied /api/graph|resolve-all|search|
+    // discrepancies `?wait=` to min(this, WAIT_MAX_MS = 5 minutes) — the
+    // split this comment used to ask for. Raising this budget therefore
+    // lengthens indexing patience only, never how long a read may hold a
+    // socket.
     default: 1_800_000,
     min: 1_000,
     max: 7_200_000,

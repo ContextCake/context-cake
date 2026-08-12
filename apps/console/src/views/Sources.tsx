@@ -202,7 +202,7 @@ function filesSummary(source: Source, entry: LayerFiles | undefined, known: bool
 }
 
 export function Sources({ onAddSource }: { onAddSource?: () => void }) {
-  const { mode, sources, reload, reloadKey, openFilesScope } = useStoreData()
+  const { mode, sources, reload, reloadKey, openFilesScope, indexingControl, canControlIndexing } = useStoreData()
   const { query } = useStoreInput()
   const live = mode === 'live'
   // The same listing the Files view builds its tree from: a source's file count
@@ -222,6 +222,14 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [syncing, setSyncing] = useState<string | null>(null)
+  // Which source an indexing control is in flight for — one at a time, and
+  // the button that asked stays visibly busy until the engine answers.
+  const [controlling, setControlling] = useState<string | null>(null)
+  const runControl = async (action: 'pause' | 'resume' | 'cancel' | 'reindex', name: string) => {
+    if (controlling) return
+    setControlling(name)
+    try { await indexingControl(action, { source: name }) } finally { setControlling(null) }
+  }
   const [notice, setNotice] = useState<{ name: string; text: string } | null>(null)
   const [syncErr, setSyncErr] = useState<{ name: string; text: string } | null>(null)
   const [selectedName, setSelectedName] = useState<string | null>(null)
@@ -526,6 +534,40 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                     style={btnSmallGhost()}
                     onClick={() => openEdit(s)}
                   >{canEditPath(s) ? 'Rename / level / folder' : 'Rename / level'}</button>
+                )}
+                {/* The indexing controls (engine-side, session-scoped): a
+                    paused source keeps serving its snapshot and reads nothing
+                    new; Re-index forces a fresh sweep now. Cancel appears only
+                    while a pass is actually running. */}
+                {live && canControlIndexing && !s.quarantined && (
+                  <>
+                    <button
+                      type="button"
+                      className="cc-h-bd-strong"
+                      aria-label={s.indexing?.phase === 'paused' ? `Resume indexing ${s.name}` : `Pause indexing ${s.name}`}
+                      disabled={controlling === s.name}
+                      style={controlling === s.name ? btnSmallDisabled() : btnSmallGhost()}
+                      onClick={() => void runControl(s.indexing?.phase === 'paused' ? 'resume' : 'pause', s.name)}
+                    >{s.indexing?.phase === 'paused' ? 'Resume indexing' : 'Pause indexing'}</button>
+                    <button
+                      type="button"
+                      className="cc-h-bd-strong"
+                      aria-label={`Re-index ${s.name} now`}
+                      disabled={controlling === s.name}
+                      style={controlling === s.name ? btnSmallDisabled() : btnSmallGhost()}
+                      onClick={() => void runControl('reindex', s.name)}
+                    >Re-index</button>
+                    {(s.status === 'indexing' || s.indexing?.refreshing === true) && s.indexing?.phase !== 'paused' && (
+                      <button
+                        type="button"
+                        className="cc-h-bd-amber2"
+                        aria-label={`Cancel the running index pass for ${s.name}`}
+                        disabled={controlling === s.name}
+                        style={controlling === s.name ? btnSmallDisabled() : btnSmallGhost()}
+                        onClick={() => void runControl('cancel', s.name)}
+                      >Cancel pass</button>
+                    )}
+                  </>
                 )}
                 {live && <button type="button" className="cc-h-bd-amber2" aria-label={`Remove ${s.name}`} style={btnSmallGhost()} onClick={() => openRemove(s)}>{s.quarantined ? 'Remove entry' : 'Remove'}</button>}
               </div>

@@ -42,6 +42,14 @@ function empty(): Concept {
   }
 }
 
+/** A graph-first row that has not fetched its document yet. */
+function compact(): Concept {
+  return {
+    id: 'decisions/pending-note', title: 'Pending note', type: 'note',
+    layers: ['personal'], contributorLayers: ['personal'], sections: [], detailLoaded: false,
+  }
+}
+
 function button(label: string): HTMLButtonElement | undefined {
   return Array.from(container.querySelectorAll('button')).find((item) => item.textContent === label)
 }
@@ -94,6 +102,18 @@ describe('a concept with no sections', () => {
     const populatedRow = rows.find((row) => row.textContent?.includes('Primary database'))
     expect(emptyRow?.textContent).toContain('empty')
     expect(populatedRow?.textContent).not.toContain('empty')
+  })
+
+  it('does not call a row empty before its document has loaded', async () => {
+    // Graph-first bootstrap gives every row zero sections until it is opened.
+    // Labelling those "empty" would mark a whole vault as dead ends.
+    mocks.useStore.mockReturnValue(storeWith([compact()], 'decisions/pending-note'))
+    await act(async () => root.render(<Concepts />))
+
+    const rows = Array.from(container.querySelectorAll('.cc-navigator-detail > div > button'))
+    const pending = rows.find((row) => row.textContent?.includes('Pending note'))
+    expect(pending).toBeTruthy()
+    expect(pending?.textContent).not.toContain('empty')
   })
 })
 

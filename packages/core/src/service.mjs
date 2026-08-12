@@ -29,8 +29,10 @@ import { createSourceOperations, normalizeRepo } from "./control/sources.mjs";
 import { patchSettings, settingsView } from "./control/settings.mjs";
 import { withDeadline } from "./control/util.mjs";
 import { mergeConcepts, resolveConcept } from "./resolver.mjs";
-import { searchConcepts, tokenizeQuery } from "./search.mjs";
+import { tokenizeQuery } from "./search.mjs";
+import { createSearchIndex } from "./search-index.mjs";
 import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
+import { createTokenCountCache } from "./token-count-cache.mjs";
 import { resolveSettings, walkLimitsFrom } from "./settings.mjs";
 import {
   assertInsideRoot, guardMutatingRequest, httpError, json, MIME, parseJson, readBody,
@@ -50,7 +52,7 @@ import { createDiscrepancyPriorityStore } from "./discrepancy-priorities.mjs";
 import { resolveLiveLayer } from "./sources/git-sync.mjs";
 import { commitPathsWithMutation, push as pushGit } from "./sources/git-core.mjs";
 import { indexEntryKeys, layerIdentity } from "./index-keys.mjs";
-import { memoryPressureLevel } from "./memory-pressure.mjs";
+import { memorySnapshot } from "./memory-pressure.mjs";
 import {
   getManifestProfileLayers,
   readContextManifestQuarantined,
@@ -93,10 +95,68 @@ function bearerMatches(header, expected) {
 
 const YIELD_EVERY = 25;
 const yieldNow = () => new Promise((resolve) => setImmediate(resolve));
+// The ceiling on `?wait=`, independent of sourceBudgetMs — see waitParam().
+const WAIT_MAX_MS = 300_000;
 
-// Reads one source end to end, reporting progress into `entry` as it goes so
-// the UI can show "Indexed 340 of 1,500" instead of an opaque spinner.
-async function snapshotSource(source, entry, signal = null) {
+/**
+ * Stream a resolve-all payload as JSON, one concept at a time.
+ *
+ * Byte-for-byte the same JSON json() would have produced — same fields, same
+ * order — but the peak allocation is one concept's stringification instead of
+ * the whole payload as a single string (~50MB at 4,000 notes, and a hard
+ * RangeError past V8's ~512MB string ceiling). Drain-aware so a slow reader
+ * applies backpressure instead of buffering the corpus in the socket, and
+ * yielding so /api/status stays answerable mid-response.
+ */
+async function streamResolveAll(res, payload) {
+  res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  let closed = false;
+  res.on("close", () => { closed = true; });
+  const write = (chunk) => {
+    if (closed || res.destroyed) return null;
+    if (res.write(chunk)) return null;
+    // 'close' must also settle the promise: a client that disconnects
+    // mid-stream never emits 'drain', and an unsettled await here would pin
+    // the corpus-sized payload in this closure forever.
+    return new Promise((resolve) => {
+      const done = () => { res.off("drain", done); res.off("close", done); resolve(); };
+      res.once("drain", done);
+      res.once("close", done);
+    });
+  };
+  await write('{"concepts":[');
+  for (let i = 0; i < payload.concepts.length; i++) {
+    if (closed) break;
+    const pending = write((i === 0 ? "" : ",") + JSON.stringify(payload.concepts[i]));
+    if (pending) await pending;
+    if ((i + 1) % YIELD_EVERY === 0) await yieldNow();
+  }
+  const tail = `],"errors":${JSON.stringify(payload.errors)}`
+    + `,"indexing":${JSON.stringify(payload.indexing)}`
+    + `,"indexingSources":${JSON.stringify(payload.indexingSources)}}`;
+  const pendingTail = write(tail);
+  if (pendingTail) await pendingTail;
+  if (!closed) res.end();
+}
+
+// Reads one source, reporting progress into `entry` as it goes so the UI can
+// show "Indexed 340 of 1,500" instead of an opaque spinner.
+//
+// INCREMENTAL against `previousSnap` when the adapter can fingerprint its
+// listing (listEntries — local folders): a document whose (rel, ext, size,
+// mtimeMs) is unchanged carries its parsed concept and token count forward
+// without a read, so a one-note edit in a 4,000-note vault costs one walk +
+// one file read + one BPE encode instead of a full corpus re-read. Every pass
+// is still a full SWEEP — the walk is the correctness backstop that catches
+// what fs.watch dropped — deliberately not a scoped delta: at 20k files the
+// walk is sub-second, and a scope protocol would buy those milliseconds at
+// the price of a second coalescing state machine.
+//
+// Adapters without listEntries (github, mcp, cached) take the old full-read
+// path unchanged; carry-forward safety is structural — previousSnap only
+// reaches this function through the entry's own key, and any settings or
+// credential change re-keys and drops the entry first (index-keys.mjs).
+async function snapshotSource(source, entry, signal = null, previousSnap = null, tokenCache = null, carrySeed = null) {
   const throwIfAborted = () => {
     if (signal?.aborted) throw signal.reason ?? new Error("Indexing cancelled");
   };
@@ -111,37 +171,162 @@ async function snapshotSource(source, entry, signal = null) {
   // over the size cap, a subtree it lacks permission to read — belongs on the
   // snapshot, because the row the user sees is built from the snapshot.
   const notes = { skipped: [], unreadable: [], hidden: 0 };
-  const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds({ signal, notes }) : [];
-  throwIfAborted();
-  entry.phase = "loading";
-  entry.total = ids.length;
+  // A pass reads every document, so an adapter that batches per-generation
+  // work (okf-local pins its git-history memo) gets told one is starting.
+  // Optional and idempotent to release; adapters without it are unaffected.
+  const releaseBatch = typeof source.beginBatch === "function" ? source.beginBatch() : null;
+  // Hoisted above the try: the catch snapshots these as the retry seed.
+  const fingerprinted = typeof source.listEntries === "function";
   const concepts = new Map();
   // Per-concept token counts, kept rather than only summed. The index already
   // pays one BPE encode per document, and buildGraph used to pay a second one
   // over the whole merged corpus on every request — 14 seconds on a 139MB
   // vault. Keeping the number here is what makes that rebuild cheap.
   const tokensById = new Map();
+  const fileMeta = fingerprinted ? new Map() : null;
+  try {
+  let ids;
+  let items; // [{ id, rel, ext, size, mtimeMs }] when fingerprinted
+  if (fingerprinted) {
+    items = await source.listEntries({ signal, notes });
+    ids = items.map((item) => item.id);
+  } else {
+    ids = typeof source.listConceptIds === "function" ? await source.listConceptIds({ signal, notes }) : [];
+    items = ids.map((id) => ({ id }));
+  }
+  throwIfAborted();
+  entry.phase = "loading";
+  entry.total = ids.length;
+  entry.loadingStartedAt = Date.now(); // rate/ETA baseline for the activity panel
+  const prevMeta = fingerprinted ? previousSnap?.fileMeta ?? null : null;
+  // Partial progress from an aborted predecessor (entry.carrySeed): consulted
+  // BEHIND the served snapshot, so a retry resumes what the failed attempt
+  // already read without ever trusting it over newer disk state.
+  const seedMeta = fingerprinted ? carrySeed?.fileMeta ?? null : null;
+  const stats = { carried: 0, read: 0, tokenized: 0, removed: 0 };
+  // Of the carries, how many came from the SEED rather than the served
+  // snapshot. Not part of passStats (the payload counts work, not where a
+  // carry came from) — it exists for the reuse guard below, which must not
+  // mistake "a predecessor already read this" for "nothing changed".
+  let carriedFromSeed = 0;
   let tokens = 0;
   let n = 0;
-  for (const id of ids) {
+  for (const item of items) {
     throwIfAborted();
-    const concept = await source.loadConcept(id);
-    throwIfAborted();
-    concepts.set(id, concept);
-    tokens += tokenizeConcept(source, id, concept, tokensById);
+    const fromPrev = matchesFingerprint(prevMeta?.get(item.id), item) && previousSnap.concepts.has(item.id)
+      ? previousSnap : null;
+    const fromSeed = !fromPrev && matchesFingerprint(seedMeta?.get(item.id), item) && carrySeed.concepts.has(item.id)
+      ? carrySeed : null;
+    const carryFrom = fromPrev ?? fromSeed;
+    if (carryFrom) {
+      // Unchanged on disk: the parsed concept object itself carries forward —
+      // same identity, which is what lets downstream caches (the search
+      // index's per-doc analysis) recognize it without re-work.
+      concepts.set(item.id, carryFrom.concepts.get(item.id));
+      const prevTokens = carryFrom.tokensById.get(item.id);
+      if (prevTokens !== undefined) {
+        tokensById.set(item.id, prevTokens);
+        tokens += prevTokens;
+      }
+      fileMeta.set(item.id, carryFrom.fileMeta.get(item.id));
+      stats.carried += 1;
+      if (fromSeed) carriedFromSeed += 1;
+    } else {
+      const concept = await source.loadConcept(item.id, item.ext ? { ext: item.ext } : undefined);
+      throwIfAborted();
+      concepts.set(item.id, concept);
+      tokens += tokenizeConcept(source, item.id, concept, tokensById, tokenCache, stats);
+      stats.read += 1;
+      if (fileMeta && item.rel !== undefined) {
+        fileMeta.set(item.id, {
+          rel: item.rel, ext: item.ext, size: item.size, mtimeMs: item.mtimeMs,
+          // Present only where the adapter derives a date from something other
+          // than the file itself (okf-local's git history) — see listEntries.
+          authoredDate: item.authoredDate,
+        });
+      }
+    }
     if (++n % YIELD_EVERY === 0) {
       entry.loaded = n;
       await yieldNow();
     }
   }
   entry.loaded = n;
+  if (previousSnap && fingerprinted) {
+    for (const id of previousSnap.ids) if (!concepts.has(id)) stats.removed += 1;
+  }
+  if (fingerprinted && canReuseSnapshot(previousSnap, { stats, carriedFromSeed, idCount: ids.length, notes })) {
+    entry.passStats = stats;
+    return previousSnap;
+  }
+  entry.passStats = stats;
   // A generation, assigned once, never reused. Snapshots are immutable after
   // this returns, so "same generation" is the same content — which is what lets
   // buildGraph key a memo on live state instead of on invalidation events.
   return {
-    ids, concepts, tokens, tokensById, gen: ++SNAPSHOT_SEQ,
+    ids, concepts, tokens, tokensById, gen: ++SNAPSHOT_SEQ, fileMeta,
     skipped: notes.skipped, unreadable: notes.unreadable, hidden: notes.hidden,
+    truncated: notes.truncated ?? null,
   };
+  } catch (err) {
+    // An interrupted pass leaves its partial progress as a seed for the retry
+    // (never served — only entry.snap is): whatever it read is real,
+    // fingerprinted work the next attempt should not repeat.
+    if (fingerprinted && concepts.size > 0 && signal?.aborted) {
+      entry.carrySeed = { fileMeta, concepts, tokensById };
+    }
+    throw err;
+  } finally {
+    releaseBatch?.();
+    // Land the counts this pass added; awaited nowhere on purpose — the cache
+    // must never make a pass slower or able to fail.
+    tokenCache?.flush();
+  }
+}
+
+/**
+ * May a pass return the PREVIOUS snapshot object instead of its own?
+ *
+ * When it may, the graph/search/corpus memos stay warm and the status
+ * generation moves only for the progress counter, never for content that did
+ * not change. Every clause is a way the two could disagree: a document read,
+ * a document gone, a count that moved, or a warning that appeared or cleared
+ * (the notes are payload the row reports from the snapshot).
+ *
+ * `carriedFromSeed` is the clause that is easy to miss and expensive to get
+ * wrong. A carry from the retry seed means an ABORTED predecessor had already
+ * read that document — its content is newer than the served snapshot even
+ * though this pass read nothing. Reusing the previous snapshot there discards
+ * the edit and reports a clean pass, and because the served snapshot then
+ * disagrees with disk, nothing re-reads it until some unrelated change or a
+ * restart. Exported (and unit-tested) because that failure is silent.
+ */
+export function canReuseSnapshot(previousSnap, { stats, carriedFromSeed = 0, idCount, notes }) {
+  return Boolean(previousSnap)
+    && stats.read === 0 && stats.removed === 0 && carriedFromSeed === 0
+    && previousSnap.ids.length === idCount
+    && sameNotes(previousSnap, notes);
+}
+
+// The fingerprint match the skip gate uses, shared by both carry tables.
+// `authoredDate` is absent for adapters whose dates come from the file alone
+// (files.mjs) and compares equal on both sides there; okf-local sets it so a
+// commit — which changes a document's date without changing the document —
+// re-reads instead of carrying a date the repo no longer supports.
+function matchesFingerprint(prev, item) {
+  return Boolean(prev)
+    && prev.rel === item.rel && prev.ext === item.ext
+    && prev.size === item.size && prev.mtimeMs === item.mtimeMs
+    && prev.authoredDate === item.authoredDate;
+}
+
+// Snapshot-note equality for the identity-reuse check above. Order-stable by
+// construction: both sides come from the same sorted walk.
+function sameNotes(previousSnap, notes) {
+  return previousSnap.hidden === notes.hidden
+    && JSON.stringify(previousSnap.skipped) === JSON.stringify(notes.skipped)
+    && JSON.stringify(previousSnap.unreadable) === JSON.stringify(notes.unreadable)
+    && JSON.stringify(previousSnap.truncated ?? null) === JSON.stringify(notes.truncated ?? null);
 }
 
 let SNAPSHOT_SEQ = 0;
@@ -162,7 +347,7 @@ let SNAPSHOT_SEQ = 0;
 // failing the whole index; that concept simply stays out of tokensById and
 // buildGraph counts it itself, rather than inheriting a number derived
 // differently from every other row.
-function tokenizeConcept(source, id, concept, tokensById) {
+function tokenizeConcept(source, id, concept, tokensById, tokenCache = null, stats = null) {
   try {
     const contributor = {
       layer: source.name,
@@ -170,12 +355,30 @@ function tokenizeConcept(source, id, concept, tokensById) {
       updated: concept.frontmatter.updated ?? null,
       ...concept,
     };
-    const count = countTokens(conceptText(mergeConcepts([contributor])));
+    const count = countText(conceptText(mergeConcepts([contributor])), tokenCache, stats);
     tokensById.set(id, count);
     return count;
   } catch {
-    return countTokens(conceptText(concept));
+    return countText(conceptText(concept), tokenCache, stats);
   }
+}
+
+// One counted string, through the persistent cache when one is wired
+// (token-count-cache.mjs): the count is a pure function of the text, so a
+// hash hit skips the ~193–280ms/MB BPE encode entirely — which is what makes
+// an engine restart over an unchanged vault cost a re-read, not a re-encode.
+function countText(text, tokenCache, stats) {
+  if (!tokenCache) {
+    if (stats) stats.tokenized += 1;
+    return countTokens(text);
+  }
+  const hash = tokenCache.hash(text);
+  const cached = tokenCache.get(hash);
+  if (cached !== undefined) return cached;
+  if (stats) stats.tokenized += 1;
+  const count = countTokens(text);
+  tokenCache.put(hash, count);
+  return count;
 }
 
 // What a source could not read, said in the words a person would use. The
@@ -186,6 +389,10 @@ function sourceWarnings(snap) {
   if (!snap) return [];
   const mb = (bytes) => `${(bytes / 1_000_000).toFixed(1)} MB`;
   return [
+    ...(snap.truncated ? [
+      `Indexed the first ${snap.truncated.cap.toLocaleString("en-US")} documents — this folder has more. `
+        + 'Raise "Maximum documents per source" in Settings to index all of it.',
+    ] : []),
     ...(snap.skipped ?? []).map(
       (item) => `Skipped ${item.rel} — ${mb(item.bytes)} is over the ${mb(MAX_DOC_BYTES)} per-file limit`,
     ),
@@ -205,18 +412,8 @@ function snapshotView(source, snap) {
   };
 }
 
-// The same idea, shaped for search.mjs's adapter contract instead of
-// resolveConcept's: searchConcepts walks listConceptIds() itself (it has no
-// other way to know what to score), so this view answers that from the
-// snapshot's own id list rather than reopening the source it was read from.
-function searchSnapshotView(source, snap) {
-  return {
-    name: source.name,
-    level: source.level,
-    async listConceptIds() { return snap.ids; },
-    async loadConcept(id) { return snap.concepts.get(id) ?? null; },
-  };
-}
+// (searchSnapshotView used to live here — the search route now hands the
+// incremental index the snapshot's ids/concepts directly; search-index.mjs.)
 
 // The identity a memoized read is keyed on: which sources contributed, and
 // which generation of each. A snapshot is immutable once assigned, so this
@@ -299,6 +496,13 @@ export function createEngineService({
   const CONSOLE_DIR = consoleDist ? path.resolve(consoleDist) : null;
   // Git-backed sources clone next to the manifest that declares them.
   const CACHE_DIR = path.join(MANIFEST_DIR, ".cache", "repos");
+  // Persistent BPE token counts (token-count-cache.mjs): restarts re-read a
+  // vault but never re-encode unchanged text. Shared with the CLI's second
+  // engine by design — the file tolerates concurrent writers.
+  const tokenCache = createTokenCountCache({
+    file: path.join(MANIFEST_DIR, ".cache", "index", "token-counts.v1.ndjson"),
+    tokenizer: TOKENIZER,
+  });
   // The service serves the default profile view (see openSources), so its
   // decision history, rules, priorities, and journal are default's — a
   // control operation selecting another profile constructs its own stores.
@@ -357,6 +561,54 @@ export function createEngineService({
   // flight join it instead of running the corpus scan twice.
   let searchMemo = null;
   const SEARCH_MEMO_CAP = 200; // distinct queries per content generation before the map is dropped, not the search
+  // The incremental BM25F index behind /api/search (search-index.mjs): built
+  // once, updated by delta as snapshots move, idle-evicted like corpusMemo.
+  const searchIndex = createSearchIndex();
+  // { key, promise, evictTimer } — the resolved corpus behind /api/resolve-all
+  // and /api/discrepancies. Same live-key correctness story as graphMemo, plus
+  // a residency bound the others don't need: unlike graph rows (compact) or
+  // hit lists (tiny), this holds every merged section string of every concept
+  // — corpus-scale memory — so an idle memo is evicted on a timer. The TTL
+  // bounds MEMORY only; staleness is impossible by construction because the
+  // key is re-derived from live pins on every request.
+  let corpusMemo = null;
+  const CORPUS_MEMO_TTL_MS = 30_000;
+  // Source names the host told us to skip (setIndexQuarantine): the desktop's
+  // crash-loop breaker, after the same source was mid-index for two engine
+  // deaths in a row. Session-scoped on purpose — never persisted, so a plain
+  // app restart is always a clean retry. Removing the layer from the manifest
+  // clears its name (ensureIndexes), which is what makes "remove and re-add
+  // the source to try again" in the quarantine copy literally true.
+  let quarantinedIndexNames = new Set();
+  // User-directed pause list (POST /api/indexing/pause): "*" pauses every
+  // source. Session-scoped like the quarantine — never persisted, and never
+  // written to the manifest (settings there participate in validity keys, so
+  // persisting pause would re-index on toggle).
+  const PAUSE_ALL = "*";
+  let pausedIndexNames = new Set();
+  // Diagnostics the activity panel reads: what recent passes did, and the
+  // engine's own recent warn/error lines — bounded rings, names and enums
+  // plus human-readable messages, never document content.
+  const passHistory = new Map(); // source name -> [{startedAt, durationMs, outcome, ...}] newest last
+  const PASS_HISTORY_LIMIT = 20;
+  const engineEvents = [];
+  const ENGINE_EVENTS_LIMIT = 200;
+
+  function isPausedName(name) {
+    return pausedIndexNames.has(PAUSE_ALL) || pausedIndexNames.has(name);
+  }
+
+  function pushEngineEvent(line) {
+    engineEvents.push({ at: Date.now(), line });
+    if (engineEvents.length > ENGINE_EVENTS_LIMIT) engineEvents.splice(0, engineEvents.length - ENGINE_EVENTS_LIMIT);
+  }
+
+  function recordPass(name, record) {
+    const list = passHistory.get(name) ?? [];
+    list.push(record);
+    if (list.length > PASS_HISTORY_LIMIT) list.splice(0, list.length - PASS_HISTORY_LIMIT);
+    passHistory.set(name, list);
+  }
   let conceptTokens = new Map(); // concept id -> { sig, tokens } for merged concepts
   // Monotonic counter behind /api/status. Bumped whenever the signature of what
   // the heavy routes would return changes, so a client can poll cheaply and
@@ -368,13 +620,24 @@ export function createEngineService({
   // of blocking the first /api/graph for ~800ms mid-setup.
   setImmediate(warmTokenizer).unref?.();
 
+  // The stamp is a statSync, and its callers are hot: every request's
+  // openSources() plus every 25ms tick of awaitIndexes. 100ms of memo turns
+  // that into ≤10 stats/second while staying far under every poll cadence and
+  // human-perceivable staleness — a manifest write is picked up on the next
+  // tick either way.
+  let stampMemo = null; // { at, value }
+  const STAMP_MEMO_MS = 100;
   function manifestStamp() {
+    if (stampMemo && Date.now() - stampMemo.at < STAMP_MEMO_MS) return stampMemo.value;
+    let value;
     try {
       const st = fs.statSync(MANIFEST);
-      return `${st.mtimeMs}:${st.size}`;
+      value = `${st.mtimeMs}:${st.size}`;
     } catch {
-      return "absent"; // manifestPath may not exist yet — surfaced per request
+      value = "absent"; // manifestPath may not exist yet — surfaced per request
     }
+    stampMemo = { at: Date.now(), value };
+    return value;
   }
 
   // The read path's manifest, where a single malformed layer is quarantined
@@ -511,6 +774,9 @@ export function createEngineService({
     indexes = new Map();
     graphMemo = null;
     searchMemo = null;
+    searchIndex.close();
+    if (corpusMemo) clearTimeout(corpusMemo.evictTimer);
+    corpusMemo = null;
     conceptTokens = new Map();
     if (prev) for (const s of prev.sources) s.close?.();
   }
@@ -562,7 +828,7 @@ export function createEngineService({
     // still allowed through even under pressure: with `runningIndexCount` at
     // 0 the alternative is the queue simply never draining, since nothing
     // already in flight exists to trigger the next pump via releaseIndexSlot.
-    const cap = memoryPressureLevel() === "critical"
+    const cap = memorySnapshot().level === "critical"
       ? Math.min(normalCap, runningIndexCount > 0 ? runningIndexCount : 1)
       : normalCap;
     while (runningIndexCount < cap && indexQueue.length) {
@@ -570,6 +836,14 @@ export function createEngineService({
       if (activeSourceName) {
         const preferred = indexQueue.findIndex((item) => item.sourceName === activeSourceName);
         if (preferred !== -1) i = preferred;
+      }
+      // A paused source's queued pass never takes a slot. It is not dequeued
+      // here — the pause path cancels it — this only closes the race where a
+      // pause lands between enqueue and pump.
+      if (isPausedName(indexQueue[i].sourceName)) {
+        const runnable = indexQueue.findIndex((item) => !isPausedName(item.sourceName));
+        if (runnable === -1) break;
+        i = runnable;
       }
       const [item] = indexQueue.splice(i, 1);
       runningIndexCount += 1;
@@ -686,6 +960,16 @@ export function createEngineService({
    */
   function ensureIndexes() {
     const open = openSources();
+    // A quarantined name whose layer left the manifest is forgiven: removing
+    // and re-adding a source is the documented way to retry it, and holding
+    // the grudge against a future layer that merely reuses the name would be
+    // a trap with no visible cause.
+    if (quarantinedIndexNames.size) {
+      const current = new Set(open.sources.map((source) => source.name));
+      for (const name of quarantinedIndexNames) {
+        if (!current.has(name)) quarantinedIndexNames.delete(name);
+      }
+    }
     const entries = open.sources.map((source, i) => {
       const key = open.keys[i];
       let entry = indexes.get(key);
@@ -718,13 +1002,198 @@ export function createEngineService({
    * instead of cancelling, and the entry owes exactly one follow-up when this
    * pass lands (see scheduleFollowUp for when it actually runs).
    */
+  // What a quarantined source's row says. Distinct wording from the
+  // sourceBudgetMs timeout (startIndex's withDeadline message) — these are
+  // different failures with different fixes, and setup-robustness-test pins
+  // the timeout string verbatim.
+  const QUARANTINE_ERROR = "Indexing this source stopped the engine twice, so ContextCake is skipping it. "
+    + "Point it at a smaller folder, or remove and re-add the source to try again.";
+
+  /**
+   * Host-directed skip list (the desktop's crash-loop breaker). Cancels any
+   * running pass for a named source and parks its entry in `error`; future
+   * passes short-circuit in startIndex. Session-scoped; see the state comment.
+   */
+  function setIndexQuarantine(names) {
+    quarantinedIndexNames = new Set((names ?? []).map((n) => String(n)).slice(0, 64));
+    if (!quarantinedIndexNames.size) return;
+    for (const entry of indexes.values()) {
+      if (!quarantinedIndexNames.has(entry.sourceName)) continue;
+      entry.cancel?.();
+      entry.running = false;
+      entry.refreshing = false;
+      entry.status = "error";
+      entry.phase = "error";
+      entry.error = QUARANTINE_ERROR;
+    }
+  }
+
+  // ---- user-facing indexing controls (POST /api/indexing/*) -----------------
+  //
+  // Pause is session-scoped and layered exactly like the quarantine: new
+  // passes short-circuit to a parked entry, queued passes are cancelled and
+  // parked, and a RUNNING pass keeps its slot until Cancel is asked for
+  // explicitly — aborting work someone did not ask to abort loses real
+  // progress for a control that only promised "don't start more".
+
+  /** Start a fresh pass for one entry, carrying what the caller says. */
+  function relaunchEntry(entry, { carrySeed = entry.carrySeed, disableCarry = false } = {}) {
+    let open;
+    try { open = openSources(); } catch { return false; }
+    if (indexes.get(entry.key) !== entry) return false;
+    const i = open.keys.indexOf(entry.key);
+    if (i === -1) return false;
+    indexes.set(entry.key, startIndex(open.sources[i], entry.key, open.settings, {
+      validity: open.validities[i],
+      previousSnap: entry.snap,
+      previousSuccessAt: entry.lastSuccessAt,
+      previousHealth: entry.lastHealth,
+      passes: entry.passes + 1,
+      carrySeed: disableCarry ? null : carrySeed,
+      disableCarry,
+    }));
+    return true;
+  }
+
+  function pauseIndexing(name = null) {
+    pausedIndexNames.add(name ?? PAUSE_ALL);
+    pushEngineEvent(`[control] pause ${name ?? "all sources"}`);
+    for (const entry of [...indexes.values()]) {
+      if (!isPausedName(entry.sourceName)) continue;
+      const queued = indexQueue.some((item) => item.sourceName === entry.sourceName);
+      if (queued && entry.running) {
+        // Never took a slot: cancel the wait and park. The catch converts the
+        // abort into phase "paused" because the name is in the pause set.
+        entry.cancel();
+      } else if (!entry.running && entry.status !== "error") {
+        // Idle entries park immediately so the row says what will happen.
+        entry.phase = "paused";
+        if (entry.retryTimer) {
+          clearTimeout(entry.retryTimer);
+          entry.retryTimer = null;
+          entry.nextRetryAt = null;
+        }
+      }
+    }
+  }
+
+  function resumeIndexing(name = null) {
+    if (name === null) pausedIndexNames = new Set();
+    else {
+      pausedIndexNames.delete(name);
+      pausedIndexNames.delete(PAUSE_ALL); // resuming one source ends a pause-all for the rest too — least surprising reading of "resume"
+    }
+    pushEngineEvent(`[control] resume ${name ?? "all sources"}`);
+    for (const entry of [...indexes.values()]) {
+      if (entry.phase !== "paused") continue;
+      if (isPausedName(entry.sourceName)) continue; // a narrower pause still covers it
+      relaunchEntry(entry);
+    }
+  }
+
+  function cancelIndexing(name) {
+    for (const entry of [...indexes.values()]) {
+      if (entry.sourceName !== name || !entry.running) continue;
+      entry.userCancelled = true;
+      entry.cancel();
+      pushEngineEvent(`[control] cancel ${name}`);
+      return true;
+    }
+    return false;
+  }
+
+  function reindexSource(name = null, { full = false } = {}) {
+    pushEngineEvent(`[control] reindex ${name ?? "all sources"}${full ? " (full)" : ""}`);
+    let any = false;
+    for (const entry of [...indexes.values()]) {
+      if (name !== null && entry.sourceName !== name) continue;
+      if (isPausedName(entry.sourceName)) continue; // paused stays paused; resume is the lever
+      if (entry.running) { entry.dirty = true; any = true; continue; }
+      if (entry.followUp) { clearTimeout(entry.followUp); entry.followUp = null; }
+      any = relaunchEntry(entry, { carrySeed: full ? null : entry.carrySeed, disableCarry: full }) || any;
+    }
+    return any;
+  }
+
+  /**
+   * GET /api/indexing/activity — the power-user panel's payload. Deliberately
+   * NOT part of /api/status (which must stay O(sources)-tiny and poll-cheap):
+   * this carries pass history, warning samples and the event ring, and is
+   * fetched only while someone is looking at it. Still O(sources)+O(rings):
+   * no resolve, no tokenizer, no file I/O.
+   */
+  function indexingActivityApi() {
+    const { entries } = ensureIndexes();
+    const now = Date.now();
+    const sources = entries.map(({ source, entry }) => {
+      const running = entry.running === true && entry.phase === "loading";
+      const elapsedS = running && entry.loadingStartedAt ? (now - entry.loadingStartedAt) / 1000 : 0;
+      const rate = running && elapsedS > 0.5 && entry.loaded > 0 ? entry.loaded / elapsedS : null;
+      const remaining = rate && entry.total ? Math.max(0, entry.total - entry.loaded) : null;
+      return {
+        name: source.name,
+        level: source.level,
+        status: entry.status,
+        phase: entry.phase,
+        paused: isPausedName(source.name),
+        loaded: entry.loaded,
+        total: entry.total,
+        startedAt: entry.startedAt,
+        finishedAt: entry.finishedAt,
+        passes: entry.passes ?? 1,
+        rateDocsPerSec: rate ? Math.round(rate * 10) / 10 : null,
+        etaMs: remaining !== null ? Math.round((remaining / rate) * 1000) : null,
+        passStats: entry.passStats ?? null,
+        retries: entry.retries || 0,
+        nextRetryAt: entry.nextRetryAt ?? null,
+        error: entry.error ?? null,
+        lastPasses: passHistory.get(source.name) ?? [],
+        warnings: sourceWarnings(entry.snap),
+        skippedSamples: (entry.snap?.skipped ?? []).slice(0, 20).map((item) => item.rel),
+        unreadableSamples: (entry.snap?.unreadable ?? []).slice(0, 20).map((item) => item.rel),
+        truncated: entry.snap?.truncated ?? null,
+      };
+    });
+    return { paused: [...pausedIndexNames], sources, events: engineEvents.slice() };
+  }
+
   function startIndex(source, key, settings, {
     validity = null, previousSnap = null, previousSuccessAt = null, previousHealth = null, passes = 1,
+    carrySeed = null, retries = 0, disableCarry = false,
   } = {}) {
     const controller = new AbortController();
     const refreshing = previousSnap !== null;
+    if (isPausedName(source.name)) {
+      // Parked, not erroring: a paused source with a snapshot keeps serving
+      // it ("ready"); one without stays "indexing" — no answer yet, and
+      // deliberately not working (the documented meaning of that status).
+      // Neither counts as unsettled, so ?wait= answers promptly.
+      return {
+        key, sourceName: source.name, status: previousSnap ? "ready" : "indexing", phase: "paused",
+        error: null, loaded: 0, total: null, snap: previousSnap, lastSuccessAt: previousSuccessAt,
+        lastHealth: previousHealth, validity, running: false, refreshing: false,
+        // The pass this entry was created for never ran; the counter counts
+        // passes, not parks.
+        passes: Math.max(1, passes - 1),
+        dirty: false, followUp: null, startedAt: Date.now(), finishedAt: Date.now(),
+        carrySeed, retries, retryTimer: null, nextRetryAt: null,
+        cancel: () => {},
+      };
+    }
+    if (quarantinedIndexNames.has(source.name)) {
+      console.error(`[index] ${source.name}: quarantined by the host — no pass started`);
+      return {
+        key, sourceName: source.name, status: "error", phase: "error", error: QUARANTINE_ERROR,
+        loaded: 0, total: null, snap: previousSnap, lastSuccessAt: previousSuccessAt,
+        lastHealth: previousHealth, validity, running: false, refreshing: false,
+        passes: Math.max(1, passes - 1), // parked, not run — see the pause park above
+        dirty: false, followUp: null, startedAt: Date.now(), finishedAt: Date.now(),
+        cancel: () => {},
+      };
+    }
     const entry = {
       key,
+      sourceName: source.name,
       status: refreshing ? "ready" : "indexing",
       phase: refreshing ? "ready" : "queued",
       loaded: 0,
@@ -752,21 +1221,45 @@ export function createEngineService({
       error: null,
       startedAt: Date.now(),
       finishedAt: null,
+      // Partial progress from an aborted/timed-out predecessor: a second-
+      // priority carry table the pass consults behind previousSnap, so a
+      // retry resumes where the last attempt stopped instead of starting
+      // over. Never served — only snap is.
+      carrySeed,
+      // How many retryable failures this entry has absorbed, and when the
+      // armed retry will run. Surfaced additively via indexProgress.
+      retries,
+      retryTimer: null,
+      nextRetryAt: null,
       cancel: () => {
         clearTimeout(entry.followUp);
         entry.followUp = null;
+        clearTimeout(entry.retryTimer);
+        entry.retryTimer = null;
+        entry.nextRetryAt = null;
         controller.abort(new Error("Indexing superseded"));
       },
     };
     const budget = settings.sourceBudgetMs;
     const limit = settings.maxConcurrentIndexing;
     acquireIndexSlot(source.name, controller.signal, limit)
-      .then(() => withDeadline(
-        snapshotSource(source, entry, controller.signal),
-        budget,
-        `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
-        () => controller.abort(new Error("Indexing timed out")),
-      ).finally(() => releaseIndexSlot(limit)))
+      .then(() => {
+        // One line per pass, on stderr with the other diagnostics. In the
+        // desktop app these land in ~/Library/Logs/ContextCake/engine.log,
+        // which is what makes "which source was the engine reading when it
+        // died" answerable after the fact.
+        console.error(`[index] ${source.name}: pass ${entry.passes} start${refreshing ? " (refresh)" : ""}`);
+        return withDeadline(
+          snapshotSource(source, entry, controller.signal, disableCarry ? null : previousSnap, tokenCache, carrySeed),
+          budget,
+          `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
+          () => {
+            const reason = new Error("Indexing timed out");
+            reason.code = "CONTEXTCAKE_TIMEOUT"; // same class as the withDeadline rejection
+            controller.abort(reason);
+          },
+        ).finally(() => releaseIndexSlot(limit));
+      })
       .then((snap) => {
         if (indexes.get(entry.key) !== entry) return; // superseded by a newer config
         entry.snap = snap;
@@ -782,12 +1275,69 @@ export function createEngineService({
         const health = typeof source.health === "function" ? source.health() : null;
         if (health) entry.lastHealth = health;
         if (!health || health.ok !== false) entry.lastSuccessAt = new Date().toISOString();
+        entry.carrySeed = null; // resumed and landed — the partial is obsolete
+        entry.retries = 0;
+        const doneLine = `[index] ${source.name}: pass ${entry.passes} done in ${Date.now() - entry.startedAt}ms — ${snap.ids.length} concepts`;
+        console.error(doneLine);
+        pushEngineEvent(doneLine);
+        recordPass(source.name, {
+          startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt, outcome: "ok",
+          concepts: snap.ids.length, ...(entry.passStats ?? {}),
+        });
       })
       .catch((err) => {
         if (indexes.get(entry.key) !== entry) return;
         entry.status = "error";
         entry.phase = "error";
-        entry.error = err.message;
+        // A pass cancelled BY the quarantine settles here after
+        // setIndexQuarantine already wrote the row; the abort reason
+        // ("Indexing superseded") must not overwrite the message that
+        // actually explains the state.
+        // A pass ended by pause/cancel parks as paused (its carry seed makes
+        // resume cheap); quarantine keeps its own message; everything else is
+        // the error it is.
+        if (isPausedName(source.name) || entry.userCancelled) {
+          entry.status = entry.snap ? "ready" : "indexing";
+          entry.phase = "paused";
+          entry.error = null;
+          const pausedLine = `[index] ${source.name}: pass ${entry.passes} stopped (${entry.userCancelled ? "cancelled" : "paused"}) after ${Date.now() - entry.startedAt}ms`;
+          console.error(pausedLine);
+          pushEngineEvent(pausedLine);
+          recordPass(source.name, {
+            startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt,
+            outcome: entry.userCancelled ? "cancelled" : "paused",
+          });
+          return;
+        }
+        entry.error = quarantinedIndexNames.has(source.name) ? QUARANTINE_ERROR : err.message;
+        const failLine = `[index] ${source.name}: pass ${entry.passes} failed after ${Date.now() - entry.startedAt}ms — ${entry.error}`;
+        console.error(failLine);
+        pushEngineEvent(failLine);
+        recordPass(source.name, {
+          startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt, outcome: "error", error: entry.error,
+        });
+        // A transient failure retries itself on a backoff instead of parking
+        // until something happens to invalidate — a fresh vault whose first
+        // pass timed out used to sit at zero concepts FOREVER. Only failures
+        // that can pass on a repeat qualify; a missing folder or a scan-cap
+        // throw needs the user, not a timer. Status stays "error" between
+        // retries (honest), and awaitIndexes never counts a parked retry as
+        // unsettled, so ?wait= cannot hang on a backoff window.
+        if (isRetryableIndexError(err) && !quarantinedIndexNames.has(source.name)) {
+          const backoff = RETRY_BACKOFFS_MS[Math.min(entry.retries, RETRY_BACKOFFS_MS.length - 1)];
+          if (entry.retries < RETRY_MAX) {
+            entry.nextRetryAt = Date.now() + backoff;
+            entry.retryTimer = setTimeout(() => {
+              entry.retryTimer = null;
+              entry.nextRetryAt = null;
+              retryIndex(entry);
+            }, backoff);
+            entry.retryTimer.unref?.();
+            const retryLine = `[index] ${source.name}: retry ${entry.retries + 1}/${RETRY_MAX} in ${backoff}ms`;
+            console.error(retryLine);
+            pushEngineEvent(retryLine);
+          }
+        }
       })
       .finally(() => {
         entry.running = false;
@@ -826,6 +1376,13 @@ export function createEngineService({
   const FOLLOW_UP_MIN_QUIET_MS = 1000;
   const FOLLOW_UP_MAX_QUIET_MS = 15000;
   function followUpQuietMs(entry) {
+    // The window models the cost of the NEXT pass, and the fingerprint gate
+    // changed that cost: an incremental-capable snapshot (fileMeta present)
+    // makes a follow-up cheap no matter what the LAST pass paid — a 20k-file
+    // first index taking ten seconds must not make the first edit wait ten
+    // more. Sources without fingerprints (github, mcp) keep the duration-
+    // based window, because their follow-up genuinely is another full read.
+    if (entry.snap?.fileMeta) return FOLLOW_UP_MIN_QUIET_MS;
     const lastPassMs = (entry.finishedAt ?? Date.now()) - entry.startedAt;
     return Math.min(FOLLOW_UP_MAX_QUIET_MS, Math.max(FOLLOW_UP_MIN_QUIET_MS, lastPassMs));
   }
@@ -841,6 +1398,42 @@ export function createEngineService({
       restartIndex(entry);
     }, quiet);
     entry.followUp.unref?.();
+  }
+
+  // Retry cadence for transient index failures. Injectable so the retry test
+  // does not wait out real backoffs; the env override is test-only surface.
+  const RETRY_BACKOFFS_MS = (process.env.CONTEXTCAKE_RETRY_BACKOFFS_MS ?? "")
+    .split(",").map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (RETRY_BACKOFFS_MS.length === 0) RETRY_BACKOFFS_MS.push(30_000, 120_000, 480_000, 1_800_000);
+  const RETRY_MAX = Number(process.env.CONTEXTCAKE_RETRY_MAX) > 0 ? Number(process.env.CONTEXTCAKE_RETRY_MAX) : 5;
+
+  function isRetryableIndexError(err) {
+    if (err?.code === "CONTEXTCAKE_TIMEOUT") return true;
+    if (["EBUSY", "EAGAIN", "ENFILE", "EMFILE", "EIO"].includes(err?.code)) return true;
+    return false;
+  }
+
+  // The retry pass a transient failure armed. Same re-resolution rules as
+  // restartIndex below, plus the partial-progress seed rides forward so the
+  // attempt RESUMES rather than starting over.
+  function retryIndex(entry) {
+    if (closed) return;
+    let open;
+    try { open = openSources(); } catch { return; }
+    const key = entry.key;
+    if (indexes.get(key) !== entry) return; // dropped or superseded while parked
+    if (entry.running || entry.followUp) return;
+    const i = open.keys.indexOf(key);
+    if (i === -1) return;
+    indexes.set(key, startIndex(open.sources[i], key, open.settings, {
+      validity: open.validities[i],
+      previousSnap: entry.snap,
+      previousSuccessAt: entry.lastSuccessAt,
+      previousHealth: entry.lastHealth,
+      passes: entry.passes + 1,
+      carrySeed: entry.carrySeed,
+      retries: entry.retries + 1,
+    }));
   }
 
   // The follow-up pass a coalesced invalidation asked for. The adapter is
@@ -885,12 +1478,18 @@ export function createEngineService({
   }
 
   // How long a client asked us to wait for indexing before answering. Bounded
-  // by the source budget so `?wait=` can never become a new way to hang.
+  // by the source budget so `?wait=` can never become a new way to hang — and
+  // by its own ceiling, because the source budget stopped being a sane bound
+  // the day it grew to 30 minutes for iCloud-shaped vaults (settings.mjs): a
+  // request socket held open that long is a hang with a header. Five minutes
+  // covers every real completeness assertion (tests use ≤15s; a first pass
+  // over 20k files measures in tens of seconds); anything longer should poll
+  // /api/status like the console does.
   function waitParam(url) {
     const raw = Number(url.searchParams.get("wait"));
     if (!Number.isFinite(raw) || raw <= 0) return 0;
     const { settings } = openSources();
-    return Math.min(raw, settings.sourceBudgetMs);
+    return Math.min(raw, settings.sourceBudgetMs, WAIT_MAX_MS);
   }
 
   /**
@@ -935,12 +1534,32 @@ export function createEngineService({
         scheduleFollowUp(previous);
         return;
       }
+      // Idle, but only just: an entry whose last pass finished inside its own
+      // quiet window schedules a follow-up instead of starting now. The
+      // incremental index made passes fast enough that sustained editing
+      // started finding the entry idle between edits — and "idle → start
+      // immediately" then runs one full sweep per watcher event, which is a
+      // busy loop with extra steps. A genuinely quiet vault still refreshes
+      // immediately: its last pass finished ages ago.
+      if (previous?.finishedAt && Date.now() - previous.finishedAt < followUpQuietMs(previous)) {
+        scheduleFollowUp(previous);
+        return;
+      }
+      // A parked retry is superseded by this fresh invalidation — real new
+      // evidence beats the backoff clock, and its timer must not fire against
+      // a replaced entry.
+      if (previous?.retryTimer) {
+        clearTimeout(previous.retryTimer);
+        previous.retryTimer = null;
+        previous.nextRetryAt = null;
+      }
       indexes.set(key, startIndex(source, key, open.settings, {
         validity: open.validities[i],
         previousSnap: previous?.snap ?? null,
         previousSuccessAt: previous?.lastSuccessAt ?? null,
         previousHealth: previous?.lastHealth ?? null,
         passes: (previous?.passes ?? 0) + 1,
+        carrySeed: previous?.carrySeed ?? null,
       }));
     });
   }
@@ -1043,6 +1662,13 @@ export function createEngineService({
       // How many passes this entry has run, carried across refreshes. Cheap to
       // report and the only way to see a re-index storm from outside.
       passes: entry.passes ?? 1,
+      // What the last completed pass actually did — additive, and the visible
+      // proof of incrementality: an edited note shows read:1 carried:N-1.
+      // Absent until a pass with the skip gate has landed.
+      ...(entry.passStats ? { passStats: entry.passStats } : {}),
+      // Transient-failure retry state — additive; absent while healthy.
+      ...(entry.retries ? { retries: entry.retries } : {}),
+      ...(entry.nextRetryAt ? { nextRetryAt: entry.nextRetryAt } : {}),
     };
   }
 
@@ -1089,6 +1715,12 @@ export function createEngineService({
       json(res, 400, { error: "Bad request URL" }); // unparseable Host/target — nothing to route on
       return true;
     }
+    // A mutating request may write the manifest; its own handler — and the
+    // request that races in right behind it — must read the post-write state,
+    // not a 100ms-old stamp memo. One chokepoint beats chasing every write
+    // site. (External writers — the CLI's second engine — are covered by the
+    // memo simply expiring.)
+    if (req.method !== "GET" && req.method !== "HEAD") stampMemo = null;
     const p = url.pathname;
     const isApi = p === "/api" || p.startsWith("/api/");
     const isConsole = CONSOLE_DIR !== null && (p === "/console" || p.startsWith("/console/"));
@@ -1112,7 +1744,7 @@ export function createEngineService({
       if (p === "/api/graph") { json(res, 200, await buildGraph(waitParam(url))); return true; }
       if (p === "/api/status") { json(res, 200, statusApi()); return true; }
       if (p === "/api/resolve") { json(res, 200, await resolveOne(url.searchParams.get("concept"))); return true; }
-      if (p === "/api/resolve-all") { json(res, 200, await resolveAllApi(waitParam(url))); return true; }
+      if (p === "/api/resolve-all") { await streamResolveAll(res, await resolveAllApi(waitParam(url))); return true; }
       if (p === "/api/search") { json(res, 200, await searchApi(url, waitParam(url))); return true; }
       if (p === "/api/discrepancies" && req.method === "GET") {
         json(res, 200, await discrepanciesApi(waitParam(url)));
@@ -1193,6 +1825,23 @@ export function createEngineService({
         json(res, 200, { ok: true });
         return true;
       }
+      if (p === "/api/indexing/activity") { json(res, 200, indexingActivityApi()); return true; }
+      if (p.startsWith("/api/indexing/") && req.method === "POST") {
+        // The indexing controls change what the engine DOES, not what it
+        // stores — session-scoped by design — but they still ride the same
+        // mutation gate as every other state-changing route.
+        if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
+        const body = parseJson(await readBody(req));
+        const name = typeof body?.source === "string" && body.source ? body.source.slice(0, 200) : null;
+        if (p === "/api/indexing/pause") { pauseIndexing(name); json(res, 200, { ok: true, paused: [...pausedIndexNames] }); return true; }
+        if (p === "/api/indexing/resume") { resumeIndexing(name); json(res, 200, { ok: true, paused: [...pausedIndexNames] }); return true; }
+        if (p === "/api/indexing/cancel") {
+          if (!name) { json(res, 400, { error: "Provide {source} to cancel" }); return true; }
+          json(res, 200, { ok: cancelIndexing(name) });
+          return true;
+        }
+        if (p === "/api/indexing/reindex") { json(res, 200, { ok: reindexSource(name, { full: body?.full === true }) }); return true; }
+      }
       if (p === "/api/files") { json(res, 200, await listFilesApi(fileRoots(), walkLimits())); return true; }
       if (p === "/api/file") {
         if (req.method === "PUT" || req.method === "POST") {
@@ -1231,6 +1880,12 @@ export function createEngineService({
     } catch (err) {
       json(res, err.status ?? 500, { error: err.message, ...(err.detail ?? {}) });
       return true;
+    } finally {
+      // The write happens DURING a mutating handler, so the entry-time clear
+      // above is not enough on its own: a stamp memoized mid-handler (pre-
+      // write) would outlive the write by up to the memo window. Clearing on
+      // the way out closes that, for this handler's tail and the next request.
+      if (req.method !== "GET" && req.method !== "HEAD") stampMemo = null;
     }
   }
 
@@ -1535,12 +2190,16 @@ export function createEngineService({
         // count visible, never what is inside them. Additive, and already
         // computed by the walk, so it costs nothing on this cheap route.
         skippedHidden: snap?.hidden ?? 0,
+        // The last pass's work breakdown (see indexProgress) — additive, three
+        // small integers, and how a test proves an edit cost one read.
+        passStats: progress.passStats ?? null,
       };
     });
     // A source with nothing to serve yet. A source refreshing behind a good
     // snapshot is deliberately NOT here: it has an answer, so a client has
     // nothing to wait for and no reason to hold a spinner up in front of it.
     const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
+    const memory = memorySnapshot();
     return {
       generation: bumpGeneration(pinned),
       indexing: pending.length > 0,
@@ -1550,7 +2209,21 @@ export function createEngineService({
       // embedding this engine (the desktop app's utility process, in
       // particular) can use this to throttle its own polling or show a
       // banner without adding its own watermark logic.
-      memory: memoryPressureLevel(),
+      memory: memory.level,
+      // Sources the user paused (POST /api/indexing/pause) — additive; "*"
+      // means everything. A paused source is settled state, so ?wait= callers
+      // and the console must be able to SEE why nothing is progressing.
+      indexingPaused: [...pausedIndexNames],
+      // The raw numbers behind the level, additive: how much live heap this
+      // engine holds against the V8 ceiling it would actually die at. The
+      // desktop app cannot raise that ceiling (Electron ignores utilityProcess
+      // heap flags — see memory-pressure.mjs), so watching it is the tool.
+      memoryDetail: {
+        heapUsedBytes: memory.heapUsedBytes,
+        heapLimitBytes: memory.heapLimitBytes,
+        liveBytes: memory.liveBytes,
+        totalBytes: memory.totalBytes,
+      },
     };
   }
 
@@ -1610,8 +2283,13 @@ export function createEngineService({
     const cacheKey = `${query}\u0000${limit}`;
     let promise = searchMemo.hits.get(cacheKey);
     if (!promise) {
-      const views = contributing.map((p) => searchSnapshotView(p.source, p.snap));
-      promise = searchConcepts(views, { query, limit }).catch((err) => {
+      // The incremental index replaces the per-query corpus rebuild
+      // (search-index.mjs: same scores by construction, differential-tested).
+      // Wrapped in an async IIFE so the memo keeps holding promises.
+      const snapshots = contributing.map((p) => ({
+        name: p.source.name, level: p.source.level, gen: p.snap.gen, ids: p.snap.ids, concepts: p.snap.concepts,
+      }));
+      promise = (async () => searchIndex.search(snapshots, { query, limit }))().catch((err) => {
         if (searchMemo?.hits.get(cacheKey) === promise) searchMemo.hits.delete(cacheKey);
         throw err;
       });
@@ -1776,19 +2454,39 @@ export function createEngineService({
     }
   }
 
-  // Resolve every indexed concept in one pass. The console's initial load calls
-  // this instead of one /api/resolve per concept. Per-concept failures are
-  // reported alongside the successes, never fatal; sources still indexing are
-  // named so the client knows the answer is partial and can poll.
-  async function resolveAllApi(waitMs = 0) {
-    if (waitMs > 0) await awaitIndexes(waitMs);
-    const { entries } = ensureIndexes();
-    // Pinned for the same reason /api/graph pins: the loop below spans many
-    // event-loop turns, and `indexingSources` has to name the state these
-    // concepts were resolved from, not whatever landed while it ran.
-    const pinned = entries.map(pinEntry);
-    const healthy = pinned.filter((p) => p.snap).map((p) => snapshotView(p.source, p.snap));
-    const allIds = [...new Set(pinned.flatMap((p) => p.snap?.ids ?? []))].sort();
+  // The one full-corpus resolve, shared by everything that needs it. Before
+  // this memo, /api/resolve-all and /api/discrepancies each ran their own
+  // corpus-wide resolve — and the console fires both concurrently on
+  // bootstrap, so a 4,000-note vault paid the entire materialization twice at
+  // the same instant (measured: 587MB peak for a 46MB corpus). Keyed like
+  // graphMemo — on the live (name, level, generation) triples — so a memo hit
+  // is correct by construction; concurrent callers join the build in flight.
+  function resolvedCorpus(pinned) {
+    const contributing = pinned.filter((p) => p.snap);
+    const key = contributingKey(contributing);
+    if (!corpusMemo || corpusMemo.key !== key) {
+      if (corpusMemo) clearTimeout(corpusMemo.evictTimer);
+      let promise;
+      promise = buildResolvedCorpus(contributing).catch((err) => {
+        if (corpusMemo?.promise === promise) {
+          clearTimeout(corpusMemo.evictTimer);
+          corpusMemo = null;
+        }
+        throw err;
+      });
+      corpusMemo = { key, promise, evictTimer: null };
+    }
+    // Re-armed per access: the memo holds corpus-scale strings, so it lives
+    // only as long as someone is actually reading it (+TTL), not forever.
+    clearTimeout(corpusMemo.evictTimer);
+    corpusMemo.evictTimer = setTimeout(() => { corpusMemo = null; }, CORPUS_MEMO_TTL_MS);
+    corpusMemo.evictTimer.unref?.();
+    return corpusMemo.promise;
+  }
+
+  async function buildResolvedCorpus(contributing) {
+    const healthy = contributing.map((p) => snapshotView(p.source, p.snap));
+    const allIds = [...new Set(contributing.flatMap((p) => p.snap.ids))].sort();
     const concepts = [];
     const errors = [];
     let sinceYield = 0;
@@ -1802,6 +2500,24 @@ export function createEngineService({
         errors.push({ concept: id, error: err.message });
       }
     }
+    return { concepts, errors };
+  }
+
+  // Resolve every indexed concept in one pass. The console's initial load calls
+  // this instead of one /api/resolve per concept. Per-concept failures are
+  // reported alongside the successes, never fatal; sources still indexing are
+  // named so the client knows the answer is partial and can poll.
+  async function resolveAllApi(waitMs = 0) {
+    if (waitMs > 0) await awaitIndexes(waitMs);
+    const { entries } = ensureIndexes();
+    // Pinned for the same reason /api/graph pins: `indexingSources` has to
+    // name the state these concepts were resolved from. The corpus itself
+    // comes from the shared memo; only the progress fields are per-request.
+    const pinned = entries.map(pinEntry);
+    const { concepts, errors } = await resolvedCorpus(pinned);
+    // Decoration happens per request over the cached objects: it OVERWRITES
+    // section.discrepancy in place (idempotent for one decision list), which
+    // is what keeps a decision recorded a second ago visible on a memo hit.
     const decisions = await conflictResolutionLog.list();
     for (const concept of concepts) decorateResolvedDispositions(concept, decisions);
     const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
@@ -1911,6 +2627,14 @@ export function createEngineService({
   async function runAutomaticRules() {
     const { entries } = ensureIndexes();
     if (entries.some(({ entry }) => entry.running || entry.followUp || entry.status !== "ready")) return;
+    // This job runs after EVERY index pass, and discrepanciesApi() below is a
+    // full-corpus resolve. With no enabled automatic rule there is nothing it
+    // could ever apply, so answer that from the rule stores (two small file
+    // reads) before paying for the corpus — the common case, since automatic
+    // rules are opt-in. Same `enabled !== false` reading as rule matching
+    // (discrepancies.mjs).
+    const rules = await effectiveDiscrepancyRules();
+    if (!rules.some((rule) => rule.enabled !== false && rule.mode === "automatic")) return;
     const payload = await discrepanciesApi(0);
     if (!payload.coverageComplete) return;
     const decisions = await conflictResolutionLog.list();
@@ -2266,5 +2990,5 @@ export function createEngineService({
     console.error(`contextcake: discrepancy transaction recovery requires attention: ${error.message}`);
   }));
 
-  return { handleRequest, close, getSources, reload, setTokens };
+  return { handleRequest, close, getSources, reload, setTokens, setIndexQuarantine };
 }

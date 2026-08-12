@@ -57,6 +57,29 @@ export function withGitSync(source, { root, pullTtlMs = 90000, retentionDays = 1
       }
       return kept;
     },
+    // Batch pin passes through: it coordinates the wrapped source's own
+    // per-generation work (okf-local's git-history memo), and a live layer is
+    // exactly the okf-local case that needs it during an index pass.
+    ...(typeof source.beginBatch === "function" ? { beginBatch: () => source.beginBatch() } : {}),
+    // The fingerprinted listing, with the SAME capture-decay filter as
+    // listConceptIds above — an expired capture must not reappear just
+    // because the index asked through the newer surface.
+    ...(typeof source.listEntries === "function" ? {
+      async listEntries(options = {}) {
+        await maybePull();
+        const entries = await source.listEntries(options);
+        const kept = [];
+        for (const entry of entries) {
+          if (!entry.id.startsWith(CAPTURE_PREFIX)) {
+            kept.push(entry);
+            continue;
+          }
+          const loaded = await source.loadConcept(entry.id);
+          if (!expired(loaded)) kept.push(entry);
+        }
+        return kept;
+      },
+    } : {}),
     // Explicit sync: force-refresh AND land any offline-queued commits.
     async sync() {
       await retryQueued(root);

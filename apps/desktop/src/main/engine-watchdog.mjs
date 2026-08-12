@@ -1,7 +1,7 @@
 // Liveness for an engine that is still running but has stopped answering.
 //
-// An engine EXIT is already handled and already fatal (service-host.mjs's
-// onCrash → the clean dialog-and-exit of specs/contextcake-distribution/design.md).
+// An engine EXIT is already handled elsewhere (service-host.mjs's onCrash →
+// main.mjs's handleEngineCrash: bounded restart, breadcrumbs, quarantine).
 // A WEDGE is the other failure and deliberately does not take that path: the
 // process is alive, its HTTP server is bound, and the app looks fine while
 // every request hangs. Nothing measured that before, so the only symptom a user
@@ -35,6 +35,38 @@ export const PING_TIMEOUT_MS = 5_000
 export const MISS_THRESHOLD = 3
 /** How long unresponsive before relaunching is offered. */
 export const WEDGED_MS = 60_000
+
+/**
+ * Should the relaunch OFFER be shown, given a fresh out-of-band status probe?
+ *
+ * The watchdog's 5s ping deadline measures responsiveness; this measures
+ * aliveness-with-progress. A heavy index pass can miss enough pings to raise
+ * the wedge banner while the engine is demonstrably WORKING — and a user who
+ * accepts the restart throws all of that progress away. So before the modal:
+ * one longer probe, and if it answers with indexing that has MOVED since the
+ * last look, hold the offer (the banner stays; the next tick re-probes).
+ * Suppression requires observed progress: two consecutive no-progress probes
+ * always fall through, so a real wedge is delayed by at most one interval,
+ * never hidden.
+ *
+ * Pure — main.mjs owns the probe and the dialog — so every branch is
+ * unit-testable without a wedged engine.
+ *
+ * @param {null | { indexing: boolean, loadedBySource: Record<string, number> }} previous
+ *   The status the last suppressed offer saw (null on the first offer).
+ * @param {null | { indexing: boolean, loadedBySource: Record<string, number> }} fresh
+ *   The out-of-band probe's answer (null when the probe failed).
+ */
+export function shouldOfferRelaunch(previous, fresh) {
+  if (!fresh) return true // the longer probe failed too: genuinely stuck
+  if (fresh.indexing !== true) return true // not working, just not answering
+  if (!previous) return false // first look at an indexing engine: give it one interval
+  const sources = new Set([...Object.keys(previous.loadedBySource ?? {}), ...Object.keys(fresh.loadedBySource ?? {})])
+  for (const name of sources) {
+    if ((fresh.loadedBySource?.[name] ?? 0) !== (previous.loadedBySource?.[name] ?? 0)) return false // progress
+  }
+  return true // indexing in name only — counters frozen since the last look
+}
 
 /**
  * @param {object} options

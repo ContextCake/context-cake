@@ -13,11 +13,15 @@
 // quiet note, never a spinner in front of an answer).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { progressPercent } from '../api'
+import type { IndexingActivity, IndexingActivitySource } from '../api'
 import { useStoreData } from '../store'
 import type { BackgroundTask } from '../store'
 import { C, css, MONO } from '../theme'
 
 const NUM = new Intl.NumberFormat()
+
+/** How often the open popover refreshes its detail feed. Closed = never. */
+const ACTIVITY_REFRESH_MS = 2000
 
 /** The same set App.tsx restores focus across, so the two agree on "a control". */
 const FOCUSABLE = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -112,7 +116,54 @@ function Ring({ percent, tone }: { percent: number | null; tone: 'work' | 'atten
   )
 }
 
-function TaskRow({ task }: { task: BackgroundTask }) {
+/** "410 docs/s · ~38s left" — present only while the engine is mid-read. */
+export function rateLine(detail: IndexingActivitySource | undefined): string | null {
+  if (!detail?.rateDocsPerSec) return null
+  const rate = `${NUM.format(detail.rateDocsPerSec)} docs/s`
+  if (detail.etaMs == null) return rate
+  return `${rate} · ~${formatElapsed(detail.etaMs)} left`
+}
+
+/** One line per recent pass: "12:31:04 · ok · 3.7s · read 1, carried 499". */
+function PassHistory({ detail }: { detail: IndexingActivitySource }) {
+  if (detail.lastPasses.length === 0) return null
+  return (
+    <ul style={css('margin:4px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:3px;')}>
+      {detail.lastPasses.slice(-6).reverse().map((p) => (
+        <li key={p.startedAt} style={css(`font-family:${MONO}; font-size:10.5px; color:${C.caption};`)}>
+          {new Date(p.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          {' · '}{p.outcome}{' · '}{formatElapsed(p.durationMs)}
+          {p.read != null && ` · read ${NUM.format(p.read)}, carried ${NUM.format(p.carried ?? 0)}`}
+          {p.error ? ` · ${p.error}` : ''}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** The per-source disclosure: history + warning samples, closed by default. */
+function TaskDetail({ detail }: { detail: IndexingActivitySource }) {
+  const samples = [...detail.skippedSamples.map((rel) => `skipped ${rel}`), ...detail.unreadableSamples.map((rel) => `unreadable ${rel}`)]
+  if (detail.lastPasses.length === 0 && detail.warnings.length === 0 && samples.length === 0) return null
+  return (
+    <details style={css('margin-top:2px;')}>
+      <summary style={css(`cursor:pointer; font-size:11px; color:${C.faint}; user-select:none;`)}>Details</summary>
+      {detail.warnings.length > 0 && (
+        <ul style={css(`margin:4px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:3px; font-size:11px; line-height:1.45; color:${C.amberText};`)}>
+          {detail.warnings.map((w) => <li key={w} style={css('overflow-wrap:anywhere;')}>{w}</li>)}
+        </ul>
+      )}
+      {samples.length > 0 && (
+        <ul style={css(`margin:4px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:2px; font-family:${MONO}; font-size:10.5px; color:${C.faint};`)}>
+          {samples.slice(0, 8).map((s) => <li key={s} style={css('overflow-wrap:anywhere;')}>{s}</li>)}
+        </ul>
+      )}
+      <PassHistory detail={detail} />
+    </details>
+  )
+}
+
+function TaskRow({ task, detail }: { task: BackgroundTask; detail?: IndexingActivitySource }) {
   const percent = progressPercent(task)
   const counts = task.total != null && task.total > 0
     ? `${NUM.format(task.loaded)} / ${NUM.format(task.total)}`
@@ -143,15 +194,46 @@ function TaskRow({ task }: { task: BackgroundTask }) {
       <div style={css(`display:flex; gap:6px; font-size:11.5px; color:${C.caption};`)}>
         <span>{label}</span><span aria-hidden="true">·</span><span>{counts}</span>
         <span aria-hidden="true">·</span><span>{task.kind}</span>
+        {rateLine(detail) && <><span aria-hidden="true">·</span><span>{rateLine(detail)}</span></>}
       </div>
+      {detail && <TaskDetail detail={detail} />}
     </li>
   )
 }
 
 export function BackgroundActivity() {
-  const { load, retryNow, setView } = useStoreData()
+  const { load, retryNow, setView, fetchIndexingActivity, indexingControl, canControlIndexing } = useStoreData()
   const { tasks, refreshError, lastRefreshAt } = load
   const [open, setOpen] = useState(false)
+
+  // The detail feed exists only while someone is looking at it: fetched on
+  // open, refreshed on a slow tick, dropped on close. Never joins the
+  // steady-state poll — that is the status-polling doctrine.
+  const [activityFeed, setActivityFeed] = useState<IndexingActivity | null>(null)
+  useEffect(() => {
+    // Guarded like source.setActiveSource: several test harnesses stub a
+    // partial store, and a popover without the detail feed is still a popover.
+    if (!open || typeof fetchIndexingActivity !== 'function') { setActivityFeed(null); return }
+    let cancelled = false
+    const pull = () => { void fetchIndexingActivity().then((a) => { if (!cancelled) setActivityFeed(a) }) }
+    pull()
+    const timer = setInterval(pull, ACTIVITY_REFRESH_MS)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [open, fetchIndexingActivity])
+  const detailByName = new Map((activityFeed?.sources ?? []).map((s) => [s.name, s]))
+  const allPaused = (activityFeed?.paused ?? []).includes('*')
+  const [controlBusy, setControlBusy] = useState(false)
+  const toggleAll = async () => {
+    if (controlBusy) return
+    setControlBusy(true)
+    try {
+      await indexingControl(allPaused ? 'resume' : 'pause')
+      const fresh = await fetchIndexingActivity()
+      setActivityFeed(fresh)
+    } finally {
+      setControlBusy(false)
+    }
+  }
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -309,18 +391,33 @@ export function BackgroundActivity() {
               )}
               {tasks.length > 0 ? (
                 <ul style={css('margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:14px;')}>
-                  {tasks.map((task) => <TaskRow key={task.name} task={task} />)}
+                  {tasks.map((task) => <TaskRow key={task.name} task={task} detail={detailByName.get(task.name)} />)}
                 </ul>
               ) : (
                 <p style={css(`margin:0; font-size:12px; line-height:1.5; color:${C.caption};`)}>
                   No indexing in flight. The page is still live — it just cannot reach the engine right now.
                 </p>
               )}
-              <button
-                type="button"
-                className="cc-activity-action"
-                onClick={() => { setView('sources'); close() }}
-              >Open Sources</button>
+              {allPaused && (
+                <p role="status" style={css(`margin:0; font-size:11.5px; line-height:1.5; color:${C.amberText};`)}>
+                  Indexing is paused. Sources keep serving what they have; nothing new is read until you resume.
+                </p>
+              )}
+              <div style={css('display:flex; gap:8px;')}>
+                <button
+                  type="button"
+                  className="cc-activity-action"
+                  onClick={() => { setView('sources'); close() }}
+                >Open Sources</button>
+                {canControlIndexing && (
+                  <button
+                    type="button"
+                    className="cc-activity-action"
+                    disabled={controlBusy}
+                    onClick={() => void toggleAll()}
+                  >{allPaused ? 'Resume Indexing' : 'Pause Indexing'}</button>
+                )}
+              </div>
             </div>
           )}
         </>

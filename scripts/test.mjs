@@ -90,6 +90,7 @@ const SUITES = [
   { group: "slow", name: "index-lifecycle", ...sh("index-lifecycle-test.sh") },
   { group: "slow", name: "index-concurrency", ...sh("index-concurrency-test.sh") },
   { group: "slow", name: "graph-latency", ...sh("graph-latency-test.sh") },
+  { group: "slow", name: "resolve-all-scale", ...sh("resolve-all-scale-test.sh") },
 ];
 
 const GROUPS = [...new Set(SUITES.map((suite) => suite.group))];

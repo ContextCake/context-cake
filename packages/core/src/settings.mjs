@@ -40,13 +40,12 @@ export const SETTING_DEFS = {
     // so the settings UI has headroom above the new default, not a ceiling
     // just above it.
     //
-    // This knob is not indexing-only: waitParam() in service.mjs bounds a
-    // client-supplied /api/graph|resolve-all|search|discrepancies `?wait=`
-    // against this same value ("so ?wait= can never become a new way to
-    // hang"), so raising it also raises how long those reads can block a
-    // caller for — 10 min -> 2 hr at the new max. No caller in this repo
-    // requests anywhere near either ceiling today, but a future one inherits
-    // this wider bound unless it's split onto its own constant.
+    // This knob is no longer the only bound on `?wait=`: waitParam() in
+    // service.mjs clamps a client-supplied /api/graph|resolve-all|search|
+    // discrepancies `?wait=` to min(this, WAIT_MAX_MS = 5 minutes) — the
+    // split this comment used to ask for. Raising this budget therefore
+    // lengthens indexing patience only, never how long a read may hold a
+    // socket.
     default: 1_800_000,
     min: 1_000,
     max: 7_200_000,

@@ -43,4 +43,14 @@ is no code path that can forget to fire one.
 `/api/graph` and `/api/resolve-all` answer from whatever is indexed right now
 and report `indexing` / `indexingSources`. Clients render what they have and
 poll. Any assertion about completeness — in a test or a script — must pass
-`?wait=<ms>`. `/api/resolve` deliberately reads one concept live.
+`?wait=<ms>`, and `?wait=` is clamped to 5 minutes (`WAIT_MAX_MS` in
+service.mjs) regardless of how large `sourceBudgetMs` grows — a socket held
+open for a 30-minute index budget is a hang with a header. Something that
+genuinely needs to outwait a longer index polls `/api/status` like the
+console does. `/api/resolve` deliberately reads one concept live.
+
+`/api/resolve-all` also shares one corpus materialization with
+`/api/discrepancies` (`resolvedCorpus` memo, keyed like the graph memo, 30s
+idle eviction because it holds corpus-scale strings) and streams its response
+one concept at a time — the old whole-payload `JSON.stringify` was a
+~50MB-per-4k-notes single string with a hard V8 ceiling at ~512MB.

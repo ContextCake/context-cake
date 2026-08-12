@@ -93,6 +93,49 @@ function bearerMatches(header, expected) {
 
 const YIELD_EVERY = 25;
 const yieldNow = () => new Promise((resolve) => setImmediate(resolve));
+// The ceiling on `?wait=`, independent of sourceBudgetMs — see waitParam().
+const WAIT_MAX_MS = 300_000;
+
+/**
+ * Stream a resolve-all payload as JSON, one concept at a time.
+ *
+ * Byte-for-byte the same JSON json() would have produced — same fields, same
+ * order — but the peak allocation is one concept's stringification instead of
+ * the whole payload as a single string (~50MB at 4,000 notes, and a hard
+ * RangeError past V8's ~512MB string ceiling). Drain-aware so a slow reader
+ * applies backpressure instead of buffering the corpus in the socket, and
+ * yielding so /api/status stays answerable mid-response.
+ */
+async function streamResolveAll(res, payload) {
+  res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  let closed = false;
+  res.on("close", () => { closed = true; });
+  const write = (chunk) => {
+    if (closed || res.destroyed) return null;
+    if (res.write(chunk)) return null;
+    // 'close' must also settle the promise: a client that disconnects
+    // mid-stream never emits 'drain', and an unsettled await here would pin
+    // the corpus-sized payload in this closure forever.
+    return new Promise((resolve) => {
+      const done = () => { res.off("drain", done); res.off("close", done); resolve(); };
+      res.once("drain", done);
+      res.once("close", done);
+    });
+  };
+  await write('{"concepts":[');
+  for (let i = 0; i < payload.concepts.length; i++) {
+    if (closed) break;
+    const pending = write((i === 0 ? "" : ",") + JSON.stringify(payload.concepts[i]));
+    if (pending) await pending;
+    if ((i + 1) % YIELD_EVERY === 0) await yieldNow();
+  }
+  const tail = `],"errors":${JSON.stringify(payload.errors)}`
+    + `,"indexing":${JSON.stringify(payload.indexing)}`
+    + `,"indexingSources":${JSON.stringify(payload.indexingSources)}}`;
+  const pendingTail = write(tail);
+  if (pendingTail) await pendingTail;
+  if (!closed) res.end();
+}
 
 // Reads one source end to end, reporting progress into `entry` as it goes so
 // the UI can show "Indexed 340 of 1,500" instead of an opaque spinner.
@@ -357,6 +400,15 @@ export function createEngineService({
   // flight join it instead of running the corpus scan twice.
   let searchMemo = null;
   const SEARCH_MEMO_CAP = 200; // distinct queries per content generation before the map is dropped, not the search
+  // { key, promise, evictTimer } — the resolved corpus behind /api/resolve-all
+  // and /api/discrepancies. Same live-key correctness story as graphMemo, plus
+  // a residency bound the others don't need: unlike graph rows (compact) or
+  // hit lists (tiny), this holds every merged section string of every concept
+  // — corpus-scale memory — so an idle memo is evicted on a timer. The TTL
+  // bounds MEMORY only; staleness is impossible by construction because the
+  // key is re-derived from live pins on every request.
+  let corpusMemo = null;
+  const CORPUS_MEMO_TTL_MS = 30_000;
   let conceptTokens = new Map(); // concept id -> { sig, tokens } for merged concepts
   // Monotonic counter behind /api/status. Bumped whenever the signature of what
   // the heavy routes would return changes, so a client can poll cheaply and
@@ -511,6 +563,8 @@ export function createEngineService({
     indexes = new Map();
     graphMemo = null;
     searchMemo = null;
+    if (corpusMemo) clearTimeout(corpusMemo.evictTimer);
+    corpusMemo = null;
     conceptTokens = new Map();
     if (prev) for (const s of prev.sources) s.close?.();
   }
@@ -894,12 +948,18 @@ export function createEngineService({
   }
 
   // How long a client asked us to wait for indexing before answering. Bounded
-  // by the source budget so `?wait=` can never become a new way to hang.
+  // by the source budget so `?wait=` can never become a new way to hang — and
+  // by its own ceiling, because the source budget stopped being a sane bound
+  // the day it grew to 30 minutes for iCloud-shaped vaults (settings.mjs): a
+  // request socket held open that long is a hang with a header. Five minutes
+  // covers every real completeness assertion (tests use ≤15s; a first pass
+  // over 20k files measures in tens of seconds); anything longer should poll
+  // /api/status like the console does.
   function waitParam(url) {
     const raw = Number(url.searchParams.get("wait"));
     if (!Number.isFinite(raw) || raw <= 0) return 0;
     const { settings } = openSources();
-    return Math.min(raw, settings.sourceBudgetMs);
+    return Math.min(raw, settings.sourceBudgetMs, WAIT_MAX_MS);
   }
 
   /**
@@ -1121,7 +1181,7 @@ export function createEngineService({
       if (p === "/api/graph") { json(res, 200, await buildGraph(waitParam(url))); return true; }
       if (p === "/api/status") { json(res, 200, statusApi()); return true; }
       if (p === "/api/resolve") { json(res, 200, await resolveOne(url.searchParams.get("concept"))); return true; }
-      if (p === "/api/resolve-all") { json(res, 200, await resolveAllApi(waitParam(url))); return true; }
+      if (p === "/api/resolve-all") { await streamResolveAll(res, await resolveAllApi(waitParam(url))); return true; }
       if (p === "/api/search") { json(res, 200, await searchApi(url, waitParam(url))); return true; }
       if (p === "/api/discrepancies" && req.method === "GET") {
         json(res, 200, await discrepanciesApi(waitParam(url)));
@@ -1796,19 +1856,39 @@ export function createEngineService({
     }
   }
 
-  // Resolve every indexed concept in one pass. The console's initial load calls
-  // this instead of one /api/resolve per concept. Per-concept failures are
-  // reported alongside the successes, never fatal; sources still indexing are
-  // named so the client knows the answer is partial and can poll.
-  async function resolveAllApi(waitMs = 0) {
-    if (waitMs > 0) await awaitIndexes(waitMs);
-    const { entries } = ensureIndexes();
-    // Pinned for the same reason /api/graph pins: the loop below spans many
-    // event-loop turns, and `indexingSources` has to name the state these
-    // concepts were resolved from, not whatever landed while it ran.
-    const pinned = entries.map(pinEntry);
-    const healthy = pinned.filter((p) => p.snap).map((p) => snapshotView(p.source, p.snap));
-    const allIds = [...new Set(pinned.flatMap((p) => p.snap?.ids ?? []))].sort();
+  // The one full-corpus resolve, shared by everything that needs it. Before
+  // this memo, /api/resolve-all and /api/discrepancies each ran their own
+  // corpus-wide resolve — and the console fires both concurrently on
+  // bootstrap, so a 4,000-note vault paid the entire materialization twice at
+  // the same instant (measured: 587MB peak for a 46MB corpus). Keyed like
+  // graphMemo — on the live (name, level, generation) triples — so a memo hit
+  // is correct by construction; concurrent callers join the build in flight.
+  function resolvedCorpus(pinned) {
+    const contributing = pinned.filter((p) => p.snap);
+    const key = contributingKey(contributing);
+    if (!corpusMemo || corpusMemo.key !== key) {
+      if (corpusMemo) clearTimeout(corpusMemo.evictTimer);
+      let promise;
+      promise = buildResolvedCorpus(contributing).catch((err) => {
+        if (corpusMemo?.promise === promise) {
+          clearTimeout(corpusMemo.evictTimer);
+          corpusMemo = null;
+        }
+        throw err;
+      });
+      corpusMemo = { key, promise, evictTimer: null };
+    }
+    // Re-armed per access: the memo holds corpus-scale strings, so it lives
+    // only as long as someone is actually reading it (+TTL), not forever.
+    clearTimeout(corpusMemo.evictTimer);
+    corpusMemo.evictTimer = setTimeout(() => { corpusMemo = null; }, CORPUS_MEMO_TTL_MS);
+    corpusMemo.evictTimer.unref?.();
+    return corpusMemo.promise;
+  }
+
+  async function buildResolvedCorpus(contributing) {
+    const healthy = contributing.map((p) => snapshotView(p.source, p.snap));
+    const allIds = [...new Set(contributing.flatMap((p) => p.snap.ids))].sort();
     const concepts = [];
     const errors = [];
     let sinceYield = 0;
@@ -1822,6 +1902,24 @@ export function createEngineService({
         errors.push({ concept: id, error: err.message });
       }
     }
+    return { concepts, errors };
+  }
+
+  // Resolve every indexed concept in one pass. The console's initial load calls
+  // this instead of one /api/resolve per concept. Per-concept failures are
+  // reported alongside the successes, never fatal; sources still indexing are
+  // named so the client knows the answer is partial and can poll.
+  async function resolveAllApi(waitMs = 0) {
+    if (waitMs > 0) await awaitIndexes(waitMs);
+    const { entries } = ensureIndexes();
+    // Pinned for the same reason /api/graph pins: `indexingSources` has to
+    // name the state these concepts were resolved from. The corpus itself
+    // comes from the shared memo; only the progress fields are per-request.
+    const pinned = entries.map(pinEntry);
+    const { concepts, errors } = await resolvedCorpus(pinned);
+    // Decoration happens per request over the cached objects: it OVERWRITES
+    // section.discrepancy in place (idempotent for one decision list), which
+    // is what keeps a decision recorded a second ago visible on a memo hit.
     const decisions = await conflictResolutionLog.list();
     for (const concept of concepts) decorateResolvedDispositions(concept, decisions);
     const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
@@ -1931,6 +2029,14 @@ export function createEngineService({
   async function runAutomaticRules() {
     const { entries } = ensureIndexes();
     if (entries.some(({ entry }) => entry.running || entry.followUp || entry.status !== "ready")) return;
+    // This job runs after EVERY index pass, and discrepanciesApi() below is a
+    // full-corpus resolve. With no enabled automatic rule there is nothing it
+    // could ever apply, so answer that from the rule stores (two small file
+    // reads) before paying for the corpus — the common case, since automatic
+    // rules are opt-in. Same `enabled !== false` reading as rule matching
+    // (discrepancies.mjs).
+    const rules = await effectiveDiscrepancyRules();
+    if (!rules.some((rule) => rule.enabled !== false && rule.mode === "automatic")) return;
     const payload = await discrepanciesApi(0);
     if (!payload.coverageComplete) return;
     const decisions = await conflictResolutionLog.list();

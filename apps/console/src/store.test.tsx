@@ -9,7 +9,14 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StoreProvider, useStore } from './store'
 
-const mocks = vi.hoisted(() => ({ graph: vi.fn(), resolveAll: vi.fn(), conflictResolutions: vi.fn(), status: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  graph: vi.fn(), resolveAll: vi.fn(), conflictResolutions: vi.fn(), status: vi.fn(),
+  resolve: vi.fn(), discrepancies: vi.fn(),
+  // The graph-first path only exists against an engine that serves
+  // /api/discrepancies; most cases here predate it and pin the legacy
+  // resolve-all fallback, so the modern route is opt-in per suite.
+  flags: { withDiscrepancies: false },
+}))
 
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api')
@@ -19,11 +26,12 @@ vi.mock('./api', async () => {
       mode: 'live' as const,
       graph: mocks.graph,
       resolveAll: mocks.resolveAll,
-      resolve: vi.fn(),
+      resolve: mocks.resolve,
       listConcepts: vi.fn(),
       status: mocks.status,
       conflictResolutions: mocks.conflictResolutions,
       resolveConflict: vi.fn(),
+      ...(mocks.flags.withDiscrepancies ? { discrepancies: mocks.discrepancies } : {}),
     }),
   }
 })
@@ -34,12 +42,16 @@ let root: Root
 /** Renders the store's load state so assertions read it from the DOM. */
 function Probe() {
   const { load, concepts, sources, reload, retryNow, view, selConcept, filesScope, filesPath, openFilesScope, setView, setFilesScope, setFilesPath } = useStore()
+  const selected = concepts.find((c) => c.id === selConcept)
   return (
     <div
       data-shell={String(load.shell)}
       data-concepts={String(load.concepts)}
       data-indexing={load.indexingSources.join(',')}
       data-count={String(concepts.length)}
+      data-sel-detail={String(selected?.detailLoaded)}
+      data-sel-sections={String(selected?.sections.length ?? '')}
+      data-conflict-ids={concepts.filter((c) => c.conflict).map((c) => c.id).join(',')}
       data-sources={String(sources.length)}
       data-view={view}
       data-selection={selConcept}
@@ -108,6 +120,9 @@ beforeEach(() => {
   mocks.resolveAll.mockReset()
   mocks.conflictResolutions.mockReset()
   mocks.status.mockReset()
+  mocks.resolve.mockReset()
+  mocks.discrepancies.mockReset()
+  mocks.flags.withDiscrepancies = false
   mocks.status.mockResolvedValue(null) // most cases exercise the legacy graph path
   mocks.conflictResolutions.mockResolvedValue([])
   window.history.replaceState(null, '', '/#/overview')
@@ -729,5 +744,81 @@ describe('navigating away from an unsaved file', () => {
     await goBack()
     expect(probe().dataset.view).toBe('sources')
     expect(window.location.hash).toBe('#/sources')
+  })
+})
+
+// The graph-first contract: against a modern engine (one that serves
+// /api/discrepancies), bootstrap must never download the resolved corpus.
+// That payload measured ~150MB on a 3,000-note vault — fetched on every
+// bootstrap and content move against a 60s deadline, it was the console-side
+// "timeout" and the renderer-OOM white window on large vaults.
+describe('graph-first bootstrap', () => {
+  const graphRow = (id: string, conflictCount = 0) => ({
+    id, type: 'note', title: id, contributors: ['personal'], winner: 'personal', conflictCount, tokens: 0,
+  })
+  const graphWithRows = (rows: ReturnType<typeof graphRow>[]) => ({
+    ...graphPayload([]),
+    totals: { sourceTokens: 0, resolvedTokens: 0, concepts: rows.length, sources: 1 },
+    concepts: rows,
+  })
+  const emptyDiscrepancies = {
+    discrepancies: [], coverageComplete: true, indexing: false, indexingSources: [], errors: [], generation: 1,
+  }
+
+  it('renders concept rows from the graph with ZERO resolve-all calls, and details follow selection', async () => {
+    mocks.flags.withDiscrepancies = true
+    mocks.graph.mockResolvedValue(graphWithRows([graphRow('a'), graphRow('b')]))
+    mocks.discrepancies.mockResolvedValue(emptyDiscrepancies)
+    mocks.resolve.mockImplementation(async (id: string) => conceptPayload(id))
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+
+    expect(probe().dataset.count).toBe('2')
+    expect(mocks.resolveAll).not.toHaveBeenCalled()
+    // The default selection ('a') pulled its full document — one /api/resolve,
+    // on demand — and the row was replaced in place.
+    expect(probe().dataset.selection).toBe('a')
+    expect(mocks.resolve).toHaveBeenCalledWith('a')
+    expect(probe().dataset.selDetail).toBe('undefined') // full rows drop the compact marker
+    expect(probe().dataset.selSections).toBe('1')
+    // Still zero corpus downloads after the detail landed.
+    expect(mocks.resolveAll).not.toHaveBeenCalled()
+  })
+
+  it('gives compact rows their dissent surface from the discrepancies payload', async () => {
+    mocks.flags.withDiscrepancies = true
+    mocks.graph.mockResolvedValue(graphWithRows([graphRow('a'), graphRow('b', 1)]))
+    mocks.discrepancies.mockResolvedValue({
+      ...emptyDiscrepancies,
+      discrepancies: [{
+        id: 'section_content::b::body', conceptId: 'b', key: 'body', label: 'Body', conceptTitle: 'b',
+        status: 'needs_review', history: [],
+        contributions: [
+          { source: 'personal', level: 3, value: 'mine', updated: '2026-01-02', effective: true },
+          { source: 'team', level: 2, value: 'theirs', updated: '2026-01-01' },
+        ],
+      }],
+    })
+    mocks.resolve.mockImplementation(async (id: string) => conceptPayload(id))
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+
+    // 'b' never had its detail loaded, yet the whole-corpus surfaces (canvas
+    // ghosts, conflict badges) see its dissent through the stub section.
+    expect(probe().dataset.conflictIds).toBe('b')
+    expect(mocks.resolveAll).not.toHaveBeenCalled()
+  })
+
+  it('a failed detail load leaves the compact row and retries on the next selection', async () => {
+    mocks.flags.withDiscrepancies = true
+    mocks.graph.mockResolvedValue(graphWithRows([graphRow('a')]))
+    mocks.discrepancies.mockResolvedValue(emptyDiscrepancies)
+    mocks.resolve.mockRejectedValueOnce(new Error('engine mid-restart')).mockImplementation(async (id: string) => conceptPayload(id))
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+
+    // First attempt failed: the row stays compact — loading, never empty.
+    expect(probe().dataset.selDetail).toBe('false')
+    expect(probe().dataset.count).toBe('1')
   })
 })

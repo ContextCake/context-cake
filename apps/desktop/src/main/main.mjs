@@ -1201,6 +1201,10 @@ handleTrustedIpc('data:reload-requested', () => {
 
 const VALID_SETTINGS_PANES = new Set(['general', 'indexing', 'integrations', 'account', 'privacy'])
 
+// Last renderer-gone reload per window (protectWindowNavigation): the
+// once-per-minute bound that keeps a crashing renderer from reload-looping.
+const rendererReloadAt = new WeakMap()
+
 function rendererArguments(preferences, uiState, role) {
   return [
     `--cc-window-role=${role}`,
@@ -1224,6 +1228,29 @@ function protectWindowNavigation(window) {
   window.webContents.on('console-message', (event) => {
     const { level, message } = event
     if (level === 'error' || level === 3) recordRendererError(message)
+  })
+  // A renderer that dies (OOM, GPU reset, a Chromium kill) used to leave a
+  // permanent white window with no record and no way back short of reopening
+  // the app. Reload once per minute at most; a second death inside the window
+  // gets an honest dialog instead of a loop.
+  window.webContents.on('render-process-gone', (_event, details) => {
+    if (details?.reason === 'clean-exit' || window.isDestroyed()) return
+    engineLog?.logEvent(`renderer gone (${details?.reason ?? 'unknown'}, exitCode ${details?.exitCode ?? '?'})`)
+    const now = Date.now()
+    const lastReload = rendererReloadAt.get(window) ?? 0
+    if (now - lastReload > 60_000 && service) {
+      rendererReloadAt.set(window, now)
+      window.loadURL(`${service.origin}/console/`).catch(() => { /* engine mid-relaunch; the watchdog path owns it */ })
+      return
+    }
+    if (process.env.CC_SMOKE === '1' || !app.isReady()) return
+    dialog.showMessageBox(window, {
+      type: 'error',
+      buttons: ['OK'],
+      title: 'ContextCake Window Crashed',
+      message: 'The ContextCake window crashed and could not be restored.',
+      detail: 'Close the window and reopen it from the Dock. Your sources and settings are untouched.',
+    }).catch(() => { /* the window went away mid-prompt */ })
   })
   window.webContents.setWindowOpenHandler(({ url }) => {
     openExternalHttps(url)

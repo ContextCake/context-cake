@@ -6,7 +6,8 @@ import {
   type Activity, type Concept, type Conflict, type Signal, type Source,
 } from './data'
 import {
-  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, computeLevelBuckets, createDataSource, LiveDataError, mergeSourceStatus,
+  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptGraphConcept, adaptSources, attachConflictStubs,
+  computeLevelBuckets, createDataSource, LiveDataError, mergeSourceStatus,
   type Mode,
 } from './api'
 import type {
@@ -80,14 +81,27 @@ export function filterSignals(signals: Signal[], tab: TriageTab, query: string):
   )
 }
 
-/** A compact textual view of the resolved cascade, for the chat prompt. */
+/** How many full concept details the renderer holds at once (LRU). */
+const DETAIL_CACHE_LIMIT = 50
+
+/**
+ * A compact textual view of the resolved cascade, for the chat prompt.
+ * Bounded to the details actually loaded (graph-first rows carry no document
+ * text) and capped — at vault scale the whole corpus was never a viable
+ * prompt anyway, it just silently was one.
+ */
+const CHAT_CONTEXT_MAX_CONCEPTS = 30
+const CHAT_CONTEXT_MAX_CHARS = 40_000
 function buildContext(concepts: Concept[]): string {
   return concepts
+    .filter((c) => c.detailLoaded !== false && c.sections.length > 0)
+    .slice(0, CHAT_CONTEXT_MAX_CONCEPTS)
     .map((c) => `${c.id}: ` + c.sections
       .map((s) => `${s.name} = "${s.value}" [${s.winner}]`
         + (s.dissents ?? []).map((d) => ` (conflicts with ${d.layer}: "${d.value}")`).join(''))
       .join('; '))
     .join('\n')
+    .slice(0, CHAT_CONTEXT_MAX_CHARS)
 }
 
 function cannedAnswer(q: string): { text: string; cites: Cite[]; note?: string } {
@@ -439,6 +453,58 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  // ---- Concept details on demand -------------------------------------------
+  //
+  // Bootstrap builds COMPACT rows from the graph summary (adaptGraphConcept);
+  // the full resolve for a concept arrives when it is selected, one
+  // /api/resolve at a time. `compactRef` keeps the compact form of every row
+  // so an evicted detail can fall back to it instead of to nothing;
+  // `loadedDetailsRef` is the LRU order of full details currently held.
+  const bucketsRef = useRef<ReturnType<typeof computeLevelBuckets> | null>(null)
+  const compactRef = useRef<Map<string, Concept>>(new Map())
+  const loadedDetailsRef = useRef<string[]>([])
+  const detailInFlightRef = useRef<Set<string>>(new Set())
+  // NB: `selConceptRef` (declared with the other selection refs below) is
+  // read inside readAll — the binding exists by the time any async pass runs.
+
+  const loadConceptDetail = useCallback(async (id: string) => {
+    // Only rows born compact load: demo-bundle rows and the legacy
+    // resolve-all fallback are already full, and compactRef only holds rows
+    // the graph-first path created.
+    if (!compactRef.current.has(id)) return
+    if (loadedDetailsRef.current.includes(id)) return
+    if (detailInFlightRef.current.has(id)) return
+    detailInFlightRef.current.add(id)
+    try {
+      const resolved = await source.resolve(id)
+      const buckets = bucketsRef.current
+      if (!buckets || !compactRef.current.has(id)) return // a refetch rebuilt the world mid-flight
+      const full = adaptConcept(resolved, buckets)
+      const order = loadedDetailsRef.current.filter((held) => held !== id)
+      order.push(id)
+      // Bounded: the whole point of graph-first is that the renderer never
+      // holds the corpus. The oldest detail regresses to its compact row.
+      const evict = order.length > DETAIL_CACHE_LIMIT ? order.shift() : undefined
+      loadedDetailsRef.current = order
+      setConcepts((prev) => prev.map((c) => {
+        if (c.id === id) return full
+        if (evict !== undefined && c.id === evict) return compactRef.current.get(evict) ?? c
+        return c
+      }))
+    } catch {
+      // The compact row stays; the next selection change or refetch retries.
+      // A missing detail renders as loading, never as an empty document.
+    } finally {
+      detailInFlightRef.current.delete(id)
+    }
+  }, [source])
+
+  // The detail follows the selection. Runs in the provider (not a view) so
+  // every surface that shows the selected concept shares one loader.
+  useEffect(() => {
+    if (selConcept) void loadConceptDetail(selConcept)
+  }, [selConcept, loadConceptDetail])
+
   // Load the cascade in two stages so the app is usable immediately, then keep
   // the page honest about what the engine is still doing.
   //
@@ -534,50 +600,75 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       shellReadyRef.current = true
       setLoading(false) // the shell can render now — everything else streams in
 
-      const [{ concepts: raw, errors, indexing, indexingSources: resolvingSources }, resolutionHistory, discrepancyPayload, rulePayload] = await Promise.all([
-        source.resolveAll(),
-        source.conflictResolutions(),
-        source.discrepancies ? source.discrepancies() : Promise.resolve(null),
-        source.discrepancyRules ? source.discrepancyRules().catch(() => ({ rules: [], suggestions: [] })) : Promise.resolve({ rules: [], suggestions: [] }),
-      ])
-      if (cancelled) return false
-      // Only fail the whole page when nothing resolved AND nothing is still
-      // being read; a partial pass mid-index is expected, not an error.
-      if (raw.length === 0 && errors.length > 0 && !indexing) {
-        throw new LiveDataError('bad-shape', `No concept resolved (first error: ${errors[0].concept}: ${errors[0].error})`)
-      }
-      setLoadErrors(errors)
-      // The graph and resolve-all requests are separate snapshots. Indexing
-      // can finish between them; use the later answer so a stale graph never
-      // leaves the banner running after the work has landed.
-      applyIndexing(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
       // Rank-based level→lane buckets for this pass, computed once from every
       // source in the graph and threaded through every adapter below — see
       // computeLevelBuckets in api.ts for why a narrower computation (e.g. per
       // concept) would bucket the same source differently depending on what
       // happened to touch it.
       const buckets = computeLevelBuckets(g.sources.map((s) => s.level))
-      setConcepts(raw.map((c) => adaptConcept(c, buckets)))
+      bucketsRef.current = buckets
+
+      // Concepts come from the GRAPH rows — compact identity, lanes and the
+      // conflict signal — never from resolve-all. That payload measured
+      // ~150MB on a 3,000-note vault, fetched into this renderer on every
+      // bootstrap and content move, against a 60s deadline: the "timeout" and
+      // the white-window half of the large-vault failure. Full documents now
+      // arrive one concept at a time on selection (loadConceptDetail below).
+      // An engine too old to serve /api/discrepancies still takes the legacy
+      // whole-corpus path in the branch below — an engine that old predates
+      // every large-vault feature, so its corpora are small.
+      const legacy = !source.discrepancies
+      const [legacyAll, resolutionHistory, discrepancyPayload, rulePayload] = await Promise.all([
+        legacy ? source.resolveAll() : Promise.resolve(null),
+        source.conflictResolutions(),
+        source.discrepancies ? source.discrepancies() : Promise.resolve(null),
+        source.discrepancyRules ? source.discrepancyRules().catch(() => ({ rules: [], suggestions: [] })) : Promise.resolve({ rules: [], suggestions: [] }),
+      ])
+      if (cancelled) return false
+      const indexing = discrepancyPayload?.indexing ?? legacyAll?.indexing ?? g.indexing ?? false
+      const resolvingSources = discrepancyPayload?.indexingSources ?? legacyAll?.indexingSources
+      const errors = discrepancyPayload?.errors ?? legacyAll?.errors ?? []
+      // Only fail the whole page when nothing is known AND nothing is still
+      // being read; a partial pass mid-index is expected, not an error.
+      if (g.concepts.length === 0 && errors.length > 0 && !indexing) {
+        throw new LiveDataError('bad-shape', `No concept resolved (first error: ${errors[0].concept}: ${errors[0].error})`)
+      }
+      setLoadErrors(errors)
+      // The graph and the payloads above are separate snapshots. Indexing can
+      // finish between them; use the later answer so a stale graph never
+      // leaves the banner running after the work has landed.
+      applyIndexing(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
       const derivedConflicts = discrepancyPayload
         ? adaptDiscrepancies(discrepancyPayload.discrepancies, discrepancyPayload.coverageComplete, buckets)
-        : adaptConflicts(raw, resolutionHistory, buckets)
+        : adaptConflicts(legacyAll?.concepts ?? [], resolutionHistory, buckets)
+      const levelBySource = new Map(g.sources.map((s) => [s.name, s.level]))
+      const compact = legacy
+        ? (legacyAll?.concepts ?? []).map((c) => adaptConcept(c, buckets))
+        : g.concepts.map((row) => attachConflictStubs(adaptGraphConcept(row, levelBySource, buckets), derivedConflicts))
+      compactRef.current = new Map(compact.map((c) => [c.id, c]))
+      loadedDetailsRef.current = []
+      setConcepts(compact)
       setConflicts(derivedConflicts)
       setDiscrepancyRules(rulePayload.rules)
       setDiscrepancyRuleSuggestions(rulePayload.suggestions)
       // Honor a deep-linked concept from the URL hash; else default to the
       // first. Only claim the deep link once it actually resolved.
       const pendingId = pendingConceptRef.current
-      if (pendingId && raw.some((c) => c.id === pendingId)) {
+      if (pendingId && compact.some((c) => c.id === pendingId)) {
         setView('concepts')
         setConceptRouteMode('deep')
         setSelConcept(pendingId)
         pendingConceptRef.current = undefined
       } else if (!indexing) {
-        setSelConceptState((prev) => prev || raw[0]?.id || '')
+        setSelConceptState((prev) => prev || compact[0]?.id || '')
         pendingConceptRef.current = undefined
       }
       setSelConflict((prev) => prev || derivedConflicts[0]?.id || '')
       setConceptsLoading(Boolean(indexing))
+      // The rows just rebuilt are compact; the concept on screen must not
+      // regress to a spinner because content moved somewhere in the corpus.
+      const selected = selConceptRef.current
+      if (!legacy && selected && compactRef.current.has(selected)) void loadConceptDetail(selected)
       // Seed the gate from the payload we just took, so the next poll does not
       // immediately pull the same thing back for a generation it already has.
       // This is the ONLY place the gate advances, and it is past every await:

@@ -14,7 +14,7 @@
 import demoBundleRaw from './generated/demo-cascade.json'
 import type {
   ConflictResolutionRecord, DemoBundle, DiscrepanciesResponse, DiscrepancyDecisionRequest, DiscrepancyRecord,
-  DiscrepancyRule, DiscrepancyRuleSuggestion, GraphSummary, GraphSource, ResolveConflictRequest,
+  DiscrepancyRule, DiscrepancyRuleSuggestion, GraphConcept, GraphSummary, GraphSource, ResolveConflictRequest,
   ResolvedConcept, ResolvedSection, SearchHit, SourceStatus, StatusSummary,
 } from './types'
 import type { Concept, ConceptSection, Conflict, Dissent, Source } from './data'
@@ -582,6 +582,56 @@ export function adaptConcept(r: ResolvedConcept, buckets: LevelBuckets): Concept
     sections,
     contributorLayers: r.contributors.map((c) => c.layer),
   }
+}
+
+/**
+ * A graph summary row → a compact Concept the shell can render NOW, without
+ * the corpus. Identity, lanes, draft-unknowable (graph rows carry no
+ * frontmatter, so `draft` stays off) and the conflict signal are real;
+ * sections stay empty until `attachConflictStubs` (below) or a full detail
+ * load fills them. This is what lets the console bootstrap from /api/graph
+ * alone instead of downloading a ~150MB resolve-all it renders a list from.
+ */
+export function adaptGraphConcept(row: GraphConcept, levelBySource: Map<string, number>, buckets: LevelBuckets): Concept {
+  const layerIds = orderLayers(row.contributors.map((name) => layerOf(name, levelBySource.get(name) ?? 0, buckets)))
+  return {
+    id: row.id,
+    title: row.title || row.id,
+    type: row.type || 'concept',
+    layers: layerIds,
+    conflict: row.conflictCount > 0,
+    sections: [],
+    contributorLayers: row.contributors,
+    detailLoaded: false,
+  }
+}
+
+/**
+ * Give a compact concept the sections its OPEN conflicts describe, so every
+ * whole-corpus dissent surface — the canvas ghosts, the Files conflict
+ * counts — keeps working without resolve-all. A discrepancy record carries
+ * the same contributions a resolved section's `conflicts[]` would (winner
+ * first via `effectiveSource`), which is exactly the slice of the corpus
+ * those surfaces read. Non-conflicted sections are not represented — the
+ * detail view loads the real document instead of rendering these.
+ */
+export function attachConflictStubs(concept: Concept, conflicts: Conflict[]): Concept {
+  if (concept.detailLoaded !== false) return concept
+  const open = conflicts.filter((c) => c.concept === concept.id && c.status === 'open' && c.contributions.length > 0)
+  if (open.length === 0) return concept.sections.length === 0 ? concept : { ...concept, sections: [] }
+  const sections = open.map((c) => {
+    const effectiveName = c.effectiveSource ?? c.contributions[0].sourceLayer
+    const winner = c.contributions.find((item) => item.sourceLayer === effectiveName) ?? c.contributions[0]
+    const dissents = c.contributions.filter((item) => item !== winner).map((item) => ({
+      layer: item.layer, sourceLayer: item.sourceLayer, value: item.value, updated: item.updated || null,
+    }))
+    return {
+      name: c.section, key: c.sectionKey, winner: c.winner, value: winner.value,
+      sourceLayer: winner.sourceLayer, updated: winner.updated || null, dissents,
+      ...(c.contributions.some((item) => item.fresherDissent) ? { fresherDissent: true } : {}),
+    }
+  })
+  return { ...concept, sections, conflict: true }
 }
 
 /** Phase names the engine reports, in the words a person would use for them. */

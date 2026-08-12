@@ -96,7 +96,17 @@ via their pre-hooks.
 - **Data** — `src/api.ts` is the single seam: demo mode imports a bundle
   generated at build time by shelling out to the real `packages/core/src/resolver.mjs`
   (`scripts/build-demo-data.mjs`), live mode fetches the same-origin playground
-  API (`/api/status`, `/api/graph`, `/api/resolve-all`). `src/layer-files.ts` is
+  API (`/api/status`, `/api/graph`, `/api/discrepancies`, per-concept
+  `/api/resolve`). **Bootstrap is graph-first**: concept rows come from the
+  graph summary (`adaptGraphConcept`, compact, `detailLoaded: false`), open
+  conflicts give those rows their dissent surface (`attachConflictStubs` from
+  the discrepancies payload — canvas ghosts and conflict badges work without
+  the corpus), and a concept's full document loads on selection
+  (`store.loadConceptDetail`, ~50-detail LRU that regresses evictions to their
+  compact rows). `/api/resolve-all` is only called against an engine too old
+  to serve `/api/discrepancies` — never on the modern path, where it was a
+  ~150MB payload per bootstrap on a 3,000-note vault and the renderer-side
+  crash/timeout on large vaults. `src/layer-files.ts` is
   the same seam for files: the demo half of `demo-files.json` is one
   `listFilesApi` listing plus a `readFileApi` answer per path, produced by
   calling the engine's own file APIs — never hand-authored, and read-only
@@ -178,12 +188,14 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   another one. A failed *background* refresh must not clear a working page.
 - **The poll is cheap by construction.** `store.tsx` polls `/api/status`
   (O(sources), sub-millisecond, ~370 bytes) at 900ms while work is in flight and
-  5s when idle, and refetches `/api/graph` + `/api/resolve-all` only when the
-  content moved. The engine's `generation` also ticks for a progress counter, so
-  the gate is `generation` changed **and** (the per-source content signature
-  changed **or** nothing is in flight). Measured on a 3,000-note vault: 24 status
-  calls, 2 resolve-alls, where the old loop issued 24 × 150MB. Polling pauses on
-  `visibilitychange` and resumes on return.
+  5s when idle, and refetches the heavy payloads (`/api/graph` +
+  `/api/discrepancies` — no longer `/api/resolve-all`, see **Data**) only when
+  the content moved. The engine's `generation` also ticks for a progress
+  counter, so the gate is `generation` changed **and** (the per-source content
+  signature changed **or** nothing is in flight). A refetch rebuilds compact
+  rows and re-loads the selected concept's detail so the document on screen
+  never regresses to a spinner. Polling pauses on `visibilitychange` and
+  resumes on return.
 - **A background failure is never silent.** The loop retries at capped backoff
   (5s) forever, keeps `load.indexingSources`, and sets `load.refreshError` —
   rendered as the header's attention-toned activity control and a dismissible

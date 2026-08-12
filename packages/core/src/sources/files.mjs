@@ -160,11 +160,14 @@ function parsePlainText(content, stem, mtime) {
   return { frontmatter: { type: "document", title: stem }, sections };
 }
 
-// Same posture as okf-local's pushSection: drop a heading-less section with no content.
+// Same posture as okf-local's pushSection: drop a heading-less section with no
+// content — and the same retained shape: one contiguous string, never a line
+// array (sections.mjs).
 function pushPlainSection(sections, section) {
   const hasContent = section.lines.some((line) => line.trim() !== "");
   if (section.heading === null && !hasContent) return;
-  sections.push(section);
+  const { lines, ...rest } = section;
+  sections.push({ ...rest, text: lines.join("\n") });
 }
 
 function stripAttrs(text) {

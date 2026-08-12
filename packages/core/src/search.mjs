@@ -11,6 +11,7 @@
 // context-budget accounting. The analyzer here is a query analyzer.
 
 import { stem } from "./stem.mjs";
+import { sectionText } from "./sections.mjs";
 
 const DAY_MS = 86400000;
 const WORD = /[a-z0-9_-]+/g;
@@ -68,7 +69,7 @@ async function collectDocuments(layers, { prefix = null } = {}) {
         id,
         layer: source.name,
         frontmatter,
-        body: sections.map((section) => section.lines.join("\n")).join("\n"),
+        body: sections.map((section) => sectionText(section)).join("\n"),
       });
     }
   }

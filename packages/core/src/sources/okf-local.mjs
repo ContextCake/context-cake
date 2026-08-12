@@ -286,7 +286,11 @@ export function parseHeadingAttrs(headingText) {
 function pushSection(sections, section) {
   const hasContent = section.lines.some((line) => line.trim() !== "");
   if (section.heading === null && !hasContent) return;
-  sections.push(section);
+  // One contiguous string per section, not one string per line — the parse
+  // accumulates lines locally, but what a snapshot RETAINS must be the cheap
+  // shape (see sections.mjs). The join happens exactly once, here.
+  const { lines, ...rest } = section;
+  sections.push({ ...rest, text: lines.join("\n") });
 }
 
 // Shared with other adapters (files.mjs): section keys must derive identically

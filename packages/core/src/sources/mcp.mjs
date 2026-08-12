@@ -247,7 +247,7 @@ function translateToOkf(node) {
     return {
       key,
       heading: `## ${topic} {#${key}}`,
-      lines: String(f.text ?? "").split("\n"),
+      text: String(f.text ?? ""),
       updated: f.lastTouched ?? null,
       override: null,
     };
@@ -259,7 +259,7 @@ function translateToOkf(node) {
     sections.push({
       key: "related",
       heading: "## Related {#related}",
-      lines: [related.map((s) => `[[${s}]]`).join(", ")],
+      text: related.map((s) => `[[${s}]]`).join(", "),
       updated: null,
       override: null,
     });

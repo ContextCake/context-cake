@@ -8,6 +8,7 @@ import { normalizeConceptId as normalizeOkfConceptId, parseConcept } from "./sou
 import { commitPaths, commitPathsWithMutation, push, runGit } from "./sources/git-core.mjs";
 import { appendFileInRoot, readFileInRoot, resolveAuthor, writeFileInRoot } from "./capture.mjs";
 import { slugify } from "./classify-context.mjs";
+import { sectionText } from "./sections.mjs";
 import { sourceConfigFingerprint, withManifestLockAsync } from "./manifest.mjs";
 import { loadProfileRuntime, resolveProfileLiveLayer } from "./profile-runtime.mjs";
 
@@ -546,7 +547,7 @@ function renderCurated(frontmatter, sections, dest) {
   ];
   for (const section of sections) {
     if (!section.heading) continue;
-    lines.push(section.heading, "", section.lines.join("\n").trim(), "");
+    lines.push(section.heading, "", sectionText(section).trim(), "");
   }
   return lines.join("\n");
 }

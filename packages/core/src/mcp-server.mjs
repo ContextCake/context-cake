@@ -10,6 +10,7 @@
 
 import path from "node:path";
 import readline from "node:readline";
+import { sectionText } from "./sections.mjs";
 import { isNewerDay } from "./conflict-policy.mjs";
 import { resolveConcept } from "./resolver.mjs";
 import { createConflictResolutionLog } from "./conflict-resolutions.mjs";
@@ -556,7 +557,7 @@ async function getLinks({ concept_id }) {
       if (sourceId === id) continue;
       const entry = await source.loadConcept(sourceId);
       if (!entry) continue;
-      const sourceBody = entry.sections.map((s) => `${s.heading ?? ""}\n${s.lines.join("\n")}`).join("\n");
+      const sourceBody = entry.sections.map((s) => `${s.heading ?? ""}\n${sectionText(s)}`).join("\n");
       for (const link of extractLinks(sourceBody)) {
         if (resolveLinkTarget(sourceId, link.target) === id) {
           incoming.push({ id: sourceId, layer: source.name, raw: link.raw });

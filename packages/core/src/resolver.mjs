@@ -19,6 +19,7 @@
 
 import { pathToFileURL } from "node:url";
 import { equivalent, isNewerDay } from "./conflict-policy.mjs";
+import { sectionText } from "./sections.mjs";
 import { buildProfileSources, loadProfileRuntime } from "./profile-runtime.mjs";
 
 if (isMainModule(import.meta.url)) {
@@ -134,7 +135,7 @@ export function mergeConcepts(contributors) {
   const sections = order.map((key) => {
     const { c, section } = winners.get(key);
     const suppressed = section.override === "none";
-    const winnerContent = suppressed ? "" : section.lines.join("\n").trim();
+    const winnerContent = suppressed ? "" : sectionText(section).trim();
 
     // Dissent: any OTHER contributor that defines this section with different content.
     // Formatting-equivalent restatements (whitespace, bullet glyphs) are not dissent
@@ -145,7 +146,7 @@ export function mergeConcepts(contributors) {
       .map((x) => ({
         layer: x.c.layer,
         updated: x.section.updated ?? x.c.updated ?? null,
-        content: x.section.override === "none" ? "" : x.section.lines.join("\n").trim(),
+        content: x.section.override === "none" ? "" : sectionText(x.section).trim(),
       }))
       .filter((d) => !equivalent(d.content, winnerContent));
 

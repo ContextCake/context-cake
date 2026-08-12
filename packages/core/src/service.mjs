@@ -260,6 +260,7 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
   return {
     ids, concepts, tokens, tokensById, gen: ++SNAPSHOT_SEQ, fileMeta,
     skipped: notes.skipped, unreadable: notes.unreadable, hidden: notes.hidden,
+    truncated: notes.truncated ?? null,
   };
   } finally {
     releaseBatch?.();
@@ -274,7 +275,8 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
 function sameNotes(previousSnap, notes) {
   return previousSnap.hidden === notes.hidden
     && JSON.stringify(previousSnap.skipped) === JSON.stringify(notes.skipped)
-    && JSON.stringify(previousSnap.unreadable) === JSON.stringify(notes.unreadable);
+    && JSON.stringify(previousSnap.unreadable) === JSON.stringify(notes.unreadable)
+    && JSON.stringify(previousSnap.truncated ?? null) === JSON.stringify(notes.truncated ?? null);
 }
 
 let SNAPSHOT_SEQ = 0;
@@ -337,6 +339,10 @@ function sourceWarnings(snap) {
   if (!snap) return [];
   const mb = (bytes) => `${(bytes / 1_000_000).toFixed(1)} MB`;
   return [
+    ...(snap.truncated ? [
+      `Indexed the first ${snap.truncated.cap.toLocaleString("en-US")} documents — this folder has more. `
+        + 'Raise "Maximum documents per source" in Settings to index all of it.',
+    ] : []),
     ...(snap.skipped ?? []).map(
       (item) => `Skipped ${item.rel} — ${mb(item.bytes)} is over the ${mb(MAX_DOC_BYTES)} per-file limit`,
     ),

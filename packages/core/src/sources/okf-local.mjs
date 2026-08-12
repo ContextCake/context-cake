@@ -441,8 +441,15 @@ export async function walkDocEntries(root, extensions, limits = null, { signal =
   let scanned = 0;
   let hiddenSkipped = 0;
   let sinceBreath = 0;
+  // The document cap TRUNCATES, it does not throw: a folder with more notes
+  // than the cap is a normal thing to point the app at, and "here are the
+  // first N, visibly marked partial" beats an error row with nothing behind
+  // it. The SCAN cap below still throws — blowing through 150k directory
+  // entries means the user pointed at a home directory, and no prefix of
+  // that is an answer worth serving.
+  let truncated = false;
   const stack = [root];
-  while (stack.length > 0) {
+  while (stack.length > 0 && !truncated) {
     throwIfAborted(signal);
     const current = stack.pop();
     let dirents;
@@ -492,7 +499,7 @@ export async function walkDocEntries(root, extensions, limits = null, { signal =
     // One stat per candidate, batched in bounded chunks rather than one
     // directory-wide Promise.all, so a flat vault costs rounds of parallel
     // syscalls with abort checks between them instead of one long await.
-    for (let start = 0; start < candidates.length; start += WALK_STAT_CHUNK) {
+    for (let start = 0; start < candidates.length && !truncated; start += WALK_STAT_CHUNK) {
       throwIfAborted(signal);
       const chunk = candidates.slice(start, start + WALK_STAT_CHUNK);
       const stats = await Promise.all(chunk.map((c) => fileStat(c.path)));
@@ -503,6 +510,11 @@ export async function walkDocEntries(root, extensions, limits = null, { signal =
           notes?.skipped.push({ rel: relTo(root, chunk[i].path), bytes: stat.size });
           continue;
         }
+        if (entries.length >= maxFiles) {
+          truncated = true;
+          if (notes) notes.truncated = { cap: maxFiles };
+          break;
+        }
         entries.push({
           path: chunk[i].path,
           rel: toPosix(path.relative(root, chunk[i].path)),
@@ -510,12 +522,6 @@ export async function walkDocEntries(root, extensions, limits = null, { signal =
           size: stat.size,
           mtimeMs: stat.mtimeMs,
         });
-        if (entries.length > maxFiles) {
-          throw new Error(
-            `This folder has too many documents to index (over ${maxFiles.toLocaleString("en-US")}). ` +
-              `Choose a more specific folder, such as your notes or docs directory.`,
-          );
-        }
       }
     }
   }

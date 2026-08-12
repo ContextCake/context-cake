@@ -296,21 +296,28 @@ P_ROW() { curl -s "${AUTH[@]}" "$BASE3/api/graph" | JQ 'JSON.stringify((d.source
 
 code 200 "$(C -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"maxDocFiles":100}' "$BASE3/api/settings")" "lower maxDocFiles below the layer's size"
 # The user just said "index at most 100 documents". Serving 200 after that is
-# wrong at every moment, not only once the re-index has failed.
+# wrong at every moment — the re-key must drop the over-cap snapshot rather
+# than hand it forward. What replaces it changed deliberately with the
+# truncating cap: the fresh pass serves AT MOST the new cap, visibly marked
+# partial, instead of an error row with nothing behind it.
 STILL_200=0
 for _ in $(seq 1 60); do
   ROW="$(P_ROW)"
   [ "$(JQ 'String(d.conceptCount)' <<<"$ROW")" = "200" ] && STILL_200=1
-  [ "$(JQ 'String(d.status)' <<<"$ROW")" = "error" ] && break
+  COUNT="$(JQ 'String(d.conceptCount)' <<<"$ROW")"
+  [ "$(JQ 'String(d.status)' <<<"$ROW")" = "ok" ] && [ "$COUNT" = "100" ] && break
   sleep 0.25
 done
 [ "$STILL_200" = "0" ] \
   && pass "the over-cap answer was never served after the cap was lowered" \
   || fail "the pre-change snapshot survived the settings change (row: $(P_ROW))"
 FINAL="$(P_ROW)"
-[ "$(JQ '`${d.status}:${d.conceptCount}`' <<<"$FINAL")" = "error:0" ] \
-  && pass "the failed re-index reports error with nothing to show, not a stale corpus" \
-  || fail "a failed re-index after a policy change left a stale answer in place ($FINAL)"
+[ "$(JQ '`${d.status}:${d.conceptCount}`' <<<"$FINAL")" = "ok:100" ] \
+  && pass "the re-index serves exactly the new cap, truncated, never the old answer" \
+  || fail "a policy change did not land on the capped truncated answer ($FINAL)"
+grep -q 'Indexed the first 100 documents' <<<"$(JQ 'String((d.warningMessages ?? []).join(" | "))' <<<"$FINAL")" \
+  && pass "and the partial answer says so out loud (truncation warning)" \
+  || fail "a truncated source carries no visible warning ($FINAL)"
 
 # The credential half, in-process: the engine receives secrets by value, so
 # Disconnect is a setTokens({}) call rather than an HTTP route.

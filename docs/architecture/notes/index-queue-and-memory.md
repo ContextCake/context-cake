@@ -23,15 +23,29 @@ took it. This is a known gap, not a subtlety to rediscover.
 
 ## Memory pressure
 
-`packages/core/src/memory-pressure.mjs` gates new passes on the engine's own
-live heap (`heapUsed + external`) as a fraction of total system RAM.
+`packages/core/src/memory-pressure.mjs` gates new passes on the worse of two
+signals: the engine's `heapUsed` as a fraction of the **measured V8
+`heap_size_limit`** (elevated ≥60%, critical ≥80%), and the engine's live
+bytes (`heapUsed + external`) as a fraction of total system RAM (≥12%/≥25%).
 
-Two rejected alternatives, both of which read plausibly and measure nothing:
+Three rejected alternatives, each of which read plausibly and measured nothing:
 
 - `os.freemem()` — mostly reclaimable page cache, so a healthy machine looks
   starved.
 - Raw RSS — a high-water mark V8 rarely releases, so the engine looks permanently
   worse than it is.
+- The system-RAM fraction **alone** — unreachable on the machines that matter.
+  25% of a 32GB Mac is 8GB of live heap; V8 aborts the process at its own
+  ~4.2GB default limit first, and the desktop app cannot raise that ceiling
+  (Electron 43 ignores every utilityProcess heap flag — probed empirically,
+  see apps/desktop/CLAUDE.md). A watermark that only trips above the crash
+  line is a net hung above the ceiling. The system fraction stays as a second
+  signal because `external` (Buffers) lives outside the V8 heap and a
+  machine-wide squeeze (jetsam) does not care which limit was hit first.
+
+The heap ceiling is measured per process (`v8.getHeapStatistics()`), never
+hardcoded, so an embedder that *can* configure a larger heap (plain Node with
+`--max-old-space-size`) gets watermarks that scale with it for free.
 
 Under critical pressure the queue holds new passes back entirely, flooring at 1
 concurrent pass rather than deadlocking at 0.

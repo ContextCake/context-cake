@@ -29,12 +29,27 @@
 // Two watermarks, not one: "elevated" is a soft signal a caller may use to
 // show a banner or slow its own polling; "critical" is the one that actually
 // stops new passes from starting.
+//
+// Two SIGNALS, and the worse one wins. The original single signal — live
+// bytes as a fraction of total system RAM — is also rejected as the only
+// gauge, because it is unreachable on the machines that matter: 25% of a
+// 32GB Mac is 8GB of live heap, and V8 aborts the process at its own
+// heap_size_limit (~4.2GB by default — a ceiling the desktop app cannot
+// raise; Electron ignores every utilityProcess heap flag, probed 2026-08-12)
+// long before the fraction trips. A watermark that only fires above the
+// crash line is a net hung above the ceiling. So the heap signal — heapUsed
+// against the measured heap_size_limit — is the one that actually guards the
+// OOM, and the system fraction stays for what the heap signal cannot see:
+// `external` (Buffers) lives outside the V8 heap, and a machine-wide squeeze
+// (jetsam) does not care which limit was going to be hit first.
 
 import os from "node:os";
 import v8 from "node:v8";
 
 const ELEVATED_LIVE_FRACTION = 0.12; // this process alone holds >12% of total RAM in live+external bytes
 const CRITICAL_LIVE_FRACTION = 0.25; // >25%
+const ELEVATED_HEAP_FRACTION = 0.60; // heapUsed at >60% of the V8 ceiling this process dies at
+const CRITICAL_HEAP_FRACTION = 0.80; // >80% — the GC-thrash zone right under the abort
 
 function realRead() {
   const mem = process.memoryUsage();
@@ -60,16 +75,20 @@ function realRead() {
  * no way to be exercised deterministically in a test at all.
  */
 export function memorySnapshot({ read = realRead } = {}) {
-  // Injected readings (tests) may omit the heap fields; they default to null
-  // and the level math below never touches them, so old fixtures stay valid.
+  // Injected readings (tests) may omit the heap fields; they default to null,
+  // the heap signal sits out, and the level is the system fraction alone —
+  // exactly the pre-heap-signal behavior, so old fixtures stay valid.
   const { totalBytes, liveBytes, heapUsedBytes = null, heapLimitBytes = null } = read();
   const liveFraction = totalBytes > 0 ? liveBytes / totalBytes : 0;
-  const level = liveFraction >= CRITICAL_LIVE_FRACTION
-    ? "critical"
-    : liveFraction >= ELEVATED_LIVE_FRACTION
-      ? "elevated"
-      : "normal";
-  return { level, liveBytes, totalBytes, liveFraction, heapUsedBytes, heapLimitBytes };
+  const heapFraction = heapLimitBytes > 0 ? (heapUsedBytes ?? 0) / heapLimitBytes : 0;
+  const rank = (fraction, elevated, critical) =>
+    fraction >= critical ? 2 : fraction >= elevated ? 1 : 0;
+  const worst = Math.max(
+    rank(liveFraction, ELEVATED_LIVE_FRACTION, CRITICAL_LIVE_FRACTION),
+    rank(heapFraction, ELEVATED_HEAP_FRACTION, CRITICAL_HEAP_FRACTION),
+  );
+  const level = worst === 2 ? "critical" : worst === 1 ? "elevated" : "normal";
+  return { level, liveBytes, totalBytes, liveFraction, heapUsedBytes, heapLimitBytes, heapFraction };
 }
 
 /** Just the level ("normal" | "elevated" | "critical") — the common case. */

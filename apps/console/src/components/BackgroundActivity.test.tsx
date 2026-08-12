@@ -6,7 +6,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { activityDescription, activityLabel, activityName, aggregatePercent, BackgroundActivity, formatElapsed } from './BackgroundActivity'
+import { activityDescription, activityLabel, activityName, aggregatePercent, BackgroundActivity, formatElapsed, rateLine } from './BackgroundActivity'
 import { LiveDataError } from '../api'
 import type { BackgroundTask, Store } from '../store'
 
@@ -196,5 +196,17 @@ describe('BackgroundActivity', () => {
     await act(async () => root.render(<BackgroundActivity />))
     expect(control()?.textContent).toContain('Refreshing')
     expect(control()?.textContent).not.toContain('Indexing')
+  })
+})
+
+// rateLine: the "410 docs/s · ~38s left" caption — pure, so table-tested.
+describe('rateLine', () => {
+  const detail = (rateDocsPerSec: number | null, etaMs: number | null) =>
+    ({ rateDocsPerSec, etaMs } as unknown as import('../api').IndexingActivitySource)
+  it('renders rate and eta, rate alone, and nothing without a rate', () => {
+    expect(rateLine(detail(410, 38_000))).toBe('410 docs/s · ~38s left')
+    expect(rateLine(detail(12.5, null))).toBe('12.5 docs/s')
+    expect(rateLine(detail(null, 5_000))).toBeNull()
+    expect(rateLine(undefined)).toBeNull()
   })
 })

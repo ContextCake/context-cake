@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useThemeMode } from '../theme-mode'
 import { checkForUpdate, isUpdateCheckEnabled, setUpdateCheckEnabled, type UpdateInfo } from '../update'
-import type { Mode } from '../api'
-import { C, css } from '../theme'
+import { apiFetch } from '../api'
+import type { IndexingActivity, Mode } from '../api'
+import { C, css, MONO } from '../theme'
 import { AccountPanel } from './AccountPanel'
 import { IndexingSettings } from './IndexingSettings'
 import { IntegrationsPanel } from './IntegrationsPanel'
@@ -37,6 +38,47 @@ function describeUpdateStatus(status: UpdateStatus): string {
  * manual GitHub-releases check with a link out, and demo mode gets nothing —
  * matching UpdatePill's existing per-mode gating.
  */
+/**
+ * The last few engine events (pass outcomes, retries, control actions) —
+ * the in-app tail of what engine.log records on disk, so a browser-served
+ * console can self-diagnose without filesystem access. Live mode only;
+ * fetched on demand, never polled.
+ */
+function EngineEvents({ appMode }: { appMode: Mode }) {
+  const [events, setEvents] = useState<IndexingActivity['events'] | null>(null)
+  const [note, setNote] = useState('The engine’s recent pass outcomes, retries and control actions.')
+  const refresh = async () => {
+    try {
+      const res = await apiFetch('/api/indexing/activity')
+      if (!res.ok) { setNote('This engine does not report indexing activity.'); return }
+      const parsed = (await res.json()) as IndexingActivity
+      setEvents(parsed.events.slice(-12).reverse())
+      if (parsed.events.length === 0) setNote('No engine events yet this session.')
+    } catch {
+      setNote('The engine could not be reached.')
+    }
+  }
+  if (appMode !== 'live') return null
+  return (
+    <div className="cc-settings-row" style={css('align-items:flex-start;')}>
+      <div style={css('min-width:0;')}>
+        <strong>Recent engine events</strong>
+        <span>{note}</span>
+        {events && events.length > 0 && (
+          <ul style={css(`margin:8px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:3px; font-family:${MONO}; font-size:10.5px; line-height:1.5; color:${C.caption};`)}>
+            {events.map((e) => (
+              <li key={`${e.at}-${e.line}`} style={css('overflow-wrap:anywhere;')}>
+                {new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} {e.line}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <Button type="button" variant="secondary" onClick={() => void refresh()}>{events ? 'Refresh' : 'Show'}</Button>
+    </div>
+  )
+}
+
 function UpdateControl({ appMode }: { appMode: Mode }) {
   const bridge = window.__CC_DESKTOP?.updates
   const [status, setStatus] = useState<UpdateStatus | null>(null)
@@ -404,6 +446,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
                 <CliControl />
                 {canRevealConfig && <div className="cc-settings-row"><div><strong>Configuration folder</strong><span>{revealError ?? 'Settings and the source list live in ~/Library/Application Support/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showConfigFolder()}>Show in Finder</Button></div>}
                 {canRevealLogs && <div className="cc-settings-row"><div><strong>Engine log</strong><span>{logsError ?? 'What the engine was doing, including each indexing pass — useful in a bug report. Lives in ~/Library/Logs/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showEngineLog()}>Show in Finder</Button></div>}
+                <EngineEvents appMode={appMode} />
                 {settingsFile && <div className="cc-settings-row"><div><strong>Export settings</strong><span>{exportNote ?? 'Save a copy of ContextCake’s local preferences — useful in a bug report. Never includes credentials or your documents.'}</span></div><Button type="button" variant="secondary" onClick={() => void exportSettings()}>Export…</Button></div>}
                 {settingsFile && <div className="cc-settings-row"><div><strong>Reset settings</strong><span>Return appearance, update, window, and view settings on this Mac to their defaults. Sources and knowledge are not affected.</span></div><Button type="button" variant="secondary" disabled={resetBusy} onClick={() => void resetSettingsFile()}>{resetBusy ? 'Resetting…' : 'Reset…'}</Button></div>}
               </div>

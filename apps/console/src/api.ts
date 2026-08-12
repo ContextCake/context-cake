@@ -85,6 +85,46 @@ export interface DataSource {
    * demo mode where nothing indexes.
    */
   setActiveSource(name: string | null): void
+  /**
+   * The power-user activity feed (GET /api/indexing/activity): per-source
+   * rate/ETA, pass history, warning samples, and the engine's event ring.
+   * `null` against an engine too old to have the route, and in demo mode
+   * (nothing indexes a finished snapshot). Fetched only while a surface that
+   * renders it is open — never part of the steady-state poll.
+   */
+  indexingActivity?(): Promise<IndexingActivity | null>
+  /** POST /api/indexing/<action>. Absent in demo mode — the UI hides the controls. */
+  indexingControl?(action: IndexingControlAction, options?: { source?: string; full?: boolean }): Promise<boolean>
+}
+
+export type IndexingControlAction = 'pause' | 'resume' | 'cancel' | 'reindex'
+
+export interface IndexingActivitySource {
+  name: string
+  level: number
+  status: string
+  phase: string
+  paused: boolean
+  loaded: number
+  total: number | null
+  passes: number
+  rateDocsPerSec: number | null
+  etaMs: number | null
+  passStats: { carried: number; read: number; tokenized: number; removed: number } | null
+  retries: number
+  nextRetryAt: number | null
+  error: string | null
+  lastPasses: { startedAt: number; durationMs: number; outcome: string; concepts?: number; carried?: number; read?: number; error?: string }[]
+  warnings: string[]
+  skippedSamples: string[]
+  unreadableSamples: string[]
+  truncated: { cap: number } | null
+}
+
+export interface IndexingActivity {
+  paused: string[]
+  sources: IndexingActivitySource[]
+  events: { at: number; line: string }[]
 }
 
 // ---- Transport --------------------------------------------------------------
@@ -422,6 +462,24 @@ class LiveSource implements DataSource {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
     }).catch(() => {})
   }
+  async indexingActivity(): Promise<IndexingActivity | null> {
+    try {
+      return await this.get<IndexingActivity>('/api/indexing/activity')
+    } catch (e) {
+      // An engine too old for the route: the panel simply has no detail pane.
+      if (e instanceof LiveDataError && e.kind === 'bad-status' && e.status === 404) return null
+      throw e
+    }
+  }
+  async indexingControl(action: IndexingControlAction, options: { source?: string; full?: boolean } = {}): Promise<boolean> {
+    const body: Record<string, unknown> = {}
+    if (options.source) body.source = options.source
+    if (options.full) body.full = true
+    const out = await this.request<{ ok: boolean }>(`/api/indexing/${action}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    })
+    return out?.ok === true
+  }
   private async get<T>(path: string): Promise<T> {
     return this.request<T>(path, { headers: { accept: 'application/json' } })
   }
@@ -637,7 +695,7 @@ export function attachConflictStubs(concept: Concept, conflicts: Conflict[]): Co
 /** Phase names the engine reports, in the words a person would use for them. */
 const PHASE_LABELS: Record<string, string> = {
   queued: 'Queued', scanning: 'Scanning', loading: 'Reading', cloning: 'Cloning',
-  ready: 'Ready', error: 'Failed',
+  ready: 'Ready', error: 'Failed', paused: 'Paused',
 }
 export function phaseLabel(phase: string | undefined): string {
   return PHASE_LABELS[phase ?? ''] ?? 'Indexing'

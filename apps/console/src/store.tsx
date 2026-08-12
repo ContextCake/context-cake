@@ -8,7 +8,7 @@ import {
 import {
   adaptConcept, adaptConflicts, adaptDiscrepancies, adaptGraphConcept, adaptSources, attachConflictStubs,
   computeLevelBuckets, createDataSource, LiveDataError, mergeSourceStatus,
-  type Mode,
+  type IndexingActivity, type IndexingControlAction, type Mode,
 } from './api'
 import type {
   DiscrepancyDecisionRequest, DiscrepancyRule, DiscrepancyRuleSuggestion,
@@ -302,6 +302,17 @@ export interface StoreData {
    * refetch on this (see `filesRevalidation` in `layer-files.ts`).
    */
   reloadKey: number
+  /**
+   * On-demand fetch of the indexing activity feed (rate/ETA, pass history,
+   * warnings, engine events). Never part of the poll — call it only while a
+   * surface renders it. `null` in demo mode and against engines without the
+   * route.
+   */
+  fetchIndexingActivity: () => Promise<IndexingActivity | null>
+  /** Pause/resume/cancel/reindex. Resolves false when the control is unavailable or refused. */
+  indexingControl: (action: IndexingControlAction, options?: { source?: string; full?: boolean }) => Promise<boolean>
+  /** Whether the backing source supports the indexing controls (live engine only). */
+  canControlIndexing: boolean
 }
 
 /** Where the user is. Changes on navigation and selection, never on a keystroke. */
@@ -1220,6 +1231,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     else setReloadKey((k) => k + 1)
   }, [])
 
+  // The power-user indexing surfaces. Activity is fetched ON DEMAND by the
+  // component that renders it (never part of the steady-state poll), and a
+  // control kicks the poll so the affected rows repaint promptly. Both are
+  // absent-by-capability: demo mode and old engines simply have no panel.
+  const fetchIndexingActivity = useCallback(async () => {
+    if (!source.indexingActivity) return null
+    try { return await source.indexingActivity() } catch { return null }
+  }, [source])
+  const indexingControl = useCallback(async (action: IndexingControlAction, options: { source?: string; full?: boolean } = {}) => {
+    if (!source.indexingControl) return false
+    try {
+      const ok = await source.indexingControl(action, options)
+      if (pollNowRef.current) pollNowRef.current()
+      return ok
+    } catch {
+      return false
+    }
+  }, [source])
+  const canControlIndexing = typeof source.indexingControl === 'function'
+
   const load = useMemo<LoadState>(
     () => ({ shell: loading, concepts: conceptsLoading, indexingSources, tasks, refreshError, lastRefreshAt }),
     [loading, conceptsLoading, indexingSources, tasks, refreshError, lastRefreshAt],
@@ -1235,12 +1266,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
     send, reload, reloadKey,
+    fetchIndexingActivity, indexingControl, canControlIndexing,
   }), [mode, loading, load, error, concepts, sources, signals, conflicts, activity, loadErrors,
     resolvingConflict, resolutionError, discrepancyRules, discrepancyRuleSuggestions,
     retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
     send, reload, reloadKey, setView, setSelConcept, setQuery, search, setFilesScope, setFilesPath,
-    openFilesScope, openConcept, openChat, closeChat])
+    openFilesScope, openConcept, openChat, closeChat,
+    fetchIndexingActivity, indexingControl, canControlIndexing])
 
   const nav = useMemo<StoreNav>(
     () => ({ view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, chatOpen }),

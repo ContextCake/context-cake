@@ -42,11 +42,16 @@ function ensureConfig(withManifestLock, writeContextManifest) {
 /**
  * Fork the engine and resolve once it is serving.
  *
- * @param {{ onCrash?: (err: Error) => void }} [options] `onCrash` fires only
- *   for an exit the app did not ask for; the app cannot work without the
- *   engine, so the caller treats it as fatal.
+ * @param {{
+ *   onCrash?: (err: Error) => void,
+ *   onOutput?: (stream: 'stdout' | 'stderr', chunk: Buffer | string) => void,
+ * }} [options] `onCrash` fires only for an exit the app did not ask for; the
+ *   app cannot work without the engine, so the caller treats it as fatal.
+ *   `onOutput` receives every engine stdout/stderr chunk (the caller tees it
+ *   into the engine log); the chunks are ALSO forwarded to this process's own
+ *   stdio, so `npm run dev` in a terminal loses nothing.
  */
-export async function startEngineService({ onCrash } = {}) {
+export async function startEngineService({ onCrash, onOutput } = {}) {
   const { serviceModule, consoleDist } = enginePaths()
   const manifestModule = path.join(path.dirname(serviceModule), 'manifest.mjs')
   const {
@@ -60,14 +65,22 @@ export async function startEngineService({ onCrash } = {}) {
     path.join(here, 'engine-process.mjs'),
     [manifestPath(), serviceModule, consoleDist ?? ''],
     {
-      // Engine diagnostics (an unreachable MCP source, a request handler
-      // throw) stay visible in the app's own output.
-      stdio: 'inherit',
+      // Piped, not inherited: for a Finder-launched .app "inherit" is
+      // /dev/null, which is why an engine death used to leave no artifact at
+      // all. The forwarding below keeps terminal visibility for `npm run dev`
+      // while the onOutput tee gives the log file the same bytes.
+      stdio: 'pipe',
       // Names the process in Activity Monitor, so a user looking at CPU can
       // tell the engine apart from the window.
       serviceName: 'ContextCake Engine',
     },
   )
+  for (const streamName of ['stdout', 'stderr']) {
+    child[streamName]?.on('data', (chunk) => {
+      try { process[streamName].write(chunk) } catch { /* dead pipe — main.mjs swallows these too */ }
+      try { onOutput?.(streamName, chunk) } catch { /* the log must never hurt the engine */ }
+    })
+  }
 
   let settled = false // boot resolved or rejected — the promise is done either way
   let started = false // boot SUCCEEDED — only then is an exit a crash

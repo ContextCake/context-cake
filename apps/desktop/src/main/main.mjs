@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron'
+import { lineSink, openEngineLog } from './engine-log.mjs'
 import { startEngineService } from './service-host.mjs'
 import { createEngineWatchdog } from './engine-watchdog.mjs'
 import { createGithubConnections, verifyGithubToken } from './github-connections.mjs'
@@ -46,6 +47,10 @@ for (const stream of [process.stdout, process.stderr]) {
 function handleFatal(err) {
   if (err && err.code === 'EPIPE') return
   const detail = (err && err.stack) || String(err)
+  // Breadcrumb first: everything after this line is teardown, and the log is
+  // the only artifact a Finder-launched app leaves. Guarded because this
+  // handler is registered before the log state initializes (TDZ window).
+  try { engineLog?.logEvent(`fatal: ${detail}`) } catch { /* log unavailable */ }
   // Stop the engine child first. app.exit() below skips before-quit, so
   // without this its teardown would look like an unexpected exit and report a
   // second, misleading failure. Settings writes are queued and asynchronous;
@@ -95,6 +100,26 @@ let win = null
 let settingsWin = null
 const trustedWindows = createTrustedWindowRegistry(() => service?.origin)
 
+// The engine's on-disk diagnostic trail (engine-log.mjs). Opened lazily on the
+// first engine start; null when the logs dir is unwritable, and every use is
+// optional-chained — diagnostics must never block or crash the app they exist
+// to explain. CC_ENGINE_LOG_DIR redirects it so tests never write into
+// ~/Library/Logs.
+let engineLog = null
+let engineLogOpened = false
+
+function engineLogDir() {
+  return process.env.CC_ENGINE_LOG_DIR || app.getPath('logs')
+}
+
+function ensureEngineLog() {
+  if (!engineLogOpened) {
+    engineLogOpened = true
+    engineLog = openEngineLog(engineLogDir())
+  }
+  return engineLog
+}
+
 /**
  * Bumped by every teardown. An engine forked before the bump belongs to a
  * generation nobody is going to close — see startEngine().
@@ -130,12 +155,23 @@ function shutdownEngine() {
  */
 async function startEngine() {
   const epoch = engineEpoch
-  const started = await startEngineService({ onCrash: handleFatal })
+  const log = ensureEngineLog()
+  log?.logEvent('engine starting')
+  // One sink per stream per engine generation: each keeps its own partial-line
+  // buffer, so interleaved stdout/stderr chunks never splice into one line.
+  const sinks = log
+    ? { stdout: lineSink(log.writeRaw, 'engine'), stderr: lineSink(log.writeRaw, 'engine!') }
+    : null
+  const started = await startEngineService({
+    onCrash: handleFatal,
+    onOutput: sinks ? (stream, chunk) => sinks[stream]?.(chunk) : undefined,
+  })
   if (engineEpoch !== epoch) {
     try { started.close() } catch { /* already down */ }
     return null
   }
   service = started
+  log?.logEvent(`engine ready at ${started.origin}`)
   return started
 }
 
@@ -298,6 +334,7 @@ async function offerEngineRelaunch() {
 async function relaunchEngine() {
   if (relaunchingEngine) return { ok: false, reason: 'already-restarting' }
   relaunchingEngine = true
+  engineLog?.logEvent('engine relaunch requested')
   try {
     shutdownEngine()
     // A fresh engine's memory level is worth reporting even if it happens to
@@ -327,6 +364,7 @@ async function relaunchEngine() {
     // still here, so keep them, say what actually failed, and leave the
     // banner's Restart Engine button live for another try.
     console.error(`[contextcake] the engine could not be restarted: ${err?.stack ?? err}`)
+    engineLog?.logEvent(`engine relaunch failed: ${err?.message ?? err}`)
     shutdownEngine()
     reportEngineRestartFailure(err)
     return { ok: false, reason: 'restart-failed' }
@@ -929,6 +967,15 @@ handleTrustedIpc('contextcake:reveal-config-dir', () => {
   const dir = configDir()
   if (!fs.existsSync(dir)) return { ok: false, error: 'The configuration folder does not exist yet.' }
   shell.showItemInFolder(dir)
+  return { ok: true }
+})
+
+// The engine log folder (engine-log.mjs). Same no-renderer-input doctrine as
+// reveal-config-dir: the path is fixed on this side.
+handleTrustedIpc('contextcake:reveal-logs', () => {
+  const target = engineLog?.path ?? engineLogDir()
+  if (!fs.existsSync(target)) return { ok: false, error: 'No engine log has been written yet.' }
+  shell.showItemInFolder(target)
   return { ok: true }
 })
 
@@ -1543,18 +1590,32 @@ async function smokeCheck() {
     // "ContextCake" so `contextcake mcp` finds the manifest the app wrote.
     const userDataName = path.basename(app.getPath('userData'))
     const okName = userDataName === 'ContextCake'
-    if (res.ok && unauth.status === 401 && okName) {
+    // The engine must know the heap ceiling it runs under (memoryDetail on
+    // /api/status): the watermark that pauses indexing is computed against it,
+    // and Electron gives us no way to raise it — so "the number is present and
+    // sane" is the whole regression guard. Same for the engine log: it is the
+    // only crash artifact a Finder-launched app has, so a smoke run must prove
+    // one gets written.
+    const status = await fetch(`${service.origin}/api/status`, { headers: authHeaders }).then((r) => r.json())
+    const heapLimitBytes = status?.memoryDetail?.heapLimitBytes
+    const okHeapDetail = typeof heapLimitBytes === 'number' && heapLimitBytes > 1024 * 1024 * 1024
+    const okEngineLog = engineLog !== null && fs.existsSync(engineLog.path) && fs.statSync(engineLog.path).size > 0
+    if (res.ok && unauth.status === 401 && okName && okHeapDetail && okEngineLog) {
       console.log(
         `SMOKE OK ${service.origin} api=200 unauth=401 userData=${userDataName}`
         + ` lag=${lag}ms indexing=${graph?.indexing === true}`
         + ` engineP50=${latency.p50}ms engineP95=${latency.p95}ms engineMax=${latency.max}ms`
-        + ` engineProbes=${latency.probes} engineFailures=${latency.failures}`,
+        + ` engineProbes=${latency.probes} engineFailures=${latency.failures}`
+        + ` engineHeapLimitMb=${Math.round(heapLimitBytes / (1024 * 1024))} engineLog=${engineLog.path}`,
       )
       shutdownEngine()
       flushSettingsSync()
       app.exit(0)
     } else {
-      console.error(`SMOKE FAIL api=${res.status} unauth=${unauth.status} userData=${userDataName}`)
+      console.error(
+        `SMOKE FAIL api=${res.status} unauth=${unauth.status} userData=${userDataName}`
+        + ` heapDetail=${okHeapDetail} engineLog=${okEngineLog}`,
+      )
       shutdownEngine()
       flushSettingsSync()
       app.exit(1)

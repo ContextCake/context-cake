@@ -166,6 +166,12 @@ declare global {
        */
       revealConfigDir?: () => Promise<{ ok: boolean; error?: string }>
       /**
+       * Show the engine log (~/Library/Logs/ContextCake/engine.log) in
+       * Finder — same fixed-path doctrine as revealConfigDir. Answers
+       * `{ ok: false, error }` when no log has been written yet.
+       */
+      revealLogs?: () => Promise<{ ok: boolean; error?: string }>
+      /**
        * The local preferences file (settings.json), for support flows. Export
        * opens a native save dialog and writes a copy — the renderer never
        * names a path. Reset confirms natively in the main process, then

@@ -48,6 +48,28 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   no `electron` module: pass it plain paths via argv. The bearer token travels
   up the engine message port and reaches the preload only through trusted IPC;
   it must never appear in engine or renderer argv (visible in `ps`).
+- **The engine's V8 heap ceiling cannot be raised, only watched.** Probed
+  empirically on Electron 43 (2026-08-12): `utilityProcess.fork` accepts
+  `execArgv: ['--max-old-space-size=…']` but V8 ignores it (the flag reaches
+  `process.execArgv` and does nothing), `NODE_OPTIONS` is likewise ignored,
+  `v8.setFlagsFromString` is too late at child runtime, and `resourceLimits`
+  is a worker_threads option utilityProcess does not have. The ceiling is
+  fixed at ~4.2GB (`heap_size_limit` 4192MB, bundled Node 24.18). Consequences:
+  the engine's memory watermark keys off the measured limit
+  (`packages/core/src/memory-pressure.mjs`), `/api/status` surfaces it as
+  `memoryDetail`, and keeping index/resolve memory bounded is a hard
+  requirement, not a nicety. (Same probe: `node:sqlite` IS available in the
+  utilityProcess as of Electron 43 — recorded for the future, unused today.)
+- **Engine stdio is piped and teed into `~/Library/Logs/ContextCake/engine.log`**
+  (`src/main/engine-log.mjs`, 5MB rotation to `engine.log.1`, redirect with
+  `CC_ENGINE_LOG_DIR` in tests). For a Finder-launched .app the old
+  `stdio: 'inherit'` was /dev/null, so an engine death left no artifact at all
+  — the log is the app's only durable diagnostic trail, which is why the smoke
+  test asserts one gets written and `npm run test:isolation` asserts the
+  `[index]` pass lines land in it. Terminal visibility for `npm run dev` is
+  preserved by forwarding the same chunks to the app's own stdio. The log must
+  never crash the app: every writer is wrapped, an unwritable dir yields a
+  null log, and everything degrades to silence.
 - **Source credentials are separate from accounts, and separate from the API
   bearer.** `src/main/github-connections.mjs` holds GitHub tokens in
   `tokens.enc` (its own file, not `session.enc` — clearing a sign-in must not

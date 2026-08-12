@@ -195,6 +195,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
   const [metricsEnabled, setMetricsEnabled] = useState<boolean | null>(null)
   const [writeFailed, setWriteFailed] = useState(false)
   const [revealError, setRevealError] = useState<string | null>(null)
+  const [logsError, setLogsError] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const { preference: theme, density, setPreference: setTheme, setDensity, transparency, systemReducedTransparency, setTransparency, saveFailed } = useThemeMode()
   // Appearance writes and this view's own toggles hit the same file for the same
@@ -309,6 +310,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
   // implementation detail rather than the only thing holding the row shut.
   const isSettingsWindow = window.__CC_DESKTOP?.windowRole === 'settings'
   const canRevealConfig = isSettingsWindow && typeof window.__CC_DESKTOP?.revealConfigDir === 'function'
+  const canRevealLogs = isSettingsWindow && typeof window.__CC_DESKTOP?.revealLogs === 'function'
   const settingsFile = isSettingsWindow ? window.__CC_DESKTOP?.settingsFile : undefined
   const [exportNote, setExportNote] = useState<string | null>(null)
   const [resetBusy, setResetBusy] = useState(false)
@@ -351,6 +353,16 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
       setRevealError(e instanceof Error ? e.message : String(e))
     }
   }
+  const showEngineLog = async () => {
+    const bridge = window.__CC_DESKTOP?.revealLogs
+    if (!bridge) return
+    try {
+      const result = await bridge()
+      setLogsError(result?.ok ? null : result?.error ?? 'The log could not be shown.')
+    } catch (e) {
+      setLogsError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   return (
     <div ref={rootRef} className="cc-settings-screen" role={surface === 'overlay' ? 'dialog' : undefined} aria-modal={surface === 'overlay' || undefined} aria-label="ContextCake Settings" data-surface={surface}>
@@ -391,6 +403,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
                 <UpdateControl appMode={appMode} />
                 <CliControl />
                 {canRevealConfig && <div className="cc-settings-row"><div><strong>Configuration folder</strong><span>{revealError ?? 'Settings and the source list live in ~/Library/Application Support/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showConfigFolder()}>Show in Finder</Button></div>}
+                {canRevealLogs && <div className="cc-settings-row"><div><strong>Engine log</strong><span>{logsError ?? 'What the engine was doing, including each indexing pass — useful in a bug report. Lives in ~/Library/Logs/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showEngineLog()}>Show in Finder</Button></div>}
                 {settingsFile && <div className="cc-settings-row"><div><strong>Export settings</strong><span>{exportNote ?? 'Save a copy of ContextCake’s local preferences — useful in a bug report. Never includes credentials or your documents.'}</span></div><Button type="button" variant="secondary" onClick={() => void exportSettings()}>Export…</Button></div>}
                 {settingsFile && <div className="cc-settings-row"><div><strong>Reset settings</strong><span>Return appearance, update, window, and view settings on this Mac to their defaults. Sources and knowledge are not affected.</span></div><Button type="button" variant="secondary" disabled={resetBusy} onClick={() => void resetSettingsFile()}>{resetBusy ? 'Resetting…' : 'Reset…'}</Button></div>}
               </div>

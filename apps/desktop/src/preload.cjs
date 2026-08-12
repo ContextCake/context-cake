@@ -89,6 +89,8 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   // Show the app's own configuration folder in Finder. The path is fixed on
   // the main-process side; no arguments cross this bridge.
   revealConfigDir: () => ipcRenderer.invoke('contextcake:reveal-config-dir'),
+  // Show the engine log in Finder — same fixed-path doctrine.
+  revealLogs: () => ipcRenderer.invoke('contextcake:reveal-logs'),
   settingsFile: {
     export: () => ipcRenderer.invoke('contextcake:settings-export'),
     reset: () => ipcRenderer.invoke('contextcake:settings-reset'),

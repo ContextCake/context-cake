@@ -50,7 +50,7 @@ import { createDiscrepancyPriorityStore } from "./discrepancy-priorities.mjs";
 import { resolveLiveLayer } from "./sources/git-sync.mjs";
 import { commitPathsWithMutation, push as pushGit } from "./sources/git-core.mjs";
 import { indexEntryKeys, layerIdentity } from "./index-keys.mjs";
-import { memoryPressureLevel } from "./memory-pressure.mjs";
+import { memorySnapshot } from "./memory-pressure.mjs";
 import {
   getManifestProfileLayers,
   readContextManifestQuarantined,
@@ -562,7 +562,7 @@ export function createEngineService({
     // still allowed through even under pressure: with `runningIndexCount` at
     // 0 the alternative is the queue simply never draining, since nothing
     // already in flight exists to trigger the next pump via releaseIndexSlot.
-    const cap = memoryPressureLevel() === "critical"
+    const cap = memorySnapshot().level === "critical"
       ? Math.min(normalCap, runningIndexCount > 0 ? runningIndexCount : 1)
       : normalCap;
     while (runningIndexCount < cap && indexQueue.length) {
@@ -761,12 +761,19 @@ export function createEngineService({
     const budget = settings.sourceBudgetMs;
     const limit = settings.maxConcurrentIndexing;
     acquireIndexSlot(source.name, controller.signal, limit)
-      .then(() => withDeadline(
-        snapshotSource(source, entry, controller.signal),
-        budget,
-        `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
-        () => controller.abort(new Error("Indexing timed out")),
-      ).finally(() => releaseIndexSlot(limit)))
+      .then(() => {
+        // One line per pass, on stderr with the other diagnostics. In the
+        // desktop app these land in ~/Library/Logs/ContextCake/engine.log,
+        // which is what makes "which source was the engine reading when it
+        // died" answerable after the fact.
+        console.error(`[index] ${source.name}: pass ${entry.passes} start${refreshing ? " (refresh)" : ""}`);
+        return withDeadline(
+          snapshotSource(source, entry, controller.signal),
+          budget,
+          `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
+          () => controller.abort(new Error("Indexing timed out")),
+        ).finally(() => releaseIndexSlot(limit));
+      })
       .then((snap) => {
         if (indexes.get(entry.key) !== entry) return; // superseded by a newer config
         entry.snap = snap;
@@ -782,12 +789,14 @@ export function createEngineService({
         const health = typeof source.health === "function" ? source.health() : null;
         if (health) entry.lastHealth = health;
         if (!health || health.ok !== false) entry.lastSuccessAt = new Date().toISOString();
+        console.error(`[index] ${source.name}: pass ${entry.passes} done in ${Date.now() - entry.startedAt}ms — ${snap.ids.length} concepts`);
       })
       .catch((err) => {
         if (indexes.get(entry.key) !== entry) return;
         entry.status = "error";
         entry.phase = "error";
         entry.error = err.message;
+        console.error(`[index] ${source.name}: pass ${entry.passes} failed after ${Date.now() - entry.startedAt}ms — ${err.message}`);
       })
       .finally(() => {
         entry.running = false;
@@ -1541,6 +1550,7 @@ export function createEngineService({
     // snapshot is deliberately NOT here: it has an answer, so a client has
     // nothing to wait for and no reason to hold a spinner up in front of it.
     const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
+    const memory = memorySnapshot();
     return {
       generation: bumpGeneration(pinned),
       indexing: pending.length > 0,
@@ -1550,7 +1560,17 @@ export function createEngineService({
       // embedding this engine (the desktop app's utility process, in
       // particular) can use this to throttle its own polling or show a
       // banner without adding its own watermark logic.
-      memory: memoryPressureLevel(),
+      memory: memory.level,
+      // The raw numbers behind the level, additive: how much live heap this
+      // engine holds against the V8 ceiling it would actually die at. The
+      // desktop app cannot raise that ceiling (Electron ignores utilityProcess
+      // heap flags — see memory-pressure.mjs), so watching it is the tool.
+      memoryDetail: {
+        heapUsedBytes: memory.heapUsedBytes,
+        heapLimitBytes: memory.heapLimitBytes,
+        liveBytes: memory.liveBytes,
+        totalBytes: memory.totalBytes,
+      },
     };
   }
 

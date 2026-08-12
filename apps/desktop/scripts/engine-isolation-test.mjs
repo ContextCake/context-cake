@@ -290,9 +290,13 @@ const MIN_ENGINE_PROBES = Math.max(3, Math.floor((1200 / (MAX_ENGINE_P95_MS + 20
 // normal Mac, where the defaults are correct.
 const extraArgs = (process.env.CC_ELECTRON_ARGS ?? '').split(/\s+/).filter(Boolean)
 
+// The engine log is redirected into the sandbox both to keep the test out of
+// ~/Library/Logs and so this run can assert the log actually captures pass
+// lines — the log is the only crash artifact a Finder-launched app has.
+const logDir = path.join(tmp, 'logs')
 const child = spawn(electron, [appDir, `--user-data-dir=${userData}`, ...extraArgs], {
   stdio: ['ignore', 'pipe', 'pipe'],
-  env: { ...process.env, CC_SMOKE: '1' },
+  env: { ...process.env, CC_SMOKE: '1', CC_ENGINE_LOG_DIR: logDir },
 })
 
 let out = ''
@@ -311,6 +315,9 @@ function cleanup() {
 
 child.on('exit', (code) => {
   clearTimeout(timer)
+  // Read before cleanup() — the log lives inside the sandbox it deletes.
+  let engineLogText = ''
+  try { engineLogText = fs.readFileSync(path.join(logDir, 'engine.log'), 'utf8') } catch { /* asserted below */ }
   cleanup()
 
   const match = out.match(
@@ -364,6 +371,19 @@ child.on('exit', (code) => {
       + `over ${engine.probes} probes while indexing ${DOCS} documents `
       + `(limits ${MAX_ENGINE_P95_MS}ms / ${MAX_ENGINE_MAX_MS}ms — ${calibration}). `
       + `Main-process lag was ${lag}ms, so the stall is inside the engine's request path, not the UI thread.\n`,
+    )
+    process.exitCode = 1
+    return
+  }
+
+  // The engine log must have recorded the pass this run provoked. Asserted on
+  // the START line only: the smoke deliberately exits while indexing is still
+  // running, so the "done" line may not exist yet.
+  if (!engineLogText.includes('[index] ') || !engineLogText.includes('pass 1 start')) {
+    process.stdout.write(
+      'ISOLATION FAIL: the engine log did not capture the indexing pass '
+      + `(engine.log ${engineLogText === '' ? 'is missing or empty' : 'has no [index] pass line'}). `
+      + 'A crash during a large index would leave no artifact.\n',
     )
     process.exitCode = 1
     return

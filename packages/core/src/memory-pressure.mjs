@@ -31,13 +31,24 @@
 // stops new passes from starting.
 
 import os from "node:os";
+import v8 from "node:v8";
 
 const ELEVATED_LIVE_FRACTION = 0.12; // this process alone holds >12% of total RAM in live+external bytes
 const CRITICAL_LIVE_FRACTION = 0.25; // >25%
 
 function realRead() {
   const mem = process.memoryUsage();
-  return { totalBytes: os.totalmem(), liveBytes: mem.heapUsed + mem.external };
+  return {
+    totalBytes: os.totalmem(),
+    liveBytes: mem.heapUsed + mem.external,
+    // The V8 ceiling this process will actually die at — measured, not
+    // configured, because the host may not be able to configure it at all
+    // (Electron 43's utilityProcess ignores execArgv/NODE_OPTIONS heap flags;
+    // probed 2026-08-12, fixed at ~4.2GB). Surfaced through /api/status as
+    // memoryDetail so the app and tests can see how close a pass is running.
+    heapUsedBytes: mem.heapUsed,
+    heapLimitBytes: v8.getHeapStatistics().heap_size_limit,
+  };
 }
 
 /**
@@ -49,14 +60,16 @@ function realRead() {
  * no way to be exercised deterministically in a test at all.
  */
 export function memorySnapshot({ read = realRead } = {}) {
-  const { totalBytes, liveBytes } = read();
+  // Injected readings (tests) may omit the heap fields; they default to null
+  // and the level math below never touches them, so old fixtures stay valid.
+  const { totalBytes, liveBytes, heapUsedBytes = null, heapLimitBytes = null } = read();
   const liveFraction = totalBytes > 0 ? liveBytes / totalBytes : 0;
   const level = liveFraction >= CRITICAL_LIVE_FRACTION
     ? "critical"
     : liveFraction >= ELEVATED_LIVE_FRACTION
       ? "elevated"
       : "normal";
-  return { level, liveBytes, totalBytes, liveFraction };
+  return { level, liveBytes, totalBytes, liveFraction, heapUsedBytes, heapLimitBytes };
 }
 
 /** Just the level ("normal" | "elevated" | "critical") — the common case. */

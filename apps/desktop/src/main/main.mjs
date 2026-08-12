@@ -13,7 +13,7 @@ import {
 } from './engine-crash-policy.mjs'
 import { lineSink, openEngineLog } from './engine-log.mjs'
 import { startEngineService } from './service-host.mjs'
-import { createEngineWatchdog } from './engine-watchdog.mjs'
+import { createEngineWatchdog, shouldOfferRelaunch } from './engine-watchdog.mjs'
 import { createGithubConnections, verifyGithubToken } from './github-connections.mjs'
 import { buildMenu } from './menu.mjs'
 import { configDir, enginePaths, manifestPath, settingsPath } from './paths.mjs'
@@ -292,7 +292,10 @@ function startEngineWatchdog() {
       // no place to put it.
       trustedWindows.broadcast('engine:status', state, ['main'])
       noteEngineHealth(state.healthy === true)
-      if (state.healthy) relaunchDeclined = false
+      if (state.healthy) {
+        relaunchDeclined = false
+        lastRelaunchOfferStatus = null
+      }
       else if (state.canRelaunch && !relaunchDeclined) offerEngineRelaunch()
     },
   })
@@ -323,12 +326,49 @@ function reloadEngine() {
   })
 }
 
+// The status the last SUPPRESSED relaunch offer observed (shouldOfferRelaunch's
+// `previous`): progress is judged against this, and it resets once healthy.
+let lastRelaunchOfferStatus = null
+
+/**
+ * One out-of-band status probe with a deadline matched to "is it alive at
+ * all" rather than the watchdog's snappy 5s "is it responsive". Returns
+ * {indexing, loadedBySource} or null when even 30s was not enough.
+ */
+async function probeEngineForRelaunch() {
+  const current = service
+  if (!current) return null
+  try {
+    const res = await fetch(`${current.origin}/api/status`, {
+      headers: { authorization: `Bearer ${current.token}` },
+      signal: AbortSignal.timeout(30_000),
+    })
+    const parsed = await res.json()
+    const loadedBySource = {}
+    for (const row of parsed?.sources ?? []) loadedBySource[row.name] = row.loaded ?? 0
+    return { indexing: parsed?.indexing === true, loadedBySource }
+  } catch {
+    return null
+  }
+}
+
 async function offerEngineRelaunch() {
   // Smoke and CI must never meet a modal. The banner still reaches the window.
   if (process.env.CC_SMOKE === '1' || !app.isReady()) return
   if (relaunchPromptOpen || relaunchingEngine || !win || win.isDestroyed()) return
   relaunchPromptOpen = true
   try {
+    // A wedge banner during a heavy index is often a BUSY engine, not a stuck
+    // one — and accepting the restart discards the pass. Hold the offer while
+    // a longer probe shows indexing that moved since the last look; two
+    // consecutive no-progress probes always fall through to the dialog.
+    const fresh = await probeEngineForRelaunch()
+    if (!shouldOfferRelaunch(lastRelaunchOfferStatus, fresh)) {
+      lastRelaunchOfferStatus = fresh
+      engineLog?.logEvent('relaunch offer held — the engine is indexing and progressing')
+      return
+    }
+    lastRelaunchOfferStatus = null
     const { response } = await dialog.showMessageBox(win, {
       type: 'warning',
       buttons: ['Keep Waiting', 'Restart Engine'],

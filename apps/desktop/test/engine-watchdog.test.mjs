@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createEngineWatchdog } from '../src/main/engine-watchdog.mjs'
+import { createEngineWatchdog, shouldOfferRelaunch } from '../src/main/engine-watchdog.mjs'
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -254,4 +254,24 @@ test('a ping that throws synchronously does not wedge the watchdog', async (t) =
   await h.tick(4)
   assert.equal(h.last().healthy, false)
   assert.equal(h.last().misses, 4, 'a synchronous throw is a miss like any other, and must not strand inFlight')
+})
+
+// shouldOfferRelaunch: the guard between the wedge banner and a progress-
+// destroying restart offer. Table-driven — the function is pure on purpose.
+test('shouldOfferRelaunch offers on failure or idleness, holds on progress, and never hides a frozen engine twice', () => {
+  const s = (indexing, loadedBySource) => ({ indexing, loadedBySource })
+  // The longer probe failed too: genuinely stuck — offer.
+  assert.equal(shouldOfferRelaunch(null, null), true)
+  assert.equal(shouldOfferRelaunch(s(true, { vault: 100 }), null), true)
+  // Alive but not indexing: not busy, just not answering — offer.
+  assert.equal(shouldOfferRelaunch(null, s(false, {})), true)
+  // First look at an indexing engine: hold, give it one interval.
+  assert.equal(shouldOfferRelaunch(null, s(true, { vault: 100 })), false)
+  // Progress since the last held offer: keep holding.
+  assert.equal(shouldOfferRelaunch(s(true, { vault: 100 }), s(true, { vault: 250 })), false)
+  // A NEW source appearing counts as progress too.
+  assert.equal(shouldOfferRelaunch(s(true, { vault: 100 }), s(true, { vault: 100, docs: 5 })), false)
+  // Frozen counters across two consecutive probes: indexing in name only — offer.
+  assert.equal(shouldOfferRelaunch(s(true, { vault: 100 }), s(true, { vault: 100 })), true)
+  assert.equal(shouldOfferRelaunch(s(true, {}), s(true, {})), true)
 })

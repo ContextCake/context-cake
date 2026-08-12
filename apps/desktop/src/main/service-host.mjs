@@ -144,6 +144,15 @@ export async function startEngineService({ onCrash, onOutput } = {}) {
           sendTokens(tokens) {
             return acks.send({ type: 'tokens', tokens: tokens ?? {} })
           },
+          /**
+           * Tell the engine which sources a crash-loop breaker decided to
+           * skip (service.mjs setIndexQuarantine). Message port, not argv —
+           * layer names in argv are `ps`-visible. Same `{acked}` contract as
+           * reload()/sendTokens().
+           */
+          sendQuarantine(names) {
+            return acks.send({ type: 'quarantine', sources: names ?? [] })
+          },
           mutateManifest(buildCandidate) {
             return withManifestLock(manifestPath(), () => {
               const current = readContextManifest(manifestPath(), { allowMissing: false })
@@ -179,12 +188,13 @@ export async function startEngineService({ onCrash, onOutput } = {}) {
       // rather than letting the caller time out and blame a wedge.
       acks.close(closing ? 'closing' : 'exit')
       if (started) {
-        // A crash after boot: the app has no cascade, and the exit was not
-        // asked for, so the caller treats it as fatal. (A WEDGE is the other
-        // failure and is recoverable — see main.mjs's relaunchEngine. The
-        // difference is not whether the window can be re-pointed; it can. It is
-        // that nothing here knows why the child died, so re-forking could loop.)
-        if (!closing) onCrash?.(new Error(`The ContextCake engine stopped unexpectedly (code ${code}).`))
+        // A crash after boot: an exit the app did not ask for. Nothing here
+        // knows WHY the child died, so this only reports; main.mjs's
+        // handleEngineCrash owns the response (bounded restart + quarantine —
+        // the loop this callback's older fatal-only contract feared is now
+        // impossible by construction there). The raw exit code rides along so
+        // the breadcrumb can record it.
+        if (!closing) onCrash?.(new Error(`The ContextCake engine stopped unexpectedly (code ${code}).`), { code })
         return
       }
       // Died during startup. A boot-error message usually arrived first and

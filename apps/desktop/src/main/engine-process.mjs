@@ -91,6 +91,14 @@ async function start() {
       post({ type: 'ack', id: message.id })
       return
     }
+    if (message.type === 'quarantine') {
+      // Source names a crash-loop breaker decided to skip (see main.mjs's
+      // handleEngineCrash). Travels the message port like everything else —
+      // never argv, where layer names would be `ps`-visible.
+      try { service.setIndexQuarantine(message.sources ?? []) } catch (err) { console.error('[engine-service] quarantine failed', err) }
+      post({ type: 'ack', id: message.id })
+      return
+    }
     if (message.type === 'close') {
       try { service.close() } catch { /* already down */ }
       server.close()
@@ -99,6 +107,27 @@ async function start() {
   })
 
   post({ type: 'ready', origin: `http://127.0.0.1:${port}`, token })
+
+  // Test seam (engine-crash smoke): a post-boot death on a timer, so the
+  // app's bounded-restart path can be driven for real. Exit code 87 keeps the
+  // simulated death recognizable in breadcrumbs and logs. With
+  // CC_FORCE_ENGINE_EXIT_LIMIT + a state file, only the first N generations
+  // die — which is how the smoke gets a surviving engine to assert the
+  // quarantine against.
+  const forcedExitMs = Number(process.env.CC_FORCE_ENGINE_EXIT_AFTER_READY)
+  if (Number.isFinite(forcedExitMs) && forcedExitMs > 0) {
+    let shouldDie = true
+    const limit = Number(process.env.CC_FORCE_ENGINE_EXIT_LIMIT)
+    const stateFile = process.env.CC_FORCE_ENGINE_EXIT_STATE
+    if (Number.isFinite(limit) && stateFile) {
+      const { readFileSync, writeFileSync } = await import('node:fs')
+      let deaths = 0
+      try { deaths = Number(JSON.parse(readFileSync(stateFile, 'utf8')).deaths) || 0 } catch { /* first generation */ }
+      shouldDie = deaths < limit
+      if (shouldDie) writeFileSync(stateFile, JSON.stringify({ deaths: deaths + 1 }))
+    }
+    if (shouldDie) setTimeout(() => process.exit(87), forcedExitMs)
+  }
 }
 
 start().catch((err) => {

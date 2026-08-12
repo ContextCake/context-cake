@@ -92,18 +92,29 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   `ps`-readable); `GIT_TRACE*`/`GIT_CURL_VERBOSE` are stripped so a tracing var
   already in the user's shell can't dump the exchange. Proven against the real
   git binary in `packages/core/tests/git-auth.test.mjs`.
-- **An engine that EXITS is fatal; an engine that WEDGES is recoverable, and
-  the two must not share a path.** `src/main/engine-watchdog.mjs` pings
-  `GET /api/status` every 10s with a per-ping deadline; more than 3 consecutive
-  misses sends `engine:status` to the main window (the console's
-  `EngineBanner`), and 60s unresponsive additionally offers a restart —
-  `relaunchEngine()` re-forks the engine and calls `loadURL` on the new origin.
-  That re-point works (`npm run smoke:relaunch` proves origin, token, window
-  URL, old-engine death and trusted-IPC revalidation); the older comments
-  claiming a loaded window could not be re-pointed were about the crash path and
-  were wrong as a general statement. An unasked-for exit stays fatal because
-  nothing in the main process knows why the child died, so re-forking could
-  loop. Never route a wedge through `handleFatal`.
+- **A post-boot engine EXIT is restarted on a bounded budget; a WEDGE is
+  offered as a manual restart; a BOOT failure is fatal — three paths, never
+  shared.** The old invariant ("an unasked-for exit stays fatal because
+  re-forking could loop") is replaced: the loop it feared is impossible by
+  construction. `handleEngineCrash` (main.mjs) + `engine-crash-policy.mjs`
+  (pure, unit-tested): at most 2 crash-triggered restarts per 10-minute
+  window (backoff 1s/10s), the budget forgiven after 5 healthy minutes; each
+  crash appends `{at, code, indexingSources}` to `engine-crashes.json` in
+  userData (last 5); when the two most recent in-window crashes were mid-index
+  on exactly ONE shared source, that source is quarantined for the next
+  generation (`sendQuarantine` over the message port → engine
+  `setIndexQuarantine` parks it as an error row — session-scoped, cleared by
+  remove/re-add or app restart; an ambiguous intersection restarts without
+  blaming anyone). Budget exhausted → the app STAYS OPEN behind an honest
+  "Engine Stopped" dialog with the watchdog's Restart Engine banner still
+  live. The most likely healthy-engine death is an OOM mid-index — knowable
+  and recoverable — which is exactly the case the fatal-exit policy used to
+  turn into "the app crashed". `npm run smoke:crash` proves the whole arc
+  (two deaths → quarantine → surviving third generation); boot failures keep
+  `handleFatal` and its boot copy. The wedge path is unchanged:
+  `src/main/engine-watchdog.mjs` pings `GET /api/status` every 10s, >3 misses
+  raises the banner, 60s unresponsive offers `relaunchEngine()` (proven by
+  `npm run smoke:relaunch`). Never route a wedge through `handleFatal`.
 - **`reload()`/`sendTokens()` resolve to `{acked}`, and the flag is the point.**
   `src/main/ack-channel.mjs` resolves `{acked: false, reason}` when the
   message-port deadline expires; the old code resolved the same empty promise

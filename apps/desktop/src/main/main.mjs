@@ -3,6 +3,14 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron'
+import {
+  CRASH_WINDOW_MS,
+  HEALTHY_RESET_MS,
+  appendBreadcrumb,
+  nextRestartDecision,
+  pruneRestarts,
+  quarantineCandidate,
+} from './engine-crash-policy.mjs'
 import { lineSink, openEngineLog } from './engine-log.mjs'
 import { startEngineService } from './service-host.mjs'
 import { createEngineWatchdog } from './engine-watchdog.mjs'
@@ -163,7 +171,9 @@ async function startEngine() {
     ? { stdout: lineSink(log.writeRaw, 'engine'), stderr: lineSink(log.writeRaw, 'engine!') }
     : null
   const started = await startEngineService({
-    onCrash: handleFatal,
+    // Post-boot exits go to the bounded-restart path; boot failures reject
+    // this await and stay with handleFatal's (correct) boot copy.
+    onCrash: handleEngineCrash,
     onOutput: sinks ? (stream, chunk) => sinks[stream]?.(chunk) : undefined,
   })
   if (engineEpoch !== epoch) {
@@ -240,7 +250,7 @@ async function pingEngine(signal) {
   // forever. The status code itself is not the signal — ANY answer means the
   // engine's loop is turning, which is the only thing being measured here.
   const body = await res.text().catch(() => '')
-  reportEngineMemory(body)
+  recordEngineStatus(body)
   return res.status
 }
 
@@ -251,10 +261,24 @@ async function pingEngine(signal) {
 // cost. Only the level crosses the bridge, and only on change: this is not a
 // second channel worth of traffic, just the one field of a response the
 // watchdog needed anyway.
+//
+// The same parsed answer feeds `lastEngineStatus`: which sources were
+// mid-index at the last successful ping. That is the breadcrumb a crash
+// records (handleEngineCrash) so the crash-loop breaker can name a suspect.
+// Ten-second granularity, so it can be stale by up to one ping — fine for a
+// breadcrumb, stated here so nobody mistakes it for the live truth.
 let lastReportedMemoryLevel = null
-function reportEngineMemory(rawBody) {
-  let level
-  try { level = JSON.parse(rawBody)?.memory } catch { return }
+let lastEngineStatus = null
+function recordEngineStatus(rawBody) {
+  let parsed
+  try { parsed = JSON.parse(rawBody) } catch { return }
+  if (!parsed || typeof parsed !== 'object') return
+  lastEngineStatus = {
+    at: Date.now(),
+    indexing: parsed.indexing === true,
+    indexingSources: Array.isArray(parsed.indexingSources) ? parsed.indexingSources.map(String) : [],
+  }
+  const level = parsed.memory
   if (typeof level !== 'string' || level === lastReportedMemoryLevel) return
   lastReportedMemoryLevel = level
   trustedWindows.broadcast('engine:memory', { level }, ['main'])
@@ -267,6 +291,7 @@ function startEngineWatchdog() {
       // Only the main window carries the shell banner; the settings window has
       // no place to put it.
       trustedWindows.broadcast('engine:status', state, ['main'])
+      noteEngineHealth(state.healthy === true)
       if (state.healthy) relaunchDeclined = false
       else if (state.canRelaunch && !relaunchDeclined) offerEngineRelaunch()
     },
@@ -343,6 +368,10 @@ async function relaunchEngine() {
     lastReportedMemoryLevel = null
     if (!(await startEngine())) return { ok: false, reason: 'shutting-down' }
     await pushGithubTokens()
+    if (pendingQuarantine.length) {
+      const sent = await service.sendQuarantine(pendingQuarantine)
+      if (sent?.acked !== true) noteUnackedEngineMessage('a source quarantine', sent?.reason ?? 'unknown')
+    }
     const targets = [[win, `${service.origin}/console/`]]
     if (settingsWin) targets.push([settingsWin, `${service.origin}/console/?surface=settings`])
     for (const [window, url] of targets) {
@@ -399,6 +428,124 @@ function reportEngineRestartFailure(err) {
   const parent = win && !win.isDestroyed() ? win : null
   const shown = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options)
   // A rejected dialog promise on the main process is the fatal handler.
+  shown.catch(() => { /* the window went away mid-prompt */ })
+}
+
+// ---- Engine crash recovery --------------------------------------------------
+//
+// A post-boot engine exit used to be fatal by policy: nothing knew why the
+// child died, so re-forking "could loop", and the app quit behind a dialog
+// whose copy described a BOOT failure. But the most likely reason a healthy
+// engine exits is an OOM during a large index — knowable, and recoverable.
+// The loop the old rule feared is made impossible by construction instead:
+// restarts are bounded per window, a source mid-index for two deaths in a
+// row is quarantined (engine-crash-policy.mjs), and when the budget is spent
+// the app STAYS OPEN with the watchdog's Restart Engine banner still live.
+// Boot failures keep handleFatal and its correct copy.
+
+let crashRestarts = [] // timestamps of crash-triggered restarts, pruned to the policy window
+let pendingQuarantine = [] // source names the next engine generation must skip
+let crashRelaunchTimer = null
+let engineHealthySince = null
+
+function crashBreadcrumbFile() {
+  return path.join(configDir(), 'engine-crashes.json')
+}
+
+function readCrashBreadcrumbs() {
+  try { return JSON.parse(fs.readFileSync(crashBreadcrumbFile(), 'utf8')) } catch { return [] }
+}
+
+function noteEngineHealth(healthy) {
+  if (!healthy) {
+    engineHealthySince = null
+    return
+  }
+  engineHealthySince ??= Date.now()
+  // A stretch of good behavior forgives the restart budget — one bad
+  // afternoon must not count against next week. The quarantine is NOT
+  // forgiven here: it took two same-source deaths to earn, and only a
+  // remove/re-add or an app restart clears it.
+  if (crashRestarts.length && Date.now() - engineHealthySince >= HEALTHY_RESET_MS) {
+    crashRestarts = []
+  }
+}
+
+function handleEngineCrash(err, { code = null } = {}) {
+  const message = err?.message ?? String(err)
+  engineLog?.logEvent(`engine crashed (code ${code ?? 'unknown'}): ${message}`)
+  engineHealthySince = null
+  // The dead process can serve nothing; reflect that now. close() is a no-op
+  // on an exited child, and marking the teardown deliberate keeps any
+  // straggler events out of this handler.
+  shutdownEngine()
+
+  const breadcrumbs = appendBreadcrumb(readCrashBreadcrumbs(), {
+    at: new Date().toISOString(),
+    code,
+    indexingSources: lastEngineStatus?.indexingSources ?? null,
+  })
+  try { fs.writeFileSync(crashBreadcrumbFile(), `${JSON.stringify(breadcrumbs, null, 2)}\n`) } catch { /* breadcrumbs are best-effort */ }
+
+  // Only crashes from the current window vote: two mid-index deaths months
+  // apart are a coincidence, not a pattern worth quarantining over.
+  const recent = breadcrumbs.filter((crumb) => Date.now() - Date.parse(crumb.at) < CRASH_WINDOW_MS)
+  const suspect = quarantineCandidate(recent)
+  if (suspect && !pendingQuarantine.includes(suspect)) {
+    pendingQuarantine.push(suspect)
+    engineLog?.logEvent(`quarantining source after repeat crash: ${suspect}`)
+  }
+
+  crashRestarts = pruneRestarts(crashRestarts, Date.now())
+  const decision = nextRestartDecision(crashRestarts)
+  if (!decision.restart) {
+    engineLog?.logEvent('engine restart budget exhausted — staying open without an engine')
+    reportEngineStopped(message)
+    return
+  }
+  crashRestarts.push(Date.now())
+  engineLog?.logEvent(`engine restart ${crashRestarts.length} scheduled in ${decision.backoffMs}ms`)
+  clearTimeout(crashRelaunchTimer)
+  crashRelaunchTimer = setTimeout(() => {
+    crashRelaunchTimer = null
+    relaunchEngine().then((result) => {
+      if (!result.ok && result.reason !== 'already-restarting' && result.reason !== 'shutting-down') {
+        engineLog?.logEvent(`crash-triggered relaunch failed: ${result.reason}`)
+      }
+    }).catch((relaunchErr) => {
+      // relaunchEngine reports its own failures; an unexpected rejection here
+      // must not reach unhandledRejection, which is the fatal handler.
+      engineLog?.logEvent(`crash-triggered relaunch threw: ${relaunchErr?.message ?? relaunchErr}`)
+    })
+  }, decision.backoffMs)
+  crashRelaunchTimer.unref?.()
+}
+
+/**
+ * The end of the restart budget: say what actually happened, keep the app.
+ * The watchdog keeps pinging a dead origin, so the EngineBanner and its
+ * Restart Engine button stay live for a manual retry.
+ */
+function reportEngineStopped(detail) {
+  relaunchDeclined = false
+  startEngineWatchdog()
+  engineWatchdog?.checkNow()?.catch(() => {})
+  if (process.env.CC_SMOKE === '1' || !app.isReady()) return
+  const suspectLine = pendingQuarantine.length
+    ? `\n\nIndexing "${pendingQuarantine.join('", "')}" appears to be what stops it. That source will be `
+      + 'skipped if the engine comes back; point it at a smaller folder, or remove and re-add it to try again.'
+    : ''
+  const options = {
+    type: 'error',
+    buttons: ['OK'],
+    title: 'ContextCake Engine Stopped',
+    message: 'The ContextCake engine stopped unexpectedly and could not be kept running.',
+    detail: 'ContextCake is still open; your sources and settings are untouched. '
+      + 'Use Restart Engine in the banner to try again, or quit and reopen ContextCake.'
+      + suspectLine + `\n\n${detail}`,
+  }
+  const parent = win && !win.isDestroyed() ? win : null
+  const shown = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options)
   shown.catch(() => { /* the window went away mid-prompt */ })
 }
 
@@ -1218,6 +1365,10 @@ async function createWindow() {
   await created.loadURL(`${service.origin}/console/${process.env.CC_SMOKE_UI === '1' ? '?mode=demo' : ''}`)
   startManifestSync()
   startEngineWatchdog()
+  // Warm the status cache now rather than at the first 10s tick: if the engine
+  // dies mid-first-index, the crash breadcrumb should already know which
+  // sources were in flight (recordEngineStatus via the ping).
+  engineWatchdog?.checkNow()?.catch(() => {})
 }
 
 /**
@@ -1277,6 +1428,48 @@ async function smokeCheck() {
   // CC_SMOKE=1: boot, prove the service answers with the token, exit.
   // Used by CI and agents — no lingering window.
   try {
+    // CC_SMOKE_ENGINE_CRASH=1: the bounded-restart path, driven by an engine
+    // that really dies (CC_FORCE_ENGINE_EXIT_AFTER_READY, limited to the
+    // first CC_FORCE_ENGINE_EXIT_LIMIT generations). Expected arc with
+    // limit=2: crash → restart in 1s → crash again with the same source
+    // mid-index → suspect quarantined → restart in 10s → the third
+    // generation survives, skipping the quarantined source. Runs FIRST and
+    // exits: nothing else in this function can hold against an engine that is
+    // dying underneath it. Driven end to end by scripts/engine-crash-test.mjs.
+    if (process.env.CC_SMOKE_ENGINE_CRASH === '1') {
+      const deadline = Date.now() + 90_000
+      // Wait for the whole arc: two crash-triggered restarts recorded, a live
+      // engine, and no relaunch still pending.
+      for (;;) {
+        if (Date.now() > deadline) throw new Error('engine-crash smoke: arc did not complete within 90s')
+        if (crashRestarts.length >= 2 && service && !relaunchingEngine && crashRelaunchTimer === null) break
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+      const crumbs = readCrashBreadcrumbs()
+      if (crumbs.length < 2) throw new Error(`engine-crash smoke: expected >=2 breadcrumbs, found ${crumbs.length}`)
+      if (crumbs.some((c) => c.code !== 87)) throw new Error('engine-crash smoke: breadcrumbs lost the exit code')
+      if (pendingQuarantine.length !== 1) {
+        throw new Error(`engine-crash smoke: expected exactly one quarantined source, got [${pendingQuarantine.join(', ')}]`)
+      }
+      // The surviving engine must be serving, with the suspect parked as an
+      // error row — not indexing, not crashing the engine a third time.
+      const status = await fetch(`${service.origin}/api/status`, {
+        headers: { authorization: `Bearer ${service.token}` },
+        signal: AbortSignal.timeout(5_000),
+      }).then((r) => r.json())
+      const suspect = status.sources.find((s) => s.name === pendingQuarantine[0])
+      if (!suspect || suspect.status !== 'error' || !/stopped the engine twice/.test(suspect.error ?? '')) {
+        throw new Error(`engine-crash smoke: quarantined source not parked as error: ${JSON.stringify(suspect ?? null)}`)
+      }
+      console.log(
+        `ENGINE CRASH SMOKE OK restarts=${crashRestarts.length} breadcrumbs=${crumbs.length}`
+        + ` quarantined=${pendingQuarantine[0]} survivor=${service.origin}`,
+      )
+      shutdownEngine()
+      flushSettingsSync()
+      app.exit(0)
+      return
+    }
     // CC_SMOKE_QUIT=quit|close: prove the window's frame survives the exit.
     // Moves the window and then ends the app while the 250ms bounds debounce
     // is still pending — which is exactly what "resize, then ⌘Q" looks like.

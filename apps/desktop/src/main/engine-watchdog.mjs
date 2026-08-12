@@ -1,7 +1,7 @@
 // Liveness for an engine that is still running but has stopped answering.
 //
-// An engine EXIT is already handled and already fatal (service-host.mjs's
-// onCrash → the clean dialog-and-exit of specs/contextcake-distribution/design.md).
+// An engine EXIT is already handled elsewhere (service-host.mjs's onCrash →
+// main.mjs's handleEngineCrash: bounded restart, breadcrumbs, quarantine).
 // A WEDGE is the other failure and deliberately does not take that path: the
 // process is alive, its HTTP server is bound, and the app looks fine while
 // every request hangs. Nothing measured that before, so the only symptom a user

@@ -409,6 +409,13 @@ export function createEngineService({
   // key is re-derived from live pins on every request.
   let corpusMemo = null;
   const CORPUS_MEMO_TTL_MS = 30_000;
+  // Source names the host told us to skip (setIndexQuarantine): the desktop's
+  // crash-loop breaker, after the same source was mid-index for two engine
+  // deaths in a row. Session-scoped on purpose — never persisted, so a plain
+  // app restart is always a clean retry. Removing the layer from the manifest
+  // clears its name (ensureIndexes), which is what makes "remove and re-add
+  // the source to try again" in the quarantine copy literally true.
+  let quarantinedIndexNames = new Set();
   let conceptTokens = new Map(); // concept id -> { sig, tokens } for merged concepts
   // Monotonic counter behind /api/status. Bumped whenever the signature of what
   // the heavy routes would return changes, so a client can poll cheaply and
@@ -740,6 +747,16 @@ export function createEngineService({
    */
   function ensureIndexes() {
     const open = openSources();
+    // A quarantined name whose layer left the manifest is forgiven: removing
+    // and re-adding a source is the documented way to retry it, and holding
+    // the grudge against a future layer that merely reuses the name would be
+    // a trap with no visible cause.
+    if (quarantinedIndexNames.size) {
+      const current = new Set(open.sources.map((source) => source.name));
+      for (const name of quarantinedIndexNames) {
+        if (!current.has(name)) quarantinedIndexNames.delete(name);
+      }
+    }
     const entries = open.sources.map((source, i) => {
       const key = open.keys[i];
       let entry = indexes.get(key);
@@ -772,13 +789,50 @@ export function createEngineService({
    * instead of cancelling, and the entry owes exactly one follow-up when this
    * pass lands (see scheduleFollowUp for when it actually runs).
    */
+  // What a quarantined source's row says. Distinct wording from the
+  // sourceBudgetMs timeout (startIndex's withDeadline message) — these are
+  // different failures with different fixes, and setup-robustness-test pins
+  // the timeout string verbatim.
+  const QUARANTINE_ERROR = "Indexing this source stopped the engine twice, so ContextCake is skipping it. "
+    + "Point it at a smaller folder, or remove and re-add the source to try again.";
+
+  /**
+   * Host-directed skip list (the desktop's crash-loop breaker). Cancels any
+   * running pass for a named source and parks its entry in `error`; future
+   * passes short-circuit in startIndex. Session-scoped; see the state comment.
+   */
+  function setIndexQuarantine(names) {
+    quarantinedIndexNames = new Set((names ?? []).map((n) => String(n)).slice(0, 64));
+    if (!quarantinedIndexNames.size) return;
+    for (const entry of indexes.values()) {
+      if (!quarantinedIndexNames.has(entry.sourceName)) continue;
+      entry.cancel?.();
+      entry.running = false;
+      entry.refreshing = false;
+      entry.status = "error";
+      entry.phase = "error";
+      entry.error = QUARANTINE_ERROR;
+    }
+  }
+
   function startIndex(source, key, settings, {
     validity = null, previousSnap = null, previousSuccessAt = null, previousHealth = null, passes = 1,
   } = {}) {
     const controller = new AbortController();
     const refreshing = previousSnap !== null;
+    if (quarantinedIndexNames.has(source.name)) {
+      console.error(`[index] ${source.name}: quarantined by the host — no pass started`);
+      return {
+        key, sourceName: source.name, status: "error", phase: "error", error: QUARANTINE_ERROR,
+        loaded: 0, total: null, snap: previousSnap, lastSuccessAt: previousSuccessAt,
+        lastHealth: previousHealth, validity, running: false, refreshing: false, passes,
+        dirty: false, followUp: null, startedAt: Date.now(), finishedAt: Date.now(),
+        cancel: () => {},
+      };
+    }
     const entry = {
       key,
+      sourceName: source.name,
       status: refreshing ? "ready" : "indexing",
       phase: refreshing ? "ready" : "queued",
       loaded: 0,
@@ -849,8 +903,12 @@ export function createEngineService({
         if (indexes.get(entry.key) !== entry) return;
         entry.status = "error";
         entry.phase = "error";
-        entry.error = err.message;
-        console.error(`[index] ${source.name}: pass ${entry.passes} failed after ${Date.now() - entry.startedAt}ms — ${err.message}`);
+        // A pass cancelled BY the quarantine settles here after
+        // setIndexQuarantine already wrote the row; the abort reason
+        // ("Indexing superseded") must not overwrite the message that
+        // actually explains the state.
+        entry.error = quarantinedIndexNames.has(source.name) ? QUARANTINE_ERROR : err.message;
+        console.error(`[index] ${source.name}: pass ${entry.passes} failed after ${Date.now() - entry.startedAt}ms — ${entry.error}`);
       })
       .finally(() => {
         entry.running = false;
@@ -2392,5 +2450,5 @@ export function createEngineService({
     console.error(`contextcake: discrepancy transaction recovery requires attention: ${error.message}`);
   }));
 
-  return { handleRequest, close, getSources, reload, setTokens };
+  return { handleRequest, close, getSources, reload, setTokens, setIndexQuarantine };
 }

@@ -821,4 +821,21 @@ describe('graph-first bootstrap', () => {
     expect(probe().dataset.selDetail).toBe('false')
     expect(probe().dataset.count).toBe('1')
   })
+
+  it('retries a failed detail on its own while the concept is still the one on screen', async () => {
+    mocks.flags.withDiscrepancies = true
+    mocks.graph.mockResolvedValue(graphWithRows([graphRow('a')]))
+    mocks.discrepancies.mockResolvedValue(emptyDiscrepancies)
+    mocks.resolve.mockRejectedValueOnce(new Error('engine mid-restart')).mockImplementation(async (id: string) => conceptPayload(id))
+
+    await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
+    expect(probe().dataset.selDetail).toBe('false')
+
+    // Nothing is clicked and nothing is navigated: the failure window this
+    // path exists for (engine mid-relaunch on a large vault) closes by itself,
+    // and a permanent spinner would be the same lie as an empty document.
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(probe().dataset.selDetail).toBe('undefined')
+    expect(probe().dataset.selSections).toBe('1')
+  })
 })

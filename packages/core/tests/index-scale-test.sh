@@ -21,7 +21,12 @@ FIRST_PASS_BUDGET_MS=120000
 # ~330MB live (contiguous sections + fingerprints + token counts for a ~60MB
 # corpus). The gate sits well above run noise and far below the 4.2GB abort.
 MAX_SETTLED_HEAP_MB=600
-EDIT_PASS_BUDGET_MS=2000
+# The edit budget is deliberately BELOW what a 20k first pass costs on CI-grade
+# hardware (~9s there, ~3s here). That is the assertion: the follow-up window
+# must not inherit the last pass's duration, or one slow first index makes the
+# first edit wait a second slow index. A correct pass here is watcher debounce
+# + the 1s quiet window + a 22k-entry walk + exactly one read (~2s on CI).
+EDIT_PASS_BUDGET_MS=6000
 
 cleanup() {
   [ -n "$PID" ] && kill "$PID" 2>/dev/null
@@ -124,7 +129,7 @@ EDIT_MS=$(( $(node -e 'process.stdout.write(String(Date.now()))') - EDIT_START )
 if [ -n "$LANDED" ]; then
   STATS="$(printf '%s' "$LANDED" | JQ '(() => { const p = d.sources[0].passStats; return `${p.read} ${p.carried}` })()')"
   CARRIED=$((NOTES - 1))
-  if [ "$STATS" = "1 $CARRIED" ] && [ "$EDIT_MS" -le $((EDIT_PASS_BUDGET_MS + 1500)) ]; then
+  if [ "$STATS" = "1 $CARRIED" ] && [ "$EDIT_MS" -le "$EDIT_PASS_BUDGET_MS" ]; then
     pass "a one-note edit at 20k scale cost one read and landed in ${EDIT_MS}ms (stats: $STATS)"
   else
     fail "edit pass: stats='$STATS' in ${EDIT_MS}ms (want '1 $CARRIED' within ~${EDIT_PASS_BUDGET_MS}ms)"

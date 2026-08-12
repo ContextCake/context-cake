@@ -478,6 +478,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // NB: `selConceptRef` (declared with the other selection refs below) is
   // read inside readAll — the binding exists by the time any async pass runs.
 
+  const detailRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadConceptDetail = useCallback(async (id: string) => {
     // Only rows born compact load: demo-bundle rows and the legacy
     // resolve-all fallback are already full, and compactRef only holds rows
@@ -503,8 +504,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return c
       }))
     } catch {
-      // The compact row stays; the next selection change or refetch retries.
-      // A missing detail renders as loading, never as an empty document.
+      // The compact row stays and the load RETRIES while this concept is
+      // still what the user is looking at — the failure window (engine
+      // mid-relaunch, a timeout under memory pressure) is exactly the
+      // large-vault condition this path exists for, and "a background
+      // failure is never silent" means never a permanent spinner either.
+      // Selection changes make the retry a no-op; success clears it.
+      if (detailRetryRef.current) clearTimeout(detailRetryRef.current)
+      detailRetryRef.current = setTimeout(() => {
+        detailRetryRef.current = null
+        if (selConceptRef.current === id) void loadConceptDetail(id)
+      }, 2500)
     } finally {
       detailInFlightRef.current.delete(id)
     }
@@ -625,16 +635,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // bootstrap and content move, against a 60s deadline: the "timeout" and
       // the white-window half of the large-vault failure. Full documents now
       // arrive one concept at a time on selection (loadConceptDetail below).
-      // An engine too old to serve /api/discrepancies still takes the legacy
-      // whole-corpus path in the branch below — an engine that old predates
-      // every large-vault feature, so its corpora are small.
-      const legacy = !source.discrepancies
-      const [legacyAll, resolutionHistory, discrepancyPayload, rulePayload] = await Promise.all([
-        legacy ? source.resolveAll() : Promise.resolve(null),
+      const [resolutionHistory, discrepancyPayload, rulePayload] = await Promise.all([
         source.conflictResolutions(),
         source.discrepancies ? source.discrepancies() : Promise.resolve(null),
         source.discrepancyRules ? source.discrepancyRules().catch(() => ({ rules: [], suggestions: [] })) : Promise.resolve({ rules: [], suggestions: [] }),
       ])
+      if (cancelled) return false
+      // Capability is judged by the ANSWER, not only by the method: a live
+      // source always defines discrepancies() and returns null when the engine
+      // is too old to serve the route (the 404 is swallowed there). Keying the
+      // fallback on the method alone left that engine rendering zero conflicts
+      // in silence. Either way the legacy whole-corpus path is what answers —
+      // an engine that old predates every large-vault feature, so its corpora
+      // are small, and it costs one extra round trip there and nowhere else.
+      const legacy = discrepancyPayload === null
+      const legacyAll = legacy ? await source.resolveAll() : null
       if (cancelled) return false
       const indexing = discrepancyPayload?.indexing ?? legacyAll?.indexing ?? g.indexing ?? false
       const resolvingSources = discrepancyPayload?.indexingSources ?? legacyAll?.indexingSources

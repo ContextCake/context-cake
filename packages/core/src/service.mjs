@@ -1347,6 +1347,13 @@ export function createEngineService({
   const FOLLOW_UP_MIN_QUIET_MS = 1000;
   const FOLLOW_UP_MAX_QUIET_MS = 15000;
   function followUpQuietMs(entry) {
+    // The window models the cost of the NEXT pass, and the fingerprint gate
+    // changed that cost: an incremental-capable snapshot (fileMeta present)
+    // makes a follow-up cheap no matter what the LAST pass paid — a 20k-file
+    // first index taking ten seconds must not make the first edit wait ten
+    // more. Sources without fingerprints (github, mcp) keep the duration-
+    // based window, because their follow-up genuinely is another full read.
+    if (entry.snap?.fileMeta) return FOLLOW_UP_MIN_QUIET_MS;
     const lastPassMs = (entry.finishedAt ?? Date.now()) - entry.startedAt;
     return Math.min(FOLLOW_UP_MAX_QUIET_MS, Math.max(FOLLOW_UP_MIN_QUIET_MS, lastPassMs));
   }

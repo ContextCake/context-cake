@@ -197,6 +197,7 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
   throwIfAborted();
   entry.phase = "loading";
   entry.total = ids.length;
+  entry.loadingStartedAt = Date.now(); // rate/ETA baseline for the activity panel
   const prevMeta = fingerprinted ? previousSnap?.fileMeta ?? null : null;
   // Partial progress from an aborted predecessor (entry.carrySeed): consulted
   // BEHIND the served snapshot, so a retry resumes what the failed attempt
@@ -549,6 +550,35 @@ export function createEngineService({
   // clears its name (ensureIndexes), which is what makes "remove and re-add
   // the source to try again" in the quarantine copy literally true.
   let quarantinedIndexNames = new Set();
+  // User-directed pause list (POST /api/indexing/pause): "*" pauses every
+  // source. Session-scoped like the quarantine — never persisted, and never
+  // written to the manifest (settings there participate in validity keys, so
+  // persisting pause would re-index on toggle).
+  const PAUSE_ALL = "*";
+  let pausedIndexNames = new Set();
+  // Diagnostics the activity panel reads: what recent passes did, and the
+  // engine's own recent warn/error lines — bounded rings, names and enums
+  // plus human-readable messages, never document content.
+  const passHistory = new Map(); // source name -> [{startedAt, durationMs, outcome, ...}] newest last
+  const PASS_HISTORY_LIMIT = 20;
+  const engineEvents = [];
+  const ENGINE_EVENTS_LIMIT = 200;
+
+  function isPausedName(name) {
+    return pausedIndexNames.has(PAUSE_ALL) || pausedIndexNames.has(name);
+  }
+
+  function pushEngineEvent(line) {
+    engineEvents.push({ at: Date.now(), line });
+    if (engineEvents.length > ENGINE_EVENTS_LIMIT) engineEvents.splice(0, engineEvents.length - ENGINE_EVENTS_LIMIT);
+  }
+
+  function recordPass(name, record) {
+    const list = passHistory.get(name) ?? [];
+    list.push(record);
+    if (list.length > PASS_HISTORY_LIMIT) list.splice(0, list.length - PASS_HISTORY_LIMIT);
+    passHistory.set(name, list);
+  }
   let conceptTokens = new Map(); // concept id -> { sig, tokens } for merged concepts
   // Monotonic counter behind /api/status. Bumped whenever the signature of what
   // the heavy routes would return changes, so a client can poll cheaply and
@@ -777,6 +807,14 @@ export function createEngineService({
         const preferred = indexQueue.findIndex((item) => item.sourceName === activeSourceName);
         if (preferred !== -1) i = preferred;
       }
+      // A paused source's queued pass never takes a slot. It is not dequeued
+      // here — the pause path cancels it — this only closes the race where a
+      // pause lands between enqueue and pump.
+      if (isPausedName(indexQueue[i].sourceName)) {
+        const runnable = indexQueue.findIndex((item) => !isPausedName(item.sourceName));
+        if (runnable === -1) break;
+        i = runnable;
+      }
       const [item] = indexQueue.splice(i, 1);
       runningIndexCount += 1;
       item.run();
@@ -960,18 +998,166 @@ export function createEngineService({
     }
   }
 
+  // ---- user-facing indexing controls (POST /api/indexing/*) -----------------
+  //
+  // Pause is session-scoped and layered exactly like the quarantine: new
+  // passes short-circuit to a parked entry, queued passes are cancelled and
+  // parked, and a RUNNING pass keeps its slot until Cancel is asked for
+  // explicitly — aborting work someone did not ask to abort loses real
+  // progress for a control that only promised "don't start more".
+
+  /** Start a fresh pass for one entry, carrying what the caller says. */
+  function relaunchEntry(entry, { carrySeed = entry.carrySeed, disableCarry = false } = {}) {
+    let open;
+    try { open = openSources(); } catch { return false; }
+    if (indexes.get(entry.key) !== entry) return false;
+    const i = open.keys.indexOf(entry.key);
+    if (i === -1) return false;
+    indexes.set(entry.key, startIndex(open.sources[i], entry.key, open.settings, {
+      validity: open.validities[i],
+      previousSnap: entry.snap,
+      previousSuccessAt: entry.lastSuccessAt,
+      previousHealth: entry.lastHealth,
+      passes: entry.passes + 1,
+      carrySeed: disableCarry ? null : carrySeed,
+      disableCarry,
+    }));
+    return true;
+  }
+
+  function pauseIndexing(name = null) {
+    pausedIndexNames.add(name ?? PAUSE_ALL);
+    pushEngineEvent(`[control] pause ${name ?? "all sources"}`);
+    for (const entry of [...indexes.values()]) {
+      if (!isPausedName(entry.sourceName)) continue;
+      const queued = indexQueue.some((item) => item.sourceName === entry.sourceName);
+      if (queued && entry.running) {
+        // Never took a slot: cancel the wait and park. The catch converts the
+        // abort into phase "paused" because the name is in the pause set.
+        entry.cancel();
+      } else if (!entry.running && entry.status !== "error") {
+        // Idle entries park immediately so the row says what will happen.
+        entry.phase = "paused";
+        if (entry.retryTimer) {
+          clearTimeout(entry.retryTimer);
+          entry.retryTimer = null;
+          entry.nextRetryAt = null;
+        }
+      }
+    }
+  }
+
+  function resumeIndexing(name = null) {
+    if (name === null) pausedIndexNames = new Set();
+    else {
+      pausedIndexNames.delete(name);
+      pausedIndexNames.delete(PAUSE_ALL); // resuming one source ends a pause-all for the rest too — least surprising reading of "resume"
+      if (pausedIndexNames.has(PAUSE_ALL)) pausedIndexNames = new Set();
+    }
+    pushEngineEvent(`[control] resume ${name ?? "all sources"}`);
+    for (const entry of [...indexes.values()]) {
+      if (entry.phase !== "paused") continue;
+      if (isPausedName(entry.sourceName)) continue; // a narrower pause still covers it
+      relaunchEntry(entry);
+    }
+  }
+
+  function cancelIndexing(name) {
+    for (const entry of [...indexes.values()]) {
+      if (entry.sourceName !== name || !entry.running) continue;
+      entry.userCancelled = true;
+      entry.cancel();
+      pushEngineEvent(`[control] cancel ${name}`);
+      return true;
+    }
+    return false;
+  }
+
+  function reindexSource(name = null, { full = false } = {}) {
+    pushEngineEvent(`[control] reindex ${name ?? "all sources"}${full ? " (full)" : ""}`);
+    let any = false;
+    for (const entry of [...indexes.values()]) {
+      if (name !== null && entry.sourceName !== name) continue;
+      if (isPausedName(entry.sourceName)) continue; // paused stays paused; resume is the lever
+      if (entry.running) { entry.dirty = true; any = true; continue; }
+      if (entry.followUp) { clearTimeout(entry.followUp); entry.followUp = null; }
+      any = relaunchEntry(entry, { carrySeed: full ? null : entry.carrySeed, disableCarry: full }) || any;
+    }
+    return any;
+  }
+
+  /**
+   * GET /api/indexing/activity — the power-user panel's payload. Deliberately
+   * NOT part of /api/status (which must stay O(sources)-tiny and poll-cheap):
+   * this carries pass history, warning samples and the event ring, and is
+   * fetched only while someone is looking at it. Still O(sources)+O(rings):
+   * no resolve, no tokenizer, no file I/O.
+   */
+  function indexingActivityApi() {
+    const { entries } = ensureIndexes();
+    const now = Date.now();
+    const sources = entries.map(({ source, entry }) => {
+      const running = entry.running === true && entry.phase === "loading";
+      const elapsedS = running && entry.loadingStartedAt ? (now - entry.loadingStartedAt) / 1000 : 0;
+      const rate = running && elapsedS > 0.5 && entry.loaded > 0 ? entry.loaded / elapsedS : null;
+      const remaining = rate && entry.total ? Math.max(0, entry.total - entry.loaded) : null;
+      return {
+        name: source.name,
+        level: source.level,
+        status: entry.status,
+        phase: entry.phase,
+        paused: isPausedName(source.name),
+        loaded: entry.loaded,
+        total: entry.total,
+        startedAt: entry.startedAt,
+        finishedAt: entry.finishedAt,
+        passes: entry.passes ?? 1,
+        rateDocsPerSec: rate ? Math.round(rate * 10) / 10 : null,
+        etaMs: remaining !== null ? Math.round((remaining / rate) * 1000) : null,
+        passStats: entry.passStats ?? null,
+        retries: entry.retries || 0,
+        nextRetryAt: entry.nextRetryAt ?? null,
+        error: entry.error ?? null,
+        lastPasses: passHistory.get(source.name) ?? [],
+        warnings: sourceWarnings(entry.snap),
+        skippedSamples: (entry.snap?.skipped ?? []).slice(0, 20).map((item) => item.rel),
+        unreadableSamples: (entry.snap?.unreadable ?? []).slice(0, 20).map((item) => item.rel),
+        truncated: entry.snap?.truncated ?? null,
+      };
+    });
+    return { paused: [...pausedIndexNames], sources, events: engineEvents.slice() };
+  }
+
   function startIndex(source, key, settings, {
     validity = null, previousSnap = null, previousSuccessAt = null, previousHealth = null, passes = 1,
-    carrySeed = null, retries = 0,
+    carrySeed = null, retries = 0, disableCarry = false,
   } = {}) {
     const controller = new AbortController();
     const refreshing = previousSnap !== null;
+    if (isPausedName(source.name)) {
+      // Parked, not erroring: a paused source with a snapshot keeps serving
+      // it ("ready"); one without stays "indexing" — no answer yet, and
+      // deliberately not working (the documented meaning of that status).
+      // Neither counts as unsettled, so ?wait= answers promptly.
+      return {
+        key, sourceName: source.name, status: previousSnap ? "ready" : "indexing", phase: "paused",
+        error: null, loaded: 0, total: null, snap: previousSnap, lastSuccessAt: previousSuccessAt,
+        lastHealth: previousHealth, validity, running: false, refreshing: false,
+        // The pass this entry was created for never ran; the counter counts
+        // passes, not parks.
+        passes: Math.max(1, passes - 1),
+        dirty: false, followUp: null, startedAt: Date.now(), finishedAt: Date.now(),
+        carrySeed, retries, retryTimer: null, nextRetryAt: null,
+        cancel: () => {},
+      };
+    }
     if (quarantinedIndexNames.has(source.name)) {
       console.error(`[index] ${source.name}: quarantined by the host — no pass started`);
       return {
         key, sourceName: source.name, status: "error", phase: "error", error: QUARANTINE_ERROR,
         loaded: 0, total: null, snap: previousSnap, lastSuccessAt: previousSuccessAt,
-        lastHealth: previousHealth, validity, running: false, refreshing: false, passes,
+        lastHealth: previousHealth, validity, running: false, refreshing: false,
+        passes: Math.max(1, passes - 1), // parked, not run — see the pause park above
         dirty: false, followUp: null, startedAt: Date.now(), finishedAt: Date.now(),
         cancel: () => {},
       };
@@ -1035,7 +1221,7 @@ export function createEngineService({
         // died" answerable after the fact.
         console.error(`[index] ${source.name}: pass ${entry.passes} start${refreshing ? " (refresh)" : ""}`);
         return withDeadline(
-          snapshotSource(source, entry, controller.signal, previousSnap, tokenCache, carrySeed),
+          snapshotSource(source, entry, controller.signal, disableCarry ? null : previousSnap, tokenCache, carrySeed),
           budget,
           `Indexing took longer than ${Math.round(budget / 1000)}s. Raise the time budget in Settings, or point this source at a smaller folder.`,
           () => {
@@ -1062,7 +1248,13 @@ export function createEngineService({
         if (!health || health.ok !== false) entry.lastSuccessAt = new Date().toISOString();
         entry.carrySeed = null; // resumed and landed — the partial is obsolete
         entry.retries = 0;
-        console.error(`[index] ${source.name}: pass ${entry.passes} done in ${Date.now() - entry.startedAt}ms — ${snap.ids.length} concepts`);
+        const doneLine = `[index] ${source.name}: pass ${entry.passes} done in ${Date.now() - entry.startedAt}ms — ${snap.ids.length} concepts`;
+        console.error(doneLine);
+        pushEngineEvent(doneLine);
+        recordPass(source.name, {
+          startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt, outcome: "ok",
+          concepts: snap.ids.length, ...(entry.passStats ?? {}),
+        });
       })
       .catch((err) => {
         if (indexes.get(entry.key) !== entry) return;
@@ -1072,8 +1264,29 @@ export function createEngineService({
         // setIndexQuarantine already wrote the row; the abort reason
         // ("Indexing superseded") must not overwrite the message that
         // actually explains the state.
+        // A pass ended by pause/cancel parks as paused (its carry seed makes
+        // resume cheap); quarantine keeps its own message; everything else is
+        // the error it is.
+        if (isPausedName(source.name) || entry.userCancelled) {
+          entry.status = entry.snap ? "ready" : "indexing";
+          entry.phase = "paused";
+          entry.error = null;
+          const pausedLine = `[index] ${source.name}: pass ${entry.passes} stopped (${entry.userCancelled ? "cancelled" : "paused"}) after ${Date.now() - entry.startedAt}ms`;
+          console.error(pausedLine);
+          pushEngineEvent(pausedLine);
+          recordPass(source.name, {
+            startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt,
+            outcome: entry.userCancelled ? "cancelled" : "paused",
+          });
+          return;
+        }
         entry.error = quarantinedIndexNames.has(source.name) ? QUARANTINE_ERROR : err.message;
-        console.error(`[index] ${source.name}: pass ${entry.passes} failed after ${Date.now() - entry.startedAt}ms — ${entry.error}`);
+        const failLine = `[index] ${source.name}: pass ${entry.passes} failed after ${Date.now() - entry.startedAt}ms — ${entry.error}`;
+        console.error(failLine);
+        pushEngineEvent(failLine);
+        recordPass(source.name, {
+          startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt, outcome: "error", error: entry.error,
+        });
         // A transient failure retries itself on a backoff instead of parking
         // until something happens to invalidate — a fresh vault whose first
         // pass timed out used to sit at zero concepts FOREVER. Only failures
@@ -1091,7 +1304,9 @@ export function createEngineService({
               retryIndex(entry);
             }, backoff);
             entry.retryTimer.unref?.();
-            console.error(`[index] ${source.name}: retry ${entry.retries + 1}/${RETRY_MAX} in ${backoff}ms`);
+            const retryLine = `[index] ${source.name}: retry ${entry.retries + 1}/${RETRY_MAX} in ${backoff}ms`;
+            console.error(retryLine);
+            pushEngineEvent(retryLine);
           }
         }
       })
@@ -1574,6 +1789,23 @@ export function createEngineService({
         json(res, 200, { ok: true });
         return true;
       }
+      if (p === "/api/indexing/activity") { json(res, 200, indexingActivityApi()); return true; }
+      if (p.startsWith("/api/indexing/") && req.method === "POST") {
+        // The indexing controls change what the engine DOES, not what it
+        // stores — session-scoped by design — but they still ride the same
+        // mutation gate as every other state-changing route.
+        if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
+        const body = parseJson(await readBody(req));
+        const name = typeof body?.source === "string" && body.source ? body.source.slice(0, 200) : null;
+        if (p === "/api/indexing/pause") { pauseIndexing(name); json(res, 200, { ok: true, paused: [...pausedIndexNames] }); return true; }
+        if (p === "/api/indexing/resume") { resumeIndexing(name); json(res, 200, { ok: true, paused: [...pausedIndexNames] }); return true; }
+        if (p === "/api/indexing/cancel") {
+          if (!name) { json(res, 400, { error: "Provide {source} to cancel" }); return true; }
+          json(res, 200, { ok: cancelIndexing(name) });
+          return true;
+        }
+        if (p === "/api/indexing/reindex") { json(res, 200, { ok: reindexSource(name, { full: body?.full === true }) }); return true; }
+      }
       if (p === "/api/files") { json(res, 200, await listFilesApi(fileRoots(), walkLimits())); return true; }
       if (p === "/api/file") {
         if (req.method === "PUT" || req.method === "POST") {
@@ -1942,6 +2174,10 @@ export function createEngineService({
       // particular) can use this to throttle its own polling or show a
       // banner without adding its own watermark logic.
       memory: memory.level,
+      // Sources the user paused (POST /api/indexing/pause) — additive; "*"
+      // means everything. A paused source is settled state, so ?wait= callers
+      // and the console must be able to SEE why nothing is progressing.
+      indexingPaused: [...pausedIndexNames],
       // The raw numbers behind the level, additive: how much live heap this
       // engine holds against the V8 ceiling it would actually die at. The
       // desktop app cannot raise that ceiling (Electron ignores utilityProcess

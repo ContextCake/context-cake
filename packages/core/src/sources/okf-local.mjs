@@ -27,6 +27,14 @@ export const MAX_DOC_BYTES = 2_000_000;
 
 export function createOkfLocalSource({ name, level, root, limits = null }) {
   let history = null; // { at, promise } — see commitHistory
+  // While a batch is pinned (an index pass sweeping every document), this
+  // holds the one history promise the whole sweep reads. Without it the 30s
+  // TTL expires MID-PASS on any vault that takes longer than that to read —
+  // which a few thousand notes does — and the pass re-spawns three git
+  // subprocesses plus a full `git log` every 30 seconds for its own duration.
+  // The TTL stays exactly right for the other caller (mcp-server's live
+  // per-request reads, where staleness is the concern).
+  let pinnedHistory = null;
   let warned = false;
 
   function warnOnce(message) {
@@ -40,6 +48,7 @@ export function createOkfLocalSource({ name, level, root, limits = null }) {
   // to the mtime — which is the precise wrong answer this whole path exists to
   // prevent, and mcp-server handles requests concurrently.
   function commitHistory() {
+    if (pinnedHistory) return pinnedHistory;
     if (!history || Date.now() - history.at >= HISTORY_TTL_MS) {
       history = { at: Date.now(), promise: readHistory() };
     }
@@ -160,10 +169,24 @@ export function createOkfLocalSource({ name, level, root, limits = null }) {
         toPosix(path.relative(root, filePath)).replace(/\.md$/i, ""),
       );
     },
+    /**
+     * Pin the git-history memo for the duration of a batch read (an index
+     * pass). Returns a release function; releases are idempotent, and a batch
+     * that forgets to release only pins until the next beginBatch. See the
+     * pinnedHistory comment above for why the TTL alone is wrong mid-pass.
+     */
+    beginBatch() {
+      const pinned = commitHistory();
+      pinnedHistory = pinned;
+      return () => {
+        if (pinnedHistory === pinned) pinnedHistory = null;
+      };
+    },
     // withGitSync calls this after a pull that changed something — new commits
     // mean new dates, so the memo must not outlive them.
     sync() {
       history = null;
+      pinnedHistory = null;
     },
     close() {},
   };
@@ -336,7 +359,12 @@ function throwIfAborted(signal) {
  * milliseconds on a normal folder and stays bounded on a huge one. Never
  * throws on size — being too big is an indexing outcome, not a form error.
  */
-export async function probeDocs(root, extensions, maxEntries = 4_000, { signal = null } = {}) {
+// The default probe ceiling used to be 4,000 — coincidentally the size of a
+// real vault whose first 4,000 scanned entries were all attachments, so the
+// add form answered "no documents found" about a folder full of them. 25,000
+// readdir entries is still milliseconds, and the 5s probe deadline
+// (control/sources.mjs) bounds the pathological case either way.
+export async function probeDocs(root, extensions, maxEntries = 25_000, { signal = null } = {}) {
   let scanned = 0;
   const stack = [root];
   while (stack.length > 0) {
@@ -367,12 +395,36 @@ export async function probeDocs(root, extensions, maxEntries = 4_000, { signal =
  * the caller is NOT getting, and both used to be silent: an unreadable subtree
  * produced a source that reported "ok" with quietly missing content.
  */
-export async function walkDocs(root, extensions, limits = null, { signal = null, notes = null } = {}) {
+export async function walkDocs(root, extensions, limits = null, options = {}) {
+  const entries = await walkDocEntries(root, extensions, limits, options);
+  return entries.map((entry) => entry.path);
+}
+
+// How many dirents one directory may contribute before the walk checks its
+// abort signal and yields the event loop. A flat vault — every note in one
+// folder, the default Obsidian shape — used to make that whole directory one
+// uninterruptible unit: the per-directory abort check never ran again, and a
+// timed-out walk kept scanning to the end.
+const WALK_BREATH_EVERY = 200;
+// Stat batches per chunk, not per directory: Promise.all over a 4,000-entry
+// folder is 4,000 in-flight syscalls and one long uninterruptible await.
+const WALK_STAT_CHUNK = 64;
+const walkYield = () => new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * walkDocs with the metadata the walk already paid for: one entry per
+ * indexable document — { path, rel, ext, size, mtimeMs }, sorted by path.
+ * The stat that enforces MAX_DOC_BYTES is the same stat that yields size and
+ * mtime, which is what makes a change-detection fingerprint free at walk time
+ * (the incremental index's skip gate reads these fields).
+ */
+export async function walkDocEntries(root, extensions, limits = null, { signal = null, notes = null } = {}) {
   if (!root) return [];
   const { maxFiles, maxEntries } = { ...defaultWalkLimits(), ...(limits ?? {}) };
-  const files = [];
+  const entries = [];
   let scanned = 0;
   let hiddenSkipped = 0;
+  let sinceBreath = 0;
   const stack = [root];
   while (stack.length > 0) {
     throwIfAborted(signal);
@@ -400,6 +452,11 @@ export async function walkDocs(root, extensions, limits = null, { signal = null,
     }
     const candidates = [];
     for (const dirent of dirents) {
+      if (++sinceBreath >= WALK_BREATH_EVERY) {
+        sinceBreath = 0;
+        throwIfAborted(signal);
+        await walkYield();
+      }
       if (dirent.name.startsWith(".")) { hiddenSkipped += 1; continue; }
       if (dirent.name === "node_modules") continue;
       scanned += 1;
@@ -411,23 +468,38 @@ export async function walkDocs(root, extensions, limits = null, { signal = null,
       }
       const fullPath = path.join(current, dirent.name);
       if (dirent.isDirectory()) stack.push(fullPath);
-      else if (dirent.isFile() && extensions.some((ext) => dirent.name.endsWith(ext))) candidates.push(fullPath);
-    }
-    // One stat per candidate, batched per directory rather than awaited one at
-    // a time, so the cap costs a round of parallel syscalls instead of a serial
-    // chain across a large vault.
-    const sizes = await Promise.all(candidates.map(fileSize));
-    for (let i = 0; i < candidates.length; i += 1) {
-      if (sizes[i] !== null && sizes[i] > MAX_DOC_BYTES) {
-        notes?.skipped.push({ rel: relTo(root, candidates[i]), bytes: sizes[i] });
-        continue;
+      else {
+        const ext = extensions.find((candidate) => dirent.name.endsWith(candidate));
+        if (ext && dirent.isFile()) candidates.push({ path: fullPath, ext });
       }
-      files.push(candidates[i]);
-      if (files.length > maxFiles) {
-        throw new Error(
-          `This folder has too many documents to index (over ${maxFiles.toLocaleString("en-US")}). ` +
-            `Choose a more specific folder, such as your notes or docs directory.`,
-        );
+    }
+    // One stat per candidate, batched in bounded chunks rather than one
+    // directory-wide Promise.all, so a flat vault costs rounds of parallel
+    // syscalls with abort checks between them instead of one long await.
+    for (let start = 0; start < candidates.length; start += WALK_STAT_CHUNK) {
+      throwIfAborted(signal);
+      const chunk = candidates.slice(start, start + WALK_STAT_CHUNK);
+      const stats = await Promise.all(chunk.map((c) => fileStat(c.path)));
+      for (let i = 0; i < chunk.length; i += 1) {
+        const stat = stats[i];
+        if (stat === null) continue; // vanished between readdir and stat
+        if (stat.size > MAX_DOC_BYTES) {
+          notes?.skipped.push({ rel: relTo(root, chunk[i].path), bytes: stat.size });
+          continue;
+        }
+        entries.push({
+          path: chunk[i].path,
+          rel: toPosix(path.relative(root, chunk[i].path)),
+          ext: chunk[i].ext,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        });
+        if (entries.length > maxFiles) {
+          throw new Error(
+            `This folder has too many documents to index (over ${maxFiles.toLocaleString("en-US")}). ` +
+              `Choose a more specific folder, such as your notes or docs directory.`,
+          );
+        }
       }
     }
   }
@@ -435,7 +507,16 @@ export async function walkDocs(root, extensions, limits = null, { signal = null,
   // itemized — one number per source is enough to say "this is deliberate",
   // and the walk never descends into a dot-dir to name what is inside it.
   if (notes) notes.hidden = (notes.hidden ?? 0) + hiddenSkipped;
-  return files.sort();
+  return entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+async function fileStat(filePath) {
+  try {
+    const stat = await fsp.stat(filePath);
+    return { size: stat.size, mtimeMs: stat.mtimeMs };
+  } catch {
+    return null;
+  }
 }
 
 async function fileSize(filePath) {

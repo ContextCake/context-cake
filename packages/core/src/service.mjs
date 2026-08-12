@@ -154,6 +154,11 @@ async function snapshotSource(source, entry, signal = null) {
   // over the size cap, a subtree it lacks permission to read — belongs on the
   // snapshot, because the row the user sees is built from the snapshot.
   const notes = { skipped: [], unreadable: [], hidden: 0 };
+  // A pass reads every document, so an adapter that batches per-generation
+  // work (okf-local pins its git-history memo) gets told one is starting.
+  // Optional and idempotent to release; adapters without it are unaffected.
+  const releaseBatch = typeof source.beginBatch === "function" ? source.beginBatch() : null;
+  try {
   const ids = typeof source.listConceptIds === "function" ? await source.listConceptIds({ signal, notes }) : [];
   throwIfAborted();
   entry.phase = "loading";
@@ -185,6 +190,9 @@ async function snapshotSource(source, entry, signal = null) {
     ids, concepts, tokens, tokensById, gen: ++SNAPSHOT_SEQ,
     skipped: notes.skipped, unreadable: notes.unreadable, hidden: notes.hidden,
   };
+  } finally {
+    releaseBatch?.();
+  }
 }
 
 let SNAPSHOT_SEQ = 0;
@@ -427,13 +435,24 @@ export function createEngineService({
   // of blocking the first /api/graph for ~800ms mid-setup.
   setImmediate(warmTokenizer).unref?.();
 
+  // The stamp is a statSync, and its callers are hot: every request's
+  // openSources() plus every 25ms tick of awaitIndexes. 100ms of memo turns
+  // that into ≤10 stats/second while staying far under every poll cadence and
+  // human-perceivable staleness — a manifest write is picked up on the next
+  // tick either way.
+  let stampMemo = null; // { at, value }
+  const STAMP_MEMO_MS = 100;
   function manifestStamp() {
+    if (stampMemo && Date.now() - stampMemo.at < STAMP_MEMO_MS) return stampMemo.value;
+    let value;
     try {
       const st = fs.statSync(MANIFEST);
-      return `${st.mtimeMs}:${st.size}`;
+      value = `${st.mtimeMs}:${st.size}`;
     } catch {
-      return "absent"; // manifestPath may not exist yet — surfaced per request
+      value = "absent"; // manifestPath may not exist yet — surfaced per request
     }
+    stampMemo = { at: Date.now(), value };
+    return value;
   }
 
   // The read path's manifest, where a single malformed layer is quarantined
@@ -1216,6 +1235,12 @@ export function createEngineService({
       json(res, 400, { error: "Bad request URL" }); // unparseable Host/target — nothing to route on
       return true;
     }
+    // A mutating request may write the manifest; its own handler — and the
+    // request that races in right behind it — must read the post-write state,
+    // not a 100ms-old stamp memo. One chokepoint beats chasing every write
+    // site. (External writers — the CLI's second engine — are covered by the
+    // memo simply expiring.)
+    if (req.method !== "GET" && req.method !== "HEAD") stampMemo = null;
     const p = url.pathname;
     const isApi = p === "/api" || p.startsWith("/api/");
     const isConsole = CONSOLE_DIR !== null && (p === "/console" || p.startsWith("/console/"));
@@ -1358,6 +1383,12 @@ export function createEngineService({
     } catch (err) {
       json(res, err.status ?? 500, { error: err.message, ...(err.detail ?? {}) });
       return true;
+    } finally {
+      // The write happens DURING a mutating handler, so the entry-time clear
+      // above is not enough on its own: a stamp memoized mid-handler (pre-
+      // write) would outlive the write by up to the memo window. Clearing on
+      // the way out closes that, for this handler's tail and the next request.
+      if (req.method !== "GET" && req.method !== "HEAD") stampMemo = null;
     }
   }
 

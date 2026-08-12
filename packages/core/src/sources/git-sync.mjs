@@ -57,6 +57,10 @@ export function withGitSync(source, { root, pullTtlMs = 90000, retentionDays = 1
       }
       return kept;
     },
+    // Batch pin passes through: it coordinates the wrapped source's own
+    // per-generation work (okf-local's git-history memo), and a live layer is
+    // exactly the okf-local case that needs it during an index pass.
+    ...(typeof source.beginBatch === "function" ? { beginBatch: () => source.beginBatch() } : {}),
     // Explicit sync: force-refresh AND land any offline-queued commits.
     async sync() {
       await retryQueued(root);

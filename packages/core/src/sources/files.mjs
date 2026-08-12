@@ -25,14 +25,23 @@ export function createFilesSource({ name, level, root, limits = null }) {
   return {
     name,
     level,
-    async loadConcept(id) {
+    /**
+     * `hint.ext` names the extension the walk already matched for this id, so
+     * an index pass costs one stat+read instead of trying the precedence list
+     * (a `.txt` document paid two ENOENT stats per load without it). Live
+     * single-concept reads pass no hint and keep the full fallback walk.
+     */
+    async loadConcept(id, { ext: extHint = null } = {}) {
       let safeId;
       try {
         safeId = normalizeConceptId(id); // throws on traversal (isTraversal guard)
       } catch {
         return null; // an arbitrary folder is user-facing — a bad id is a miss, not a crash
       }
-      for (const ext of FILES_EXTENSIONS) {
+      const order = extHint && FILES_EXTENSIONS.includes(extHint)
+        ? [extHint, ...FILES_EXTENSIONS.filter((known) => known !== extHint)]
+        : FILES_EXTENSIONS;
+      for (const ext of order) {
         const filePath = path.join(root, `${safeId}${ext}`);
         let stat;
         try {

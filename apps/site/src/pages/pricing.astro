@@ -1,7 +1,7 @@
 ---
 import Base from '../layouts/Base.astro';
 import { applicationPlans, packPriceBands, planComparison } from '../data/commerce';
-import { sourceDownloadUrl } from '../data/source-release';
+import { appDownloadUrl } from '../data/app-release';
 
 const faqs = [
 	['Does Free expire or limit my local context?', 'No. Local sources, layers, profiles, resolution, MCP access, and Pack authoring remain available without an account or subscription.'],
@@ -23,7 +23,7 @@ const faqs = [
 				<h1 id="pricing-title">Use ContextCake locally for free.</h1>
 				<p class="lede">The local engine stays free. Paid plans will cover device sync, managed updates, and team controls.</p>
 				<div class="hero-actions">
-					<a class="button primary" href={sourceDownloadUrl} download>Download free</a>
+					<a class="button primary" href={appDownloadUrl} download>Download for Mac</a>
 					<a class="button secondary" href="/packs">Browse Packs</a>
 				</div>
 			</div>
@@ -56,7 +56,7 @@ const faqs = [
 							{plan.features.map((feature) => <li>{feature}</li>)}
 						</ul>
 						{plan.id === 'free' ? (
-							<a class="tier-action" href={sourceDownloadUrl} download>Download ContextCake</a>
+							<a class="tier-action" href={appDownloadUrl} download>Download for Mac</a>
 						) : (
 							<span class="tier-action unavailable">Coming soon</span>
 						)}

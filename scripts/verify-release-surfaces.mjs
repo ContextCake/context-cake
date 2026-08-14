@@ -18,6 +18,19 @@ async function readResponse(fetchImpl, url, label) {
   return response
 }
 
+async function readRedirect(fetchImpl, url, label) {
+  const response = await fetchImpl(url, {
+    redirect: 'manual',
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (![301, 302, 303, 307, 308].includes(response.status)) {
+    throw new Error(`${label} returned HTTP ${response.status} instead of a redirect`)
+  }
+  const location = response.headers?.get?.('location')
+  if (!location) throw new Error(`${label} did not include a Location header`)
+  return location
+}
+
 export async function verifyReleaseSurfaces({
   webDemoUrl,
   siteUrl,
@@ -41,8 +54,14 @@ export async function verifyReleaseSurfaces({
 
   const installResponse = await readResponse(fetchImpl, new URL('/install/', siteBase), 'Site install page')
   const installHtml = await installResponse.text()
-  if (!installHtml.includes(`ContextCake-${expectedVersion}-arm64.dmg`)) {
-    throw new Error(`Site install page does not target ContextCake ${expectedVersion}`)
+  if (!installHtml.includes(expectedTag) || !installHtml.includes('href="/download/mac"')) {
+    throw new Error(`Site install page does not expose published release ${expectedTag}`)
+  }
+
+  const downloadLocation = await readRedirect(fetchImpl, new URL('/download/mac', siteBase), 'Site Mac download')
+  const expectedDownload = `https://github.com/ContextCake/context-cake/releases/download/${expectedTag}/ContextCake-${expectedVersion}-arm64.dmg`
+  if (downloadLocation !== expectedDownload) {
+    throw new Error(`Site Mac download does not target ${expectedTag}`)
   }
 
   const demoResponse = await readResponse(fetchImpl, new URL('/demo/', siteBase), 'Site demo page')

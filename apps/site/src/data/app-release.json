@@ -1,0 +1,25 @@
+{
+  "channel": "stable",
+  "version": "0.7.3",
+  "tag": "app-v0.7.3",
+  "publishedAt": "2026-08-12T20:35:33Z",
+  "architectures": [
+    "arm64"
+  ],
+  "releaseUrl": "https://github.com/ContextCake/context-cake/releases/tag/app-v0.7.3",
+  "checksumsUrl": "https://github.com/ContextCake/context-cake/releases/download/app-v0.7.3/SHA256SUMS",
+  "artifacts": {
+    "dmg": {
+      "name": "ContextCake-0.7.3-arm64.dmg",
+      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.7.3/ContextCake-0.7.3-arm64.dmg",
+      "sha256": "03cf345f4974e78bb1cddecdae2aae0c1a3e9ce8ecc84d46a5cf540c94bd5053",
+      "bytes": 124143902
+    },
+    "updaterZip": {
+      "name": "ContextCake-0.7.3-arm64-mac.zip",
+      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.7.3/ContextCake-0.7.3-arm64-mac.zip",
+      "sha256": "8cbaecd8b77be0380b8a4d858647e11d6c7481bd3f58f404515a09d7234a0b99",
+      "bytes": 123563332
+    }
+  }
+}

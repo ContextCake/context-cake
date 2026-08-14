@@ -76,6 +76,13 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME implies version $TAG_VERSION but apps/desktop/package.json is $PKG_VERSION"
             exit 1
           fi
+          # The signed app, standalone CLI package, and MCPB use exactly one
+          # release identity. A mismatch makes an otherwise valid artifact
+          # impossible to support or audit, so stop before the expensive Mac build.
+          TAG_VERSION="$TAG_VERSION" node --input-type=module -e '
+            import { assertVersionAlignment } from "./scripts/distribution-artifacts.mjs";
+            await assertVersionAlignment(process.env.TAG_VERSION);
+          '
 
       - name: Verify no release gate is open
         run: |
@@ -177,16 +184,27 @@ jobs:
           spctl -a -vv -t install "$APP"
           xcrun stapler validate "$APP"
 
+      - name: Build verified distribution channel artifacts
+        working-directory: apps/desktop
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          node ../../scripts/build-distribution-artifacts.mjs \
+            --version "${TAG_VERSION#app-v}" \
+            --dist dist
+
       - name: Checksums
         working-directory: apps/desktop/dist
         run: |
-          shasum -a 256 *.dmg *.zip > SHA256SUMS
+          shasum -a 256 *.dmg *.zip *.mcpb *.tgz > SHA256SUMS
           cat SHA256SUMS
 
       - name: Prepare anonymous install counter
         if: steps.creds.outputs.signed == 'true'
         working-directory: apps/desktop/dist
-        run: cp ../release-assets/install-ping.txt install-ping.txt
+        run: |
+          cp ../release-assets/install-ping.txt install-ping.txt
+          cp ../release-assets/mcpb-install-ping.txt mcpb-install-ping.txt
 
       - name: Publish GitHub Release
         if: steps.creds.outputs.signed == 'true'
@@ -197,7 +215,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "ContextCake ${GITHUB_REF_NAME#app-v}" \
             --generate-notes \
-            *.dmg *.zip latest-mac.yml SHA256SUMS install-ping.txt
+            *.dmg *.zip *.mcpb *.tgz contextcake.rb contextcake-mcp-server.json latest-mac.yml SHA256SUMS install-ping.txt mcpb-install-ping.txt
 
       - name: Upload artifacts (unsigned build)
         if: steps.creds.outputs.signed != 'true'
@@ -207,6 +225,10 @@ jobs:
           path: |
             apps/desktop/dist/*.dmg
             apps/desktop/dist/*.zip
+            apps/desktop/dist/*.mcpb
+            apps/desktop/dist/*.tgz
+            apps/desktop/dist/contextcake.rb
+            apps/desktop/dist/contextcake-mcp-server.json
             apps/desktop/dist/latest-mac.yml
           retention-days: 7
 
@@ -239,6 +261,12 @@ jobs:
       - name: Install site dependencies
         working-directory: apps/site
         run: npm ci
+
+      - name: Sync tagged published app release
+        working-directory: apps/site
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/sync-app-release.mjs --tag "$GITHUB_REF_NAME"
 
       - name: Build release site
         working-directory: apps/site

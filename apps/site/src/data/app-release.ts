@@ -1,10 +1,27 @@
-import desktopPackage from '../../../desktop/package.json';
+import rawRelease from './app-release.json';
 
-// ContextCake has one product version. The site, hosted Web Demo, and packaged
-// app all derive it from the desktop package used by electron-builder.
-export const appVersion = desktopPackage.version;
-export const appTag = `app-v${appVersion}`;
-export const appDownloadUrl = `https://github.com/ContextCake/context-cake/releases/download/${appTag}/ContextCake-${appVersion}-arm64.dmg`;
-export const appReleaseUrl = `https://github.com/ContextCake/context-cake/releases/tag/${appTag}`;
-// Evergreen link for prose and docs — always the newest app release page.
-export const latestReleaseUrl = 'https://github.com/ContextCake/context-cake/releases/latest';
+type Artifact = { name: string; url: string; sha256: string; bytes: number };
+type PublishedAppRelease = {
+	version: string;
+	tag: string;
+	releaseUrl: string;
+	checksumsUrl: string;
+	artifacts: { dmg: Artifact; updaterZip: Artifact; mcpb?: Artifact };
+};
+const release = rawRelease as PublishedAppRelease;
+
+// The desktop package version is a release candidate. Public site links come
+// from the newest app release that actually exists on GitHub. Production
+// workflows refresh this record before building; local/offline builds use the
+// committed last-known-good copy instead of inventing a future download URL.
+export const appVersion = release.version;
+export const appTag = release.tag;
+export const appDownloadUrl = '/download/mac';
+export const appArtifactUrl = release.artifacts.dmg.url;
+export const appDownloadName = release.artifacts.dmg.name;
+export const appDownloadSha256 = release.artifacts.dmg.sha256;
+export const appDownloadBytes = release.artifacts.dmg.bytes;
+export const appReleaseUrl = release.releaseUrl;
+export const appChecksumsUrl = release.checksumsUrl;
+export const latestReleaseUrl = release.releaseUrl;
+export const appMcpb = release.artifacts.mcpb;

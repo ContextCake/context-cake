@@ -1,6 +1,6 @@
 {
   "name": "context-cake",
-  "version": "0.1.0",
+  "version": "0.7.3",
   "description": "Federated team knowledge with cascading layer precedence — OKF-compatible, MCP-ready.",
   "type": "module",
   "scripts": {
@@ -22,7 +22,8 @@
     "console:build": "npm --prefix apps/console run build",
     "site:dev": "npm --prefix apps/site run dev",
     "site:build": "npm --prefix apps/site run build",
-    "metrics:app": "node scripts/app-metrics.mjs"
+    "metrics:app": "node scripts/app-metrics.mjs",
+    "distribution:artifacts": "node scripts/build-distribution-artifacts.mjs"
   },
   "engines": {
     "node": ">=22"

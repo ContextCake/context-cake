@@ -1,0 +1,3 @@
+This file is a content-free, opt-in ContextCake MCP bundle activation counter.
+Its versioned GitHub Release asset download count is directional aggregate telemetry,
+not a unique-person or account metric. It contains no personal, device, or context data.

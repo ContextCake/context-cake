@@ -65,7 +65,10 @@ const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
 const discrepancyDecisions = runtime
   ? createConflictResolutionLog(runtime.manifestPath, { profileId: selection.profileId })
   : null;
-const serverInfo = { name: "contextcake", version: "0.5.0" };
+const releaseVersion = /^\d+\.\d+\.\d+$/.test(process.env.CONTEXTCAKE_RELEASE_VERSION ?? "")
+  ? process.env.CONTEXTCAKE_RELEASE_VERSION
+  : "0.5.0";
+const serverInfo = { name: "contextcake", version: releaseVersion };
 const serverInstructions = [
   "Consult ContextCake before answering project-specific questions.",
   `Selected ContextCake profile id: ${selection.profileId}; reason: ${selection.reason}.`,
@@ -292,7 +295,16 @@ async function processLine(line) {
   }
   try {
     const response = await handleMessage(message);
-    if (response) write(response);
+    if (response) {
+      write(response);
+      // Packaging adapters can opt into this lifecycle hook without changing
+      // the default engine's network-silent behavior. It runs only after the
+      // client has received a successful initialize response, never on a
+      // process merely starting or on a failed handshake.
+      if (message.method === "initialize" && !response.error) {
+        void Promise.resolve(globalThis.__contextcakeOnMcpInitialized?.()).catch(() => {});
+      }
+    }
   } catch (error) {
     write({ jsonrpc: "2.0", id: message.id ?? null, error: { code: -32000, message: error.message } });
   }

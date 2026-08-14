@@ -1,9 +1,12 @@
 import { readFile } from 'node:fs/promises'
 
 const html = await readFile(new URL('../dist/install/index.html', import.meta.url), 'utf8')
+const homeHtml = await readFile(new URL('../dist/index.html', import.meta.url), 'utf8')
+const pricingHtml = await readFile(new URL('../dist/pricing/index.html', import.meta.url), 'utf8')
 const demoHtml = await readFile(new URL('../dist/demo/index.html', import.meta.url), 'utf8')
-const desktopPackage = JSON.parse(await readFile(new URL('../../desktop/package.json', import.meta.url), 'utf8'))
+const appRelease = JSON.parse(await readFile(new URL('../src/data/app-release.json', import.meta.url), 'utf8'))
 const sourceRelease = JSON.parse(await readFile(new URL('../src/data/source-release.json', import.meta.url), 'utf8'))
+const redirects = await readFile(new URL('../dist/_redirects', import.meta.url), 'utf8')
 
 function requireText(text, message) {
   if (!html.includes(text)) throw new Error(message)
@@ -24,7 +27,8 @@ function requireOrder(items) {
 }
 
 requireText('Download for Mac', 'Mac download must remain the primary install action')
-requireText(`ContextCake-${desktopPackage.version}-arm64.dmg`, 'Mac download must target the current desktop version')
+requireText(appRelease.tag, 'Install page must identify the published Mac release')
+requireText('href="/download/mac"', 'Install page must use the stable Mac download route')
 requireText('href="/install" aria-current="page"', 'Install navigation must expose the current route')
 requireText('Show source installation', 'Versioned source installation must remain available')
 requireText(`app-v${sourceRelease.version}`, 'Source installation must use an app release tag')
@@ -41,6 +45,18 @@ forbidText('The next distribution layer', 'Planned distribution channels must no
 forbidText('After sign-in', 'Sign-in must not be presented as required for local setup')
 forbidText('theagent', 'Inline link whitespace collapsed in production HTML')
 forbidText('nopostinstall', 'Inline code whitespace collapsed in production HTML')
+
+for (const [label, page] of [['home', homeHtml], ['install', html], ['pricing', pricingHtml]]) {
+  if (!page.includes('href="/download/mac"')) throw new Error(`${label} page must use the stable Mac download route`)
+  if (/href="https:\/\/github\.com\/ContextCake\/context-cake\/releases\/download\/app-v[^\"]+ContextCake-[^\"]+-arm64\.dmg"/.test(page)) {
+    throw new Error(`${label} page must not embed a versioned GitHub DMG URL`)
+  }
+}
+if (!homeHtml.includes('Download for Mac')) throw new Error('Homepage Mac action must name the platform')
+if (!pricingHtml.includes('Download for Mac')) throw new Error('Pricing Mac action must name the platform')
+if (!redirects.includes(`/download/mac ${appRelease.artifacts.dmg.url} 302`)) {
+  throw new Error('Stable Mac redirect must target the published DMG')
+}
 
 const demoIframeMatch = demoHtml.match(/<iframe\b[^>]*\bsrc="([^"]+)"[^>]*>/i)
 if (!demoIframeMatch) throw new Error('The site demo must contain a Web Demo iframe')
@@ -61,4 +77,4 @@ if (!demoHtml.includes('sandbox="allow-scripts allow-same-origin allow-forms all
   throw new Error('The cross-origin Web Demo embed must retain its iframe sandbox')
 }
 
-console.log('install page verification passed (Mac activation + source fallback)')
+console.log('install page verification passed (published Mac release + source fallback)')

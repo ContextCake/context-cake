@@ -19,6 +19,14 @@ function response(body) {
   }
 }
 
+function redirect(location) {
+  return {
+    ok: false,
+    status: 302,
+    headers: new Headers({ location }),
+  }
+}
+
 test('accepts matching Web Demo provenance and site release links', async () => {
   const seen = []
   await verifyReleaseSurfaces({
@@ -26,7 +34,8 @@ test('accepts matching Web Demo provenance and site release links', async () => 
     fetchImpl: async (url) => {
       seen.push(url.href)
       if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
-      if (url.pathname === '/install/') return response('ContextCake-1.2.3-arm64.dmg')
+      if (url.pathname === '/install/') return response('app-v1.2.3 href="/download/mac"')
+      if (url.pathname === '/download/mac') return redirect('https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg')
       if (url.pathname === '/demo/') return response('<iframe src="https://contextcake-console.pages.dev/"></iframe>')
       throw new Error(`unexpected URL ${url}`)
     },
@@ -34,6 +43,7 @@ test('accepts matching Web Demo provenance and site release links', async () => 
   assert.deepEqual(seen, [
     'https://demo-deploy.pages.dev/release.json',
     'https://site-deploy.pages.dev/install/',
+    'https://site-deploy.pages.dev/download/mac',
     'https://site-deploy.pages.dev/demo/',
   ])
 })
@@ -67,7 +77,8 @@ test('rejects a lookalike Web Demo iframe host', async () => {
       ...release,
       fetchImpl: async (url) => {
         if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
-        if (url.pathname === '/install/') return response('ContextCake-1.2.3-arm64.dmg')
+        if (url.pathname === '/install/') return response('app-v1.2.3 href="/download/mac"')
+        if (url.pathname === '/download/mac') return redirect('https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg')
         if (url.pathname === '/demo/') {
           return response('<iframe src="https://contextcake-console.pages.dev.attacker.example/"></iframe>')
         }
@@ -75,5 +86,20 @@ test('rejects a lookalike Web Demo iframe host', async () => {
       },
     }),
     /does not embed the canonical Web Demo/,
+  )
+})
+
+test('rejects a stable download redirect to another app version', async () => {
+  await assert.rejects(
+    verifyReleaseSurfaces({
+      ...release,
+      fetchImpl: async (url) => {
+        if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
+        if (url.pathname === '/install/') return response('app-v1.2.3 href="/download/mac"')
+        if (url.pathname === '/download/mac') return redirect('https://github.com/ContextCake/context-cake/releases/download/app-v1.2.2/ContextCake-1.2.2-arm64.dmg')
+        throw new Error(`unexpected URL ${url}`)
+      },
+    }),
+    /does not target app-v1\.2\.3/,
   )
 })

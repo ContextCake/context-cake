@@ -1,0 +1,19 @@
+{
+  "name": "context-cake",
+  "version": "0.7.3",
+  "description": "Compatibility pointer for the ContextCake CLI. Install contextcake instead.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ContextCake/context-cake.git"
+  },
+  "homepage": "https://contextcake.com",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {},
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

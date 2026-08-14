@@ -2,7 +2,25 @@
 # ContextCake CLI shim. Installed as a symlink at /usr/local/bin/contextcake;
 # resolves back into the app bundle it ships inside, so app updates update the
 # CLI automatically and uninstalling the app leaves only a dangling link.
-SELF_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+resolve_link() {
+  target="$1"
+  while [ -L "$target" ]; do
+    base="$(cd -P "$(dirname "$target")" && pwd)"
+    link="$(readlink "$target")" || return 1
+    case "$link" in
+      /*) target="$link" ;;
+      *) target="$base/$link" ;;
+    esac
+  done
+  cd -P "$(dirname "$target")" && printf '%s/%s\n' "$(pwd)" "$(basename "$target")"
+}
+
+# macOS' BSD readlink has no -f. Resolve Homebrew's and the app menu's symlink
+# explicitly so both installation routes can find ContextCake.app.
+SELF_PATH="$(resolve_link "$0")" || {
+  echo "contextcake: cannot resolve command path" >&2
+  exit 1
+}
 BIN_DIR="$(cd "$(dirname "$SELF_PATH")" && pwd -P)"          # …/Contents/Resources/bin
 RESOURCES="$(dirname "$BIN_DIR")"                             # …/Contents/Resources
 CONTENTS="$(dirname "$RESOURCES")"                            # …/Contents

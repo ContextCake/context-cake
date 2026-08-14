@@ -9,7 +9,12 @@ import {
 	appVersion,
 	appTag,
 	appDownloadUrl,
+	appDownloadName,
+	appDownloadBytes,
 	appReleaseUrl,
+	appChecksumsUrl,
+	appDownloadSha256,
+	appMcpb,
 } from '../data/app-release';
 import {
 	sourceTag,
@@ -56,6 +61,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
 	timeZone: 'UTC',
 });
 const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:00Z`));
+const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`;
 ---
 
 <Base
@@ -72,19 +78,46 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 					ContextCake runs locally on your Mac. Point it at a Markdown folder, connect
 					your AI client, and get a sourced answer without building a manifest by hand.
 				</p>
-				<div class="hero-actions" aria-label="Install actions">
-					<a class="button button--primary" href={appDownloadUrl} download>
-						<Icon name="download" size={18} />
-						Download for Mac
-					</a>
-					<a class="text-link" href="#source-install">Install from source <span aria-hidden="true">→</span></a>
-				</div>
-				<ul class="hero-facts" aria-label="Mac app details">
-					<li>Signed and notarized</li>
-					<li>Apple silicon (M1 or later) only</li>
-					<li>Runs locally</li>
-					<li><a href={appReleaseUrl}>Release notes and checksums</a></li>
-				</ul>
+				<section class="download-module" aria-labelledby="download-title">
+					<div class="download-module__top">
+						<div>
+							<p>Recommended desktop app</p>
+							<h2 id="download-title">ContextCake for Mac</h2>
+							<span>Apple silicon (M1 or later) · signed and notarized</span>
+						</div>
+						<a class="button button--primary" href={appDownloadUrl} download>
+							<Icon name="download" size={18} />
+							Download for Mac
+						</a>
+					</div>
+					<ol class="mac-install-path" aria-label="Mac installation steps">
+						<li><span>1</span><strong>Download</strong><small>{appDownloadName} · {formatFileSize(appDownloadBytes)}</small></li>
+						<li><span>2</span><strong>Move to Applications</strong><small>Open the DMG and drag ContextCake over.</small></li>
+						<li><span>3</span><strong>Set up your first source</strong><small>The app guides the rest.</small></li>
+					</ol>
+					<div class="download-record" aria-label="Release details">
+						<span>{appTag}</span>
+						<a href={appReleaseUrl}>Release notes</a>
+						<a href={appChecksumsUrl}>SHA-256 checksums</a>
+					</div>
+				</section>
+				<nav class="install-alternatives" aria-label="Other installation options">
+					<a href="#source-install"><span>Not on Apple silicon?</span> Install the versioned source <b aria-hidden="true">→</b></a>
+					<a href={appReleaseUrl}><span>Need another build or the full history?</span> Browse app releases <b aria-hidden="true">→</b></a>
+				</nav>
+				{appMcpb && (
+					<section class="mcpb-route" aria-labelledby="mcpb-route-title">
+						<div>
+							<p>Claude Desktop</p>
+							<h2 id="mcpb-route-title">Install the local MCP bundle</h2>
+							<span>Choose your ContextCake manifest during setup. Anonymous activation metrics are off by default.</span>
+						</div>
+						<a class="button button--secondary" href={appMcpb.url} download>
+							<Icon name="download" size={17} /> Download .mcpb
+						</a>
+						<small>{appMcpb.name} · {formatFileSize(appMcpb.bytes)} · <a href={appChecksumsUrl}>SHA-256</a></small>
+					</section>
+				)}
 			</div>
 
 			<figure class="app-preview" aria-labelledby="app-preview-title">
@@ -121,7 +154,7 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		<section class="activation" aria-labelledby="activation-title">
 			<header class="section-intro">
 				<h2 id="activation-title">From download to a sourced answer.</h2>
-				<p>The Mac app needs no archive, checksum, or manifest.</p>
+				<p>Open the DMG, move ContextCake to Applications, then let the app handle source and agent setup.</p>
 			</header>
 
 			<ol class="activation-steps">
@@ -262,17 +295,31 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		<section class="trust" aria-labelledby="trust-title">
 			<div>
 				<Icon name="shield" size={24} />
-				<h2 id="trust-title">Local does not mean automatic trust.</h2>
+				<h2 id="trust-title">A download you can inspect.</h2>
 			</div>
 			<div class="trust-copy">
 				<p>
-					ContextCake reads local files and can launch commands named by a manifest. Only
-					add folders and MCP sources you trust. Source installs remain versioned and
-					checksum-verifiable for teams that need the smaller audit surface.
+					The Mac app is Developer ID-signed and notarized. Its release record names the
+					exact DMG and checksum; its updater verifies a signed update before asking you
+					to relaunch. ContextCake still only reads folders and MCP sources you choose.
 				</p>
+				<dl class="release-details">
+					<div>
+						<dt>Current release</dt>
+						<dd><a href={appReleaseUrl}>{appTag}</a> · {appDownloadName}</dd>
+					</div>
+					<div>
+						<dt>SHA-256</dt>
+						<dd><code>{appDownloadSha256}</code> <a href={appChecksumsUrl}>View manifest</a></dd>
+					</div>
+					<div>
+						<dt>Updates</dt>
+						<dd>Checked over HTTPS; you choose whether to relaunch. <a href="/docs/reference/updates-and-privacy">Updates and privacy</a></dd>
+					</div>
+				</dl>
 				<nav aria-label="Install trust links">
 					<a href="/docs/concepts/trust-boundary">Read the trust model</a>
-					<a href={sourceTagUrl}>Inspect {sourceTag} on GitHub <Icon name="external-link" size={15} /></a>
+					<a href={sourceTagUrl}>Inspect source {sourceTag} <Icon name="external-link" size={15} /></a>
 					<a href="/docs/getting-started/connect-an-agent">Agent connection guide</a>
 				</nav>
 			</div>
@@ -321,13 +368,6 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		line-height: 1.65;
 		text-wrap: pretty;
 	}
-	.hero-actions {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.9rem 1.15rem;
-		margin-top: 2rem;
-	}
 	.button {
 		display: inline-flex;
 		align-items: center;
@@ -354,40 +394,121 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 	:global(body.theme-paper) .button--primary {
 		color: var(--cc-on-cta);
 	}
-	.text-link {
-		display: inline-flex;
+	.download-module {
+		margin-top: 2rem;
+		border: 1px solid var(--cc-border-strong);
+		border-radius: var(--cc-radius-md);
+		background: color-mix(in srgb, var(--cc-surface-raised) 78%, var(--cc-layer-team));
+		overflow: hidden;
+	}
+	.download-module__top {
+		display: flex;
 		align-items: center;
+		justify-content: space-between;
+		gap: 1.25rem;
+		padding: 1.15rem 1.25rem;
+	}
+	.download-module__top > div { display: grid; gap: 0.18rem; }
+	.download-module__top p {
+		margin: 0;
+		color: var(--cc-layer-team);
+		font-family: var(--cc-font-mono);
+		font-size: 0.66rem;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+	.download-module__top h2 {
+		margin: 0;
+		color: var(--cc-text);
+		font-size: 1.28rem;
+		letter-spacing: -0.02em;
+	}
+	.download-module__top > div > span { color: var(--cc-text-body); font-size: 0.78rem; }
+	.download-module__top .button { flex: none; }
+	.mac-install-path {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 1px;
+		margin: 0;
+		padding: 1px 0 0;
+		list-style: none;
+		background: var(--cc-border);
+	}
+	.mac-install-path li {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		align-content: start;
+		gap: 0.15rem 0.55rem;
+		min-height: 5.8rem;
+		padding: 0.9rem 1rem;
+		background: var(--cc-surface-solid);
+	}
+	.mac-install-path li > span {
+		display: grid;
+		grid-row: span 2;
+		place-items: center;
+		width: 1.35rem;
+		height: 1.35rem;
+		margin-top: 0.05rem;
+		border-radius: 50%;
+		background: color-mix(in srgb, var(--cc-layer-team) 15%, var(--cc-surface-raised));
+		color: var(--cc-layer-team);
+		font-family: var(--cc-font-mono);
+		font-size: 0.65rem;
+		font-weight: 700;
+	}
+	.mac-install-path strong { color: var(--cc-text); font-size: 0.8rem; }
+	.mac-install-path small { color: var(--cc-text-muted); font-size: 0.69rem; line-height: 1.45; }
+	.download-record {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.45rem 1rem;
+		padding: 0.7rem 1rem;
+		color: var(--cc-text-muted);
+		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+	}
+	.download-record a { color: var(--cc-text-body); text-underline-offset: 0.22rem; }
+	.download-record a:hover { color: var(--cc-layer-team); }
+	.install-alternatives {
+		display: grid;
 		gap: 0.45rem;
+		margin-top: 1rem;
+	}
+	.install-alternatives a {
+		display: flex;
+		align-items: baseline;
+		gap: 0.35rem;
+		width: fit-content;
 		min-height: 2.75rem;
 		color: var(--cc-text-body);
-		font-weight: 700;
+		font-size: 0.82rem;
+		font-weight: 600;
 		text-decoration-color: color-mix(in srgb, var(--cc-text-body) 42%, transparent);
 		text-underline-offset: 0.28rem;
 	}
-	.text-link:hover { color: var(--cc-layer-team); }
-	.hero-facts {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem 1.2rem;
-		margin: 1.5rem 0 0;
-		padding: 0;
-		list-style: none;
-		color: var(--cc-text-muted);
-		font-size: 0.8rem;
-	}
-	.hero-facts li {
-		display: flex;
+	.install-alternatives a span { color: var(--cc-text-muted); font-weight: 500; }
+	.install-alternatives a b { color: var(--cc-layer-team); }
+	.install-alternatives a:hover { color: var(--cc-layer-team); }
+	.mcpb-route {
+		margin-top: 1.4rem;
+		padding: 1rem 1.05rem;
+		border: 1px solid color-mix(in srgb, var(--cc-layer-team) 34%, transparent);
+		border-radius: 0.95rem;
+		background: color-mix(in srgb, var(--cc-layer-team) 8%, transparent);
+		display: grid;
+		grid-template-columns: 1fr auto;
+		gap: 0.75rem 1rem;
 		align-items: center;
-		gap: 0.5rem;
 	}
-	.hero-facts li::before {
-		content: '';
-		width: 0.35rem;
-		height: 0.35rem;
-		border-radius: 50%;
-		background: var(--cc-layer-team);
-	}
-	.hero-facts a { color: inherit; }
+	.mcpb-route > div { display: grid; gap: 0.18rem; }
+	.mcpb-route p { margin: 0; color: var(--cc-layer-team); font: 700 0.69rem/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; }
+	.mcpb-route h2 { margin: 0; color: var(--cc-text); font-size: 1rem; }
+	.mcpb-route span, .mcpb-route small { color: var(--cc-text-muted); font-size: 0.72rem; line-height: 1.45; }
+	.mcpb-route small { grid-column: 1 / -1; }
+	.mcpb-route small a { color: inherit; text-decoration: underline; text-underline-offset: 0.17em; }
 
 	.app-preview {
 		margin: 0;
@@ -803,6 +924,34 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		color: var(--cc-layer-team);
 		font-weight: 700;
 	}
+	.release-details {
+		display: grid;
+		gap: 0;
+		margin: 1.8rem 0 0;
+		border-top: 1px solid var(--cc-border);
+	}
+	.release-details > div {
+		display: grid;
+		grid-template-columns: 8rem minmax(0, 1fr);
+		gap: 1rem;
+		padding: 0.85rem 0;
+		border-bottom: 1px solid var(--cc-border);
+	}
+	.release-details dt {
+		color: var(--cc-text-muted);
+		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+		font-weight: 700;
+		text-transform: uppercase;
+	}
+	.release-details dd { margin: 0; color: var(--cc-text-body); font-size: 0.84rem; }
+	.release-details dd a { color: var(--cc-layer-team); }
+	.release-details code {
+		color: var(--cc-text-body);
+		font-family: var(--cc-font-mono);
+		font-size: 0.68rem;
+		overflow-wrap: anywhere;
+	}
 
 	@media (max-width: 980px) {
 		.install-hero { grid-template-columns: 1fr; min-height: auto; }
@@ -836,15 +985,23 @@ const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:
 		.conflict-row { grid-template-columns: auto minmax(0, 1fr); }
 		.result-row code,
 		.conflict-row code { grid-column: 2; white-space: normal; }
+		.mac-install-path { grid-template-columns: 1fr; }
+		.mac-install-path li { min-height: auto; }
 	}
 	@media (max-width: 520px) {
 		.install-page { padding-inline: 1rem; }
 		h1 { font-size: clamp(2rem, 11vw, 2.75rem); }
-		.hero-actions,
-		.hero-actions .button,
+		.download-module__top,
 		.download-strip,
 		.download-strip .button { width: 100%; box-sizing: border-box; }
-		.hero-facts { display: grid; }
+		.download-module__top { align-items: flex-start; flex-direction: column; }
+		.download-module__top .button { width: 100%; box-sizing: border-box; }
+		.install-alternatives a { display: block; width: auto; line-height: 1.65; }
+		.install-alternatives a span { display: block; }
+		.mcpb-route { grid-template-columns: 1fr; }
+		.mcpb-route .button { width: 100%; box-sizing: border-box; }
+		.release-details > div { grid-template-columns: 1fr; gap: 0.35rem; }
+		.release-details dd a { display: inline-block; margin-top: 0.35rem; }
 		.app-shell-preview { grid-template-columns: 1fr; min-height: 0; }
 		.preview-sidebar { display: none; }
 		.preview-content { padding: 1.25rem; }

@@ -98,6 +98,26 @@ be downloaded outside the app. The first release with this counter also counts
 existing users when they update and launch it; later releases do not recount the
 same application-support directory.
 
+## MCPB bundle activation
+
+The Claude Desktop `.mcpb` bundle has a separate **Share anonymous activation
+metrics** setting, off by default. When a person enables it and the bundled MCP
+server starts successfully, it downloads one tiny versioned release asset:
+
+```text
+https://github.com/ContextCake/context-cake/releases/download/app-v<version>/mcpb-install-ping.txt
+```
+
+The request has no body and contains no ContextCake manifest, file path, tool
+input, prompt, knowledge content, account information, device ID, or cookie. A
+local marker prevents repeat reports. Choosing not to share means no request;
+an error cannot delay the MCP server. This remains a directional aggregate,
+never an identity or a unique-person metric.
+
+The npm CLI adds no installation or runtime telemetry. Homebrew's anonymous
+analytics, if a user leaves it enabled, are collected and controlled by
+Homebrew rather than ContextCake.
+
 ## Why this exists
 
 ContextCake is privacy-by-default: local engine work does not phone home, update checks

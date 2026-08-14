@@ -1,0 +1,32 @@
+{
+  "name": "contextcake",
+  "version": "0.7.3",
+  "description": "Local-first context resolution and MCP tools for ContextCake.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ContextCake/context-cake.git"
+  },
+  "homepage": "https://contextcake.com",
+  "bugs": {
+    "url": "https://github.com/ContextCake/context-cake/issues"
+  },
+  "bin": {
+    "contextcake": "bin/contextcake.mjs"
+  },
+  "files": [
+    "bin",
+    "engine",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {},
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

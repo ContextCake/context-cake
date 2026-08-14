@@ -144,10 +144,15 @@ hijacked maintainer accounts and `postinstall` payloads. A knowledge engine your
 agents read from should have a supply chain you can audit: a source archive is
 small, inspectable, and runnable as plain Node.js.
 
-There is no npm global install today. The signed macOS app is the recommended
-guided route. A Homebrew cask and native Windows package will be documented only
-after their real artifacts are published and tested; Windows users can use the
-terminal route in WSL today.
+The signed macOS app is the recommended guided route. When the current release
+includes the verified Claude Desktop `.mcpb` bundle, the [Install page](/install)
+shows its checksum-pinned download and manifest setup. A Homebrew cask will
+appear only after the first-party tap has been published and tested.
+
+The npm/npx channel is intentionally held behind npm trusted publishing (OIDC),
+provenance, two-factor authentication, a script-free package, and an audited
+file allowlist. It will be documented only after that gate passes. Windows users
+can use the terminal route in WSL today.
 
 ## Next
 

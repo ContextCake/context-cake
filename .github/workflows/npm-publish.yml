@@ -1,0 +1,79 @@
+# Publishes only after npm's trusted-publisher/OIDC relationship has been
+# configured for ContextCake. No long-lived npm token is accepted or stored.
+name: Publish ContextCake npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published app-vX.Y.Z GitHub Release to publish to npm
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish provenance-backed npm CLI
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    steps:
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          case "$RELEASE_TAG" in
+            app-v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::tag must use app-vX.Y.Z"; exit 1 ;;
+          esac
+
+      - name: Checkout exact release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Setup Node with npm registry
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify published GitHub release and package hardening
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo ContextCake/context-cake --json isDraft,isPrerelease --jq 'if .isDraft or .isPrerelease then error("Release must be published and stable") else empty end'
+          VERSION="${RELEASE_TAG#app-v}"
+          VERSION="$VERSION" node --input-type=module -e '
+            import { assertVersionAlignment, buildNpmPackage } from "./scripts/distribution-artifacts.mjs";
+            import { mkdtemp, rm } from "node:fs/promises";
+            import { spawnSync } from "node:child_process";
+            import os from "node:os";
+            import path from "node:path";
+            await assertVersionAlignment(process.env.VERSION);
+            const dir = await mkdtemp(path.join(os.tmpdir(), "contextcake-npm-publish-"));
+            try {
+              await buildNpmPackage({ version: process.env.VERSION, outDir: dir });
+              const dryRun = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts"], { cwd: dir, stdio: "inherit" });
+              if (dryRun.status !== 0) throw new Error("npm pack --dry-run failed");
+            }
+            finally { await rm(dir, { recursive: true, force: true }); }
+          '
+
+      - name: Publish contextcake with provenance
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          VERSION="${RELEASE_TAG#app-v}"
+          STAGING="$(mktemp -d)"
+          trap 'rm -rf "$STAGING"' EXIT
+          VERSION="$VERSION" STAGING="$STAGING" node --input-type=module -e '
+            import { buildNpmPackage } from "./scripts/distribution-artifacts.mjs";
+            await buildNpmPackage({ version: process.env.VERSION, outDir: process.env.STAGING });
+          '
+          cd "$STAGING"
+          npm publish --provenance --access public
+          test "$(npm view contextcake@"$VERSION" version)" = "$VERSION"

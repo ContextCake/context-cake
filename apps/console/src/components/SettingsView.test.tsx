@@ -257,6 +257,34 @@ describe('SettingsView', () => {
     expect(window.localStorage.getItem('contextcake.cascadeDisplay')).toBe('cards')
   })
 
+  it('desktop: loads and persists Cascade view through device UI state', async () => {
+    const setUiState = vi.fn().mockResolvedValue({})
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '0.0.0-test',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      uiState: {
+        initial: {
+          sidebar: { collapsed: false, width: 232 },
+          lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+          cascadeDisplay: 'cards', cascadeHiddenNodes: [],
+        },
+        set: setUiState,
+      },
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" onClose={vi.fn()} /></ThemeModeProvider>,
+    ))
+
+    expect(groupButton('Cascade view', 'Cards').getAttribute('aria-pressed')).toBe('true')
+    await act(async () => groupButton('Cascade view', 'Grouped').click())
+    expect(setUiState).toHaveBeenCalledWith({ cascadeDisplay: 'grouped' })
+    expect(groupButton('Cascade view', 'Grouped').getAttribute('aria-pressed')).toBe('true')
+  })
+
   it('lets a Mac user override Reduce Transparency and hand the choice back', async () => {
     // This Mac says "reduce": that is what makes System distinguishable from
     // Off. With a Mac that says no, every wrong fallback still renders `false`
@@ -664,6 +692,8 @@ describe('SettingsView', () => {
       settingsFile,
       cli: { getStatus: vi.fn(), install: vi.fn() },
     } as unknown as typeof window.__CC_DESKTOP
+    window.localStorage.setItem('contextcake.cascadeDisplay', 'cards')
+    window.localStorage.setItem('contextcake.cascadeHiddenNodes', '["concept:identity"]')
 
     await act(async () => root.render(
       <ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>,
@@ -675,13 +705,17 @@ describe('SettingsView', () => {
     await act(async () => button('Reset…').click())
     expect(settingsFile.reset).toHaveBeenCalledOnce()
     expect(container.textContent).not.toContain('could not be saved to this Mac')
+    expect(window.localStorage.getItem('contextcake.cascadeDisplay')).toBeNull()
+    expect(window.localStorage.getItem('contextcake.cascadeHiddenNodes')).toBeNull()
 
     // Cancel is the most common outcome of a confirmation dialog, and it must
     // stay silent. Treating it as a failure would raise the alarming
     // "in effect but could not be saved" banner every time someone backs out.
     settingsFile.reset.mockResolvedValue({ ok: false, canceled: true })
+    window.localStorage.setItem('contextcake.cascadeDisplay', 'compact')
     await act(async () => button('Reset…').click())
     expect(container.textContent).not.toContain('could not be saved to this Mac')
+    expect(window.localStorage.getItem('contextcake.cascadeDisplay')).toBe('compact')
 
     // A rejected invoke means "applied but not persisted" — the same story
     // every other failed settings write tells, through the same banner.

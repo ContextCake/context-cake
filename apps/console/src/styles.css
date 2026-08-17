@@ -1395,9 +1395,9 @@ textarea:focus-visible,
 }
 
 /* Cascade display system: the map can summarize large folders, show a dense
-   flat inventory, or preserve the full card treatment. The control is local
-   to this task surface; the app-wide comfortable/compact preference remains a
-   separate choice in Settings. */
+   flat inventory, or preserve the full card treatment. The view is selected
+   in Settings and stays separate from the app-wide comfortable/compact UI
+   density preference. */
 .cc-canvas-viewbar {
   position: absolute;
   z-index: 4;
@@ -1848,6 +1848,25 @@ textarea:focus-visible,
 .cc-canvas-folder-state { padding: 2px 6px; border-radius: 999px; background: var(--cc-amber-fill); color: var(--cc-amber-text); font-size: 8.5px; font-weight: 650; }
 .cc-canvas-folder-open { width: 14px; height: 14px; fill: none; stroke: var(--cc-faint); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .cc-canvas-folder-item:hover .cc-canvas-folder-open { stroke: var(--cc-caption); }
+.cc-canvas-folder-more {
+  width: calc(100% - 12px);
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px;
+  padding: 0 11px;
+  border: 1px solid var(--cc-line);
+  border-radius: 8px;
+  background: var(--cc-neutral-fill);
+  color: var(--cc-body);
+  cursor: pointer;
+  font: inherit;
+}
+.cc-canvas-folder-more:hover { border-color: var(--cc-line-strong); color: var(--cc-ink); }
+.cc-canvas-folder-more strong { font-size: 10.5px; font-weight: 650; }
+.cc-canvas-folder-more span { color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9px; }
 .cc-canvas-folder-empty {
   min-height: 190px;
   display: flex;
@@ -1976,6 +1995,7 @@ textarea:focus-visible,
 @media (pointer: coarse) {
   .cc-canvas-zoom button { width: 44px; height: 44px; }
   .cc-canvas-folder-item { min-height: 56px; }
+  .cc-canvas-folder-more { min-height: 48px; }
   .cc-canvas-hidden-row > button { min-height: 40px; }
 }
 

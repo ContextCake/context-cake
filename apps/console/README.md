@@ -39,9 +39,12 @@ playground/service command documented in the repository instructions.
 
 ## Product flow
 
-- **Canvas** lays concepts into Company, Team, and Personal lanes. Columns are
-  reused when their occupied lanes do not collide, keeping sparse cascades
-  compact. Pan, zoom, fit, concept detail, and dissent links remain available.
+- **Canvas** defaults to the Grouped Cascade view. Folders with four or more
+  concepts in the same precedence lane become one summary node; opening one
+  launches a separate searchable folder browser without changing the graph's
+  geometry. Right-click a concept or folder to hide it from Cascade, then use
+  **Hidden** to restore it. Hidden concepts remain available in Knowledge and
+  Review. Pan, zoom, fit, concept detail, and dissent links remain available.
 - **Overview** summarizes live sources, concepts, and conflicts. Recent activity
   is demo-only until the engine exposes an activity API.
 - **Queue** demonstrates review, stored, and discarded signal routing in demo
@@ -69,9 +72,11 @@ playground/service command documented in the repository instructions.
   visibly labeled sample answers. Live mode never substitutes demo knowledge:
   without a bridge it points the user to the agent connection flow instead.
   Electron does not currently provide that completion bridge.
-- **Settings** opens from the sidebar or Cmd/Ctrl-comma. General holds theme and
-  update preferences; Account holds optional desktop GitHub sign-in, sync state,
-  sign-out, and self-service deletion.
+- **Settings** opens from the sidebar or Cmd/Ctrl-comma. General → Appearance
+  holds theme and the Cascade view preference persisted on this Mac (or in
+  this browser): Grouped (the default), Compact, or Cards. General also holds update preferences; Account
+  holds optional desktop GitHub sign-in, sync state, sign-out, and self-service
+  deletion.
 
 The desktop sidebar remembers its expanded width, can be resized by pointer or
 keyboard, and collapses to a 72px icon rail. On narrow screens it becomes a

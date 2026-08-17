@@ -10,7 +10,7 @@ import { IntegrationsPanel } from './IntegrationsPanel'
 import { AccountIcon, ConnectionsIcon, IndexingIcon, PrivacyIcon, SettingsIcon } from './icons'
 import { ShortcutsReference } from './ShortcutsReference'
 import { Button, SegmentedControl } from './ui'
-import { onCascadeDisplayModeChange, readCascadeDisplayMode, writeCascadeDisplayMode, type CascadeDisplayMode } from '../cascade-preferences'
+import { onCascadeDisplayModeChange, readCascadeDisplayMode, resetCascadeLocalPreferences, writeCascadeDisplayMode, type CascadeDisplayMode } from '../cascade-preferences'
 
 export type SettingsPane = 'general' | 'indexing' | 'integrations' | 'account' | 'privacy'
 
@@ -294,9 +294,14 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
 
   useEffect(() => onCascadeDisplayModeChange(setCascadeDisplay), [])
 
-  const changeCascadeDisplay = (next: CascadeDisplayMode) => {
+  const changeCascadeDisplay = async (next: CascadeDisplayMode) => {
     setCascadeDisplay(next)
-    writeCascadeDisplayMode(next)
+    try {
+      await writeCascadeDisplayMode(next)
+      setWriteFailed(false)
+    } catch {
+      setWriteFailed(true)
+    }
   }
 
   useEffect(() => {
@@ -391,7 +396,10 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
     setResetBusy(true)
     try {
       const result = await settingsFile.reset()
-      if (result.ok) setWriteFailed(false)
+      if (result.ok) {
+        resetCascadeLocalPreferences()
+        setWriteFailed(false)
+      }
     } catch {
       setWriteFailed(true)
     } finally {
@@ -447,7 +455,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
               <div className="cc-settings-group">
                 <div className="cc-settings-row"><div><strong>Theme</strong><span>{desktop ? 'System follows the current appearance of this Mac.' : 'System follows your browser and operating system.'}</span></div><SegmentedControl label="Theme" value={theme} onChange={setTheme} options={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} /></div>
                 <div className="cc-settings-row"><div><strong>Density</strong><span>Comfortable gives controls more room. Compact fits more knowledge on screen.</span></div><SegmentedControl label="Density" value={density} onChange={setDensity} options={[{ value: 'comfortable', label: 'Comfortable' }, { value: 'compact', label: 'Compact' }]} /></div>
-                <div className="cc-settings-row"><div><strong>Cascade view</strong><span>Grouped is the default and keeps large folders condensed. Compact and Cards show every visible concept.</span></div><SegmentedControl label="Cascade view" value={cascadeDisplay} onChange={changeCascadeDisplay} options={[{ value: 'grouped', label: 'Grouped' }, { value: 'compact', label: 'Compact' }, { value: 'cards', label: 'Cards' }]} /></div>
+                <div className="cc-settings-row"><div><strong>Cascade view</strong><span>Grouped is the default and keeps large folders condensed. Compact and Cards show concepts individually.</span></div><SegmentedControl label="Cascade view" value={cascadeDisplay} onChange={changeCascadeDisplay} options={[{ value: 'grouped', label: 'Grouped' }, { value: 'compact', label: 'Compact' }, { value: 'cards', label: 'Cards' }]} /></div>
                 {desktop && <div className="cc-settings-row"><div><strong>Reduce transparency</strong><span>Turns off the translucent sidebar material. System follows Accessibility on this Mac, which is currently {systemReducedTransparency ? 'on' : 'off'}.</span></div><SegmentedControl label="Reduce transparency" value={transparency} onChange={setTransparency} options={[{ value: 'system', label: 'System' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]} /></div>}
               </div>
             </section>
@@ -461,8 +469,8 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
                 {canRevealConfig && <div className="cc-settings-row"><div><strong>Configuration folder</strong><span>{revealError ?? 'Settings and the source list live in ~/Library/Application Support/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showConfigFolder()}>Show in Finder</Button></div>}
                 {canRevealLogs && <div className="cc-settings-row"><div><strong>Engine log</strong><span>{logsError ?? 'What the engine was doing, including each indexing pass — useful in a bug report. Lives in ~/Library/Logs/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showEngineLog()}>Show in Finder</Button></div>}
                 <EngineEvents appMode={appMode} />
-                {settingsFile && <div className="cc-settings-row"><div><strong>Export settings</strong><span>{exportNote ?? 'Save a copy of ContextCake’s local preferences — useful in a bug report. Never includes credentials or your documents.'}</span></div><Button type="button" variant="secondary" onClick={() => void exportSettings()}>Export…</Button></div>}
-                {settingsFile && <div className="cc-settings-row"><div><strong>Reset settings</strong><span>Return appearance, update, window, and view settings on this Mac to their defaults. Sources and knowledge are not affected.</span></div><Button type="button" variant="secondary" disabled={resetBusy} onClick={() => void resetSettingsFile()}>{resetBusy ? 'Resetting…' : 'Reset…'}</Button></div>}
+                {settingsFile && <div className="cc-settings-row"><div><strong>Export settings</strong><span>{exportNote ?? 'Save a copy of ContextCake’s Mac settings file — useful in a bug report. Never includes credentials, hidden Cascade nodes, or your documents.'}</span></div><Button type="button" variant="secondary" onClick={() => void exportSettings()}>Export…</Button></div>}
+                {settingsFile && <div className="cc-settings-row"><div><strong>Reset settings</strong><span>Return appearance, update, navigation, and Cascade view settings on this Mac to their defaults. Sources, knowledge, window position, and privacy choices are not affected.</span></div><Button type="button" variant="secondary" disabled={resetBusy} onClick={() => void resetSettingsFile()}>{resetBusy ? 'Resetting…' : 'Reset…'}</Button></div>}
               </div>
             </section>
             <ShortcutsReference appMode={appMode} />

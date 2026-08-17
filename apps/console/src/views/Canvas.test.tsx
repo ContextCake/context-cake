@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Concept, Conflict } from '../data'
 import { writeCascadeDisplayMode } from '../cascade-preferences'
-import { buildCanvasPresentation, capConceptsPerLane, clampZoom, computeFitScale, computeLayout, conceptSupportingText, countByLane, filterFolderConcepts, hiddenKeyForConcept, hiddenKeyForFolder, isConceptHidden, MAX_NODES_PER_LANE, MIN_SCALE } from './Canvas'
+import { buildCanvasPresentation, capConceptsPerLane, clampZoom, computeFitScale, computeLayout, conceptSupportingText, countByLane, filterFolderConcepts, hiddenKeyForConcept, hiddenKeyForFolder, isConceptHidden, FOLDER_PAGE_SIZE, MAX_NODES_PER_LANE, MIN_SCALE } from './Canvas'
 
 function concept(id: string, layer: Concept['layers'][number], dissent?: Concept['layers'][number]): Concept {
   return {
@@ -288,6 +288,52 @@ describe('buildCanvasPresentation', () => {
     expect(buildCanvasPresentation(input, 'compact').concepts).toBe(input)
     expect(buildCanvasPresentation(input, 'cards').concepts).toBe(input)
   })
+
+  it('keeps an eligible folder grouped after an individual member is hidden', () => {
+    const all = Array.from({ length: 4 }, (_, index) => concept(`journal/${index}`, 'personal'))
+    const result = buildCanvasPresentation(all.slice(1), 'grouped', all)
+    const group = [...result.groups.values()][0]
+
+    expect(result.concepts).toHaveLength(1)
+    expect(group.concepts).toHaveLength(3)
+    expect(group.concepts.map((entry) => entry.id)).not.toContain('journal/0')
+  })
+
+  it('uses an internal group id that cannot collide with a real concept path', () => {
+    const real = concept('__contextcake_group__/personal/"journal"', 'personal')
+    const result = buildCanvasPresentation([
+      real,
+      ...Array.from({ length: 4 }, (_, index) => concept(`journal/${index}`, 'personal')),
+    ], 'grouped')
+    const group = [...result.groups.values()][0]
+
+    expect(group.id).not.toBe(real.id)
+    expect(result.concepts).toContain(real)
+    expect(result.concepts.map((entry) => entry.id)).toEqual([real.id, group.id])
+  })
+
+  it('keeps arbitrary MCP ids and control characters collision-safe', () => {
+    const collision = concept('__contextcake_group__/personal/"journal"', 'personal')
+    const nulFolder = `journal\u0000nested\uD800`
+    const result = buildCanvasPresentation([
+      collision,
+      ...Array.from({ length: 4 }, (_, index) => concept(`journal/${index}`, 'personal')),
+      ...Array.from({ length: 4 }, (_, index) => concept(`${nulFolder}/${index}`, 'personal')),
+    ], 'grouped')
+    const groups = [...result.groups.values()]
+
+    expect(groups).toHaveLength(2)
+    expect(groups.map((group) => group.folder)).toEqual(['journal', nulFolder])
+    expect(new Set(result.concepts.map((entry) => entry.id)).size).toBe(result.concepts.length)
+    expect(result.concepts).toContain(collision)
+  })
+
+  it('groups a source-sized folder without quadratic bucket copying', () => {
+    const input = Array.from({ length: 25_000 }, (_, index) => concept(`journal/${index}`, 'personal'))
+    const result = buildCanvasPresentation(input, 'grouped')
+    expect(result.concepts).toHaveLength(1)
+    expect([...result.groups.values()][0].concepts).toHaveLength(25_000)
+  })
 })
 
 describe('Cascade hidden targets', () => {
@@ -299,6 +345,15 @@ describe('Cascade hidden targets', () => {
     expect(isConceptHidden(identity, new Set([hiddenKeyForConcept('identity')]))).toBe(true)
     expect(isConceptHidden(personalJournal, new Set([hiddenKeyForFolder('personal', 'journal')]))).toBe(true)
     expect(isConceptHidden(teamJournal, new Set([hiddenKeyForFolder('personal', 'journal')]))).toBe(false)
+  })
+
+  it('encodes arbitrary MCP folder ids without URI errors', () => {
+    const folder = `notes\u2028foreign\u0000value\uD800`
+    const foreign = concept(`${folder}/entry`, 'team')
+    const key = hiddenKeyForFolder('team', folder)
+
+    expect(key).toContain('folder:team:')
+    expect(isConceptHidden(foreign, new Set([key]))).toBe(true)
   })
 })
 
@@ -401,6 +456,7 @@ describe('cascade display controls', () => {
     vi.doUnmock('../store')
     vi.resetModules()
     window.localStorage.clear()
+    window.__CC_DESKTOP = undefined
   })
 
   it('opens grouped folders in a separate browser without changing the graph and responds to the Settings preference', async () => {
@@ -411,7 +467,7 @@ describe('cascade display controls', () => {
       const noop = () => {}
       const state = {
         mode: 'live',
-        concepts: Array.from({ length: 5 }, (_, index) => concept(`journal/${index}`, 'personal')),
+        concepts: Array.from({ length: 105 }, (_, index) => concept(`journal/${index}`, 'personal')),
         conflicts: [],
         sources: [],
         setSelConcept: noop,
@@ -431,7 +487,7 @@ describe('cascade display controls', () => {
     await act(async () => root.render(<Canvas />))
 
     const folder = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')
-    expect(folder?.getAttribute('aria-label')).toContain('Open journal folder — 5 concepts')
+    expect(folder?.getAttribute('aria-label')).toContain('Open journal folder — 105 concepts')
     expect(container.querySelector('[aria-label="Cascade display"]')).toBeNull()
     expect(container.querySelector('[aria-label^="journal/0 —"]')).toBeNull()
     expect(container.querySelectorAll('.cc-canvas-node')).toHaveLength(0)
@@ -442,6 +498,26 @@ describe('cascade display controls', () => {
     expect(folderBrowser?.querySelector('[aria-label="Filter journal concepts"]')).toBeTruthy()
     expect(folderBrowser?.textContent).toContain('Right-click a concept to hide it from Cascade.')
     expect(container.querySelectorAll('.cc-canvas-node')).toHaveLength(0)
+    expect(folderBrowser?.querySelectorAll('.cc-canvas-folder-item')).toHaveLength(FOLDER_PAGE_SIZE)
+
+    const showMore = folderBrowser?.querySelector<HTMLButtonElement>('.cc-canvas-folder-more')
+    expect(showMore?.textContent).toContain('Show 5 more')
+    await act(async () => showMore!.click())
+    expect(folderBrowser?.querySelectorAll('.cc-canvas-folder-item')).toHaveLength(105)
+    expect(folderBrowser?.querySelector('.cc-canvas-folder-more')).toBeNull()
+
+    await act(async () => root.render(<Canvas keyboardSuspended />))
+    const suspendedEscape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => window.dispatchEvent(suspendedEscape))
+    expect(container.querySelector('#cc-canvas-folder-browser')).toBeTruthy()
+
+    await act(async () => root.render(<Canvas />))
+    const ownedEscape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => window.dispatchEvent(ownedEscape))
+    expect(ownedEscape.defaultPrevented).toBe(true)
+    expect(container.querySelector('#cc-canvas-folder-browser')).toBeNull()
+
+    await act(async () => folder!.click())
 
     await act(async () => writeCascadeDisplayMode('compact'))
     expect(window.localStorage.getItem('contextcake.cascadeDisplay')).toBe('compact')
@@ -480,21 +556,364 @@ describe('cascade display controls', () => {
     await act(async () => root.render(<Canvas />))
 
     const folder = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
-    await act(async () => folder.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 40, clientY: 40 })))
-    const hide = container.querySelector<HTMLButtonElement>('[role="menuitem"]')
+    folder.focus()
+    await act(async () => {
+      folder.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }))
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    })
+    let hide = container.querySelector<HTMLButtonElement>('[role="menuitem"]')
     expect(hide?.textContent).toContain('Hide folder from Cascade')
+    expect(document.activeElement).toBe(hide)
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    })
+    expect(container.querySelector('[role="menu"]')).toBeNull()
+    expect(document.activeElement).toBe(folder)
+
+    await act(async () => {
+      folder.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }))
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    })
+    hide = container.querySelector<HTMLButtonElement>('[role="menuitem"]')
+    await act(async () => hide!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })))
+    expect(container.querySelector('[role="menu"]')).toBeNull()
+
+    await act(async () => folder.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 40, clientY: 40 })))
+    hide = container.querySelector<HTMLButtonElement>('[role="menuitem"]')
 
     await act(async () => hide!.click())
     expect(container.querySelector('[aria-haspopup="dialog"]')).toBeNull()
-    expect(window.localStorage.getItem('contextcake.cascadeHiddenNodes')).toContain('folder:personal:journal')
+    expect(JSON.parse(window.localStorage.getItem('contextcake.cascadeHiddenNodes') ?? '[]'))
+      .toContain(hiddenKeyForFolder('personal', 'journal'))
 
     const hidden = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('5 hidden'))
+    await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    expect(document.activeElement).toBe(hidden)
     await act(async () => hidden!.click())
     expect(container.querySelector('#cc-canvas-hidden-manager')?.textContent).toContain('journal/')
 
     const show = Array.from(container.querySelectorAll<HTMLButtonElement>('#cc-canvas-hidden-manager button')).find((button) => button.textContent === 'Show')
     await act(async () => show!.click())
     expect(container.querySelector('[aria-haspopup="dialog"]')).toBeTruthy()
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('counts actionable non-structural conflicts in folder and Hidden summaries', async () => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const brokenLink: Conflict = {
+        id: 'broken-link', concept: 'journal/0', sectionKey: 'references', section: 'references', title: 'Missing target',
+        status: 'open', discrepancyStatus: 'needs_review', winner: 'personal', safe: false, history: [],
+        kind: 'broken_link', target: 'missing/target',
+        contributions: [{ layer: 'personal', sourceLayer: 'personal', value: 'missing/target', updated: '' }],
+      }
+      const state = {
+        mode: 'live',
+        concepts: Array.from({ length: 4 }, (_, index) => concept(`journal/${index}`, 'personal')),
+        conflicts: [brokenLink],
+        sources: [],
+        setSelConcept: noop,
+        setSelConflict: noop,
+        setView: noop,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+
+    const folder = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+    expect(folder.getAttribute('aria-label')).toContain('1 with conflicts')
+    expect(folder.textContent).toContain('1 conflict')
+
+    await act(async () => folder.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 40, clientY: 40 })))
+    const hide = container.querySelector<HTMLButtonElement>('[role="menuitem"]')!
+    expect(container.querySelector('[role="menu"]')?.textContent).toContain('1 conflict will remain available in Review')
+    await act(async () => hide.click())
+
+    const hidden = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('4 hidden'))!
+    expect(hidden.textContent).toContain('1 conflicted')
+    await act(async () => hidden.click())
+    expect(container.querySelector('#cc-canvas-hidden-manager')?.textContent).toContain('1 conflicted')
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('loads hidden nodes from durable desktop UI state and writes changes back', async () => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const setUiState = vi.fn().mockResolvedValue({})
+    window.__CC_DESKTOP = {
+      uiState: {
+        initial: {
+          sidebar: { collapsed: false, width: 232 },
+          lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+          cascadeDisplay: 'grouped', cascadeHiddenNodes: [],
+        },
+        get: vi.fn().mockResolvedValue({
+          sidebar: { collapsed: false, width: 232 },
+          lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+          cascadeDisplay: 'grouped', cascadeHiddenNodes: ['concept:identity'],
+        }),
+        set: setUiState,
+      },
+    } as unknown as typeof window.__CC_DESKTOP
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const state = {
+        mode: 'live', concepts: [concept('identity', 'personal')], conflicts: [], sources: [],
+        setSelConcept: noop, setSelConflict: noop, setView: noop,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+
+    expect(container.textContent).toContain('1 hidden')
+    expect(setUiState).toHaveBeenCalledWith({ cascadeHiddenNodes: ['concept:identity'] })
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('uses live desktop display state when Cascade remounts after a Settings reset', async () => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    window.__CC_DESKTOP = {
+      uiState: {
+        initial: {
+          sidebar: { collapsed: false, width: 232 },
+          lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+          cascadeDisplay: 'cards', cascadeHiddenNodes: [],
+        },
+        get: vi.fn().mockResolvedValue({
+          sidebar: { collapsed: false, width: 232 },
+          lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+          cascadeDisplay: 'grouped', cascadeHiddenNodes: [],
+        }),
+        set: vi.fn().mockResolvedValue({}),
+      },
+    } as unknown as typeof window.__CC_DESKTOP
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const state = {
+        mode: 'live',
+        concepts: Array.from({ length: 4 }, (_, index) => concept(`journal/${index}`, 'personal')),
+        conflicts: [], sources: [],
+        setSelConcept: noop, setSelConflict: noop, setView: noop,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+
+    expect(container.querySelector('[aria-label="Open journal folder — 4 concepts"]')).toBeTruthy()
+    expect(container.querySelector('[aria-label^="journal/0 —"]')).toBeNull()
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('keeps a Settings display change that arrives while desktop state is hydrating', async () => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    let resolveUiState!: (state: NonNullable<NonNullable<typeof window.__CC_DESKTOP>['uiState']>['initial']) => void
+    const getUiState = vi.fn(() => new Promise<NonNullable<NonNullable<typeof window.__CC_DESKTOP>['uiState']>['initial']>((resolve) => { resolveUiState = resolve }))
+    window.__CC_DESKTOP = {
+      uiState: {
+        initial: {
+          sidebar: { collapsed: false, width: 232 },
+          lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+          cascadeDisplay: 'cards', cascadeHiddenNodes: [],
+        },
+        get: getUiState,
+        set: vi.fn().mockResolvedValue({}),
+      },
+    } as unknown as typeof window.__CC_DESKTOP
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const state = {
+        mode: 'live',
+        concepts: Array.from({ length: 4 }, (_, index) => concept(`journal/${index}`, 'personal')),
+        conflicts: [], sources: [],
+        setSelConcept: noop, setSelConflict: noop, setView: noop,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+    await act(async () => writeCascadeDisplayMode('compact'))
+    await act(async () => resolveUiState({
+      sidebar: { collapsed: false, width: 232 },
+      lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+      cascadeDisplay: 'grouped', cascadeHiddenNodes: [],
+    }))
+
+    expect(container.querySelector('[aria-label="Open journal folder — 4 concepts"]')).toBeNull()
+    expect(container.querySelector('[aria-label^="journal/0 —"]')).toBeTruthy()
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('does not overwrite durable hidden state when desktop hydration fails', async () => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const setUiState = vi.fn().mockResolvedValue({})
+    window.__CC_DESKTOP = {
+      uiState: {
+        initial: {
+          sidebar: { collapsed: false, width: 232 },
+          lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+          cascadeDisplay: 'grouped', cascadeHiddenNodes: [],
+        },
+        get: vi.fn().mockRejectedValue(new Error('IPC unavailable')),
+        set: setUiState,
+      },
+    } as unknown as typeof window.__CC_DESKTOP
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const state = {
+        mode: 'live', concepts: [concept('identity', 'personal')], conflicts: [], sources: [],
+        setSelConcept: noop, setSelConflict: noop, setView: noop,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+    await act(async () => {})
+
+    expect(setUiState).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem('contextcake.cascadeHiddenNodes')).toBeNull()
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('applies a reset that happens while desktop hidden state is hydrating', async () => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    let resolveUiState!: (state: NonNullable<NonNullable<typeof window.__CC_DESKTOP>['uiState']>['initial']) => void
+    const getUiState = vi.fn(() => new Promise<NonNullable<NonNullable<typeof window.__CC_DESKTOP>['uiState']>['initial']>((resolve) => { resolveUiState = resolve }))
+    const setUiState = vi.fn().mockResolvedValue({})
+    window.__CC_DESKTOP = {
+      uiState: {
+        initial: {
+          sidebar: { collapsed: false, width: 232 },
+          lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+          cascadeDisplay: 'grouped', cascadeHiddenNodes: [],
+        },
+        get: getUiState,
+        set: setUiState,
+      },
+    } as unknown as typeof window.__CC_DESKTOP
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const state = {
+        mode: 'live', concepts: [concept('identity', 'personal')], conflicts: [], sources: [],
+        setSelConcept: noop, setSelConflict: noop, setView: noop,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+    const { resetCascadeLocalPreferences } = await import('../cascade-preferences')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+    await act(async () => resetCascadeLocalPreferences())
+    await act(async () => resolveUiState({
+      sidebar: { collapsed: false, width: 232 },
+      lastView: 'canvas', knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+      cascadeDisplay: 'grouped', cascadeHiddenNodes: ['concept:identity'],
+    }))
+
+    expect(container.textContent).not.toContain('1 hidden')
+    expect(setUiState).toHaveBeenCalledWith({ cascadeHiddenNodes: [] })
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('drops malformed persisted hidden targets instead of crashing the Cascade', async () => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    window.localStorage.setItem('contextcake.cascadeHiddenNodes', JSON.stringify([
+      'folder:not-a-layer:anything',
+      'folder:company:%',
+      'concept:identity',
+    ]))
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const state = {
+        mode: 'live',
+        concepts: [concept('identity', 'personal')],
+        conflicts: [],
+        sources: [],
+        setSelConcept: noop,
+        setSelConflict: noop,
+        setView: noop,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+
+    expect(container.textContent).toContain('1 hidden')
+    expect(window.localStorage.getItem('contextcake.cascadeHiddenNodes')).toBe('["concept:identity"]')
 
     await act(async () => root.unmount())
     container.remove()
@@ -696,6 +1115,23 @@ describe('inline conflict quick-resolve', () => {
     await act(async () => ghost!.click())
 
     expect(container.textContent).not.toContain('Use personal’s answer everywhere')
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('does not count resolved history as a current conflict on an otherwise clean concept', async () => {
+    const decideDiscrepancy = vi.fn(async () => {})
+    const resolved: Conflict = { ...CONFLICT_RECORD, discrepancyStatus: 'resolved', status: 'resolved' }
+    const { container, root, act } = await renderWithConflict(
+      decideDiscrepancy,
+      resolved,
+      null,
+      concept('doc-a', 'personal'),
+    )
+
+    expect(container.querySelector('.cc-canvas-summary-conflicts')).toBeNull()
+    expect(container.querySelector('[data-role="conflict-badge"]')).toBeNull()
 
     await act(async () => root.unmount())
     container.remove()

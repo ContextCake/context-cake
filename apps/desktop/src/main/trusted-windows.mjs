@@ -23,6 +23,7 @@ export const TRUSTED_IPC_ROLES = Object.freeze({
   'updates:get-status': BOTH_ROLES,
   'updates:check': BOTH_ROLES,
   'updates:install': BOTH_ROLES,
+  'ui-state:get': BOTH_ROLES,
   'ui-state:set': BOTH_ROLES,
   'contextcake:get-api-token': BOTH_ROLES,
   // The Connect Agent dialog (main window) and Settings → General both surface

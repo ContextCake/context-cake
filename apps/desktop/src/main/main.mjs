@@ -1104,6 +1104,7 @@ handleTrustedIpc('preferences:set', async (candidate) => {
   if (!persisted) throw new Error(SETTINGS_WRITE_FAILED)
   return preferences
 })
+handleTrustedIpc('ui-state:get', () => uiStateSnapshot())
 handleTrustedIpc('ui-state:set', async (patch) => {
   const currentSettings = readSettings()
   const result = applyUiStatePatch(currentSettings.uiState, patch)
@@ -1190,7 +1191,14 @@ handleTrustedIpc('contextcake:settings-export', async ({ window }) => {
     // so this is a leak that would arrive silently on the day accounts ship.
     // The row's own copy promises a file that is safe to attach to a bug
     // report; this is what keeps that true.
-    const { _sync: _bookkeeping, ...exported } = readSettings()
+    const { _sync: _bookkeeping, ...stored } = readSettings()
+    const exported = stored.uiState
+      ? { ...stored, uiState: { ...stored.uiState } }
+      : stored
+    // Hidden concept/folder ids are useful only to this Mac and may reveal
+    // project naming. Keep the display mode and other harmless UI state in a
+    // support export, but leave that inventory behind.
+    if (exported.uiState) delete exported.uiState.cascadeHiddenNodes
     // 0600, matching every other writer of this content (settings.mjs,
     // settings-sync.mjs) — an export to a shared folder must not be the one
     // copy other local accounts can read.
@@ -1246,6 +1254,10 @@ const VALID_SETTINGS_PANES = new Set(['general', 'indexing', 'integrations', 'ac
 const rendererReloadAt = new WeakMap()
 
 function rendererArguments(preferences, uiState, role) {
+  // Hidden concept/folder ids can reveal project naming. They are fetched
+  // after boot through trusted IPC instead of being placed in renderer argv,
+  // which other local processes may be able to inspect.
+  const rendererUiState = { ...uiState, cascadeHiddenNodes: [] }
   return [
     `--cc-window-role=${role}`,
     `--cc-version=${app.getVersion()}`,
@@ -1259,7 +1271,7 @@ function rendererArguments(preferences, uiState, role) {
     `--cc-system-reduced-transparency=${preferences.systemReducedTransparency ? '1' : '0'}`,
     `--cc-high-contrast=${preferences.highContrast ? '1' : '0'}`,
     `--cc-native-vibrancy=${process.platform === 'darwin' && role === 'main' ? '1' : '0'}`,
-    `--cc-ui-state=${encodeURIComponent(JSON.stringify(uiState))}`,
+    `--cc-ui-state=${encodeURIComponent(JSON.stringify(rendererUiState))}`,
     `--cc-accounts=${currentAuthState().available ? '1' : '0'}`,
   ]
 }

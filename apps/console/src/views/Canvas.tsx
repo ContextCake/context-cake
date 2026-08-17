@@ -5,7 +5,7 @@ import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
 import { ConflictQuickResolve } from '../components/ConflictQuickResolve'
 import { useStoreData } from '../store'
-import { onCascadeDisplayModeChange, readCascadeDisplayMode, type CascadeDisplayMode } from '../cascade-preferences'
+import { CASCADE_HIDDEN_NODES_KEY, onCascadeDisplayModeChange, onCascadeHiddenNodesChange, readCascadeDisplayMode, type CascadeDisplayMode } from '../cascade-preferences'
 
 // Statuses a conflict can still be acted on from — matches Overview.tsx's
 // "Needs Attention" actionable filter. A resolved/acknowledged conflict keeps
@@ -91,8 +91,11 @@ export const MIN_SCALE = 0.2
 const MAX_SCALE = 2
 
 const NUM = new Intl.NumberFormat()
-const HIDDEN_NODES_KEY = 'contextcake.cascadeHiddenNodes'
 export const GROUP_MIN_SIZE = 4
+export const FOLDER_PAGE_SIZE = 100
+const MAX_HIDDEN_TARGETS = 1_000
+const MAX_HIDDEN_KEY_LENGTH = 2_048
+const MAX_HIDDEN_TOTAL_CHARS = 250_000
 
 // lanes top→bottom: highest precedence (Personal) on top so "up = wins"
 const LANE_ORDER: LayerId[] = ['personal', 'team', 'company']
@@ -140,8 +143,19 @@ export function filterFolderConcepts(concepts: Concept[], query: string): Concep
     || concept.type.toLocaleLowerCase().includes(normalized))
 }
 
-function groupId(layer: LayerId, folder: string): string {
-  return `__contextcake_group__/${layer}/${encodeURIComponent(folder)}`
+function groupBucketKey(layer: LayerId, folder: string): string {
+  // JSON's string escaping makes this injective even for arbitrary MCP node
+  // ids containing separators or control characters.
+  return JSON.stringify([layer, folder])
+}
+
+function groupId(layer: LayerId, folder: string, occupiedIds: Set<string>): string {
+  const base = `__contextcake_group__/${layer}/${JSON.stringify(folder)}`
+  let candidate = base
+  let suffix = 1
+  while (occupiedIds.has(candidate)) candidate = `${base}#${suffix++}`
+  occupiedIds.add(candidate)
+  return candidate
 }
 
 export function hiddenKeyForConcept(id: string): string {
@@ -149,7 +163,35 @@ export function hiddenKeyForConcept(id: string): string {
 }
 
 export function hiddenKeyForFolder(layer: LayerId, folder: string): string {
-  return `folder:${layer}:${encodeURIComponent(folder)}`
+  // JSON string encoding is total over arbitrary MCP ids, including control
+  // characters and lone surrogates that make encodeURIComponent throw.
+  return `folder:${layer}:${JSON.stringify(folder)}`
+}
+
+interface HiddenFolderTarget {
+  layer: LayerId
+  folder: string
+}
+
+function parseHiddenFolderKey(key: string): HiddenFolderTarget | null {
+  const match = /^folder:(personal|team|company):([\s\S]+)$/.exec(key)
+  if (!match) return null
+  try {
+    // JSON is the current total encoding. Percent-decoding keeps preferences
+    // written by earlier preview builds readable.
+    const folder = match[2].startsWith('"') ? JSON.parse(match[2]) : decodeURIComponent(match[2])
+    if (typeof folder !== 'string') return null
+    if (!folder) return null
+    return { layer: match[1] as LayerId, folder }
+  } catch {
+    return null
+  }
+}
+
+function isStoredHiddenTarget(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > MAX_HIDDEN_KEY_LENGTH) return false
+  if (value.startsWith('concept:')) return value.length > 'concept:'.length
+  return parseHiddenFolderKey(value) !== null
 }
 
 export function isConceptHidden(concept: Concept, hiddenTargets: ReadonlySet<string>): boolean {
@@ -167,29 +209,49 @@ export function isConceptHidden(concept: Concept, hiddenTargets: ReadonlySet<str
 export function buildCanvasPresentation(
   concepts: Concept[],
   displayMode: CascadeDisplayMode,
+  groupingUniverse: Concept[] = concepts,
+  activeConflictConcepts?: { has(id: string): boolean },
 ): CanvasPresentation {
   if (displayMode !== 'grouped') return { concepts, groups: new Map() }
+
+  const eligibility = new Map<string, number>()
+  for (const concept of groupingUniverse) {
+    const folder = conceptFolder(concept)
+    if (!folder) continue
+    const layer = primaryLayer(concept) ?? 'company'
+    const key = groupBucketKey(layer, folder)
+    eligibility.set(key, (eligibility.get(key) ?? 0) + 1)
+  }
 
   const buckets = new Map<string, Concept[]>()
   for (const concept of concepts) {
     const folder = conceptFolder(concept)
     if (!folder) continue
     const layer = primaryLayer(concept) ?? 'company'
-    const key = `${layer}\u0000${folder}`
-    buckets.set(key, [...(buckets.get(key) ?? []), concept])
+    const key = groupBucketKey(layer, folder)
+    const bucket = buckets.get(key)
+    if (bucket) bucket.push(concept)
+    else buckets.set(key, [concept])
   }
 
   const eligible = new Map<string, CanvasConceptGroup>()
+  const occupiedIds = new Set(groupingUniverse.map((concept) => concept.id))
   for (const [key, members] of buckets) {
-    if (members.length < GROUP_MIN_SIZE) continue
-    const [layer, folder] = key.split('\u0000') as [LayerId, string]
-    const id = groupId(layer, folder)
+    // Eligibility comes from the unhidden folder inventory. Hiding one member
+    // of an exactly-four-item folder must not explode its summary into three
+    // individual cards and increase visual noise.
+    if ((eligibility.get(key) ?? 0) < GROUP_MIN_SIZE) continue
+    const first = members[0]
+    const layer = primaryLayer(first) ?? 'company'
+    const folder = conceptFolder(first)!
+    const id = groupId(layer, folder, occupiedIds)
     eligible.set(key, {
       id,
       folder,
       layer,
       concepts: members,
-      conflictCount: members.filter(conceptHasConflict).length,
+      conflictCount: members.filter((concept) =>
+        conceptHasConflict(concept) || activeConflictConcepts?.has(concept.id)).length,
       draftCount: members.filter((concept) => concept.draft).length,
     })
   }
@@ -200,7 +262,7 @@ export function buildCanvasPresentation(
   for (const concept of concepts) {
     const folder = conceptFolder(concept)
     const layer = primaryLayer(concept) ?? 'company'
-    const key = folder ? `${layer}\u0000${folder}` : ''
+    const key = folder ? groupBucketKey(layer, folder) : ''
     const group = eligible.get(key)
     if (!group) {
       out.push(concept)
@@ -223,15 +285,34 @@ export function buildCanvasPresentation(
   return { concepts: out, groups }
 }
 
-function initialHiddenTargets(): Set<string> {
+function validatedHiddenTargets(saved: unknown): Set<string> {
+  if (!Array.isArray(saved)) return new Set()
+  const valid: string[] = []
+  const seen = new Set<string>()
+  let serializedChars = 2
+  for (const value of saved.slice(0, MAX_HIDDEN_TARGETS)) {
+    if (!isStoredHiddenTarget(value) || seen.has(value)) continue
+    const entryChars = JSON.stringify(value).length + (valid.length > 0 ? 1 : 0)
+    if (serializedChars + entryChars > MAX_HIDDEN_TOTAL_CHARS) break
+    valid.push(value)
+    seen.add(value)
+    serializedChars += entryChars
+  }
+  return new Set(valid)
+}
+
+function browserHiddenTargets(): Set<string> {
   try {
-    const saved = JSON.parse(localStorage.getItem(HIDDEN_NODES_KEY) ?? '[]')
-    if (!Array.isArray(saved)) return new Set()
-    return new Set(saved.filter((value): value is string =>
-      typeof value === 'string' && (value.startsWith('concept:') || value.startsWith('folder:'))))
+    const saved = JSON.parse(localStorage.getItem(CASCADE_HIDDEN_NODES_KEY) ?? '[]')
+    return validatedHiddenTargets(saved)
   } catch {
     return new Set()
   }
+}
+
+function initialHiddenTargets(): Set<string> {
+  const desktop = window.__CC_DESKTOP?.uiState?.initial.cascadeHiddenNodes
+  return desktop ? validatedHiddenTargets(desktop) : browserHiddenTargets()
 }
 
 /** Fit scale/pan for a `cw`×`ch` viewport around `worldW`×`worldH` content, or
@@ -441,31 +522,45 @@ interface HideMenuState {
   kind: 'concept' | 'folder'
 }
 
-function hiddenTargetRows(concepts: Concept[], hiddenTargets: ReadonlySet<string>): HiddenTargetRow[] {
-  return [...hiddenTargets].map((key) => {
+function hiddenTargetRows(
+  concepts: Concept[],
+  hiddenTargets: ReadonlySet<string>,
+  activeConflictConcepts: { has(id: string): boolean },
+): HiddenTargetRow[] {
+  const conceptsById = new Map(concepts.map((concept) => [concept.id, concept]))
+  const folders = new Map<string, { count: number; conflictCount: number }>()
+  for (const concept of concepts) {
+    const folder = conceptFolder(concept)
+    if (!folder) continue
+    const key = groupBucketKey(primaryLayer(concept) ?? 'company', folder)
+    const row = folders.get(key) ?? { count: 0, conflictCount: 0 }
+    row.count += 1
+    if (conceptHasConflict(concept) || activeConflictConcepts.has(concept.id)) row.conflictCount += 1
+    folders.set(key, row)
+  }
+  return [...hiddenTargets].flatMap((key) => {
     if (key.startsWith('concept:')) {
       const id = key.slice('concept:'.length)
-      const concept = concepts.find((entry) => entry.id === id)
-      return {
+      const concept = conceptsById.get(id)
+      return [{
         key,
         label: concept?.title ?? id,
         detail: id,
         count: concept ? 1 : 0,
-        conflictCount: concept && conceptHasConflict(concept) ? 1 : 0,
-      }
+        conflictCount: concept && (conceptHasConflict(concept) || activeConflictConcepts.has(concept.id)) ? 1 : 0,
+      }]
     }
-    const [, layerValue = 'company', encodedFolder = ''] = key.split(':')
-    const layer = layerValue as LayerId
-    const folder = decodeURIComponent(encodedFolder)
-    const matches = concepts.filter((concept) =>
-      (primaryLayer(concept) ?? 'company') === layer && conceptFolder(concept) === folder)
-    return {
+    const parsed = parseHiddenFolderKey(key)
+    if (!parsed) return []
+    const { layer, folder } = parsed
+    const stats = folders.get(groupBucketKey(layer, folder)) ?? { count: 0, conflictCount: 0 }
+    return [{
       key,
       label: `${folder}/`,
       detail: `${layerName(layer)} folder`,
-      count: matches.length,
-      conflictCount: matches.filter(conceptHasConflict).length,
-    }
+      count: stats.count,
+      conflictCount: stats.conflictCount,
+    }]
   })
 }
 
@@ -475,12 +570,79 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   const [hiddenTargets, setHiddenTargets] = useState<Set<string>>(initialHiddenTargets)
   const [openFolderGroupId, setOpenFolderGroupId] = useState<string | null>(null)
   const [folderQuery, setFolderQuery] = useState('')
+  const [folderVisibleLimit, setFolderVisibleLimit] = useState(FOLDER_PAGE_SIZE)
   const [hiddenManagerOpen, setHiddenManagerOpen] = useState(false)
   const [hideMenu, setHideMenu] = useState<HideMenuState | null>(null)
-  useEffect(() => onCascadeDisplayModeChange(setDisplayMode), [])
+  const displayHydrationPending = useRef(Boolean(window.__CC_DESKTOP?.uiState?.get))
+  const displayChangedDuringHydration = useRef(false)
+  const [hiddenStateHydrated, setHiddenStateHydrated] = useState(() => !window.__CC_DESKTOP?.uiState?.get)
+  const hiddenHydrationStatus = useRef<'pending' | 'ready' | 'failed'>(
+    window.__CC_DESKTOP?.uiState?.get ? 'pending' : 'ready',
+  )
+  const pendingHiddenOperations = useRef<Array<(current: Set<string>) => Set<string>>>([])
+  const commitHiddenTargets = useCallback((update: (current: Set<string>) => Set<string>) => {
+    if (hiddenHydrationStatus.current === 'pending') pendingHiddenOperations.current.push(update)
+    setHiddenTargets((current) => validatedHiddenTargets([...update(current)]))
+  }, [])
+  useEffect(() => onCascadeDisplayModeChange((mode) => {
+    if (displayHydrationPending.current) displayChangedDuringHydration.current = true
+    setDisplayMode(mode)
+  }), [])
+  useEffect(() => onCascadeHiddenNodesChange(() => commitHiddenTargets(() => browserHiddenTargets())), [commitHiddenTargets])
   useEffect(() => {
-    try { localStorage.setItem(HIDDEN_NODES_KEY, JSON.stringify([...hiddenTargets])) } catch { /* optional preference */ }
-  }, [hiddenTargets])
+    const getUiState = window.__CC_DESKTOP?.uiState?.get
+    if (!getUiState) return
+    let active = true
+    getUiState().then((state) => {
+      if (!active) return
+      // The launch snapshot is immutable. Settings can change (or reset) this
+      // preference while Cascade is unmounted, so the authoritative live
+      // state must win when the view is opened again.
+      if (!displayChangedDuringHydration.current) setDisplayMode(state.cascadeDisplay)
+      displayHydrationPending.current = false
+      let next = validatedHiddenTargets(state.cascadeHiddenNodes)
+      for (const update of pendingHiddenOperations.current) next = validatedHiddenTargets([...update(next)])
+      pendingHiddenOperations.current = []
+      hiddenHydrationStatus.current = 'ready'
+      setHiddenTargets(next)
+      setHiddenStateHydrated(true)
+    }).catch(() => {
+      if (!active) return
+      displayHydrationPending.current = false
+      hiddenHydrationStatus.current = 'failed'
+      pendingHiddenOperations.current = []
+    })
+    return () => { active = false }
+  }, [])
+  useEffect(() => {
+    if (!hiddenStateHydrated || hiddenHydrationStatus.current !== 'ready') return
+    const next = [...hiddenTargets]
+    try { localStorage.setItem(CASCADE_HIDDEN_NODES_KEY, JSON.stringify(next)) } catch { /* optional preference */ }
+    window.__CC_DESKTOP?.uiState?.set({ cascadeHiddenNodes: next }).catch(() => {})
+  }, [hiddenStateHydrated, hiddenTargets])
+
+  const conflictsByConcept = useMemo(() => {
+    const grouped = new Map<string, Conflict[]>()
+    for (const conflict of conflicts) {
+      const entries = grouped.get(conflict.concept)
+      if (entries) entries.push(conflict)
+      else grouped.set(conflict.concept, [conflict])
+    }
+    return grouped
+  }, [conflicts])
+  const actionableConflicts = useMemo(() => conflicts.filter((conflict) => {
+    const status = conflict.discrepancyStatus ?? (conflict.status === 'open' ? 'needs_review' : 'resolved')
+    return ACTIONABLE_DISCREPANCY_STATUSES.has(status)
+  }), [conflicts])
+  const actionableConflictsByConcept = useMemo(() => {
+    const grouped = new Map<string, Conflict[]>()
+    for (const conflict of actionableConflicts) {
+      const entries = grouped.get(conflict.concept)
+      if (entries) entries.push(conflict)
+      else grouped.set(conflict.concept, [conflict])
+    }
+    return grouped
+  }, [actionableConflicts])
 
   // User-hidden targets are removed before grouping and capping. A hidden
   // folder remains a durable preference even when new concepts arrive inside
@@ -494,20 +656,21 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
     [concepts, hiddenTargets],
   )
   const hiddenRows = useMemo(
-    () => hiddenTargetRows(concepts, hiddenTargets),
-    [concepts, hiddenTargets],
+    () => hiddenTargetRows(concepts, hiddenTargets, actionableConflictsByConcept),
+    [actionableConflictsByConcept, concepts, hiddenTargets],
   )
   const hiddenConflictCount = useMemo(
-    () => userHiddenConcepts.filter(conceptHasConflict).length,
-    [userHiddenConcepts],
+    () => userHiddenConcepts.filter((concept) =>
+      conceptHasConflict(concept) || actionableConflictsByConcept.has(concept.id)).length,
+    [actionableConflictsByConcept, userHiddenConcepts],
   )
 
   // Group before capping. A 162-note journal folder becomes one representative
   // node instead of being arbitrarily sliced at note 60. Opening a folder is a
   // separate overlay and never mutates the graph's geometry.
   const presentation = useMemo(
-    () => buildCanvasPresentation(visibleConcepts, displayMode),
-    [visibleConcepts, displayMode],
+    () => buildCanvasPresentation(visibleConcepts, displayMode, concepts, actionableConflictsByConcept),
+    [visibleConcepts, displayMode, concepts, actionableConflictsByConcept],
   )
   const capped = useMemo(() => capConceptsPerLane(presentation.concepts), [presentation.concepts])
   // Memoized: pan/zoom re-renders every pointermove — don't re-lay-out for those.
@@ -523,11 +686,6 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   // Full counts, not the capped subset — the lane header's "N concepts" stays
   // an honest visible total even while the canvas only renders some of them.
   const laneCounts = useMemo(() => countByLane(visibleConcepts), [visibleConcepts])
-  const conflictsByConcept = useMemo(() => {
-    const grouped = new Map<string, Conflict[]>()
-    for (const conflict of conflicts) grouped.set(conflict.concept, [...(grouped.get(conflict.concept) ?? []), conflict])
-    return grouped
-  }, [conflicts])
   // Real (source name, level) pairs behind each lane, for honest lane headers
   // (Fix F3): demo mode's sources are already the canonical company/team/
   // personal trio, so this reduces to the static labels there — the fallback
@@ -551,10 +709,15 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   const inspectorRef = useRef<HTMLElement | null>(null)
   const folderOpener = useRef<HTMLButtonElement | null>(null)
   const folderPanelRef = useRef<HTMLElement | null>(null)
+  const hideMenuRef = useRef<HTMLDivElement | null>(null)
+  const hideMenuOpener = useRef<HTMLElement | null>(null)
+  const focusHideMenu = useRef(false)
+  const hiddenSummaryRef = useRef<HTMLButtonElement | null>(null)
 
   const closeFolderBrowser = useCallback((restoreFocus = true) => {
     setOpenFolderGroupId(null)
     setFolderQuery('')
+    setFolderVisibleLimit(FOLDER_PAGE_SIZE)
     if (restoreFocus) requestAnimationFrame(() => folderOpener.current?.focus())
   }, [])
 
@@ -563,10 +726,24 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
     setHiddenManagerOpen(false)
     setHideMenu(null)
     setFolderQuery('')
+    setFolderVisibleLimit(FOLDER_PAGE_SIZE)
     setOpenFolderGroupId((current) => current === id ? null : id)
   }, [])
 
-  const openHideMenuAt = useCallback((x: number, y: number, target: Omit<HideMenuState, 'x' | 'y'>) => {
+  const closeHideMenu = useCallback((restoreFocus = false) => {
+    setHideMenu(null)
+    if (restoreFocus) requestAnimationFrame(() => hideMenuOpener.current?.focus())
+  }, [])
+
+  const openHideMenuAt = useCallback((
+    x: number,
+    y: number,
+    target: Omit<HideMenuState, 'x' | 'y'>,
+    opener: HTMLElement,
+    moveFocus: boolean,
+  ) => {
+    hideMenuOpener.current = opener
+    focusHideMenu.current = moveFocus
     setHiddenManagerOpen(false)
     setHideMenu({
       ...target,
@@ -578,35 +755,44 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   const onTargetContextMenu = useCallback((event: React.MouseEvent, target: Omit<HideMenuState, 'x' | 'y'>) => {
     event.preventDefault()
     event.stopPropagation()
-    openHideMenuAt(event.clientX, event.clientY, target)
+    openHideMenuAt(event.clientX, event.clientY, target, event.currentTarget as HTMLElement, false)
   }, [openHideMenuAt])
 
   const onTargetKeyDown = useCallback((event: React.KeyboardEvent, target: Omit<HideMenuState, 'x' | 'y'>) => {
     if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
     event.preventDefault()
     const rect = event.currentTarget.getBoundingClientRect()
-    openHideMenuAt(rect.left + Math.min(rect.width - 12, 36), rect.top + Math.min(rect.height - 8, 32), target)
+    openHideMenuAt(
+      rect.left + Math.min(rect.width - 12, 36),
+      rect.top + Math.min(rect.height - 8, 32),
+      target,
+      event.currentTarget as HTMLElement,
+      true,
+    )
   }, [openHideMenuAt])
 
   const hideTarget = useCallback((target: HideMenuState) => {
-    setHiddenTargets((current) => new Set(current).add(target.key))
+    commitHiddenTargets((current) => new Set(current).add(target.key))
     setHideMenu(null)
     setOpenFolderGroupId(null)
-  }, [])
+    requestAnimationFrame(() => hiddenSummaryRef.current?.focus())
+  }, [commitHiddenTargets])
 
   const restoreTarget = useCallback((key: string) => {
-    setHiddenTargets((current) => {
+    commitHiddenTargets((current) => {
       const next = new Set(current)
       next.delete(key)
       return next
     })
-  }, [])
+  }, [commitHiddenTargets])
 
   const openFolder = openFolderGroupId ? presentation.groups.get(openFolderGroupId) ?? null : null
   const folderResults = useMemo(() => {
     if (!openFolder) return []
     return filterFolderConcepts(openFolder.concepts, folderQuery)
   }, [folderQuery, openFolder])
+  const visibleFolderResults = folderResults.slice(0, folderVisibleLimit)
+  const remainingFolderResults = Math.max(0, folderResults.length - visibleFolderResults.length)
   useEffect(() => {
     if (openFolderGroupId && !openFolder) setOpenFolderGroupId(null)
   }, [openFolder, openFolderGroupId])
@@ -615,16 +801,22 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
     requestAnimationFrame(() => folderPanelRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus())
   }, [openFolder])
   useEffect(() => {
-    if (!openFolder && !hiddenManagerOpen && !hideMenu) return
+    if (!hideMenu || !focusHideMenu.current) return
+    focusHideMenu.current = false
+    requestAnimationFrame(() => hideMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
+  }, [hideMenu])
+  useEffect(() => {
+    if (keyboardSuspended || (!openFolder && !hiddenManagerOpen && !hideMenu)) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      if (hideMenu) setHideMenu(null)
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      if (hideMenu) closeHideMenu(true)
       else if (hiddenManagerOpen) setHiddenManagerOpen(false)
       else closeFolderBrowser()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [closeFolderBrowser, hiddenManagerOpen, hideMenu, openFolder])
+  }, [closeFolderBrowser, closeHideMenu, hiddenManagerOpen, hideMenu, keyboardSuspended, openFolder])
 
   const fit = useCallback(() => {
     const el = wrapRef.current
@@ -852,7 +1044,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
             const col = lc(primaryLayer(n.c))
             const group = presentation.groups.get(n.c.id)
             const selected = openId === n.c.id
-            const hasConflict = n.conflict || conflictsByConcept.has(n.c.id)
+            const hasConflict = n.conflict || actionableConflictsByConcept.has(n.c.id)
             if (group) {
               const isOpen = openFolder?.id === group.id
               const hideGroupTarget = {
@@ -956,6 +1148,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
           {presentation.groups.size > 0 && <span className="cc-canvas-summary-muted">· {NUM.format(presentation.groups.size)} folder group{presentation.groups.size === 1 ? '' : 's'}</span>}
           {userHiddenConcepts.length > 0 && (
             <button
+              ref={hiddenSummaryRef}
               type="button"
               className="cc-canvas-summary-hidden"
               data-has-conflict={hiddenConflictCount > 0}
@@ -969,9 +1162,9 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
               }}
             >· {NUM.format(userHiddenConcepts.length)} hidden{hiddenConflictCount > 0 ? ` · ${NUM.format(hiddenConflictCount)} conflicted` : ''}</button>
           )}
-          {conflicts.length > 0 && (
+          {actionableConflicts.length > 0 && (
             <button type="button" className="cc-canvas-summary-conflicts" onClick={() => setView('conflicts')}>
-              · {NUM.format(conflicts.length)} conflict{conflicts.length === 1 ? '' : 's'}
+              · {NUM.format(actionableConflicts.length)} conflict{actionableConflicts.length === 1 ? '' : 's'}
             </button>
           )}
           {capHiddenConceptCount > 0 && (
@@ -1018,12 +1211,18 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
                 data-autofocus
                 type="search"
                 value={folderQuery}
-                onChange={(event) => setFolderQuery(event.target.value)}
+                onChange={(event) => {
+                  setFolderQuery(event.target.value)
+                  setFolderVisibleLimit(FOLDER_PAGE_SIZE)
+                }}
                 placeholder={`Filter ${openFolder.folder}/`}
                 aria-label={`Filter ${openFolder.folder} concepts`}
               />
               {folderQuery && (
-                <button type="button" onClick={() => setFolderQuery('')} aria-label="Clear folder filter">
+                <button type="button" onClick={() => {
+                  setFolderQuery('')
+                  setFolderVisibleLimit(FOLDER_PAGE_SIZE)
+                }} aria-label="Clear folder filter">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" /></svg>
                 </button>
               )}
@@ -1031,8 +1230,8 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
             {folderQuery && <span aria-live="polite">{NUM.format(folderResults.length)} of {NUM.format(openFolder.concepts.length)}</span>}
           </div>
           <div className="cc-canvas-folder-list">
-            {folderResults.map((concept) => {
-              const hasConflict = conceptHasConflict(concept) || conflictsByConcept.has(concept.id)
+            {visibleFolderResults.map((concept) => {
+              const hasConflict = conceptHasConflict(concept) || actionableConflictsByConcept.has(concept.id)
               const supportingText = conceptSupportingText(concept)
               const hideConceptTarget = {
                 key: hiddenKeyForConcept(concept.id),
@@ -1063,6 +1262,16 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
                 </button>
               )
             })}
+            {remainingFolderResults > 0 && (
+              <button
+                type="button"
+                className="cc-canvas-folder-more"
+                onClick={() => setFolderVisibleLimit((current) => current + FOLDER_PAGE_SIZE)}
+              >
+                <strong>Show {NUM.format(Math.min(FOLDER_PAGE_SIZE, remainingFolderResults))} more</strong>
+                <span>{NUM.format(remainingFolderResults)} remain</span>
+              </button>
+            )}
             {folderResults.length === 0 && (
               <div className="cc-canvas-folder-empty" role="status">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
@@ -1110,7 +1319,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
           </div>
           <footer>
             <button type="button" onClick={() => {
-              setHiddenTargets(new Set())
+              commitHiddenTargets(() => new Set())
               setHiddenManagerOpen(false)
             }}>Show all hidden nodes</button>
           </footer>
@@ -1119,11 +1328,26 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
 
       {hideMenu && (
         <div
+          ref={hideMenuRef}
           className="cc-canvas-context-menu"
           role="menu"
           aria-label={`${hideMenu.label} options`}
           style={{ left: hideMenu.x, top: hideMenu.y }}
           onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === 'Tab') {
+              // Let the browser perform its normal Tab move, but dismiss the
+              // context menu so it never floats over unrelated Canvas focus.
+              closeHideMenu(false)
+              return
+            }
+            if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+            event.preventDefault()
+            hideMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+          }}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) closeHideMenu(false)
+          }}
         >
           <div className="cc-canvas-context-heading">
             <strong>{hideMenu.label}</strong>

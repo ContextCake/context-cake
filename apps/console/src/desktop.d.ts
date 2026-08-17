@@ -50,6 +50,8 @@ type DeviceUiState = {
   knowledgeView: import('./shell-navigation').KnowledgeSubview
   reviewView: import('./shell-navigation').ReviewSubview
   settingsPane: 'general' | 'indexing' | 'integrations' | 'account' | 'privacy'
+  cascadeDisplay: import('./cascade-preferences').CascadeDisplayMode
+  cascadeHiddenNodes: string[]
 }
 
 interface CliResult {
@@ -119,6 +121,7 @@ declare global {
       }
       uiState?: {
         initial: DeviceUiState
+        get?(): Promise<DeviceUiState>
         set(patch: Partial<DeviceUiState>): Promise<DeviceUiState>
       }
       commands?: {
@@ -175,10 +178,11 @@ declare global {
        * The local preferences file (settings.json), for support flows. Export
        * opens a native save dialog and writes a copy — the renderer never
        * names a path. Reset confirms natively in the main process, then
-       * returns every local preference to its default; the resulting
-       * preference state arrives through `preferences.onChanged` like any
-       * other change. Both resolve `{ok: false, canceled: true}` when the
-       * user backs out of the native dialog.
+       * returns every preference in settings.json to its default; the
+       * resulting preference state arrives through `preferences.onChanged`
+       * like any other change. Renderer-local Cascade mirrors are cleared by
+       * SettingsView after this succeeds. Both resolve
+       * `{ok: false, canceled: true}` when the user backs out of the dialog.
        */
       settingsFile?: {
         export(): Promise<{ ok: boolean; canceled?: boolean; path?: string; error?: string }>

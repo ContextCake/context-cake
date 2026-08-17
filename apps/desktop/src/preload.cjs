@@ -2,6 +2,9 @@
 // desktop shell. Keep this surface tiny — the renderer is a web app that must
 // keep working in browsers where none of this exists.
 const { contextBridge, ipcRenderer } = require('electron')
+const MAX_CASCADE_HIDDEN_NODES = 1_000
+const MAX_CASCADE_HIDDEN_KEY_LENGTH = 2_048
+const MAX_CASCADE_HIDDEN_BYTES = 1_000_000
 
 function arg(name) {
   const prefix = `--${name}=`
@@ -12,6 +15,17 @@ function arg(name) {
 function jsonArg(name, fallback) {
   try { return JSON.parse(decodeURIComponent(arg(name))) }
   catch { return fallback }
+}
+
+function setUiState(patch) {
+  const hidden = patch?.cascadeHiddenNodes
+  if (hidden !== undefined && (
+    !Array.isArray(hidden)
+    || hidden.length > MAX_CASCADE_HIDDEN_NODES
+    || hidden.some((value) => typeof value !== 'string' || value.length > MAX_CASCADE_HIDDEN_KEY_LENGTH)
+    || new TextEncoder().encode(JSON.stringify(hidden)).byteLength > MAX_CASCADE_HIDDEN_BYTES
+  )) return Promise.reject(new Error('Invalid hidden Cascade nodes.'))
+  return ipcRenderer.invoke('ui-state:set', patch)
 }
 
 contextBridge.exposeInMainWorld('__CC_DESKTOP', {
@@ -55,8 +69,10 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
     initial: jsonArg('cc-ui-state', {
       sidebar: { collapsed: false, width: 232 }, lastView: 'overview',
       knowledgeView: 'concepts', reviewView: 'triage', settingsPane: 'general',
+      cascadeDisplay: 'grouped', cascadeHiddenNodes: [],
     }),
-    set: (patch) => ipcRenderer.invoke('ui-state:set', patch),
+    get: () => ipcRenderer.invoke('ui-state:get'),
+    set: setUiState,
   },
   commands: {
     onInvoke: (cb) => subscribe('commands:invoke', cb),

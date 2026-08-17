@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Concept, Conflict } from '../data'
-import { capConceptsPerLane, clampZoom, computeFitScale, computeLayout, countByLane, MAX_NODES_PER_LANE, MIN_SCALE } from './Canvas'
+import { writeCascadeDisplayMode } from '../cascade-preferences'
+import { buildCanvasPresentation, capConceptsPerLane, clampZoom, computeFitScale, computeLayout, conceptSupportingText, countByLane, filterFolderConcepts, hiddenKeyForConcept, hiddenKeyForFolder, isConceptHidden, MAX_NODES_PER_LANE, MIN_SCALE } from './Canvas'
 
 function concept(id: string, layer: Concept['layers'][number], dissent?: Concept['layers'][number]): Concept {
   return {
@@ -32,21 +33,27 @@ describe('computeLayout', () => {
     expect(positions['team-a']).toBe(positions['personal-with-company-dissent'])
     expect(positions['team-b']).not.toBe(positions['team-a'])
     expect(positions['company-b']).toBe(positions['team-b'])
-    expect(layout.ghosts[0]?.x).toBe(positions['personal-with-company-dissent'] + 9)
+    expect(layout.ghosts[0]?.x).toBe(positions['personal-with-company-dissent'] + (layout.metrics.nodeW - layout.metrics.ghostW) / 2)
   })
 
   it('wraps a lane past COLS_PER_ROW into a second row instead of widening worldW forever', () => {
-    // 7 same-lane, dissent-free concepts always cost 7 distinct global
+    // 8 same-lane, dissent-free concepts always cost 8 distinct global
     // columns (same reasoning MAX_NODES_PER_LANE's derivation relies on) —
-    // with COLS_PER_ROW=6 that's 6 in row 0, 1 alone in row 1.
-    const seven = Array.from({ length: 7 }, (_, i) => concept(`p-${i}`, 'personal'))
-    const layout = computeLayout(seven)
+    // with Cards' COLS_PER_ROW=7 that's 7 in row 0, 1 alone in row 1.
+    const eight = Array.from({ length: 8 }, (_, i) => concept(`p-${i}`, 'personal'))
+    const layout = computeLayout(eight)
     const ys = [...new Set(layout.nodes.map((n) => n.y))]
     expect(ys).toHaveLength(2)
     // worldW stays bounded at COLS_PER_ROW columns — it must NOT keep growing
     // with N the way the old single-row layout did.
-    const sixColumns = computeLayout(Array.from({ length: 6 }, (_, i) => concept(`q-${i}`, 'personal'))).worldW
-    expect(layout.worldW).toBe(sixColumns)
+    const sevenColumns = computeLayout(Array.from({ length: 7 }, (_, i) => concept(`q-${i}`, 'personal'))).worldW
+    expect(layout.worldW).toBe(sevenColumns)
+  })
+
+  it('uses a smaller, denser footprint in every display mode', () => {
+    expect(computeLayout([], 'grouped').metrics).toEqual({ nodeW: 188, nodeH: 52, ghostW: 172, ghostH: 42, gapX: 12, rowGapY: 10, colsPerRow: 6 })
+    expect(computeLayout([], 'compact').metrics).toEqual({ nodeW: 172, nodeH: 48, ghostW: 158, ghostH: 40, gapX: 10, rowGapY: 9, colsPerRow: 8 })
+    expect(computeLayout([], 'cards').metrics).toEqual({ nodeW: 190, nodeH: 82, ghostW: 174, ghostH: 58, gapX: 18, rowGapY: 14, colsPerRow: 7 })
   })
 
   it('stacks ghost rows below a lane\'s own primary rows, never overlapping them', () => {
@@ -146,11 +153,11 @@ describe('Fit and manual zoom share one floor (regression)', () => {
   // deleted the test that had pinned "zoom out must not zoom in"; this
   // restores that guarantee against the new shared floor instead.
   it('a Fit that would drop below the shared floor gets floored there, and the next zoom-out does not jump', () => {
-    // Reconstructs the exact regression's inputs: a single lane fully
-    // saturated at the OLD per-lane cap (250), via the real layout code
-    // rather than a hand-derived worldW, so this stays honest if NODE_W/GAP_X
-    // ever change.
-    const saturated = Array.from({ length: 250 }, (_, i) => concept(`personal-${i}`, 'personal'))
+    // Reconstruct the regression's oversized single-lane condition via the
+    // real layout code rather than a hand-derived world size. The denser card
+    // system fits the old 250-node input a hair above the floor, so 260 keeps
+    // exercising the same below-floor behavior as metrics evolve.
+    const saturated = Array.from({ length: 260 }, (_, i) => concept(`personal-${i}`, 'personal'))
     const { worldW, worldH } = computeLayout(saturated)
 
     const fit = computeFitScale(1440, 800, worldW, worldH)!
@@ -227,6 +234,103 @@ describe('capConceptsPerLane', () => {
   })
 })
 
+describe('buildCanvasPresentation', () => {
+  it('collapses a large folder into one lane-local summary with honest state counts', () => {
+    const conflicted = concept('journal/2026-01-02', 'personal', 'company')
+    const draft = { ...concept('journal/2026-01-03', 'personal'), draft: true }
+    const input = [
+      concept('journal/2026-01-01', 'personal'),
+      conflicted,
+      draft,
+      concept('journal/2026-01-04', 'personal'),
+      concept('identity', 'personal'),
+    ]
+    const result = buildCanvasPresentation(input, 'grouped')
+    const group = [...result.groups.values()][0]
+
+    expect(result.concepts).toHaveLength(2)
+    expect(result.concepts.map((entry) => entry.id)).toContain('identity')
+    expect(group.folder).toBe('journal')
+    expect(group.concepts).toHaveLength(4)
+    expect(group.conflictCount).toBe(1)
+    expect(group.draftCount).toBe(1)
+  })
+
+  it('leaves small folders flat and never merges the same folder across precedence lanes', () => {
+    const input = [
+      concept('notes/p-1', 'personal'),
+      concept('notes/p-2', 'personal'),
+      concept('notes/p-3', 'personal'),
+      concept('notes/t-1', 'team'),
+      concept('notes/t-2', 'team'),
+      concept('notes/t-3', 'team'),
+      concept('notes/t-4', 'team'),
+    ]
+    const result = buildCanvasPresentation(input, 'grouped')
+
+    expect(result.groups.size).toBe(1)
+    expect([...result.groups.values()][0].layer).toBe('team')
+    expect(result.concepts.filter((entry) => entry.layers[0] === 'personal')).toHaveLength(3)
+  })
+
+  it('keeps folder members out of the graph presentation for a stable overlay browser', () => {
+    const input = Array.from({ length: 4 }, (_, index) => concept(`journal/${index}`, 'personal'))
+    const result = buildCanvasPresentation(input, 'grouped')
+    const group = [...result.groups.values()][0]
+
+    expect(result.concepts).toHaveLength(1)
+    expect(result.concepts[0].id).toBe(group.id)
+    expect(group.concepts.map((entry) => entry.id)).toEqual(input.map((entry) => entry.id))
+  })
+
+  it('keeps both flat display modes ungrouped', () => {
+    const input = Array.from({ length: 5 }, (_, index) => concept(`journal/${index}`, 'personal'))
+    expect(buildCanvasPresentation(input, 'compact').concepts).toBe(input)
+    expect(buildCanvasPresentation(input, 'cards').concepts).toBe(input)
+  })
+})
+
+describe('Cascade hidden targets', () => {
+  it('supports durable concept and lane-local folder exclusions', () => {
+    const personalJournal = concept('journal/2026-01-01', 'personal')
+    const teamJournal = concept('journal/runbook', 'team')
+    const identity = concept('identity', 'personal')
+
+    expect(isConceptHidden(identity, new Set([hiddenKeyForConcept('identity')]))).toBe(true)
+    expect(isConceptHidden(personalJournal, new Set([hiddenKeyForFolder('personal', 'journal')]))).toBe(true)
+    expect(isConceptHidden(teamJournal, new Set([hiddenKeyForFolder('personal', 'journal')]))).toBe(false)
+  })
+})
+
+describe('conceptSupportingText', () => {
+  it('drops IDs that merely restate the title with different separators', () => {
+    expect(conceptSupportingText({ title: 'identity', id: 'identity' })).toBeNull()
+    expect(conceptSupportingText({ title: 'current state', id: 'current_state' })).toBeNull()
+    expect(conceptSupportingText({ title: 'Ideas backlog', id: 'ideas-backlog' })).toBeNull()
+  })
+
+  it('keeps a path when it adds information the title does not contain', () => {
+    expect(conceptSupportingText({ title: 'Primary database', id: 'decisions/primary-db' })).toBe('decisions/primary-db')
+  })
+})
+
+describe('filterFolderConcepts', () => {
+  const concepts = [
+    { ...concept('decisions/primary-db', 'personal'), title: 'Primary database', type: 'decision' },
+    { ...concept('journal/2026-08-16', 'personal'), title: 'Sunday journal', type: 'note' },
+  ]
+
+  it('filters the folder inventory by title, path, or type without case sensitivity', () => {
+    expect(filterFolderConcepts(concepts, 'SUNDAY')).toEqual([concepts[1]])
+    expect(filterFolderConcepts(concepts, 'primary-db')).toEqual([concepts[0]])
+    expect(filterFolderConcepts(concepts, ' decision ')).toEqual([concepts[0]])
+  })
+
+  it('preserves the original inventory for an empty query', () => {
+    expect(filterFolderConcepts(concepts, '   ')).toBe(concepts)
+  })
+})
+
 describe('countByLane', () => {
   it('counts each concept into its primary lane', () => {
     const input = [
@@ -286,6 +390,111 @@ describe('lane header honesty (F3)', () => {
     // and the lane's static "runbooks, decisions, system docs" blurb is gone,
     // replaced by the source name.
     expect(container.textContent).not.toContain('runbooks, decisions, system docs')
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+})
+
+describe('cascade display controls', () => {
+  afterEach(() => {
+    vi.doUnmock('../store')
+    vi.resetModules()
+    window.localStorage.clear()
+  })
+
+  it('opens grouped folders in a separate browser without changing the graph and responds to the Settings preference', async () => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    window.localStorage.clear()
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const state = {
+        mode: 'live',
+        concepts: Array.from({ length: 5 }, (_, index) => concept(`journal/${index}`, 'personal')),
+        conflicts: [],
+        sources: [],
+        setSelConcept: noop,
+        setSelConflict: noop,
+        setView: noop,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+
+    const folder = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')
+    expect(folder?.getAttribute('aria-label')).toContain('Open journal folder — 5 concepts')
+    expect(container.querySelector('[aria-label="Cascade display"]')).toBeNull()
+    expect(container.querySelector('[aria-label^="journal/0 —"]')).toBeNull()
+    expect(container.querySelectorAll('.cc-canvas-node')).toHaveLength(0)
+
+    await act(async () => folder!.click())
+    const folderBrowser = container.querySelector('#cc-canvas-folder-browser')
+    expect(folderBrowser?.querySelector('[aria-label^="journal/0 —"]')).toBeTruthy()
+    expect(folderBrowser?.querySelector('[aria-label="Filter journal concepts"]')).toBeTruthy()
+    expect(folderBrowser?.textContent).toContain('Right-click a concept to hide it from Cascade.')
+    expect(container.querySelectorAll('.cc-canvas-node')).toHaveLength(0)
+
+    await act(async () => writeCascadeDisplayMode('compact'))
+    expect(window.localStorage.getItem('contextcake.cascadeDisplay')).toBe('compact')
+    expect(container.querySelector('[aria-label^="journal/0 —"]')).toBeTruthy()
+    expect(container.querySelector('#cc-canvas-folder-browser')).toBeNull()
+
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('hides a folder from its context menu and restores it from the on-page Hidden manager', async () => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    window.localStorage.clear()
+    vi.resetModules()
+    vi.doMock('../store', () => {
+      const noop = () => {}
+      const state = {
+        mode: 'live',
+        concepts: Array.from({ length: 5 }, (_, index) => concept(`journal/${index}`, 'personal')),
+        conflicts: [],
+        sources: [],
+        setSelConcept: noop,
+        setSelConflict: noop,
+        setView: noop,
+      }
+      const useState = () => state
+      return { useStore: useState, useStoreData: useState, useStoreNav: useState, useStoreInput: useState }
+    })
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { Canvas } = await import('./Canvas')
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Canvas />))
+
+    const folder = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+    await act(async () => folder.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 40, clientY: 40 })))
+    const hide = container.querySelector<HTMLButtonElement>('[role="menuitem"]')
+    expect(hide?.textContent).toContain('Hide folder from Cascade')
+
+    await act(async () => hide!.click())
+    expect(container.querySelector('[aria-haspopup="dialog"]')).toBeNull()
+    expect(window.localStorage.getItem('contextcake.cascadeHiddenNodes')).toContain('folder:personal:journal')
+
+    const hidden = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('5 hidden'))
+    await act(async () => hidden!.click())
+    expect(container.querySelector('#cc-canvas-hidden-manager')?.textContent).toContain('journal/')
+
+    const show = Array.from(container.querySelectorAll<HTMLButtonElement>('#cc-canvas-hidden-manager button')).find((button) => button.textContent === 'Show')
+    await act(async () => show!.click())
+    expect(container.querySelector('[aria-haspopup="dialog"]')).toBeTruthy()
 
     await act(async () => root.unmount())
     container.remove()

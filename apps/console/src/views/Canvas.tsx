@@ -5,24 +5,43 @@ import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
 import { ConflictQuickResolve } from '../components/ConflictQuickResolve'
 import { useStoreData } from '../store'
+import { onCascadeDisplayModeChange, readCascadeDisplayMode, type CascadeDisplayMode } from '../cascade-preferences'
 
 // Statuses a conflict can still be acted on from — matches Overview.tsx's
 // "Needs Attention" actionable filter. A resolved/acknowledged conflict keeps
 // its badge read-only rather than offering dispositions that no longer apply.
 const ACTIONABLE_DISCREPANCY_STATUSES = new Set(['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'])
 
-// ---- layout constants (world coordinates) ----
-const NODE_W = 214, NODE_H = 96
-const GHOST_W = 196, GHOST_H = 66
-const GAP_X = 28, START_X = 138, END_X = 24
+interface CanvasMetrics {
+  nodeW: number; nodeH: number; ghostW: number; ghostH: number
+  gapX: number; rowGapY: number; colsPerRow: number
+}
+
+const CARD_METRICS: CanvasMetrics = {
+  nodeW: 190, nodeH: 82, ghostW: 174, ghostH: 58,
+  gapX: 18, rowGapY: 14, colsPerRow: 7,
+}
+const COMPACT_METRICS: CanvasMetrics = {
+  nodeW: 172, nodeH: 48, ghostW: 158, ghostH: 40,
+  gapX: 10, rowGapY: 9, colsPerRow: 8,
+}
+const GROUPED_METRICS: CanvasMetrics = {
+  nodeW: 188, nodeH: 52, ghostW: 172, ghostH: 42,
+  gapX: 12, rowGapY: 10, colsPerRow: 6,
+}
+const METRICS_BY_MODE: Record<CascadeDisplayMode, CanvasMetrics> = {
+  grouped: GROUPED_METRICS,
+  compact: COMPACT_METRICS,
+  cards: CARD_METRICS,
+}
+
+const START_X = 138, END_X = 24
 const LANE_TOP = 60, LANE_GAP = 16
 // A lane no longer lays its nodes out in one ever-widening row — that made a
 // saturated lane's Fit shrink cards toward MIN_SCALE just to keep the whole
 // row on screen (see MAX_NODES_PER_LANE's derivation for the exact numbers
 // this replaced). Nodes wrap into a grid instead: a fixed number of columns,
 // as many rows as a lane needs, trading horizontal sprawl for lane height.
-const COLS_PER_ROW = 6
-const ROW_GAP_Y = 20
 // Vertical padding inside a lane box, and the gap between a lane's primary
 // row(s) and its ghost (dissent) row(s) when it has both.
 const LANE_PAD_TOP = 46, LANE_PAD_BOTTOM = 24, GHOST_BAND_GAP = 24
@@ -47,10 +66,8 @@ const LANE_PAD_TOP = 46, LANE_PAD_BOTTOM = 24, GHOST_BAND_GAP = 24
 // This cap is deliberately NOT raised to the point where Fit would need
 // MIN_SCALE — it's a render-cost ceiling now (this is still a real-DOM canvas
 // with no virtualization), not a legibility floor. 60 (2.5x the old cap of
-// 24) keeps the DOM node increase modest while landing Fit at ~0.52 on a
-// 1280px-wide viewport even at its fully-saturated worst case (pRows=10,
-// worldH=1442, scale = 752/1442) — more than double the old cap's ~0.21,
-// comfortably clear of the floor with headroom to spare.
+// 24) keeps the DOM increase modest and produces at most ten grouped rows;
+// the denser flat modes fit the same content in fewer rows.
 export const MAX_NODES_PER_LANE = 60
 // The ONE floor shared by Fit and manual zoom (wheel / +/- controls). These
 // used to differ (Fit ~0, manual 0.1): a 3,000-concept vault's Fit landed at
@@ -61,13 +78,12 @@ export const MAX_NODES_PER_LANE = 60
 // one shared number, low enough to still be a legible discrete card and no
 // lower.
 //
-// Derivation: a card narrower than ~40 screen px reads as a sliver, not a
-// rectangle — NODE_W (214px) needs to render at >= ~40px for the card to be a
-// visible, color-coded shape (border + lane accent) rather than noise:
-//   40 / 214 ≈ 0.187, rounded up to 0.2 for a clean shared constant.
-// With grid-wrapping, MAX_NODES_PER_LANE's fully-saturated worst case lands
-// Fit at ~0.52 (see its derivation) — comfortably above 0.2, so in practice
-// Fit never needs the floor at all; it exists purely as the shared backstop
+// Derivation: a card narrower than ~34 screen px reads as a sliver, not a
+// rectangle — the smallest NODE_W (172px) needs to render at >= ~34px for the
+// card to remain a visible, color-coded shape (border + lane accent):
+//   34 / 172 ≈ 0.198, rounded to 0.2 for a clean shared constant.
+// With grid-wrapping, the current cap still fits above that floor on a normal
+// desktop viewport. The floor exists as the shared backstop
 // both Fit and manual zoom respect (and as the floor a shrunk browser window
 // can still legitimately hit — see computeFitScale's "crops rather than
 // shrinking" test), so neither can ever clamp past the other.
@@ -75,11 +91,148 @@ export const MIN_SCALE = 0.2
 const MAX_SCALE = 2
 
 const NUM = new Intl.NumberFormat()
+const HIDDEN_NODES_KEY = 'contextcake.cascadeHiddenNodes'
+export const GROUP_MIN_SIZE = 4
 
 // lanes top→bottom: highest precedence (Personal) on top so "up = wins"
 const LANE_ORDER: LayerId[] = ['personal', 'team', 'company']
 const primaryLayer = (c: Concept): LayerId =>
   c.layers.slice().sort((a, b) => layerLevel(b) - layerLevel(a))[0]
+
+export interface CanvasConceptGroup {
+  id: string
+  folder: string
+  layer: LayerId
+  concepts: Concept[]
+  conflictCount: number
+  draftCount: number
+}
+
+export interface CanvasPresentation {
+  concepts: Concept[]
+  groups: Map<string, CanvasConceptGroup>
+}
+
+function conceptHasConflict(concept: Concept): boolean {
+  return concept.conflict === true || concept.sections.some((section) => (section.dissents?.length ?? 0) > 0)
+}
+
+function conceptFolder(concept: Concept): string | null {
+  const slash = concept.id.indexOf('/')
+  return slash > 0 ? concept.id.slice(0, slash) : null
+}
+
+export function conceptSupportingText(concept: Pick<Concept, 'id' | 'title'>): string | null {
+  const normalize = (value: string) => value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+  return normalize(concept.title) === normalize(concept.id) ? null : concept.id
+}
+
+export function filterFolderConcepts(concepts: Concept[], query: string): Concept[] {
+  const normalized = query.trim().toLocaleLowerCase()
+  if (!normalized) return concepts
+  return concepts.filter((concept) =>
+    concept.title.toLocaleLowerCase().includes(normalized)
+    || concept.id.toLocaleLowerCase().includes(normalized)
+    || concept.type.toLocaleLowerCase().includes(normalized))
+}
+
+function groupId(layer: LayerId, folder: string): string {
+  return `__contextcake_group__/${layer}/${encodeURIComponent(folder)}`
+}
+
+export function hiddenKeyForConcept(id: string): string {
+  return `concept:${id}`
+}
+
+export function hiddenKeyForFolder(layer: LayerId, folder: string): string {
+  return `folder:${layer}:${encodeURIComponent(folder)}`
+}
+
+export function isConceptHidden(concept: Concept, hiddenTargets: ReadonlySet<string>): boolean {
+  if (hiddenTargets.has(hiddenKeyForConcept(concept.id))) return true
+  const folder = conceptFolder(concept)
+  const layer = primaryLayer(concept) ?? 'company'
+  return folder ? hiddenTargets.has(hiddenKeyForFolder(layer, folder)) : false
+}
+
+/**
+ * Collapse large top-level folders into one honest summary node. Groups never
+ * cross precedence lanes, and small folders stay as ordinary concepts so a
+ * compact cascade does not turn into a wall of one-item folders.
+ */
+export function buildCanvasPresentation(
+  concepts: Concept[],
+  displayMode: CascadeDisplayMode,
+): CanvasPresentation {
+  if (displayMode !== 'grouped') return { concepts, groups: new Map() }
+
+  const buckets = new Map<string, Concept[]>()
+  for (const concept of concepts) {
+    const folder = conceptFolder(concept)
+    if (!folder) continue
+    const layer = primaryLayer(concept) ?? 'company'
+    const key = `${layer}\u0000${folder}`
+    buckets.set(key, [...(buckets.get(key) ?? []), concept])
+  }
+
+  const eligible = new Map<string, CanvasConceptGroup>()
+  for (const [key, members] of buckets) {
+    if (members.length < GROUP_MIN_SIZE) continue
+    const [layer, folder] = key.split('\u0000') as [LayerId, string]
+    const id = groupId(layer, folder)
+    eligible.set(key, {
+      id,
+      folder,
+      layer,
+      concepts: members,
+      conflictCount: members.filter(conceptHasConflict).length,
+      draftCount: members.filter((concept) => concept.draft).length,
+    })
+  }
+
+  const out: Concept[] = []
+  const groups = new Map<string, CanvasConceptGroup>()
+  const emitted = new Set<string>()
+  for (const concept of concepts) {
+    const folder = conceptFolder(concept)
+    const layer = primaryLayer(concept) ?? 'company'
+    const key = folder ? `${layer}\u0000${folder}` : ''
+    const group = eligible.get(key)
+    if (!group) {
+      out.push(concept)
+      continue
+    }
+    if (!emitted.has(group.id)) {
+      emitted.add(group.id)
+      groups.set(group.id, group)
+      out.push({
+        id: group.id,
+        title: group.folder,
+        type: 'folder',
+        layers: [group.layer],
+        conflict: group.conflictCount > 0,
+        sections: [],
+        detailLoaded: false,
+      })
+    }
+  }
+  return { concepts: out, groups }
+}
+
+function initialHiddenTargets(): Set<string> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(HIDDEN_NODES_KEY) ?? '[]')
+    if (!Array.isArray(saved)) return new Set()
+    return new Set(saved.filter((value): value is string =>
+      typeof value === 'string' && (value.startsWith('concept:') || value.startsWith('folder:'))))
+  } catch {
+    return new Set()
+  }
+}
 
 /** Fit scale/pan for a `cw`×`ch` viewport around `worldW`×`worldH` content, or
  *  `null` while the element is not yet laid out (see the caller's guard). */
@@ -147,7 +300,9 @@ interface GhostPos { key: string; parent: NodePos; layer: LayerId; value: string
 
 export interface LaneGeometry { top: number; height: number }
 
-export function computeLayout(concepts: Concept[]) {
+export function computeLayout(concepts: Concept[], displayMode: CascadeDisplayMode = 'cards') {
+  const metrics = METRICS_BY_MODE[displayMode]
+  const { nodeW, nodeH, ghostW, ghostH, gapX, rowGapY, colsPerRow } = metrics
   // A concept occupies its winning lane plus every lane where it has a
   // dissent card. Reuse a column whenever those occupied lanes do not overlap;
   // this keeps sparse cascades compact without allowing cards to collide. The
@@ -168,8 +323,8 @@ export function computeLayout(concepts: Concept[]) {
     for (const layer of occupied) columnLayers[column].add(layer)
     return { c, column }
   })
-  const rowOf = (column: number) => Math.floor(column / COLS_PER_ROW)
-  const colOf = (column: number) => column % COLS_PER_ROW
+  const rowOf = (column: number) => Math.floor(column / colsPerRow)
+  const colOf = (column: number) => column % colsPerRow
 
   // How many primary-node rows and ghost (dissent) rows each lane needs, from
   // the column assignments above — a ghost keeps its parent's global column
@@ -206,8 +361,8 @@ export function computeLayout(concepts: Concept[]) {
   let cursor = LANE_TOP
   for (const id of LANE_ORDER) {
     const pRows = primaryRows[id], gRows = ghostRows[id]
-    const pBand = pRows > 0 ? pRows * NODE_H + (pRows - 1) * ROW_GAP_Y : 0
-    const gBand = gRows > 0 ? gRows * GHOST_H + (gRows - 1) * ROW_GAP_Y : 0
+    const pBand = pRows > 0 ? pRows * nodeH + (pRows - 1) * rowGapY : 0
+    const gBand = gRows > 0 ? gRows * ghostH + (gRows - 1) * rowGapY : 0
     primaryBandH[id] = pBand
     laneTop[id] = cursor
     laneHeight[id] = LANE_PAD_TOP + pBand + (gRows > 0 ? GHOST_BAND_GAP + gBand : 0) + LANE_PAD_BOTTOM
@@ -217,8 +372,8 @@ export function computeLayout(concepts: Concept[]) {
 
   const nodes: NodePos[] = assigned.map(({ c, column }) => {
     const lane = primaryLayer(c) ?? 'company'
-    const x = START_X + colOf(column) * (NODE_W + GAP_X)
-    const y = laneTop[lane] + LANE_PAD_TOP + rowOf(column) * (NODE_H + ROW_GAP_Y)
+    const x = START_X + colOf(column) * (nodeW + gapX)
+    const y = laneTop[lane] + LANE_PAD_TOP + rowOf(column) * (nodeH + rowGapY)
     return { c, x, y, conflict: c.sections.some((s) => (s.dissents?.length ?? 0) > 0) }
   })
 
@@ -232,8 +387,8 @@ export function computeLayout(concepts: Concept[]) {
         ghosts.push({
           key: `${c.id}:${d.layer}`, parent: nodes[i], layer: d.layer, value: d.value,
           sectionKey: s.key ?? s.name,
-          x: START_X + colOf(column) * (NODE_W + GAP_X) + (NODE_W - GHOST_W) / 2,
-          y: laneTop[d.layer] + LANE_PAD_TOP + primaryBandH[d.layer] + GHOST_BAND_GAP + rowOf(column) * (GHOST_H + ROW_GAP_Y),
+          x: START_X + colOf(column) * (nodeW + gapX) + (nodeW - ghostW) / 2,
+          y: laneTop[d.layer] + LANE_PAD_TOP + primaryBandH[d.layer] + GHOST_BAND_GAP + rowOf(column) * (ghostH + rowGapY),
         })
       }
     }
@@ -241,14 +396,14 @@ export function computeLayout(concepts: Concept[]) {
 
   // worldW is bounded at COLS_PER_ROW columns regardless of N (fewer when the
   // cascade is sparse, so a small cascade carries no dead whitespace).
-  const colsUsed = Math.min(Math.max(1, columnLayers.length), COLS_PER_ROW)
-  const worldW = START_X + colsUsed * NODE_W + Math.max(0, colsUsed - 1) * GAP_X + END_X
+  const colsUsed = Math.min(Math.max(1, columnLayers.length), colsPerRow)
+  const worldW = START_X + colsUsed * nodeW + Math.max(0, colsUsed - 1) * gapX + END_X
   const lanes: Record<LayerId, LaneGeometry> = {
     personal: { top: laneTop.personal, height: laneHeight.personal },
     team: { top: laneTop.team, height: laneHeight.team },
     company: { top: laneTop.company, height: laneHeight.company },
   }
-  return { nodes, ghosts, worldW, worldH, lanes }
+  return { nodes, ghosts, worldW, worldH, lanes, metrics }
 }
 
 /** Cubic bezier between two vertically-separated anchor points. */
@@ -257,18 +412,117 @@ function edgePath(x1: number, y1: number, x2: number, y2: number) {
   return `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`
 }
 
+function representedConceptCount(
+  displayConcepts: Concept[],
+  groups: ReadonlyMap<string, CanvasConceptGroup>,
+): number {
+  return displayConcepts.reduce((total, concept) => {
+    const group = groups.get(concept.id)
+    if (!group) return total + 1
+    return total + group.concepts.length
+  }, 0)
+}
+
+interface HiddenTargetRow {
+  key: string
+  label: string
+  detail: string
+  count: number
+  conflictCount: number
+}
+
+interface HideMenuState {
+  x: number
+  y: number
+  key: string
+  label: string
+  detail: string
+  conflictCount: number
+  kind: 'concept' | 'folder'
+}
+
+function hiddenTargetRows(concepts: Concept[], hiddenTargets: ReadonlySet<string>): HiddenTargetRow[] {
+  return [...hiddenTargets].map((key) => {
+    if (key.startsWith('concept:')) {
+      const id = key.slice('concept:'.length)
+      const concept = concepts.find((entry) => entry.id === id)
+      return {
+        key,
+        label: concept?.title ?? id,
+        detail: id,
+        count: concept ? 1 : 0,
+        conflictCount: concept && conceptHasConflict(concept) ? 1 : 0,
+      }
+    }
+    const [, layerValue = 'company', encodedFolder = ''] = key.split(':')
+    const layer = layerValue as LayerId
+    const folder = decodeURIComponent(encodedFolder)
+    const matches = concepts.filter((concept) =>
+      (primaryLayer(concept) ?? 'company') === layer && conceptFolder(concept) === folder)
+    return {
+      key,
+      label: `${folder}/`,
+      detail: `${layerName(layer)} folder`,
+      count: matches.length,
+      conflictCount: matches.filter(conceptHasConflict).length,
+    }
+  })
+}
+
 function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolean }) {
   const { setSelConcept, setSelConflict, setView, conflicts, concepts, sources, mode } = useStoreData()
-  // Capped before layout: a real-DOM canvas with no virtualization stops
-  // being usable well before thousands of nodes finish laying out. Ghost
-  // (dissent) cards derive from `nodes` below, so they respect the cap too —
-  // there is no separate ghost list to cap.
-  const capped = useMemo(() => capConceptsPerLane(concepts), [concepts])
+  const [displayMode, setDisplayMode] = useState<CascadeDisplayMode>(readCascadeDisplayMode)
+  const [hiddenTargets, setHiddenTargets] = useState<Set<string>>(initialHiddenTargets)
+  const [openFolderGroupId, setOpenFolderGroupId] = useState<string | null>(null)
+  const [folderQuery, setFolderQuery] = useState('')
+  const [hiddenManagerOpen, setHiddenManagerOpen] = useState(false)
+  const [hideMenu, setHideMenu] = useState<HideMenuState | null>(null)
+  useEffect(() => onCascadeDisplayModeChange(setDisplayMode), [])
+  useEffect(() => {
+    try { localStorage.setItem(HIDDEN_NODES_KEY, JSON.stringify([...hiddenTargets])) } catch { /* optional preference */ }
+  }, [hiddenTargets])
+
+  // User-hidden targets are removed before grouping and capping. A hidden
+  // folder remains a durable preference even when new concepts arrive inside
+  // it; conflicts remain counted in the summary and available in Review.
+  const visibleConcepts = useMemo(
+    () => concepts.filter((concept) => !isConceptHidden(concept, hiddenTargets)),
+    [concepts, hiddenTargets],
+  )
+  const userHiddenConcepts = useMemo(
+    () => concepts.filter((concept) => isConceptHidden(concept, hiddenTargets)),
+    [concepts, hiddenTargets],
+  )
+  const hiddenRows = useMemo(
+    () => hiddenTargetRows(concepts, hiddenTargets),
+    [concepts, hiddenTargets],
+  )
+  const hiddenConflictCount = useMemo(
+    () => userHiddenConcepts.filter(conceptHasConflict).length,
+    [userHiddenConcepts],
+  )
+
+  // Group before capping. A 162-note journal folder becomes one representative
+  // node instead of being arbitrarily sliced at note 60. Opening a folder is a
+  // separate overlay and never mutates the graph's geometry.
+  const presentation = useMemo(
+    () => buildCanvasPresentation(visibleConcepts, displayMode),
+    [visibleConcepts, displayMode],
+  )
+  const capped = useMemo(() => capConceptsPerLane(presentation.concepts), [presentation.concepts])
   // Memoized: pan/zoom re-renders every pointermove — don't re-lay-out for those.
-  const { nodes, ghosts, worldW, worldH, lanes } = useMemo(() => computeLayout(capped.concepts), [capped.concepts])
+  const { nodes, ghosts, worldW, worldH, lanes, metrics } = useMemo(
+    () => computeLayout(capped.concepts, displayMode),
+    [capped.concepts, displayMode],
+  )
+  const represented = useMemo(
+    () => representedConceptCount(capped.concepts, presentation.groups),
+    [capped.concepts, presentation.groups],
+  )
+  const capHiddenConceptCount = Math.max(0, visibleConcepts.length - represented)
   // Full counts, not the capped subset — the lane header's "N concepts" stays
-  // an honest total even while the canvas itself only renders some of them.
-  const laneCounts = useMemo(() => countByLane(concepts), [concepts])
+  // an honest visible total even while the canvas only renders some of them.
+  const laneCounts = useMemo(() => countByLane(visibleConcepts), [visibleConcepts])
   const conflictsByConcept = useMemo(() => {
     const grouped = new Map<string, Conflict[]>()
     for (const conflict of conflicts) grouped.set(conflict.concept, [...(grouped.get(conflict.concept) ?? []), conflict])
@@ -295,6 +549,82 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null)
   const inspectorOpener = useRef<HTMLButtonElement | null>(null)
   const inspectorRef = useRef<HTMLElement | null>(null)
+  const folderOpener = useRef<HTMLButtonElement | null>(null)
+  const folderPanelRef = useRef<HTMLElement | null>(null)
+
+  const closeFolderBrowser = useCallback((restoreFocus = true) => {
+    setOpenFolderGroupId(null)
+    setFolderQuery('')
+    if (restoreFocus) requestAnimationFrame(() => folderOpener.current?.focus())
+  }, [])
+
+  const openFolderBrowser = useCallback((id: string, opener: HTMLButtonElement) => {
+    folderOpener.current = opener
+    setHiddenManagerOpen(false)
+    setHideMenu(null)
+    setFolderQuery('')
+    setOpenFolderGroupId((current) => current === id ? null : id)
+  }, [])
+
+  const openHideMenuAt = useCallback((x: number, y: number, target: Omit<HideMenuState, 'x' | 'y'>) => {
+    setHiddenManagerOpen(false)
+    setHideMenu({
+      ...target,
+      x: Math.max(8, Math.min(x, window.innerWidth - 244)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 150)),
+    })
+  }, [])
+
+  const onTargetContextMenu = useCallback((event: React.MouseEvent, target: Omit<HideMenuState, 'x' | 'y'>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    openHideMenuAt(event.clientX, event.clientY, target)
+  }, [openHideMenuAt])
+
+  const onTargetKeyDown = useCallback((event: React.KeyboardEvent, target: Omit<HideMenuState, 'x' | 'y'>) => {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    openHideMenuAt(rect.left + Math.min(rect.width - 12, 36), rect.top + Math.min(rect.height - 8, 32), target)
+  }, [openHideMenuAt])
+
+  const hideTarget = useCallback((target: HideMenuState) => {
+    setHiddenTargets((current) => new Set(current).add(target.key))
+    setHideMenu(null)
+    setOpenFolderGroupId(null)
+  }, [])
+
+  const restoreTarget = useCallback((key: string) => {
+    setHiddenTargets((current) => {
+      const next = new Set(current)
+      next.delete(key)
+      return next
+    })
+  }, [])
+
+  const openFolder = openFolderGroupId ? presentation.groups.get(openFolderGroupId) ?? null : null
+  const folderResults = useMemo(() => {
+    if (!openFolder) return []
+    return filterFolderConcepts(openFolder.concepts, folderQuery)
+  }, [folderQuery, openFolder])
+  useEffect(() => {
+    if (openFolderGroupId && !openFolder) setOpenFolderGroupId(null)
+  }, [openFolder, openFolderGroupId])
+  useEffect(() => {
+    if (!openFolder) return
+    requestAnimationFrame(() => folderPanelRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus())
+  }, [openFolder])
+  useEffect(() => {
+    if (!openFolder && !hiddenManagerOpen && !hideMenu) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (hideMenu) setHideMenu(null)
+      else if (hiddenManagerOpen) setHiddenManagerOpen(false)
+      else closeFolderBrowser()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [closeFolderBrowser, hiddenManagerOpen, hideMenu, openFolder])
 
   const fit = useCallback(() => {
     const el = wrapRef.current
@@ -339,6 +669,9 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   }, [])
 
   const onPointerDown = (e: React.PointerEvent) => {
+    setHideMenu(null)
+    setHiddenManagerOpen(false)
+    closeFolderBrowser(false)
     drag.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty }
     setDragging(true)
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
@@ -353,7 +686,14 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* noop */ }
   }
 
-  const openConcept = (c: Concept, opener: HTMLButtonElement) => { inspectorOpener.current = opener; setOpenId(c.id); setSelConcept(c.id) }
+  const openConcept = (c: Concept, opener: HTMLButtonElement) => {
+    inspectorOpener.current = opener
+    setOpenFolderGroupId(null)
+    setHiddenManagerOpen(false)
+    setHideMenu(null)
+    setOpenId(c.id)
+    setSelConcept(c.id)
+  }
   const closeInspector = () => {
     setOpenId(null)
     requestAnimationFrame(() => inspectorOpener.current?.focus())
@@ -461,7 +801,7 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
               return (
                 <path
                   key={g.key}
-                  d={edgePath(g.parent.x + NODE_W / 2, g.parent.y + NODE_H, g.x + GHOST_W / 2, g.y)}
+                  d={edgePath(g.parent.x + metrics.nodeW / 2, g.parent.y + metrics.nodeH, g.x + metrics.ghostW / 2, g.y)}
                   fill="none"
                   stroke="var(--cc-edge-conflict)"
                   strokeWidth={active ? 2.4 : 1.6}
@@ -475,22 +815,34 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
           {/* ghost (dissent) cards */}
           {ghosts.map((g) => {
             const col = lc(g.layer)
+            const hideConceptTarget = {
+              key: hiddenKeyForConcept(g.parent.c.id),
+              label: g.parent.c.title,
+              detail: g.parent.c.id,
+              conflictCount: 1,
+              kind: 'concept' as const,
+            }
             return (
               <button
                 key={g.key}
+                type="button"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(event) => openConflictFor(g.parent.c.id, event.currentTarget, g.sectionKey)}
+                onContextMenu={(event) => onTargetContextMenu(event, hideConceptTarget)}
+                onKeyDown={(event) => onTargetKeyDown(event, hideConceptTarget)}
                 onMouseEnter={() => setHoverId(g.parent.c.id)}
                 onMouseLeave={() => setHoverId(null)}
                 title="Layers disagree — open the conflict"
                 aria-label={`${g.parent.c.title} — ${layerName(g.layer)} dissents, has conflict`}
-                style={{ position: 'absolute', left: g.x, top: g.y, width: GHOST_W, height: GHOST_H, ...css(`display:flex; flex-direction:column; justify-content:center; gap:4px; text-align:left; padding:10px 12px; background:${C.surface}; border:1px dashed var(--cc-edge-conflict); border-radius:11px; cursor:pointer; font:inherit;`) }}
+                className="cc-canvas-ghost"
+                data-display={displayMode}
+                style={{ position: 'absolute', left: g.x, top: g.y, width: metrics.ghostW, height: metrics.ghostH }}
               >
                 <div style={css('display:flex; align-items:center; gap:7px;')}>
                   <LayerChip id={g.layer} />
                   <span style={css(`font-size:9.5px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:${C.amberText};`)}>overridden</span>
                 </div>
-                <div style={css(`font-size:11.5px; color:${col.text2}; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;`)}>{g.value}</div>
+                <div style={css(`font-size:${displayMode === 'cards' ? '11.5px' : '10.5px'}; color:${col.text2}; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;`)}>{g.value}</div>
               </button>
             )
           })}
@@ -498,13 +850,65 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
           {/* concept nodes */}
           {nodes.map((n) => {
             const col = lc(primaryLayer(n.c))
+            const group = presentation.groups.get(n.c.id)
             const selected = openId === n.c.id
             const hasConflict = n.conflict || conflictsByConcept.has(n.c.id)
-            const glow = selected ? `0 0 0 2px ${col.strokeE}, 0 10px 30px var(--cc-node-glow)` : `0 2px 10px var(--cc-shadow)`
+            if (group) {
+              const isOpen = openFolder?.id === group.id
+              const hideGroupTarget = {
+                key: hiddenKeyForFolder(group.layer, group.folder),
+                label: `${group.folder}/`,
+                detail: `${group.concepts.length} concepts`,
+                conflictCount: group.conflictCount,
+                kind: 'folder' as const,
+              }
+              return (
+                <button
+                  key={group.id}
+                  type="button"
+                  className="cc-canvas-group"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => openFolderBrowser(group.id, event.currentTarget)}
+                  onContextMenu={(event) => onTargetContextMenu(event, hideGroupTarget)}
+                  onKeyDown={(event) => onTargetKeyDown(event, hideGroupTarget)}
+                  onMouseEnter={() => setHoverId(group.id)}
+                  onMouseLeave={() => setHoverId(null)}
+                  aria-haspopup="dialog"
+                  aria-expanded={isOpen}
+                  aria-controls={isOpen ? 'cc-canvas-folder-browser' : undefined}
+                  aria-label={`Open ${group.folder} folder — ${group.concepts.length} concepts${group.conflictCount ? `, ${group.conflictCount} with conflicts` : ''}`}
+                  title="Open folder · Right-click for options"
+                  style={{ position: 'absolute', left: n.x, top: n.y, width: metrics.nodeW, height: metrics.nodeH }}
+                >
+                  <span className="cc-canvas-group-icon" style={{ color: col.text, background: col.fill }} aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M3.5 7.5h6l1.8 2H20.5v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /><path d="M3.5 9.5v-3a2 2 0 0 1 2-2h4l1.8 2H18" /></svg>
+                  </span>
+                  <span className="cc-canvas-group-copy">
+                    <strong>{group.folder}<span aria-hidden="true">/</span></strong>
+                    <span>{NUM.format(group.concepts.length)} concepts{group.conflictCount > 0 && <> · <em>{NUM.format(group.conflictCount)} conflict{group.conflictCount === 1 ? '' : 's'}</em></>}{group.draftCount > 0 && <> · {NUM.format(group.draftCount)} draft{group.draftCount === 1 ? '' : 's'}</>}</span>
+                  </span>
+                  <svg className="cc-canvas-group-chevron" data-expanded={isOpen} viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6" /></svg>
+                </button>
+              )
+            }
+            const hideConceptTarget = {
+              key: hiddenKeyForConcept(n.c.id),
+              label: n.c.title,
+              detail: n.c.id,
+              conflictCount: hasConflict ? 1 : 0,
+              kind: 'concept' as const,
+            }
+            const supportingText = conceptSupportingText(n.c)
             return (
               <button
                 key={n.c.id}
+                type="button"
+                className="cc-canvas-node"
+                data-display={displayMode}
+                data-selected={selected}
                 onPointerDown={(e) => e.stopPropagation()}
+                onContextMenu={(event) => onTargetContextMenu(event, hideConceptTarget)}
+                onKeyDown={(event) => onTargetKeyDown(event, hideConceptTarget)}
                 onClick={(event) => {
                   // The conflict badge is a click hit-region within this single
                   // button, not a nested interactive element (a <button> cannot
@@ -520,24 +924,221 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
                 onMouseEnter={() => setHoverId(n.c.id)}
                 onMouseLeave={() => setHoverId(null)}
                 aria-label={`${n.c.title} — ${layerName(primaryLayer(n.c))}${hasConflict ? ', has conflict' : n.c.draft ? ', draft' : ''}`}
-                style={{ position: 'absolute', left: n.x, top: n.y, width: NODE_W, height: NODE_H, boxShadow: glow, ...css(`display:flex; flex-direction:column; gap:0; text-align:left; padding:12px 14px; background:${C.raised}; border:1px solid ${selected ? col.strokeE : C.line}; border-left:3px solid ${col.strokeE}; border-radius:12px; cursor:pointer; font:inherit;`) }}
+                title="Open concept · Right-click for options"
+                style={{ position: 'absolute', left: n.x, top: n.y, width: metrics.nodeW, height: metrics.nodeH, borderColor: selected ? col.strokeE : undefined }}
               >
-                <div style={css('display:flex; align-items:center; gap:8px;')}>
-                  <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:2px 7px; border-radius:6px; color:${col.text}; background:${col.fill};`)}>{n.c.type}</span>
-                  {hasConflict && (
-                    <span data-role="conflict-badge" title="Layers disagree — click to resolve" style={css(`display:inline-flex; align-items:center; gap:4px; margin-left:auto; font-size:9.5px; font-weight:600; color:${C.amberText}; cursor:pointer;`)}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></svg>conflict
-                    </span>
-                  )}
-                  {n.c.draft && !hasConflict && <span style={css(`margin-left:auto; font-size:10px; font-family:${MONO}; color:${C.amberText2};`)}>draft</span>}
-                </div>
-                <div style={css(`font-weight:600; font-size:13.5px; margin-top:9px; color:${C.ink}; line-height:1.25;`)}>{n.c.title}</div>
-                <code style={css(`font-family:${MONO}; font-size:10.5px; color:${C.caption}; margin-top:auto;`)}>{n.c.id}</code>
+                <span className="cc-canvas-node-dot" style={{ background: col.strokeE }} aria-hidden="true" />
+                <span className="cc-canvas-node-copy" data-single-line={!supportingText}>
+                  {displayMode === 'cards' && <span className="cc-canvas-node-type" style={{ color: col.text, background: col.fill }}>{n.c.type}</span>}
+                  <strong>{n.c.title}</strong>
+                  {supportingText && <code>{supportingText}</code>}
+                </span>
+                {hasConflict && (
+                  <span data-role="conflict-badge" className="cc-canvas-node-state" title="Layers disagree — click to resolve">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></svg>
+                    {displayMode === 'cards' && <span>conflict</span>}
+                  </span>
+                )}
+                {n.c.draft && !hasConflict && <span className="cc-canvas-node-draft">draft</span>}
               </button>
             )
           })}
         </div>
       </div>
+
+      <div className="cc-canvas-viewbar" onPointerDown={(event) => event.stopPropagation()}>
+        <div className="cc-canvas-summary" aria-live="polite">
+          {capHiddenConceptCount > 0 ? (
+            <span>Showing <strong>{NUM.format(represented)}</strong> of {NUM.format(visibleConcepts.length)} visible</span>
+          ) : (
+            <span><strong>{NUM.format(visibleConcepts.length)}</strong> {userHiddenConcepts.length > 0 ? 'visible' : 'concepts'}</span>
+          )}
+          {presentation.groups.size > 0 && <span className="cc-canvas-summary-muted">· {NUM.format(presentation.groups.size)} folder group{presentation.groups.size === 1 ? '' : 's'}</span>}
+          {userHiddenConcepts.length > 0 && (
+            <button
+              type="button"
+              className="cc-canvas-summary-hidden"
+              data-has-conflict={hiddenConflictCount > 0}
+              aria-expanded={hiddenManagerOpen}
+              aria-controls={hiddenManagerOpen ? 'cc-canvas-hidden-manager' : undefined}
+              title={hiddenConflictCount > 0 ? `${hiddenConflictCount} hidden concept${hiddenConflictCount === 1 ? '' : 's'} still ${hiddenConflictCount === 1 ? 'has' : 'have'} conflicts` : 'Manage hidden Cascade nodes'}
+              onClick={() => {
+                setOpenFolderGroupId(null)
+                setHideMenu(null)
+                setHiddenManagerOpen((open) => !open)
+              }}
+            >· {NUM.format(userHiddenConcepts.length)} hidden{hiddenConflictCount > 0 ? ` · ${NUM.format(hiddenConflictCount)} conflicted` : ''}</button>
+          )}
+          {conflicts.length > 0 && (
+            <button type="button" className="cc-canvas-summary-conflicts" onClick={() => setView('conflicts')}>
+              · {NUM.format(conflicts.length)} conflict{conflicts.length === 1 ? '' : 's'}
+            </button>
+          )}
+          {capHiddenConceptCount > 0 && (
+            <button type="button" className="cc-canvas-summary-browse" onClick={() => setView('concepts')}>Browse all</button>
+          )}
+        </div>
+
+      </div>
+
+      {openFolder && (
+        <section
+          id="cc-canvas-folder-browser"
+          ref={folderPanelRef}
+          className="cc-canvas-folder-browser"
+          role="dialog"
+          aria-modal="false"
+          aria-label={`${openFolder.folder} folder`}
+          onPointerDown={(event) => event.stopPropagation()}
+          style={{ borderTopColor: lc(openFolder.layer).strokeE }}
+        >
+          <header>
+            <div className="cc-canvas-panel-heading">
+              <span className="cc-canvas-panel-folder-icon" style={{ color: lc(openFolder.layer).text, background: lc(openFolder.layer).fill }} aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3.5 7.5h6l1.8 2H20.5v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /><path d="M3.5 9.5v-3a2 2 0 0 1 2-2h4l1.8 2H18" /></svg>
+              </span>
+              <span>
+                <small className="cc-canvas-panel-kicker">{layerName(openFolder.layer)} folder</small>
+                <strong>{openFolder.folder}<span aria-hidden="true">/</span></strong>
+                <span className="cc-canvas-folder-facts">
+                  <span>{NUM.format(openFolder.concepts.length)} concepts</span>
+                  {openFolder.conflictCount > 0 && <em>{NUM.format(openFolder.conflictCount)} conflict{openFolder.conflictCount === 1 ? '' : 's'}</em>}
+                  {openFolder.draftCount > 0 && <span>{NUM.format(openFolder.draftCount)} draft{openFolder.draftCount === 1 ? '' : 's'}</span>}
+                </span>
+              </span>
+            </div>
+            <button type="button" className="cc-canvas-panel-close" onClick={() => closeFolderBrowser()} aria-label={`Close ${openFolder.folder} folder`}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </header>
+          <div className="cc-canvas-folder-toolbar">
+            <div className="cc-canvas-folder-search" role="search">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
+              <input
+                data-autofocus
+                type="search"
+                value={folderQuery}
+                onChange={(event) => setFolderQuery(event.target.value)}
+                placeholder={`Filter ${openFolder.folder}/`}
+                aria-label={`Filter ${openFolder.folder} concepts`}
+              />
+              {folderQuery && (
+                <button type="button" onClick={() => setFolderQuery('')} aria-label="Clear folder filter">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" /></svg>
+                </button>
+              )}
+            </div>
+            {folderQuery && <span aria-live="polite">{NUM.format(folderResults.length)} of {NUM.format(openFolder.concepts.length)}</span>}
+          </div>
+          <div className="cc-canvas-folder-list">
+            {folderResults.map((concept) => {
+              const hasConflict = conceptHasConflict(concept) || conflictsByConcept.has(concept.id)
+              const supportingText = conceptSupportingText(concept)
+              const hideConceptTarget = {
+                key: hiddenKeyForConcept(concept.id),
+                label: concept.title,
+                detail: concept.id,
+                conflictCount: hasConflict ? 1 : 0,
+                kind: 'concept' as const,
+              }
+              return (
+                <button
+                  key={concept.id}
+                  type="button"
+                  className="cc-canvas-folder-item"
+                  onClick={(event) => openConcept(concept, folderOpener.current ?? event.currentTarget)}
+                  onContextMenu={(event) => onTargetContextMenu(event, hideConceptTarget)}
+                  onKeyDown={(event) => onTargetKeyDown(event, hideConceptTarget)}
+                  title="Open concept · Right-click for options"
+                  aria-label={`${concept.title} — ${concept.id}${hasConflict ? ', has conflict' : concept.draft ? ', draft' : ''}`}
+                >
+                  <span className="cc-canvas-node-dot" style={{ background: lc(primaryLayer(concept) ?? 'company').strokeE }} aria-hidden="true" />
+                  <span>
+                    <strong>{concept.title}</strong>
+                    {supportingText && <code>{supportingText}</code>}
+                  </span>
+                  {hasConflict && <span className="cc-canvas-folder-state">conflict</span>}
+                  {concept.draft && !hasConflict && <span className="cc-canvas-folder-state">draft</span>}
+                  <svg className="cc-canvas-folder-open" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6" /></svg>
+                </button>
+              )
+            })}
+            {folderResults.length === 0 && (
+              <div className="cc-canvas-folder-empty" role="status">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
+                <strong>No matching concepts</strong>
+                <span>Try a title, path, or type.</span>
+              </div>
+            )}
+          </div>
+          <footer className="cc-canvas-folder-footer">
+            <span>Right-click a concept to hide it from Cascade.</span>
+            <kbd>Esc</kbd>
+          </footer>
+        </section>
+      )}
+
+      {hiddenManagerOpen && hiddenRows.length > 0 && (
+        <section
+          id="cc-canvas-hidden-manager"
+          className="cc-canvas-hidden-manager"
+          role="dialog"
+          aria-modal="false"
+          aria-label="Hidden Cascade nodes"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <header>
+            <span>
+              <strong>Hidden from Cascade</strong>
+              <small>{NUM.format(userHiddenConcepts.length)} concept{userHiddenConcepts.length === 1 ? '' : 's'} concealed</small>
+            </span>
+            <button type="button" className="cc-canvas-panel-close" onClick={() => setHiddenManagerOpen(false)} aria-label="Close hidden nodes manager">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </header>
+          <p>Hidden nodes stay available in Knowledge and Review.</p>
+          <div className="cc-canvas-hidden-list">
+            {hiddenRows.map((row) => (
+              <div key={row.key} className="cc-canvas-hidden-row">
+                <span>
+                  <strong>{row.label}</strong>
+                  <small>{row.detail}{row.count > 1 ? ` · ${NUM.format(row.count)} concepts` : ''}{row.conflictCount > 0 ? ` · ${NUM.format(row.conflictCount)} conflicted` : ''}</small>
+                </span>
+                <button type="button" onClick={() => restoreTarget(row.key)}>Show</button>
+              </div>
+            ))}
+          </div>
+          <footer>
+            <button type="button" onClick={() => {
+              setHiddenTargets(new Set())
+              setHiddenManagerOpen(false)
+            }}>Show all hidden nodes</button>
+          </footer>
+        </section>
+      )}
+
+      {hideMenu && (
+        <div
+          className="cc-canvas-context-menu"
+          role="menu"
+          aria-label={`${hideMenu.label} options`}
+          style={{ left: hideMenu.x, top: hideMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <div className="cc-canvas-context-heading">
+            <strong>{hideMenu.label}</strong>
+            <span>{hideMenu.detail}</span>
+          </div>
+          <button type="button" role="menuitem" onClick={() => hideTarget(hideMenu)}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 4.2A10.7 10.7 0 0 1 12 4c5.5 0 9 5 9 5a16 16 0 0 1-2.1 2.6M6.2 6.2C4.1 7.6 3 9 3 9s3.5 5 9 5c1 0 1.9-.2 2.7-.4" /></svg>
+            <span>
+              <strong>Hide {hideMenu.kind === 'folder' ? 'folder' : 'node'} from Cascade</strong>
+              <small>Restore it later from Hidden</small>
+            </span>
+          </button>
+          {hideMenu.conflictCount > 0 && <p>{NUM.format(hideMenu.conflictCount)} conflict{hideMenu.conflictCount === 1 ? '' : 's'} will remain available in Review.</p>}
+        </div>
+      )}
 
       {/*
         legend — the one blurred surface in the app with moving content behind
@@ -549,16 +1150,14 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
         preference, which resolves --cc-header-bg to the opaque raised surface
         and kills backdrop-filter app-wide (see styles.css).
       */}
-      <div style={css(`position:absolute; left:20px; bottom:20px; display:flex; flex-direction:column; gap:8px; padding:12px 14px; background:var(--cc-header-bg); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid ${C.line}; border-radius:11px; box-shadow:0 4px 16px var(--cc-shadow);`)}>
-        <div style={css(`font-size:10px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:${C.caption};`)}>The cascade — higher lanes win</div>
-        <div style={css('display:flex; align-items:center; gap:8px;')}>
-          <svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" stroke="var(--cc-edge-conflict)" strokeWidth="1.8" strokeDasharray="5 5" /></svg>
-          <span style={css(`font-size:11.5px; color:${C.caption};`)}>a lower layer disagrees — click to resolve</span>
-        </div>
+      <div className="cc-canvas-legend" style={css('background:var(--cc-header-bg); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);')}>
+        <div>The cascade — higher lanes win</div>
+        <span className="cc-canvas-legend-rule" aria-hidden="true" />
+        <span>a lower layer disagrees</span>
       </div>
 
       {/* zoom controls */}
-      <div style={css(`position:absolute; right:20px; bottom:20px; display:flex; flex-direction:column; gap:6px;`)}>
+      <div className="cc-canvas-zoom">
         {([['+', 'Zoom in', () => zoom(1)], ['−', 'Zoom out', () => zoom(-1)], ['⤢', 'Fit to view', fit]] as const).map(([label, name, fn]) => (
           <button
             key={name}
@@ -566,25 +1165,9 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
             onClick={fn}
             title={name}
             aria-label={name}
-            style={css(`display:grid; place-items:center; width:36px; height:36px; background:${C.surface}; border:1px solid ${C.lineStrong}; border-radius:9px; cursor:pointer; color:${C.body}; font-size:16px; font-weight:500;`)}
           >{label}</button>
         ))}
       </div>
-
-      {/* cap banner — a real-DOM canvas with no virtualization stops being
-          usable well before a large cascade finishes laying out (F7); this
-          says what's hidden and where the rest still is. */}
-      {capped.shown < capped.total && (
-        <div style={css(`position:absolute; left:20px; top:16px; display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--cc-header-bg); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid ${C.line}; border-radius:9px; box-shadow:0 4px 16px var(--cc-shadow);`)}>
-          <span style={css(`font-size:11.5px; color:${C.caption};`)}>Showing {NUM.format(capped.shown)} of {NUM.format(capped.total)}</span>
-          <button
-            type="button"
-            className="cc-h-bd-strong"
-            onClick={() => setView('concepts')}
-            style={css(`padding:2px 9px; border:1px solid ${C.lineStrong}; border-radius:999px; background:${C.raised}; cursor:pointer; font:inherit; font-size:11px; font-weight:600; color:${C.body};`)}
-          >Browse everything in Knowledge</button>
-        </div>
-      )}
 
       {/* node detail slide-over */}
       {openConceptObj && (

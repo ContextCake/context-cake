@@ -244,6 +244,19 @@ describe('SettingsView', () => {
     expect(document.documentElement.dataset.theme).toBe('dark')
   })
 
+  it('keeps Cascade view in General Settings with Grouped as the default', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+
+    expect(groupButton('Cascade view', 'Grouped').getAttribute('aria-pressed')).toBe('true')
+    await act(async () => groupButton('Cascade view', 'Cards').click())
+    expect(groupButton('Cascade view', 'Cards').getAttribute('aria-pressed')).toBe('true')
+    expect(window.localStorage.getItem('contextcake.cascadeDisplay')).toBe('cards')
+  })
+
   it('lets a Mac user override Reduce Transparency and hand the choice back', async () => {
     // This Mac says "reduce": that is what makes System distinguishable from
     // Off. With a Mac that says no, every wrong fallback still renders `false`

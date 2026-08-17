@@ -1394,6 +1394,617 @@ textarea:focus-visible,
   background-size: 26px 26px;
 }
 
+/* Cascade display system: the map can summarize large folders, show a dense
+   flat inventory, or preserve the full card treatment. The view is selected
+   in Settings and stays separate from the app-wide comfortable/compact UI
+   density preference. */
+.cc-canvas-viewbar {
+  position: absolute;
+  z-index: 4;
+  top: 16px;
+  left: 20px;
+  right: 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 12px;
+  pointer-events: none;
+}
+.cc-canvas-summary {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--cc-line);
+  border-radius: 9px;
+  background: var(--cc-header-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+.cc-canvas-summary {
+  gap: 5px;
+  padding: 0 11px;
+  color: var(--cc-caption);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.cc-canvas-summary strong { color: var(--cc-body); font-weight: 650; font-variant-numeric: tabular-nums; }
+.cc-canvas-summary-muted { color: var(--cc-faint); }
+.cc-canvas-summary button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+.cc-canvas-summary-conflicts { padding: 3px 0; color: var(--cc-amber-text); font-weight: 600; }
+.cc-canvas-summary-hidden { padding: 3px 0; color: var(--cc-caption); font-weight: 600; }
+.cc-canvas-summary-hidden:hover { color: var(--cc-ink); }
+.cc-canvas-summary-hidden[data-has-conflict='true'] { color: var(--cc-amber-text); }
+.cc-canvas-summary-browse {
+  min-height: 26px;
+  margin-left: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--cc-line-strong) !important;
+  border-radius: 7px !important;
+  background: var(--cc-raised) !important;
+  color: var(--cc-body);
+  font-weight: 600 !important;
+}
+.cc-canvas-summary-browse:hover { border-color: var(--cc-faint) !important; color: var(--cc-ink); }
+
+.cc-canvas-group,
+.cc-canvas-node,
+.cc-canvas-ghost {
+  margin: 0;
+  color: var(--cc-ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background-color 140ms var(--cc-ease-out), border-color 140ms var(--cc-ease-out);
+}
+.cc-canvas-group,
+.cc-canvas-node {
+  border: 1px solid var(--cc-line);
+  border-radius: 10px;
+  background: var(--cc-raised);
+}
+.cc-canvas-group:hover,
+.cc-canvas-node:hover { border-color: var(--cc-line-strong); background: var(--cc-surface); }
+.cc-canvas-node[data-selected='true'] { border-width: 2px; }
+
+.cc-canvas-group {
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+}
+.cc-canvas-group-icon {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+}
+.cc-canvas-group-icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.cc-canvas-group-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cc-canvas-group-copy strong { overflow: hidden; color: var(--cc-ink); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.cc-canvas-group-copy > span { overflow: hidden; color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.cc-canvas-group-copy em { color: var(--cc-amber-text); font-style: normal; }
+.cc-canvas-group-chevron { width: 14px; height: 14px; fill: none; stroke: var(--cc-faint); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform 160ms var(--cc-ease-out); }
+.cc-canvas-group-chevron[data-expanded='true'] { transform: rotate(90deg); }
+
+.cc-canvas-node {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+}
+.cc-canvas-node-dot { width: 7px; height: 7px; border-radius: 50%; align-self: center; }
+.cc-canvas-node-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cc-canvas-node-copy[data-single-line='true'] { justify-content: center; }
+.cc-canvas-node-copy strong,
+.cc-canvas-node-copy code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-canvas-node-copy strong { color: var(--cc-ink); font-size: 11.5px; font-weight: 600; line-height: 1.25; }
+.cc-canvas-node-copy code { color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9px; }
+.cc-canvas-node-state {
+  display: inline-flex;
+  align-items: center;
+  align-self: start;
+  gap: 4px;
+  color: var(--cc-amber-text);
+  cursor: pointer;
+  font-size: 9.5px;
+  font-weight: 650;
+}
+.cc-canvas-node-state svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.2; }
+.cc-canvas-node-draft { align-self: start; color: var(--cc-amber-text2); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9px; }
+
+.cc-canvas-node[data-display='cards'] {
+  align-items: start;
+  gap: 8px;
+  padding: 9px 10px;
+}
+.cc-canvas-node[data-display='cards'] .cc-canvas-node-dot { margin-top: 5px; }
+.cc-canvas-node[data-display='cards'] .cc-canvas-node-copy { align-self: stretch; height: 100%; gap: 0; }
+.cc-canvas-node[data-display='cards'] .cc-canvas-node-type {
+  align-self: flex-start;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.cc-canvas-node[data-display='cards'] .cc-canvas-node-copy strong { margin-top: 6px; font-size: 12.5px; }
+.cc-canvas-node[data-display='cards'] .cc-canvas-node-copy code { margin-top: auto; font-size: 9.5px; }
+.cc-canvas-node[data-display='cards'] .cc-canvas-node-state,
+.cc-canvas-node[data-display='cards'] .cc-canvas-node-draft { margin-top: 2px; }
+
+.cc-canvas-ghost {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px dashed var(--cc-edge-conflict);
+  border-radius: 9px;
+  background: var(--cc-surface);
+}
+.cc-canvas-ghost:hover { background: var(--cc-raised); }
+.cc-canvas-ghost[data-display='cards'] { padding: 8px 10px; border-radius: 10px; }
+
+.cc-canvas-legend {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--cc-line);
+  border-radius: 9px;
+  color: var(--cc-caption);
+  font-size: 10.5px;
+}
+.cc-canvas-legend > div { color: var(--cc-body); font-weight: 600; }
+.cc-canvas-legend-rule { width: 22px; border-top: 1.5px dashed var(--cc-edge-conflict); }
+
+.cc-canvas-zoom {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--cc-line-strong);
+  border-radius: 9px;
+  background: var(--cc-surface);
+}
+.cc-canvas-zoom button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--cc-line);
+  background: transparent;
+  color: var(--cc-body);
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 550;
+}
+.cc-canvas-zoom button:last-child { border-right: 0; }
+
+/* Modeless Cascade panels sit above the map without changing its world
+   geometry. Folder contents are a flat inventory, not another nested card
+   grid; Hidden is the durable control surface for right-click exclusions. */
+.cc-canvas-folder-browser,
+.cc-canvas-hidden-manager {
+  position: absolute;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--cc-line-strong);
+  border-radius: 14px;
+  background: var(--cc-raised);
+  box-shadow: 0 18px 54px var(--cc-shadow), 0 4px 12px var(--cc-shadow);
+  animation: ccCanvasPanelIn 160ms var(--cc-ease-out);
+}
+.cc-canvas-folder-browser {
+  top: 50%;
+  left: 50%;
+  width: min(520px, calc(100% - 40px));
+  max-height: min(620px, calc(100% - 112px));
+  border-top-width: 2px;
+  transform: translate(-50%, -50%);
+  animation-name: ccCanvasFolderIn;
+}
+.cc-canvas-hidden-manager {
+  top: 60px;
+  left: 20px;
+  width: min(350px, calc(100% - 40px));
+  max-height: min(520px, calc(100% - 132px));
+}
+.cc-canvas-folder-browser > header,
+.cc-canvas-hidden-manager > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--cc-line);
+}
+.cc-canvas-folder-browser > header {
+  padding: 17px 18px 15px;
+  border-bottom: 0;
+}
+.cc-canvas-panel-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cc-canvas-panel-heading > span:last-child,
+.cc-canvas-hidden-manager > header > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cc-canvas-panel-heading strong,
+.cc-canvas-hidden-manager > header strong {
+  overflow: hidden;
+  color: var(--cc-ink);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-canvas-folder-browser .cc-canvas-panel-heading strong {
+  font-size: 15px;
+  line-height: 1.2;
+}
+.cc-canvas-panel-heading small,
+.cc-canvas-hidden-manager > header small {
+  color: var(--cc-caption);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+}
+.cc-canvas-panel-kicker {
+  color: var(--cc-faint) !important;
+  font-family: inherit !important;
+  font-size: 9px !important;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.cc-canvas-folder-facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 3px;
+  color: var(--cc-caption);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.cc-canvas-folder-facts > span,
+.cc-canvas-folder-facts > em {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--cc-neutral-fill);
+  font-style: normal;
+}
+.cc-canvas-folder-facts > em { background: var(--cc-amber-fill); color: var(--cc-amber-text); }
+.cc-canvas-panel-folder-icon {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+}
+.cc-canvas-folder-browser .cc-canvas-panel-folder-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+}
+.cc-canvas-folder-browser .cc-canvas-panel-folder-icon svg { width: 19px; height: 19px; }
+.cc-canvas-panel-folder-icon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.cc-canvas-panel-close {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--cc-caption);
+  cursor: pointer;
+}
+.cc-canvas-panel-close:hover { background: var(--cc-neutral-fill); color: var(--cc-ink); }
+.cc-canvas-panel-close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.cc-canvas-folder-browser > p,
+.cc-canvas-hidden-manager > p {
+  margin: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--cc-line);
+  color: var(--cc-caption);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.cc-canvas-folder-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px 12px;
+  border-bottom: 1px solid var(--cc-line);
+}
+.cc-canvas-folder-toolbar > span {
+  flex: 0 0 auto;
+  min-width: 30px;
+  color: var(--cc-faint);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  text-align: right;
+}
+.cc-canvas-folder-search {
+  min-width: 0;
+  min-height: 34px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid var(--cc-line);
+  border-radius: 9px;
+  background: var(--cc-surface);
+  transition: border-color 140ms var(--cc-ease-out), box-shadow 140ms var(--cc-ease-out);
+}
+.cc-canvas-folder-search:focus-within {
+  border-color: var(--cc-blue-stroke);
+  box-shadow: 0 0 0 2px var(--cc-blue-fill);
+}
+.cc-canvas-folder-search > svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--cc-caption);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.cc-canvas-folder-search input {
+  min-width: 0;
+  height: 32px;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--cc-ink);
+  font: inherit;
+  font-size: 11.5px;
+}
+.cc-canvas-folder-search input::placeholder { color: var(--cc-faint); }
+.cc-canvas-folder-search input::-webkit-search-cancel-button { display: none; }
+.cc-canvas-folder-search > button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cc-caption);
+  cursor: pointer;
+}
+.cc-canvas-folder-search > button:hover { background: var(--cc-neutral-fill); color: var(--cc-ink); }
+.cc-canvas-folder-search > button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+.cc-canvas-folder-list,
+.cc-canvas-hidden-list { min-height: 0; overflow-y: auto; }
+.cc-canvas-folder-list { flex: 1; padding: 6px; }
+.cc-canvas-folder-item {
+  width: 100%;
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cc-ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.cc-canvas-folder-item:hover { background: var(--cc-neutral-fill); }
+.cc-canvas-folder-item:focus-visible { outline-offset: -2px; }
+.cc-canvas-folder-item > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cc-canvas-folder-item strong,
+.cc-canvas-folder-item code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-canvas-folder-item strong { color: var(--cc-ink); font-size: 11.5px; font-weight: 600; }
+.cc-canvas-folder-item code { color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9px; }
+.cc-canvas-folder-state { padding: 2px 6px; border-radius: 999px; background: var(--cc-amber-fill); color: var(--cc-amber-text); font-size: 8.5px; font-weight: 650; }
+.cc-canvas-folder-open { width: 14px; height: 14px; fill: none; stroke: var(--cc-faint); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.cc-canvas-folder-item:hover .cc-canvas-folder-open { stroke: var(--cc-caption); }
+.cc-canvas-folder-more {
+  width: calc(100% - 12px);
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px;
+  padding: 0 11px;
+  border: 1px solid var(--cc-line);
+  border-radius: 8px;
+  background: var(--cc-neutral-fill);
+  color: var(--cc-body);
+  cursor: pointer;
+  font: inherit;
+}
+.cc-canvas-folder-more:hover { border-color: var(--cc-line-strong); color: var(--cc-ink); }
+.cc-canvas-folder-more strong { font-size: 10.5px; font-weight: 650; }
+.cc-canvas-folder-more span { color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9px; }
+.cc-canvas-folder-empty {
+  min-height: 190px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--cc-caption);
+  text-align: center;
+}
+.cc-canvas-folder-empty svg { width: 24px; height: 24px; margin-bottom: 3px; fill: none; stroke: var(--cc-faint); stroke-width: 1.5; stroke-linecap: round; }
+.cc-canvas-folder-empty strong { color: var(--cc-body); font-size: 11.5px; font-weight: 650; }
+.cc-canvas-folder-empty span { font-size: 10.5px; }
+.cc-canvas-folder-footer {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px 0 18px;
+  border-top: 1px solid var(--cc-line);
+  color: var(--cc-faint);
+  font-size: 9.5px;
+}
+.cc-canvas-folder-footer kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--cc-line);
+  border-bottom-color: var(--cc-line-strong);
+  border-radius: 5px;
+  background: var(--cc-neutral-fill);
+  color: var(--cc-caption);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 8.5px;
+}
+
+.cc-canvas-hidden-row {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px 9px 14px;
+  border-bottom: 1px solid var(--cc-line);
+}
+.cc-canvas-hidden-row > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cc-canvas-hidden-row strong,
+.cc-canvas-hidden-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-canvas-hidden-row strong { color: var(--cc-ink); font-size: 11.5px; font-weight: 600; }
+.cc-canvas-hidden-row small { color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9px; }
+.cc-canvas-hidden-row > button,
+.cc-canvas-hidden-manager > footer button {
+  min-height: 28px;
+  border: 1px solid var(--cc-line-strong);
+  border-radius: 7px;
+  background: var(--cc-raised);
+  color: var(--cc-body);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.cc-canvas-hidden-row > button { flex: 0 0 auto; padding: 0 9px; }
+.cc-canvas-hidden-manager > footer { padding: 10px 12px; border-top: 1px solid var(--cc-line); }
+.cc-canvas-hidden-manager > footer button { width: 100%; padding: 0 10px; }
+.cc-canvas-hidden-row > button:hover,
+.cc-canvas-hidden-manager > footer button:hover { border-color: var(--cc-faint); color: var(--cc-ink); }
+
+.cc-canvas-context-menu {
+  position: fixed;
+  z-index: 8;
+  width: 236px;
+  overflow: hidden;
+  border: 1px solid var(--cc-line-strong);
+  border-radius: 10px;
+  background: var(--cc-surface);
+  box-shadow: 0 4px 8px var(--cc-shadow);
+  animation: ccCanvasMenuIn 120ms var(--cc-ease-out);
+}
+.cc-canvas-context-heading { display: flex; flex-direction: column; gap: 2px; padding: 10px 11px 8px; border-bottom: 1px solid var(--cc-line); }
+.cc-canvas-context-heading strong,
+.cc-canvas-context-heading span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-canvas-context-heading strong { color: var(--cc-ink); font-size: 11px; font-weight: 650; }
+.cc-canvas-context-heading span { color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 8.5px; }
+.cc-canvas-context-menu > button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 0;
+  background: transparent;
+  color: var(--cc-body);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.cc-canvas-context-menu > button:hover { background: var(--cc-raised); color: var(--cc-ink); }
+.cc-canvas-context-menu > button > svg { flex: 0 0 auto; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.cc-canvas-context-menu > button > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cc-canvas-context-menu > button strong { font-size: 10.5px; font-weight: 600; }
+.cc-canvas-context-menu > button small { color: var(--cc-caption); font-size: 9.5px; }
+.cc-canvas-context-menu > p { margin: 0; padding: 7px 11px 9px; border-top: 1px solid var(--cc-line); color: var(--cc-amber-text); font-size: 9.5px; line-height: 1.35; }
+
+@keyframes ccCanvasPanelIn {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes ccCanvasFolderIn {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)) scale(0.985); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes ccCanvasMenuIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 760px) {
+  .cc-canvas-viewbar { top: 12px; left: 12px; right: 12px; flex-direction: column; align-items: flex-start; }
+  .cc-canvas-summary { max-width: 100%; white-space: normal; flex-wrap: wrap; padding-top: 4px; padding-bottom: 4px; }
+  .cc-canvas-legend { display: none; }
+  .cc-canvas-zoom { right: 12px; bottom: 12px; }
+  .cc-canvas-folder-browser { top: 52%; left: 12px; width: calc(100% - 24px); max-height: calc(100% - 104px); transform: translateY(-50%); animation: none; }
+  .cc-canvas-hidden-manager { top: 108px; left: 12px; width: calc(100% - 24px); max-height: calc(100% - 176px); }
+}
+
+@media (pointer: coarse) {
+  .cc-canvas-zoom button { width: 44px; height: 44px; }
+  .cc-canvas-folder-item { min-height: 56px; }
+  .cc-canvas-folder-more { min-height: 48px; }
+  .cc-canvas-hidden-row > button { min-height: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-canvas-folder-browser,
+  .cc-canvas-hidden-manager,
+  .cc-canvas-context-menu { animation: none; }
+}
+
 /* Triage — list + decision panel side by side on desktop, stacked on mobile. */
 .cc-triage-grid {
   display: grid;

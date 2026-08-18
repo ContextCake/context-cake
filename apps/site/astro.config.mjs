@@ -40,6 +40,7 @@ export default defineConfig({
 					items: [
 						{ label: 'The layer cake', slug: 'docs/concepts/layer-cake' },
 						{ label: 'ContextCake and agent memory', slug: 'docs/concepts/agent-memory-comparison' },
+						{ label: 'ContextCake and OpenMetadata', slug: 'docs/concepts/openmetadata-comparison' },
 						{ label: 'OKF bundles', slug: 'docs/concepts/okf-bundles' },
 						{ label: 'Merge semantics', slug: 'docs/concepts/merge-semantics' },
 						{ label: 'Discrepancies & provenance', slug: 'docs/concepts/conflicts-and-provenance' },

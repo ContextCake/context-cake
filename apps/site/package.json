@@ -11,7 +11,7 @@
     "start": "astro dev",
     "prebuild": "npm run build-demo-data && npm run clean-legacy-demo",
     "build": "astro build",
-    "postbuild": "node scripts/verify-install-page.mjs",
+    "postbuild": "node scripts/verify-install-page.mjs && node scripts/verify-commerce-hidden.mjs",
     "preview": "astro preview",
     "astro": "astro"
   },

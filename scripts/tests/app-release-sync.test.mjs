@@ -6,6 +6,7 @@ import {
   fetchAppReleaseRecord,
   parseChecksums,
   renderDownloadRedirect,
+  renderRedirects,
   selectStableAppRelease,
 } from '../../apps/site/scripts/sync-app-release.mjs'
 
@@ -53,6 +54,22 @@ test('builds a release record only when both packaged artifacts have checksums',
     () => buildAppReleaseRecord(release('1.2.3'), `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg\n`),
     /SHA256SUMS is missing ContextCake-1\.2\.3-arm64-mac\.zip/,
   )
+})
+
+test('renders the commerce redirects only while commerce is hidden', () => {
+  const checksumText = `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg\n${'b'.repeat(64)}  ContextCake-1.2.3-arm64-mac.zip\n`
+  const record = buildAppReleaseRecord(release('1.2.3'), checksumText)
+  const download = renderDownloadRedirect(record)
+
+  assert.equal(
+    renderRedirects(record, { commerceVisible: false, paymentsLive: false }),
+    `${download}/pricing / 302\n/creators /packs 302\n`,
+  )
+  // A missing or malformed flags object is treated as hidden, never as visible.
+  assert.equal(renderRedirects(record), `${download}/pricing / 302\n/creators /packs 302\n`)
+  assert.equal(renderRedirects(record, { commerceVisible: true, paymentsLive: false }), download)
+  // Live payments imply visible commerce even if the visibility flag lags.
+  assert.equal(renderRedirects(record, { commerceVisible: false, paymentsLive: true }), download)
 })
 
 test('adds the MCPB route only when its released bytes are checksum-pinned', () => {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+import { isCommerceVisible, readSiteFlags } from './site-flags.mjs'
 
 const REPOSITORY = 'ContextCake/context-cake'
 const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases`
@@ -116,6 +117,21 @@ export function renderDownloadRedirect(record) {
   return `/download/mac ${record.artifacts.dmg.url} 302\n`
 }
 
+// The whole public/_redirects file. This script regenerates it on every release
+// sync, so any route that must 302 has to be rendered here — a hand edit to the
+// committed file is overwritten by the next `sync-app-release.mjs` run in CI.
+//
+// While commerce is hidden (src/config/flags.json) the prerendered /pricing and
+// /creators pages are meta-refresh stubs; these lines make Cloudflare answer a
+// real 302 before the stub is ever served.
+export function renderRedirects(record, flags = {}) {
+  const lines = [renderDownloadRedirect(record)]
+  if (!isCommerceVisible(flags)) {
+    lines.push('/pricing / 302\n', '/creators /packs 302\n')
+  }
+  return lines.join('')
+}
+
 function requestHeaders(token) {
   return {
     Accept: 'application/vnd.github+json',
@@ -200,8 +216,9 @@ export async function fetchAppReleaseRecord({ tag, token, fetchImpl = globalThis
 }
 
 export async function writeAppReleaseRecord(record) {
+  const flags = await readSiteFlags()
   await writeFile(DATA_URL, `${JSON.stringify(record, null, 2)}\n`)
-  await writeFile(REDIRECTS_URL, renderDownloadRedirect(record))
+  await writeFile(REDIRECTS_URL, renderRedirects(record, flags))
 }
 
 function parseArgs(argv) {

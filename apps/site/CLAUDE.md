@@ -39,6 +39,17 @@ For public-facing copy, also read `specs/contextcake-site/voice.md`.
   beyond the scaffold set without asking.
 - `npm run build` must exit 0 before any commit. Engine tests (root `npm test`) must
   still pass if you touch anything outside `apps/site/`.
+- **Commerce surfaces are gated by `src/config/flags.json`** (`commerceVisible`,
+  `paymentsLive`; read through `src/config/flags.ts` in pages and directly by the
+  build scripts). With `commerceVisible: false` the nav/footer drop Pricing and Create a
+  Pack, `/pricing` and `/creators` build as meta-refresh stubs and 302 via `_redirects`,
+  Pack pages show availability without prices, and `scripts/verify-commerce-hidden.mjs`
+  (postbuild) fails the build if a price/plan string leaks into any built page. Hidden is
+  not deleted: `src/data/commerce.ts` and the two gated pages stay in the tree. Two things
+  do not flip with the flag and must be redone by hand: the Starlight docs copy
+  (`reference/cli.md` "no account is required", `docs/index.mdx` "Packs are optional")
+  and `public/_redirects`, which `scripts/sync-app-release.mjs` regenerates from the
+  flags on every release sync (CI) — locally, rerun it after a flip.
 
 ## Development
 

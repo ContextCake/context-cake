@@ -1,3 +1,8 @@
+// Plans, price bands, the creator share, and the Pack catalog. Whether any of the
+// priced parts render is decided by src/config/flags.json (`commerceVisible`,
+// `paymentsLive`; see flags.ts for what a flip involves) — hidden is not deleted,
+// so this file stays complete while the site shows no prices. The catalog entries
+// are always used; only their `price` and `teamPrice` fields are gated.
 export interface ApplicationPlan {
 	id: 'free' | 'pro' | 'team';
 	name: string;

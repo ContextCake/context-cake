@@ -1,7 +1,12 @@
 ---
 import Base from '../layouts/Base.astro';
+import { COMMERCE_VISIBLE } from '../config/flags';
 import { applicationPlans, packPriceBands, planComparison } from '../data/commerce';
 import { appDownloadUrl } from '../data/app-release';
+
+// While commerce is hidden this route renders as a redirect stub (a meta refresh
+// on the prerendered page) and public/_redirects answers a real 302 first.
+if (!COMMERCE_VISIBLE) return Astro.redirect('/');
 
 const faqs = [
 	['Does Free expire or limit my local context?', 'No. Local sources, layers, profiles, resolution, MCP access, and Pack authoring remain available without an account or subscription.'],

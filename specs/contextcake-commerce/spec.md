@@ -6,6 +6,14 @@ local product without turning local resolution, authoring, or agent access into 
 
 **Date:** 2026-07-17
 **Amended:** 2026-08-09 — added demo catalog and open creator brief boundaries
+**Amended:** 2026-08-18 — adoption-first: every commerce surface on the site is hidden
+behind `apps/site/src/config/flags.json` (`commerceVisible: false`, `paymentsLive: false`).
+Nav and footer drop Pricing / Create a Pack, `/pricing` and `/creators` redirect, Pack pages
+show availability without prices, and a postbuild verifier fails the site build if a price
+or plan string leaks. The acceptance criteria that depend on a visible price are
+**suspended, not withdrawn** — both "Marketing comprehension" criteria (the pricing page)
+and the "target price band" clause of the creator-brief criterion under "Catalog and
+creators" — and apply again the day the flag flips.
 **Status:** Approved commercial foundation; billing remains disabled until the matching
 product behavior is live
 **Depends on:** `specs/contextcake-auth/spec.md`, `specs/contextcake-packs/spec.md`, and

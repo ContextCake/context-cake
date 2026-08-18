@@ -40,6 +40,7 @@ const SUITES = [
   { group: "unit", name: "tokens", ...node("tokens.test.mjs") },
   { group: "unit", name: "git-auth", ...node("git-auth.test.mjs") },
   { group: "unit", name: "manifest", ...node("manifest.test.mjs") },
+  { group: "unit", name: "control-sources", ...node("control-sources.test.mjs") },
   { group: "unit", name: "write-target", ...node("write-target.test.mjs") },
   { group: "unit", name: "index-keys", ...node("index-keys.test.mjs") },
   { group: "unit", name: "walk", ...node("walk.test.mjs") },

@@ -22,12 +22,101 @@ import {
   getManifestProfileLayers,
   mutateContextManifest,
   readContextManifest,
+  readContextManifestQuarantined,
   repairContextManifest,
 } from "../manifest.mjs";
 import { ControlError } from "./errors.mjs";
 import { withDeadline } from "./util.mjs";
 
 const execFileP = promisify(execFile);
+
+// A layer's `level` as the manifest may carry it: a JSON number, or a numeric
+// string a hand-authored manifest is allowed to hold (validateLayer accepts
+// `Number(level)` being an integer). Returns the safe integer, or null when the
+// value is not one — `null`, `""`, `"abc"`, `1.5`, `true` all answer null. The
+// old `Number.isFinite(+value)` test let `null` through as 0 and silently
+// ignored `"abc"`; both are now the caller's LEVEL_INVALID.
+export function parseLevel(value) {
+  if (typeof value === "number") return Number.isSafeInteger(value) ? value : null;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : null;
+  }
+  return null;
+}
+
+/**
+ * Cascade levels for a list of layers given in the order the user wants them
+ * to WIN — first entry beats everything below it. Pure; the input is not
+ * mutated. Returns `[{ name, level }]` aligned with the input.
+ *
+ * The engine's precedence stays "higher `level` wins" (resolver.mjs); this is
+ * how a rank-shaped request becomes those integers without disturbing what a
+ * user's manifest already says where it can be left alone:
+ *
+ *   - When the layers already carry N distinct levels for N layers, those
+ *     same numbers are handed back as a permutation. A 3/2/0 cascade dragged
+ *     into a new order stays a permutation of {3, 2, 0} — round-trip stable,
+ *     and every doc/fixture default survives a reorder untouched.
+ *   - Otherwise (a tie, or a layer with no level yet — an insert) the whole
+ *     list is renumbered contiguously N..1. Ties cannot be preserved through a
+ *     reorder (a tie IS the absence of an order), and an inserted layer has no
+ *     number to reuse, so 2/2/0 becomes 3/2/1 and an add-at-position onto
+ *     3/2/0 becomes 4/3/2/1.
+ *
+ * Only safe-integer levels count as "existing"; a layer whose level is
+ * missing or unparseable is simply not in the pool, which is exactly what
+ * makes an insert renumber rather than land on an arbitrary number.
+ */
+export function assignCascadeLevels(orderedLayers) {
+  const layers = Array.isArray(orderedLayers) ? orderedLayers : [];
+  const pool = [...new Set(layers.map((layer) => parseLevel(layer?.level)).filter((level) => level !== null))]
+    .sort((a, b) => b - a);
+  const total = layers.length;
+  return layers.map((layer, index) => ({
+    name: layer?.name,
+    level: pool.length === total ? pool[index] : total - index,
+  }));
+}
+
+// The current cascade order of a layer list: level descending, ties broken by
+// name (code-point order — `a < b`, not localeCompare, so it is the same on
+// every machine) so the answer is deterministic and matches what a rank
+// display shows. Used by the add-at-position insert, the only place the
+// engine has to derive an order rather than be handed one. A level the
+// manifest validated but parseLevel does not accept (a hand-authored `null`)
+// sorts as 0, which is how the resolver's `>` comparison treats it too.
+function cascadeOrder(layers) {
+  return [...layers].sort((a, b) => {
+    const la = parseLevel(a.level) ?? 0;
+    const lb = parseLevel(b.level) ?? 0;
+    if (la !== lb) return lb - la;
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  });
+}
+
+// A Pack layer carries a second copy of its level in the registry
+// (`manifest.packs[id].assignments[].level`), and validateContextManifest
+// refuses to write a manifest where the two disagree (`pack-layer-drift`).
+// So every place a pack layer's level moves has to move the assignment with
+// it, or the strict write dies on the operation's own change. Default profile
+// only — that is the only profile these operations touch. Returns whether an
+// assignment was updated.
+export function syncPackAssignmentLevel(manifest, layer) {
+  if (typeof layer?.origin !== "string" || !layer.origin.startsWith("pack:")) return false;
+  const match = /^pack:([^@]+)@/.exec(layer.origin);
+  if (!match) return false;
+  const record = manifest.packs?.[match[1]];
+  if (!record || typeof record !== "object" || !Array.isArray(record.assignments)) return false;
+  // Legacy manifests key the default profile as `null`; v2 as "default" (with
+  // a tolerated null spelling that validation warns about but accepts).
+  const assignment = record.assignments.find((entry) => (
+    entry && typeof entry === "object" && (entry.profile ?? "default") === "default" && entry.layerName === layer.name
+  ));
+  if (!assignment) return false;
+  assignment.level = layer.level;
+  return true;
+}
 
 // Accept "owner/name", an https URL, or a git@ SSH URL. Reject other schemes —
 // git clone otherwise supports dangerous transports (ext::, file://…).
@@ -174,7 +263,25 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
     if (!/^[a-zA-Z0-9 _-]{1,40}$/.test(name)) throw new ControlError("NAME_INVALID", "Name: letters/numbers/space/_/- (max 40)", { status: 400 });
     const initialManifest = readContextManifest(MANIFEST, { allowMissing: false });
     if (getManifestProfileLayers(initialManifest).some((l) => l.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
-    const level = Number.isFinite(+b.level) ? +b.level : 1;
+    // Two ways to say where the new layer sits, never both: `level` is the raw
+    // manifest integer (omitted → 1, unchanged); `position` is a 1-based rank
+    // in the cascade (1 = wins over everything, N+1 = bottom), turned into
+    // levels for the whole list inside the mutation below.
+    if (b.level !== undefined && b.position !== undefined) {
+      throw new ControlError("LEVEL_AND_POSITION", "Give either level or position, not both", { status: 400 });
+    }
+    let level = 1;
+    if (b.level !== undefined) {
+      const parsed = parseLevel(b.level);
+      if (parsed === null) throw new ControlError("LEVEL_INVALID", "level must be an integer", { status: 400 });
+      level = parsed;
+    }
+    let position = null;
+    if (b.position !== undefined) {
+      position = parseLevel(b.position);
+      if (position === null || position < 1) throw new ControlError("POSITION_INVALID", "position must be an integer of 1 or more (1 = top of the cascade)", { status: 400 });
+      level = null; // assigned by position; not in the existing-level pool
+    }
 
     let layer;
     let folder = null;
@@ -245,21 +352,119 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
       throw new ControlError("KIND_UNKNOWN", `Unknown source kind: ${b.kind}`, { status: 400 });
     }
 
-    mutateContextManifest(MANIFEST, (manifest) => {
+    const placed = mutateContextManifest(MANIFEST, (manifest) => {
       const layers = getManifestProfileLayers(manifest);
       if (layers.some((candidate) => candidate.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
+      let order = null;
+      if (position !== null) {
+        // Insert into the CURRENT cascade order (by level, not array order —
+        // position is a rank), clamped to the bottom, then re-level the whole
+        // list. Existing layers get renumbered N..1 around the newcomer.
+        const ordered = cascadeOrder(layers);
+        ordered.splice(Math.min(position, ordered.length + 1) - 1, 0, layer);
+        order = applyCascadeLevels(manifest, ordered);
+      }
       layers.push(layer);
       // A synced source whose machine-local path/command was scrubbed waits in
       // pendingSources. Configuring that source locally promotes it to a runnable
       // layer without leaving a duplicate metadata-only record behind.
       removePendingSource(defaultProfileContainer(manifest), name);
+      return order;
     }, { allowMissing: false, allowTransitional: true });
     return {
       ok: true,
       added: name,
+      level: layer.level,
       indexing: true, // counts arrive via /api/graph as the index lands
+      ...(placed ? { order: placed } : {}),
       ...(folder ? { hasDocuments: folder.found, scanComplete: folder.complete } : {}),
     };
+  }
+
+  // Write the levels assignCascadeLevels chose onto the layer objects, keeping
+  // every Pack assignment in step. Returns the [{name, level}] list.
+  function applyCascadeLevels(manifest, orderedLayers) {
+    const assigned = assignCascadeLevels(orderedLayers);
+    orderedLayers.forEach((layer, index) => {
+      layer.level = assigned[index].level;
+      syncPackAssignmentLevel(manifest, layer);
+    });
+    return assigned;
+  }
+
+  /**
+   * Reorder the cascade: `order` is the complete list of the default
+   * profile's source names, first wins. Levels are reassigned by
+   * assignCascadeLevels (a permutation of the existing distinct levels when
+   * there are enough of them, N..1 otherwise) and every Pack assignment moves
+   * with its layer, so the strict write cannot refuse on pack-layer-drift.
+   *
+   * Refused, not worked around, when a quarantined layer exists in the
+   * profile: a reorder is a whole-cascade statement, and a layer the read path
+   * had to lift out has no rank to give it — the same 409 shape removeSources
+   * answers with, listing what blocks it. Re-leveling never re-indexes:
+   * `level` is a presentation field outside the index identity.
+   */
+  function reorderSources(body) {
+    // A `null` body parses fine and would otherwise be a TypeError (500) at
+    // the destructure; it is just another shape of "no order given".
+    const order = body && typeof body === "object" ? body.order : undefined;
+    if (!Array.isArray(order) || order.some((name) => typeof name !== "string" || !name)) {
+      throw new ControlError("ORDER_INVALID", "order must be an array of source names", { status: 400, detail: { unknown: [], missing: [], duplicate: [] } });
+    }
+    const duplicate = [...new Set(order.filter((name, index) => order.indexOf(name) !== index))];
+    if (duplicate.length) {
+      throw new ControlError("ORDER_INVALID", `order names a source more than once: ${duplicate.join(", ")}`, { status: 400, detail: { unknown: [], missing: [], duplicate } });
+    }
+    // Tolerant read first: the strict read inside the mutation would throw the
+    // engine's raw validation error at a manifest holding a bad layer, and the
+    // caller is owed the same "which rows block this" answer removal gives.
+    refuseIfQuarantined();
+    let assigned;
+    try {
+      assigned = mutateContextManifest(MANIFEST, (manifest) => {
+        const layers = getManifestProfileLayers(manifest);
+        const names = new Set(layers.map((layer) => layer.name));
+        const unknown = order.filter((name) => !names.has(name));
+        const missing = layers.map((layer) => layer.name).filter((name) => !order.includes(name));
+        if (unknown.length || missing.length) {
+          const parts = [];
+          if (unknown.length) parts.push(`unknown: ${unknown.join(", ")}`);
+          if (missing.length) parts.push(`missing: ${missing.join(", ")}`);
+          throw new ControlError("ORDER_INVALID", `order must name every source in the profile exactly once (${parts.join("; ")})`, { status: 400, detail: { unknown, missing, duplicate: [] } });
+        }
+        const byName = new Map(layers.map((layer) => [layer.name, layer]));
+        return applyCascadeLevels(manifest, order.map((name) => byName.get(name)));
+      }, { allowMissing: false, allowTransitional: true });
+    } catch (err) {
+      if (err instanceof ControlError || err.status) throw err;
+      // The strict read (or the strict write) refused the manifest for a
+      // reason no default-profile row explains — a bad layer in ANOTHER
+      // profile, two layers sharing a name, a dangling Pack — or a row went
+      // bad between the tolerant read above and the lock. Neither is an
+      // internal failure; say which, the way removal and settings do.
+      refuseIfQuarantined();
+      throw new ControlError("MANIFEST_INVALID", `Nothing was reordered: the manifest is invalid in a way this operation cannot work around. Edit ${MANIFEST} by hand — ${err.message}`, { status: 409 });
+    }
+    return { ok: true, order: assigned };
+  }
+
+  // The reorder's 409: every quarantined row in the default profile, listed
+  // by the name the graph shows it under (like REMOVE_BLOCKED). A read that
+  // cannot even quarantine (whole-manifest failure) throws the engine's own
+  // error, which the caller maps to MANIFEST_INVALID.
+  function refuseIfQuarantined() {
+    let quarantined;
+    try {
+      ({ quarantined } = readContextManifestQuarantined(MANIFEST, { allowMissing: false }));
+    } catch (err) {
+      throw new ControlError("MANIFEST_INVALID", `Nothing was reordered: the manifest is invalid in a way this operation cannot work around. Edit ${MANIFEST} by hand — ${err.message}`, { status: 409 });
+    }
+    const blocking = quarantined.filter((entry) => entry.profileId === "default");
+    if (blocking.length) {
+      const listed = blocking.map((entry) => `"${entry.name}" (${entry.error})`).join("; ");
+      throw new ControlError("REORDER_BLOCKED", `Nothing was reordered: ${blocking.length} source${blocking.length === 1 ? " is" : "s are"} invalid and cannot be given a position. Remove ${blocking.length === 1 ? "it" : "them"} first — ${listed}`, { status: 409, detail: { blocking: blocking.map((entry) => ({ name: entry.name, error: entry.error })) } });
+    }
   }
 
   /**
@@ -379,6 +584,17 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
     // cheap probe the add path uses — folder-missing and not-a-folder fail the
     // request, size never does. The kind is re-checked inside the mutation
     // below; this read only decides which extensions the probe looks for.
+    // `level` is validated before anything is probed or locked: a JSON number
+    // or numeric string that is a safe integer, or the request is refused.
+    // (Was `Number.isFinite(+b.level)`, which turned `null` into level 0 and
+    // silently ignored "abc".) No range check and duplicates stay legal — a
+    // hand-authored manifest may hold either; the reorder op is the path that
+    // guarantees distinct levels.
+    let nextLevel;
+    if (b.level !== undefined) {
+      nextLevel = parseLevel(b.level);
+      if (nextLevel === null) throw new ControlError("LEVEL_INVALID", "level must be an integer", { status: 400 });
+    }
     let nextPath;
     let probed = null;
     if (b.path !== undefined) {
@@ -403,7 +619,12 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
         if (refusal) throw new ControlError("PATCH_REFUSED", refusal, { status: 400 });
         layer.path = nextPath;
       }
-      if (b.level !== undefined && Number.isFinite(+b.level)) layer.level = +b.level;
+      if (nextLevel !== undefined) {
+        layer.level = nextLevel;
+        // A Pack layer's level lives in two places; moving one without the
+        // other makes the strict write refuse this very patch.
+        syncPackAssignmentLevel(manifest, layer);
+      }
       if (b.newName && b.newName !== b.name) {
         if (!/^[a-zA-Z0-9 _-]{1,40}$/.test(b.newName)) throw new ControlError("NAME_INVALID", "Invalid new name", { status: 400 });
         if (layers.some((candidate) => candidate.name === b.newName)) throw new ControlError("NAME_EXISTS", "Name already exists", { status: 409 });
@@ -502,5 +723,5 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
     }
   }
 
-  return { addSource, removeSources, patchSource, gitCloneOrPull };
+  return { addSource, removeSources, patchSource, reorderSources, gitCloneOrPull };
 }

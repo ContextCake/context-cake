@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { progressLabel, progressPercent } from '../api'
-import { layerName, layers } from '../data'
+import { computeCascadeOrder, rankLabel, winsOverHint } from '../cascade-order'
+import { layerName } from '../data'
 import { useStoreData } from '../store'
 import { LayerChip } from '../components/LayerChip'
 import { EmptyState, StatusBadge, Button } from '../components/ui'
@@ -8,6 +9,12 @@ import { AgentIcon } from '../components/icons'
 
 function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
   const { mode, setView, signals, conflicts, sources, concepts, activity, loadErrors } = useStoreData()
+  // The real cascade, in the order it resolves: position 1 wins. Both modes
+  // read the sources the store holds — the demo bundle's trio is a real
+  // cascade too, not a static blurb to fall back to. A quarantined entry is
+  // not in the cascade (nothing was built for it), so it gets no position;
+  // Needs Attention and Source health still show it.
+  const cascade = computeCascadeOrder(sources.filter((source) => !source.quarantined))
   const queue = signals.filter((signal) => signal.route === 'review_required')
   const openConflicts = conflicts.filter((conflict) => ['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'].includes(conflict.discrepancyStatus ?? (conflict.status === 'open' ? 'needs_review' : 'resolved')))
   const failedSources = sources.filter((source) => source.status === 'error' || source.status === 'degraded')
@@ -50,21 +57,23 @@ function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
         {metrics.map((metric) => <button key={metric.label} type="button" onClick={() => setView(metric.view)}><strong>{metric.value}</strong><span>{metric.label}</span></button>)}
       </nav>
 
-      <section className="cc-workspace-section" aria-labelledby="cc-cascade-summary">
-        <div className="cc-section-heading"><div><h2 id="cc-cascade-summary">Cascade summary</h2><p>Higher layers win only for the sections they define; everything else is inherited.</p></div><button type="button" onClick={() => setView('canvas')}>Open Cascade</button></div>
-        <div className="cc-cascade-summary">{[...layers].sort((a, b) => b.level - a.level).map((layer) => {
-          const count = concepts.filter((concept) => concept.layers.includes(layer.id)).length
-          // Real levels and source names behind this lane (F3), not the static
-          // trio: a level-1 source that ranks into 'team' should say so here
-          // too, not just on the Canvas. Demo mode's sources are already the
-          // canonical company/team/personal trio, so this falls back to the
-          // static blurb there unchanged.
-          const rows = mode === 'demo' ? [] : sources.filter((source) => source.layer === layer.id)
-          const levels = [...new Set(rows.map((row) => row.level).filter((level): level is number => typeof level === 'number'))].sort((a, b) => a - b)
-          const levelLabel = levels.length ? levels.join('/') : String(layer.level)
-          const sourceLabel = rows.length ? rows.map((row) => row.name).join(', ') : layer.sub
-          return <div key={layer.id}><span className="cc-cascade-level">{levelLabel}</span><LayerChip id={layer.id} /><span>{sourceLabel}</span><strong>{count} concept{count === 1 ? '' : 's'}</strong></div>
-        })}</div>
+      <section className="cc-workspace-section" aria-labelledby="cc-cascade-order">
+        <div className="cc-section-heading"><div><h2 id="cc-cascade-order">Cascade order</h2><p>Position 1 wins wherever it speaks; everything else is inherited from the layers below.</p></div><button type="button" onClick={() => setView('sources')}>{mode === 'live' ? 'Reorder in Sources' : 'Open Sources'}</button></div>
+        {cascade.length === 0 ? <EmptyState title={sources.length ? 'No working sources' : 'No sources yet'}>{sources.length ? 'Every entry in the manifest is invalid — open Sources to remove them.' : 'Add a folder, repository, or MCP server to begin.'}</EmptyState> : (
+          <ol className="cc-cascade-order" aria-label="Cascade order">{cascade.map((entry) => {
+            // The engine's own count for this source, not a lane tally: two
+            // sources sharing a lane are two rows here, each with its own number.
+            const count = entry.conceptCount
+            return (
+              <li key={entry.name}>
+                <span className="cc-cascade-rank" aria-label={`Position ${entry.rank}${entry.tied ? ', tied' : ''}`}>{rankLabel(entry)}</span>
+                <LayerChip id={entry.layer} />
+                <span><strong>{entry.name}</strong><small>{entry.sourceKind} · {winsOverHint(entry, cascade)}</small></span>
+                <span>{count} concept{count === 1 ? '' : 's'}</span>
+              </li>
+            )
+          })}</ol>
+        )}
       </section>
 
       <section className="cc-workspace-section" aria-labelledby="cc-source-health">

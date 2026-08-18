@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { C, css, lc, MONO, type LayerId } from '../theme'
 import { layerLevel, layerName, layers, type Concept, type Conflict } from '../data'
+import { computeCascadeOrder } from '../cascade-order'
 import { LayerChip } from '../components/LayerChip'
 import { ConceptDetail } from '../components/ConceptDetail'
 import { ConflictQuickResolve } from '../components/ConflictQuickResolve'
@@ -686,14 +687,17 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
   // Full counts, not the capped subset — the lane header's "N concepts" stays
   // an honest visible total even while the canvas only renders some of them.
   const laneCounts = useMemo(() => countByLane(visibleConcepts), [visibleConcepts])
-  // Real (source name, level) pairs behind each lane, for honest lane headers
-  // (Fix F3): demo mode's sources are already the canonical company/team/
-  // personal trio, so this reduces to the static labels there — the fallback
-  // below only changes what a live, non-canonical cascade renders.
+  // Real (source name, cascade rank) pairs behind each lane, for honest lane
+  // headers (Fix F3): demo mode's sources are already the canonical company/
+  // team/personal trio, so this reduces to the static labels there — the
+  // fallback below only changes what a live, non-canonical cascade renders.
+  // Rank, not level: the badge shows the position the user sees everywhere
+  // else (#1 wins), never the manifest integer.
   const laneSourceRows = useMemo(() => {
-    const rows: Record<LayerId, { name: string; level: number }[]> = { company: [], team: [], personal: [] }
+    const rows: Record<LayerId, { name: string; rank: number }[]> = { company: [], team: [], personal: [] }
     if (mode === 'demo') return rows
-    for (const s of sources) rows[s.layer].push({ name: s.name, level: s.level })
+    // A quarantined entry contributes nothing and holds no position.
+    for (const s of computeCascadeOrder(sources.filter((source) => !source.quarantined))) rows[s.layer].push({ name: s.name, rank: s.rank })
     return rows
   }, [sources, mode])
 
@@ -959,24 +963,31 @@ function CanvasInner({ keyboardSuspended = false }: { keyboardSuspended?: boolea
         style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: wideInspector && openConceptObj ? 360 : 0, cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none' }}
       >
         <div style={{ position: 'absolute', top: 0, left: 0, transformOrigin: '0 0', transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`, width: worldW, height: worldH }}>
-          {/* lane backgrounds + labels — real levels and source names behind
-              each lane, not the static trio (F3): a level-1 source that ranks
-              into 'team' should say so, and two sources sharing a lane should
-              both be named rather than only the lane's generic blurb. */}
-          {LANE_ORDER.map((id) => {
+          {/* lane backgrounds + labels — real cascade positions and source
+              names behind each lane, not the static trio (F3): a source that
+              ranks into 'team' should say so, and two sources sharing a lane
+              should both be named rather than only the lane's generic blurb.
+              The round badge is the position (#1 wins) — the same number the
+              Overview and Sources rows show — never the manifest level. */}
+          {LANE_ORDER.map((id, laneIndex) => {
             const L = layers.find((l) => l.id === id)!
             const col = lc(id)
             const rows = laneSourceRows[id]
-            const levels = [...new Set(rows.map((r) => r.level))].sort((a, b) => a - b)
-            const conventional = rows.some((r) => r.name === id)
-            const badgeText = levels.length ? levels.join('/') : String(L.level)
-            const primary = conventional || rows.length === 0 ? L.name : `L${levels.join('/')}`
+            const ranks = [...new Set(rows.map((r) => r.rank))].sort((a, b) => a - b)
+            // Several distinct positions can share the company lane (ranks 3
+            // and below all land there); a range keeps the pill legible. The
+            // demo trio's lanes are their positions; a live lane with nothing
+            // in it has no position to claim.
+            const badgeText = ranks.length === 0
+              ? (mode === 'demo' ? `#${laneIndex + 1}` : '—')
+              : ranks.length === 1 ? `#${ranks[0]}` : `#${ranks[0]}–${ranks[ranks.length - 1]}`
+            const primary = L.name
             const detail = rows.length ? rows.map((r) => r.name).join(', ') : L.members
             return (
               <div key={id} style={{ position: 'absolute', left: 0, top: lanes[id].top, width: worldW, height: lanes[id].height }}>
                 <div style={css(`position:absolute; inset:0; background:var(--cc-lane-bg); border:1px solid var(--cc-lane-line); border-radius:16px;`)} />
                 <div style={css(`position:absolute; left:18px; top:14px; display:flex; align-items:center; gap:10px;`)}>
-                  <span style={css(`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${col.fill}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:12px;`)}>{badgeText}</span>
+                  <span style={css(`display:grid; place-items:center; min-width:26px; height:26px; padding:0 7px; box-sizing:border-box; border-radius:999px; background:${col.fill}; color:${col.text}; font-family:${MONO}; font-weight:600; font-size:11px; white-space:nowrap;`)}>{badgeText}</span>
                   <div style={{ lineHeight: 1.15 }}>
                     <div style={css(`font-size:13px; font-weight:600; color:${col.text};`)}>{primary}</div>
                     <div style={css(`font-size:10.5px; color:${C.caption}; font-family:${MONO};`)}>{detail} · {laneCounts[id]} concept{laneCounts[id] === 1 ? '' : 's'}</div>

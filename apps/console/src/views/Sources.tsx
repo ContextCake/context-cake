@@ -1,16 +1,25 @@
-// Sources view: manage the layers feeding the cascade — rename, re-level,
+// Sources view: manage the layers feeding the cascade — rename, reposition,
 // repoint, sync, and remove ride the engine's source API (PATCH/DELETE
-// /api/sources, POST /api/sources/sync). A folder-backed source can be pointed
-// at a different folder in place; a repo or an MCP command genuinely can't be,
-// and the UI says which case you are in rather than telling everyone to remove
-// and re-add. Errors render verbatim — including the engine's pack-invariant
-// messages — never paraphrased into vagueness.
+// /api/sources, PUT /api/sources/order, POST /api/sources/sync). A
+// folder-backed source can be pointed at a different folder in place; a repo
+// or an MCP command genuinely can't be, and the UI says which case you are in
+// rather than telling everyone to remove and re-add. Errors render verbatim —
+// including the engine's pack-invariant messages — never paraphrased into
+// vagueness.
+//
+// Precedence is shown as a POSITION (#1 wins), never as the manifest's level
+// integer — see cascade-order.ts. The one exception is the "Manifest level"
+// metadata row, kept for people who edit manifest.json by hand. Reorder mode
+// (live only) commits every move immediately: one PUT, one reload, no pending
+// local order that could disagree with what the engine holds.
 // Demo mode shows the same rows read-only.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { apiFetch, progressLabel, progressPercent } from '../api'
+import { computeCascadeOrder, moveTo, rankLabel, type CascadeOrderEntry } from '../cascade-order'
+import { CascadePosition } from '../components/CascadePosition'
+import { ArrowDownIcon, ArrowUpIcon, GripIcon } from '../components/icons'
 import { LayerChip } from '../components/LayerChip'
-import { LevelStepper } from '../components/SetupWizard'
 import { useDetailSurface } from '../components/useDetailSurface'
 import { filesRevalidation, useLayerFiles } from '../layer-files'
 import { useReveal } from '../reveal'
@@ -36,15 +45,32 @@ const statusColor = (s: Source['status']) =>
  *  the row text and the status word beside it do. */
 
 /**
+ * A source with its cascade position attached — every row and panel below
+ * reads one of these. A quarantined entry has no position (`rank: null`): it
+ * takes no part in resolution, and the engine will not give it one either.
+ */
+type RankedSource = CascadeOrderEntry<Source> | (Source & { rank: null; tied: false })
+
+/** The chip/row wording for a position: `#1 in cascade`, or the honest absence of one. */
+function positionText(s: RankedSource): string {
+  return s.rank === null ? 'no position — invalid entry' : `${rankLabel(s)} in cascade`
+}
+
+/**
  * What a row says under the name. A source mid-index has no concept count worth
  * quoting — "0 concepts" next to a green "synced" was the app claiming to be
  * finished with work it had barely started.
  */
-function rowSummary(s: Source): string {
-  const base = `${s.sourceKind} · level ${s.level}`
+function rowSummary(s: RankedSource): string {
+  const base = `${s.sourceKind} · ${positionText(s)}`
   if (s.status === 'indexing') return `${base} · ${progressLabel(s.indexing)}`
   const count = `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'}`
   return `${base} · ${count}${s.indexing?.refreshing ? ' · refreshing' : ''}`
+}
+
+/** Two orders are the same list — used to notice when the store has caught up with a reorder. */
+function sameOrder(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((name, index) => name === b[index])
 }
 
 /**
@@ -202,7 +228,7 @@ function filesSummary(source: Source, entry: LayerFiles | undefined, known: bool
 }
 
 export function Sources({ onAddSource }: { onAddSource?: () => void }) {
-  const { mode, sources, reload, reloadKey, openFilesScope, indexingControl, canControlIndexing } = useStoreData()
+  const { mode, sources, reload, reloadKey, openFilesScope, indexingControl, canControlIndexing, reorderSources } = useStoreData()
   const { query } = useStoreInput()
   const live = mode === 'live'
   // The same listing the Files view builds its tree from: a source's file count
@@ -218,7 +244,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   const [panel, setPanel] = useState<Panel>(null)
   const [editName, setEditName] = useState('')
   const [editPath, setEditPath] = useState('')
-  const [editLevel, setEditLevel] = useState(0)
+  const [editPosition, setEditPosition] = useState(1)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [syncing, setSyncing] = useState<string | null>(null)
@@ -238,7 +264,22 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   const detail = useDetailSurface<HTMLDivElement, HTMLElement>(detailOpen)
 
   const normalizedQuery = (query ?? '').trim().toLowerCase()
-  const ordered = [...sources]
+  // Every invalid manifest entry, off the unfiltered list: what a repair has to
+  // clear is a property of the manifest, not of what the search box is showing.
+  const invalid = useMemo(() => sources.filter((source) => source.quarantined), [sources])
+  // Cascade order — rank ascending, ties by name (code-point, matching the
+  // engine) — is the one order this view uses, so the position a row shows,
+  // the list the drawer's select offers and the list a reorder sends agree.
+  // Quarantined entries are not in it: they contribute nothing to resolution
+  // and the engine refuses to give them a position, so ranking them would put
+  // a "#2 (tied)" on a row that is not in the cascade at all. They stay in the
+  // navigator (removal is the repair) — listed last, without a position.
+  const cascade = useMemo(() => computeCascadeOrder(sources.filter((source) => !source.quarantined)), [sources])
+  const rows = useMemo<RankedSource[]>(
+    () => [...cascade, ...invalid.map((source): RankedSource => ({ ...source, rank: null, tied: false }))],
+    [cascade, invalid],
+  )
+  const ordered = rows
     .filter((source) => !normalizedQuery || [
       source.name,
       source.layer,
@@ -247,11 +288,6 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
       source.error,
       source.origin,
     ].some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery)))
-    .sort((a, b) => b.level - a.level || a.name.localeCompare(b.name))
-
-  // Every invalid manifest entry, off the unfiltered list: what a repair has to
-  // clear is a property of the manifest, not of what the search box is showing.
-  const invalid = sources.filter((source) => source.quarantined)
   // The invalid entries a removal of THIS row has to take with it. Any write
   // rewrites the whole manifest and the engine only saves one that validates,
   // so an invalid entry blocks removing a perfectly healthy source just as
@@ -279,16 +315,29 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     return () => window.removeEventListener('contextcake:close-detail', close)
   }, [])
 
+  // The full cascade as a name list — exactly what PUT /api/sources/order
+  // takes — and one source's 1-based position in it.
+  const orderNames = useMemo(() => cascade.map((source) => source.name), [cascade])
+  const positionOf = (name: string) => orderNames.indexOf(name) + 1
+
   const openEdit = (s: Source) => {
     setPanel({ name: s.name, kind: 'edit' })
     setEditName(s.name)
     setEditPath(filesByLayer.get(s.name)?.root ?? '')
-    setEditLevel(s.level)
+    setEditPosition(positionOf(s.name))
     setErr(null)
   }
   const openRemove = (s: Source) => { setPanel({ name: s.name, kind: 'remove' }); setErr(null) }
   const closePanel = () => { setPanel(null); setErr(null) }
 
+  /**
+   * Save the drawer: rename/repoint go through PATCH, a position change
+   * through the reorder op — two writes, in that order, so the reorder can
+   * name the source by its NEW name. A failure says which of the two it was:
+   * a rename that landed with a position that did not is a different state
+   * from nothing having happened, and the user has to know which one they
+   * are looking at.
+   */
   const saveEdit = async (s: Source) => {
     const newName = editName.trim()
     if (!newName) { setErr('Give this source a short name.'); return }
@@ -296,19 +345,30 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     const newPath = editPath.trim()
     const body: Record<string, unknown> = { name: s.name }
     if (newName !== s.name) body.newName = newName
-    if (editLevel !== s.level) body.level = editLevel
     // Only a real move is sent. An untouched field must not re-key the index
     // entry and put a settled source back through a full read for nothing.
     if (canEditPath(s) && newPath && newPath !== currentRoot) body.path = newPath
-    if (body.newName === undefined && body.level === undefined && body.path === undefined) { closePanel(); return }
+    const patching = body.newName !== undefined || body.path !== undefined
+    const currentPosition = positionOf(s.name)
+    const repositioning = editPosition !== currentPosition
+    if (!patching && !repositioning) { closePanel(); return }
     setBusy(true)
     setErr(null)
+    let patched = false
     try {
-      const out = await callApi('/api/sources', {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+      let out: Record<string, unknown> = {}
+      if (patching) {
+        out = await callApi('/api/sources', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        patched = true
+      }
+      if (repositioning) {
+        const renamed = orderNames.map((name) => (name === s.name ? newName : name))
+        await reorderSources(moveTo(renamed, newName, editPosition - 1))
+      }
       closePanel()
       // A move means a re-index, and the row is about to say "indexing" on its
       // own. Naming the cause first is the difference between progress and a
@@ -320,14 +380,166 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
             ? 'Pointed at the new folder — no documents spotted there yet, so it may come back empty.'
             : 'Pointed at the new folder — reading it now.',
         })
+      } else if (repositioning) {
+        setNotice({ name: newName, text: `Moved to position ${editPosition} of ${orderNames.length}.` })
       }
       reload()
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      const message = e instanceof Error ? e.message : String(e)
+      if (patched) {
+        // The rename/repoint is already on disk; only the position is not.
+        // Refresh so the panel shows the source under its new name — and
+        // follow it there: the drawer and the error live on the row's name,
+        // and a reload that renames the row underneath them would otherwise
+        // close the drawer with the only copy of the message. The engine's
+        // own words stay verbatim.
+        setPanel({ name: newName, kind: 'edit' })
+        setSelectedName(newName)
+        reload()
+        setErr(`${body.newName !== undefined ? 'Renamed' : 'Folder updated'}, but the position change failed — ${message}`)
+      } else if (patching && repositioning) {
+        setErr(`Nothing was changed — ${message}`)
+      } else {
+        setErr(message)
+      }
     } finally {
       setBusy(false)
     }
   }
+
+  // ---- Reorder mode ----------------------------------------------------------
+  // Live only, and off while any manifest entry is quarantined: the engine
+  // refuses a reorder outright (409 REORDER_BLOCKED) because an invalid entry
+  // has no position to be given, so the toggle says so up front instead of
+  // letting every drag fail. Each move is committed as it happens: one PUT
+  // with the complete new order, then reload(). The list is always drawn from
+  // the store — never from a local copy that could drift from the manifest.
+  const [reordering, setReordering] = useState(false)
+  // The move in flight, and the order the engine accepted that the store has
+  // not caught up with yet (reload() is asynchronous). Both gate the controls;
+  // neither is used to DRAW the list. Without the second, two quick presses of
+  // "Move up" would compute the second move from the pre-move order and send
+  // the same list twice — the source moves once and the user sees one press
+  // swallowed. `awaiting` is cleared when the store's order matches it, or by
+  // a timeout if some other writer got there first.
+  const [movingName, setMovingName] = useState<string | null>(null)
+  // `next` is the order the engine accepted; `prev` the order the move was
+  // computed from, so a stale store can be told apart from a fresh one that
+  // some other writer changed.
+  const [awaiting, setAwaiting] = useState<{ next: string[]; prev: string[] } | null>(null)
+  const [reorderErr, setReorderErr] = useState<string | null>(null)
+  const [announcement, setAnnouncement] = useState('')
+  const [dragName, setDragName] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ name: string; edge: 'before' | 'after' } | null>(null)
+  const moveButtons = useRef(new Map<string, { up: HTMLButtonElement | null; down: HTMLButtonElement | null }>())
+  // The arrow a keyboard move was made with, to be re-focused once the store
+  // has caught up. Focus has to be handled explicitly: a row that reaches an
+  // end has that arrow disabled, and a disabled control drops focus to the
+  // document — the one thing a keyboard user cannot recover from by feel.
+  const pendingFocus = useRef<{ name: string; which: 'up' | 'down' } | null>(null)
+  const canReorder = live && invalid.length === 0 && sources.length > 1
+  const reorderLocked = movingName !== null || awaiting !== null
+
+  useEffect(() => {
+    if (!awaiting) return
+    // Caught up — or moved on: a list that is neither the old order nor the
+    // accepted one came from another writer, and it is fresh, so it unlocks.
+    if (!sameOrder(orderNames, awaiting.prev) || sameOrder(orderNames, awaiting.next)) { setAwaiting(null); return }
+    // Still the pre-move list after a while: the reload after the PUT did not
+    // land (the refresh banner says why). Unlocking over the OLD list would let
+    // the next move be computed from it and silently undo the one the engine
+    // already holds, so the lock stays and another refresh is asked for.
+    const timer = setTimeout(() => {
+      setReorderErr('Saved, but the list could not be refreshed yet — retrying. Leave Reorder mode to work from what is shown.')
+      reload()
+    }, 6_000)
+    return () => clearTimeout(timer)
+  }, [awaiting, orderNames, reload])
+
+  useEffect(() => {
+    if (reorderLocked || !pendingFocus.current) return
+    const { name, which } = pendingFocus.current
+    pendingFocus.current = null
+    const refs = moveButtons.current.get(name)
+    if (!refs) return
+    // The arrow that was pressed, unless the row reached an end and it is
+    // now disabled — then the row's other arrow, which is still a way onward.
+    const wanted = refs[which]
+    const target = wanted && !wanted.disabled ? wanted : which === 'up' ? refs.down : refs.up
+    target?.focus()
+  }, [reorderLocked])
+
+  // Leaving the mode (or losing the right to it) drops every transient bit
+  // of drag state, so a half-finished drag can't leak into the ordinary list.
+  useEffect(() => {
+    if (reordering && canReorder) return
+    setReordering(false)
+    setDragName(null)
+    setDropTarget(null)
+  }, [canReorder, reordering])
+
+  const commitMove = async (name: string, toIndex: number, via?: 'up' | 'down') => {
+    if (reorderLocked) return
+    const next = moveTo(orderNames, name, toIndex)
+    if (sameOrder(next, orderNames)) return
+    const position = next.indexOf(name) + 1
+    setMovingName(name)
+    setReorderErr(null)
+    if (via) pendingFocus.current = { name, which: via }
+    try {
+      await reorderSources(next)
+      setAwaiting({ next, prev: orderNames })
+      setAnnouncement(`Moved ${name} to position ${position} of ${next.length}`)
+      reload()
+    } catch (e) {
+      pendingFocus.current = null
+      setReorderErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setMovingName(null)
+    }
+  }
+
+  const registerMoveButton = (name: string, which: 'up' | 'down') => (el: HTMLButtonElement | null) => {
+    const entry = moveButtons.current.get(name) ?? { up: null, down: null }
+    entry[which] = el
+    moveButtons.current.set(name, entry)
+  }
+
+  const onRowDragStart = (name: string) => (event: React.DragEvent<HTMLLIElement>) => {
+    if (reorderLocked) { event.preventDefault(); return }
+    // text/plain so the same drag reads sensibly anywhere else it lands; the
+    // state copy is for browsers that withhold dataTransfer until drop.
+    event.dataTransfer.setData('text/plain', name)
+    event.dataTransfer.effectAllowed = 'move'
+    setDragName(name)
+  }
+  const onRowDragOver = (name: string) => (event: React.DragEvent<HTMLLIElement>) => {
+    if (reorderLocked || !dragName) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    if (name === dragName) { setDropTarget(null); return }
+    // Before or after this row, by where the pointer is inside it. Everything
+    // is relative to the row's own box, so a scrolled list reads the same.
+    const rect = event.currentTarget.getBoundingClientRect()
+    const edge = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setDropTarget((current) => (current?.name === name && current.edge === edge ? current : { name, edge }))
+  }
+  const onRowDrop = (name: string) => (event: React.DragEvent<HTMLLIElement>) => {
+    event.preventDefault()
+    const dragged = event.dataTransfer.getData('text/plain') || dragName
+    const edge = dropTarget?.name === name ? dropTarget.edge : 'after'
+    setDragName(null)
+    setDropTarget(null)
+    if (!dragged || dragged === name) return
+    const from = orderNames.indexOf(dragged)
+    const at = orderNames.indexOf(name)
+    if (from === -1 || at === -1) return
+    // Where `dragged` lands once it has been lifted out of the list.
+    let to = edge === 'before' ? at : at + 1
+    if (from < to) to -= 1
+    void commitMove(dragged, to)
+  }
+  const endDrag = () => { setDragName(null); setDropTarget(null) }
 
   // A removal carries the invalid entries with it, and the panel names them
   // before the click. The engine will only persist a manifest that validates,
@@ -371,24 +583,132 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     </div>
   )
 
-  if (ordered.length === 0) return <div className="cc-sources-empty"><div><h2>No matching sources</h2><p>Try a source name, layer, kind, status, repository, or error message.</p></div></div>
+  // The search filter is ignored while reordering: a position only means
+  // something against the whole cascade, and moving a row "up" past sources
+  // the filter had hidden would be a move the user could not see.
+  if (ordered.length === 0 && !reordering) return <div className="cc-sources-empty"><div><h2>No matching sources</h2><p>Try a source name, layer, kind, status, repository, or error message.</p></div></div>
+
+  const reorderTitle = !live
+    ? undefined
+    : invalid.length > 0
+      ? `Remove the invalid ${invalid.length === 1 ? 'entry' : 'entries'} first — the cascade cannot give ${invalid.length === 1 ? 'it' : 'them'} a position: ${invalid.map((source) => source.name).join(', ')}`
+      : sources.length < 2
+        ? 'Only one source — nothing to reorder'
+        : reordering ? 'Back to the source list' : 'Drag sources into the order they should win in'
 
   return (
     <div className="cc-sources-workspace">
       <div style={css('display:flex; align-items:center; justify-content:space-between; gap:12px;')}>
         <p style={css(`margin:0; font-size:12.5px; line-height:1.5; color:${C.caption};`)}>
-          {live
-            ? 'Select a source to inspect health, metadata, and available actions.'
-            : 'Demo data is read-only. Source management needs the live engine.'}
+          {!live
+            ? 'Demo data is read-only. Source management needs the live engine.'
+            : reordering
+              ? 'Drag a source, or use its arrows. Position 1 wins wherever it speaks. Each move saves right away.'
+              : invalid.length > 0
+                ? `Select a source to inspect health, metadata, and available actions. Reordering is off until the invalid ${invalid.length === 1 ? 'entry is' : 'entries are'} removed.`
+                : sources.length < 2
+                  ? 'Select a source to inspect health, metadata, and available actions. Add a second source to choose an order.'
+                  : 'Select a source to inspect health, metadata, and available actions.'}
         </p>
-        {live && onAddSource && (
-          <button type="button" className="cc-h-tealfill2" style={{ ...btnSmallPrimary(), flex: '0 0 auto' }} onClick={onAddSource}>
-            Add Source
-          </button>
+        {live && (
+          <div style={css('display:flex; gap:8px; flex:0 0 auto;')}>
+            <button
+              type="button"
+              className="cc-h-bd-strong"
+              aria-pressed={reordering}
+              disabled={!canReorder}
+              title={reorderTitle}
+              style={!canReorder ? btnSmallDisabled() : reordering ? btnSmallPrimary() : btnSmallGhost()}
+              // An open drawer holds a position that a reorder would make
+              // stale, so it closes with the mode switch rather than saving
+              // a slot the list no longer means.
+              onClick={() => { setReordering((on) => !on); setReorderErr(null); setAnnouncement(''); setAwaiting(null); closePanel() }}
+            >{reordering ? 'Done' : 'Reorder'}</button>
+            {onAddSource && (
+              <button type="button" className="cc-h-tealfill2" style={btnSmallPrimary()} onClick={onAddSource}>
+                Add Source
+              </button>
+            )}
+          </div>
         )}
       </div>
 
-      <div ref={detail.containerRef} className="cc-sources-split">
+      {reordering && (
+        <div className="cc-source-reorder">
+          {normalizedQuery && (
+            <p className="cc-source-reorder-note">Showing all {sources.length} sources while reordering — the search filter is off here.</p>
+          )}
+          <ol aria-label="Cascade order" aria-busy={reorderLocked || undefined}>
+            {cascade.map((source, index) => {
+              const first = index === 0
+              const last = index === cascade.length - 1
+              const moving = movingName === source.name
+              const drop = dropTarget?.name === source.name ? dropTarget.edge : undefined
+              return (
+                <li
+                  key={source.name}
+                  draggable={!reorderLocked}
+                  data-dragging={dragName === source.name || undefined}
+                  data-drop={drop}
+                  onDragStart={onRowDragStart(source.name)}
+                  onDragOver={onRowDragOver(source.name)}
+                  onDrop={onRowDrop(source.name)}
+                  onDragEnd={endDrag}
+                  onDragLeave={(event) => {
+                    // Only when the pointer really left the row, not moved onto a child.
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget((current) => (current?.name === source.name ? null : current))
+                  }}
+                >
+                  <span className="cc-source-grip" aria-hidden="true"><GripIcon /></span>
+                  <span className="cc-cascade-rank">{rankLabel(source)}</span>
+                  <span className="cc-source-reorder-body">
+                    <strong>{source.name}</strong>
+                    <small>{moving ? 'Saving…' : `${source.sourceKind} · ${source.status === 'indexing' ? progressLabel(source.indexing) : `${source.conceptCount} concept${source.conceptCount === 1 ? '' : 's'}`}`}</small>
+                  </span>
+                  {/* Only an END disables an arrow for real. While a move is
+                      saving the arrows are held with aria-disabled and the
+                      click guard in commitMove — a real `disabled` on the
+                      button that has focus would throw focus to the document
+                      on every keyboard move. */}
+                  <span className="cc-source-reorder-actions">
+                    <button
+                      ref={registerMoveButton(source.name, 'up')}
+                      type="button"
+                      className="cc-ui-icon-button"
+                      aria-label={`Move ${source.name} up`}
+                      aria-disabled={reorderLocked || undefined}
+                      title={first ? `${source.name} is already at the top` : `Move ${source.name} up to position ${index}`}
+                      disabled={first}
+                      onClick={() => void commitMove(source.name, index - 1, 'up')}
+                    ><ArrowUpIcon /></button>
+                    <button
+                      ref={registerMoveButton(source.name, 'down')}
+                      type="button"
+                      className="cc-ui-icon-button"
+                      aria-label={`Move ${source.name} down`}
+                      aria-disabled={reorderLocked || undefined}
+                      title={last ? `${source.name} is already at the bottom` : `Move ${source.name} down to position ${index + 2}`}
+                      disabled={last}
+                      onClick={() => void commitMove(source.name, index + 1, 'down')}
+                    ><ArrowDownIcon /></button>
+                  </span>
+                </li>
+              )
+            })}
+          </ol>
+          {/* Visible, not screen-reader-only: the moved row lands under a
+              hand or a cursor that is looking at the list, and "position 2 of
+              3" is the confirmation everyone wants, not just a reader. */}
+          <p role="status" aria-live="polite" className="cc-source-reorder-status">{announcement}</p>
+          {reorderErr && (
+            <div role="alert" style={css(`padding:8px 10px; border-radius:8px; background:${C.amberFill}; border:1px solid ${C.amberStrokeE}; font-size:11.5px; line-height:1.5; color:${C.amberText}; overflow-wrap:anywhere;`)}>
+              {reorderErr}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!reordering && <div ref={detail.containerRef} className="cc-sources-split">
         <div className="cc-source-navigator" role="listbox" aria-label="Sources">
           {ordered.map((source, index) => <button key={source.name} type="button" role="option" aria-selected={source.name === selected?.name} onClick={(event) => selectSource(source.name, event.currentTarget)} onKeyDown={(event) => {
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
@@ -412,13 +732,18 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
           const immutable = immutableNote(s)
           return <section ref={detail.panelRef} {...detail.panelProps} className="cc-source-detail" data-open={detailOpen || undefined} aria-label={`Source ${s.name} detail`}>
             <button type="button" className="cc-detail-close" onClick={closeDetail}>Close</button>
-            <div className="cc-source-detail-head"><div><div className="cc-source-title"><span aria-hidden="true" style={{ background: statusColor(s.status) }} /><h2>{s.name}</h2>{s.live && <LiveMarker />}</div><div className="cc-source-chips"><LayerChip id={s.layer} /><span>level {s.level}</span><span>{s.sourceKind}</span><span>{s.status === 'indexing' ? progressLabel(s.indexing) : `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'}`}</span>{(s.warnings ?? 0) > 0 && <span title={`${s.warnings} thing${s.warnings === 1 ? '' : 's'} this source could not read`}>{s.warnings} warning{s.warnings === 1 ? '' : 's'}</span>}</div></div><strong>{s.status}</strong></div>
+            <div className="cc-source-detail-head"><div><div className="cc-source-title"><span aria-hidden="true" style={{ background: statusColor(s.status) }} /><h2>{s.name}</h2>{s.live && <LiveMarker />}</div><div className="cc-source-chips"><LayerChip id={s.layer} /><span>{positionText(s)}</span><span>{s.sourceKind}</span><span>{s.status === 'indexing' ? progressLabel(s.indexing) : `${s.conceptCount} concept${s.conceptCount === 1 ? '' : 's'}`}</span>{(s.warnings ?? 0) > 0 && <span title={`${s.warnings} thing${s.warnings === 1 ? '' : 's'} this source could not read`}>{s.warnings} warning{s.warnings === 1 ? '' : 's'}</span>}</div></div><strong>{s.status}</strong></div>
 
             <ProgressBlock source={s} />
 
             <dl className="cc-source-metadata">
               <div><dt>Last success</dt><dd>{s.lastSuccessAt ? fmtTime(s.lastSuccessAt) : 'Not yet'}</dd></div>
               <div><dt>Last error</dt><dd>{lastErrorSummary(s)}</dd></div>
+              {/* The ONE place the manifest's raw integer shows, for whoever
+                  edits manifest.json by hand: everywhere else the app speaks
+                  in positions (#1 wins). Not for a quarantined entry, whose
+                  level the engine never validated. */}
+              {!s.quarantined && <div><dt>Manifest level</dt><dd style={css(`font-family:${MONO}; color:${C.caption};`)}>{s.level} · higher wins</dd></div>}
               {/* "Not supported for this source kind" would be answering the
                   wrong question on an entry that is not a source at all. */}
               {!s.quarantined && <div><dt>Sync</dt><dd>{canSync(s) ? 'Available' : 'Not supported for this source kind'}</dd></div>}
@@ -519,21 +844,21 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                     onClick={() => void syncNow(s)}
                   >{syncing === s.name ? 'Syncing…' : 'Sync now'}</button>
                 )}
-                {/* Rename/level writes through the strict manifest path, so on
-                    an invalid entry it could only fail. Remove is the one
-                    action that goes anywhere from here. */}
+                {/* Rename/position writes through the strict manifest path,
+                    so on an invalid entry it could only fail. Remove is the
+                    one action that goes anywhere from here. */}
                 {/* The label names the whole panel, folder included. A control
-                    called "Rename / level" over a form that also repoints the
-                    source would hide the very thing this pass added — and the
-                    visible words have to be inside the accessible name. */}
+                    called "Rename / position" over a form that also repoints
+                    the source would hide the very thing that pass added — and
+                    the visible words have to be inside the accessible name. */}
                 {live && !s.quarantined && (
                   <button
                     type="button"
                     className="cc-h-bd-strong"
-                    aria-label={canEditPath(s) ? `Rename, re-level or repoint ${s.name}` : `Rename or re-level ${s.name}`}
+                    aria-label={canEditPath(s) ? `Rename, reposition or repoint ${s.name}` : `Rename or reposition ${s.name}`}
                     style={btnSmallGhost()}
                     onClick={() => openEdit(s)}
-                  >{canEditPath(s) ? 'Rename / level / folder' : 'Rename / level'}</button>
+                  >{canEditPath(s) ? 'Rename / position / folder' : 'Rename / position'}</button>
                 )}
                 {/* The indexing controls (engine-side, session-scoped): a
                     paused source keeps serving its snapshot and reads nothing
@@ -575,19 +900,34 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
 
             {editing && (
               <div style={css(`display:flex; flex-direction:column; gap:10px; padding:12px; border-radius:10px; background:${C.raised}; border:1px solid ${C.line};`)}>
-                <div style={css('display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:start;')}>
-                  <div>
-                    <label htmlFor={`src-edit-name`} style={css(`display:block; font-size:12px; font-weight:600; color:${C.body}; margin-bottom:5px;`)}>Source name</label>
-                    <input
-                      id="src-edit-name"
-                      style={css(`width:100%; box-sizing:border-box; padding:9px 11px; border-radius:8px; border:1px solid ${C.line}; background:${C.surface}; color:${C.ink}; font:inherit; font-size:13px;`)}
-                      value={editName}
-                      onChange={(e) => { setEditName(e.target.value); setErr(null) }}
-                      autoComplete="off"
-                    />
-                  </div>
-                  <LevelStepper id="src-edit-level" value={editLevel} onChange={setEditLevel} />
+                <div>
+                  <label htmlFor={`src-edit-name`} style={css(`display:block; font-size:12px; font-weight:600; color:${C.body}; margin-bottom:5px;`)}>Source name</label>
+                  <input
+                    id="src-edit-name"
+                    style={css(`width:100%; box-sizing:border-box; padding:9px 11px; border-radius:8px; border:1px solid ${C.line}; background:${C.surface}; color:${C.ink}; font:inherit; font-size:13px;`)}
+                    value={editName}
+                    onChange={(e) => { setEditName(e.target.value); setErr(null) }}
+                    autoComplete="off"
+                  />
                 </div>
+                {/* The other sources, in cascade order — the select places
+                    this one among them. Its own row is left out so "below X"
+                    never names itself. Held while an invalid entry exists,
+                    for the same reason the Reorder toggle is: the engine
+                    refuses to give a quarantined row a position, so the
+                    control could only fail. */}
+                <CascadePosition
+                  id="src-edit-position"
+                  value={editPosition}
+                  namesAbove={orderNames.filter((name) => name !== s.name)}
+                  onChange={(position) => { setEditPosition(position); setErr(null) }}
+                  disabled={busy || invalid.length > 0}
+                  hint={invalid.length > 0
+                    ? `Reordering is off until the invalid ${invalid.length === 1 ? 'entry is' : 'entries are'} removed.`
+                    : sources.length > 1
+                      ? 'Position 1 wins wherever it speaks. Changing this rewrites the cascade order for every source.'
+                      : 'The only source in the cascade — add another to choose an order.'}
+                />
 
                 {canEditPath(s) && (
                   <div>
@@ -673,7 +1013,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
             })()}
           </section>
         })()}
-      </div>
+      </div>}
     </div>
   )
 }

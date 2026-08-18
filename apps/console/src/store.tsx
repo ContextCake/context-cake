@@ -8,7 +8,7 @@ import {
 import {
   adaptConcept, adaptConflicts, adaptDiscrepancies, adaptGraphConcept, adaptSources, attachConflictStubs,
   computeLevelBuckets, createDataSource, LiveDataError, mergeSourceStatus,
-  type IndexingActivity, type IndexingControlAction, type Mode,
+  type CascadeOrderResult, type IndexingActivity, type IndexingControlAction, type Mode,
 } from './api'
 import type {
   DiscrepancyDecisionRequest, DiscrepancyRule, DiscrepancyRuleSuggestion,
@@ -313,6 +313,13 @@ export interface StoreData {
   indexingControl: (action: IndexingControlAction, options?: { source?: string; full?: boolean }) => Promise<boolean>
   /** Whether the backing source supports the indexing controls (live engine only). */
   canControlIndexing: boolean
+  /**
+   * Rewrite the cascade order — the COMPLETE list of source names, first
+   * wins (PUT /api/sources/order). Rejects with the engine's typed error; the
+   * caller reloads afterwards, because levels and winners changed. Demo mode
+   * rejects with a 405, like every other demo write.
+   */
+  reorderSources: (order: string[]) => Promise<CascadeOrderResult[]>
 }
 
 /** Where the user is. Changes on navigation and selection, never on a keystroke. */
@@ -1206,7 +1213,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     const complete = window.claude?.complete
     if (complete) {
-      const prompt = `You are ContextCake, an assistant that answers ONLY from a team's resolved knowledge cascade (Company/Team/Personal layers; higher layers override per section). Answer the question in 1-3 sentences, plainly. If layers disagree, say which layer wins.\n\nCASCADE:\n${buildContext(conceptsRef.current)}\n\nQUESTION: ${q}`
+      const prompt = `You are ContextCake, an assistant that answers ONLY from a team's resolved knowledge cascade (Personal, Team, Company layers in that order of precedence; an earlier layer overrides a later one per section). Answer the question in 1-3 sentences, plainly. If layers disagree, say which layer wins.\n\nCASCADE:\n${buildContext(conceptsRef.current)}\n\nQUESTION: ${q}`
       complete(prompt)
         .then((ans) => {
           setChatMessages((prev) => [...prev, { role: 'assistant', text: (ans || '').trim() }])
@@ -1265,6 +1272,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [source])
   const canControlIndexing = typeof source.indexingControl === 'function'
+  // Guarded like `source.search`: the partial DataSource stubs in the test
+  // harnesses predate the route. Deliberately does NOT reload — the Sources
+  // view already reloads once after a save that may have PATCHed first, and
+  // a second bump here would refetch the graph twice for one edit.
+  const reorderSources = useCallback(async (order: string[]) => {
+    if (!source.reorderSources) throw new LiveDataError('bad-status', 'This engine cannot reorder sources.', 405)
+    return source.reorderSources(order)
+  }, [source])
 
   const load = useMemo<LoadState>(
     () => ({ shell: loading, concepts: conceptsLoading, indexingSources, tasks, refreshError, lastRefreshAt }),
@@ -1281,14 +1296,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
     send, reload, reloadKey,
-    fetchIndexingActivity, indexingControl, canControlIndexing,
+    fetchIndexingActivity, indexingControl, canControlIndexing, reorderSources,
   }), [mode, loading, load, error, concepts, sources, signals, conflicts, activity, loadErrors,
     resolvingConflict, resolutionError, discrepancyRules, discrepancyRuleSuggestions,
     retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
     send, reload, reloadKey, setView, setSelConcept, setQuery, search, setFilesScope, setFilesPath,
     openFilesScope, openConcept, openChat, closeChat,
-    fetchIndexingActivity, indexingControl, canControlIndexing])
+    fetchIndexingActivity, indexingControl, canControlIndexing, reorderSources])
 
   const nav = useMemo<StoreNav>(
     () => ({ view, triageTab, selSignal, selConflict, selConcept, filesScope, filesPath, chatOpen }),

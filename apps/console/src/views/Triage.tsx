@@ -132,13 +132,16 @@ function TriageInner() {
                   <div style={{ marginTop: 18 }}>
                     <div style={css('font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#8A8A82; margin-bottom:9px;')}>Where it lands</div>
                     <div style={css('display:flex; flex-direction:column; gap:6px;')}>
-                      {(['company', 'team', 'personal'] as const).map((id) => {
+                      {/* Cascade order, position 1 first — the same "#1 wins"
+                          language as the Overview and Sources, never the
+                          manifest level integer. */}
+                      {(['personal', 'team', 'company'] as const).map((id, index) => {
                         const L = layers.find((x) => x.id === id)!
                         const col = lc(id)
                         const isT = selSig.landLayer === id
                         return (
                           <div key={id} style={css(`display:flex; align-items:center; gap:11px; padding:9px 12px; background:${isT ? col.fill : '#FFFFFF'}; border:1px solid ${isT ? col.stroke : C.line}; border-radius:9px;`)}>
-                            <div style={css(`display:grid; place-items:center; width:26px; height:26px; border-radius:999px; background:${isT ? col.fill : C.surface}; color:${isT ? col.text : C.caption}; font-family:${MONO}; font-weight:600; font-size:12px; flex:0 0 auto;`)}>{L.level}</div>
+                            <div style={css(`display:grid; place-items:center; min-width:26px; height:26px; padding:0 6px; box-sizing:border-box; border-radius:999px; background:${isT ? col.fill : C.surface}; color:${isT ? col.text : C.caption}; font-family:${MONO}; font-weight:600; font-size:11px; flex:0 0 auto;`)}>#{index + 1}</div>
                             <span style={css(`font-weight:${isT ? 600 : 500}; font-size:13px; color:${isT ? col.text : C.caption};`)}>{L.name}</span>
                             {isT && <code style={css(`margin-left:auto; font-family:${MONO}; font-size:11px; color:${col.text};`)}>{selSig.landPath}</code>}
                           </div>

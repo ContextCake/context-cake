@@ -67,10 +67,17 @@ via their pre-hooks.
   cross-links, no Save — `canEdit = live && file.editable` gates the save
   button, the ⌘S binding and the textarea, and the raw-preview fetch is skipped
   because a snapshot carries text, not bytes. Sources manages the layers themselves —
-  rename + re-level + repoint a folder-backed source (PATCH `/api/sources`),
+  rename + repoint a folder-backed source (PATCH `/api/sources`), reposition
+  (the drawer's position select, or Reorder mode's drag/arrows; each move is
+  one PUT `/api/sources/order` with the complete order, then `reload()`),
   remove with confirm (DELETE), Sync-now for github kinds (POST
   `/api/sources/sync`) — read-only in demo mode; `live: true` layers get a
-  capture warning on rename/remove.
+  capture warning on rename/remove. Precedence is shown everywhere as a
+  cascade position (#1 wins) computed by `src/cascade-order.ts` from the same
+  distinct-level list as the lane buckets; the manifest `level` integer is
+  never something the user types (Sources sends orders, not levels; only the
+  first-run wizard still sends the conventional 3/2/0) and shows in exactly
+  one place, the Sources detail's "Manifest level" row.
 - **Files ⇄ Concepts** — the two ends of one thing, and walkable both ways. An
   open document names the concept it resolves to (`conceptForFile`: the file's
   `rel` minus its document extension, matched against a loaded concept id —
@@ -82,7 +89,11 @@ via their pre-hooks.
   component: the first-run guided narrative (personal → optional team →
   optional company MCP → review) and a one-step add-a-source mode (four-kind
   picker). Names are derived (folder basename / repo slug / MCP command
-  target) but always editable; levels are steppers, not constants. GitHub
+  target) but always editable. Precedence is never a number the user types:
+  the first-run narrative fixes the order (payloads still send the
+  conventional `level` 3/2/0), and add mode sends `position` (1 wins;
+  folders default to the top, repos and MCP graphs to the bottom) through
+  the shared `CascadePosition` select. GitHub
   sources fork on a public/private radio: public → `github-rest` (no clone,
   never sends `auth`/`apiBase`), private → the `github` clone kind. The mode
   is frozen at mount (`isAdding`) because the shell's `addingSource` prop

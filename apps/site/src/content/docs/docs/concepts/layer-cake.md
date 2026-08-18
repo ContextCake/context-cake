@@ -25,6 +25,14 @@ Levels are the precedence axis, and they are a visible setting in the
 can see (and change) the order. The default levels leave gaps (3, 2, 0) so more
 layers can slot in later without renumbering.
 
+## Cascade order
+
+The console shows the same stack as an ordered list — position 1 wins wherever it
+speaks, and everything below it is inherited — rather than as level numbers. The
+manifest `level` is the underlying integer (higher level = earlier position);
+you can drag sources into a new order in **Sources → Reorder**, or edit `level`
+by hand.
+
 ## Higher layers win — per section
 
 When a concept exists in multiple layers, the higher layer wins **per section**, not

@@ -130,7 +130,7 @@ same repository at different refs therefore cannot share cached content.
 | Field | Required | Applies to | Meaning |
 |-------|----------|------------|---------|
 | `name` | yes | all | Layer identifier. Used in provenance (`sourceLayer`, `contributors`) and as the `layer` argument to `read_file`. |
-| `level` | yes | all | Precedence. Higher wins per section. Personal is 3, Team is 2, Company is 0 by convention, but any integer works. |
+| `level` | yes | all | Precedence. Higher wins per section. Personal is 3, Team is 2, Company is 0 by convention, but any integer works (the console shows this as a cascade position — #1 wins — and rewrites levels when you reorder). |
 | `source` | no | all | `okf-local` (default when omitted), `files`, `github`, or `mcp`. |
 | `path` | for `okf-local` / `files` | `okf-local`, `files` | Directory of the OKF bundle or existing document folder. |
 | `command` | for `mcp` | `mcp` | Executable to spawn as a stdio MCP server. |

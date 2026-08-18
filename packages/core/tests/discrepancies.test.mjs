@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDiscrepancies, discrepancyRevision, fingerprint } from "../src/discrepancies.mjs";
+import {
+  ACTIONABLE_STATUSES, bestCandidateOf, buildDiscrepancies, buildLinkIndex, candidatesFor, compactDiscrepancy,
+  discrepancyRevision, filterDiscrepancies, fingerprint, removeLink, rewriteLinkTarget, summarizeDiscrepancies,
+} from "../src/discrepancies.mjs";
 import { parseRuleDocument, serializeRuleDocument, suggestDiscrepancyRules } from "../src/discrepancy-rules.mjs";
 import { mergeConcepts } from "../src/resolver.mjs";
 
@@ -277,4 +280,225 @@ test("serialized shared rules contain structural metadata only", () => {
   }]);
   assert.equal(text.includes("secret"), false);
   assert.match(text, /"mode": "recommend"/);
+});
+
+// ---- wire shapes: summarize / compact / filter ----------------------------------
+
+function projectionFixture() {
+  const long = "x".repeat(600);
+  const concepts = [
+    concept,
+    { ...concept, id: "decisions/cache", frontmatter: { title: "Cache", type: "decision", owner: "Platform" }, frontmatterConflicts: [],
+      sections: [{ key: "choice", heading: "## Choice {#choice}", content: `${long} See [[runbooks/missing]] and [[Runbooks/Postgres]].`, sourceLayer: "team", sourceUpdated: "2026-08-01",
+        conflicts: [{ layer: "company", updated: "2026-07-01", content: "Use Redis." }] }] },
+    { id: "runbooks/postgres", contributors: [{ layer: "team", level: 2 }], frontmatter: { title: "Postgres", type: "runbook", owner: "Data" }, frontmatterConflicts: [], sections: [] },
+    { id: "notes/quiet", contributors: [{ layer: "personal", level: 3 }], frontmatter: { title: "Quiet", type: "note", owner: "Me" }, frontmatterConflicts: [],
+      sections: [{ key: "body", heading: "## Body {#body}", content: "Links [[runbooks/missing]].", sourceLayer: "personal", sourceUpdated: "2026-08-02", conflicts: [] }] },
+  ];
+  const decisions = [{
+    schemaVersion: 2, id: "ack-1", discrepancyId: "section_content::decisions/db::choice", action: "acknowledge", reasonCode: "different_scopes",
+    decidedAt: "2026-08-03T00:00:00.000Z", transactionState: "not_required",
+    contributorFingerprints: [{ source: "team", fingerprint: fingerprint("Use Postgres. See [[runbooks/missing]].") }, { source: "company", fingerprint: fingerprint("Use MySQL.") }],
+  }];
+  return buildDiscrepancies(concepts, { decisions, coverageComplete: true }).discrepancies;
+}
+
+test("summarizeDiscrepancies counts kinds, statuses, groupings, targets, and quick wins", () => {
+  const list = projectionFixture();
+  const summary = summarizeDiscrepancies(list);
+  assert.equal(summary.total, list.length);
+  assert.equal(summary.actionable, list.filter((item) => ACTIONABLE_STATUSES.has(item.status)).length);
+  assert.equal(summary.byKind.broken_link, 4);
+  assert.equal(summary.byKind.section_content, 2);
+  assert.equal(summary.byKind.frontmatter_value, 1);
+  assert.equal(summary.byStatus.acknowledged, 1);
+  assert.equal(summary.byStatus.needs_review, summary.total - 1);
+  // Three records share the missing target; the case-slip has a clear best candidate.
+  const missing = summary.topTargets.find((row) => row.target === "runbooks/missing");
+  assert.equal(missing.count, 3);
+  assert.equal(summary.topTargets[0].target, "runbooks/missing");
+  assert.equal(missing.bestCandidate, null);
+  const cased = summary.topTargets.find((row) => row.target === "Runbooks/Postgres");
+  assert.equal(cased.bestCandidate.id, "runbooks/postgres");
+  assert.equal(summary.quickWins.brokenLinksTotal, 4);
+  assert.equal(summary.quickWins.brokenLinksWithBestCandidate, 1);
+  assert.equal(summary.quickWins.autoReady, 0);
+  assert.deepEqual(summary.bySourcePair.map((row) => row.key).sort(), ["company|team", "personal", "team"]);
+  assert.equal(summary.byOwner.find((row) => row.owner === "Platform").count, 6);
+  assert.equal(summary.byConceptType.find((row) => row.conceptType === "decision").count, 6);
+  assert.equal(summary.topConcepts[0].count >= summary.topConcepts.at(-1).count, true);
+  // topN bounds every list, and the choice of ties is deterministic.
+  assert.equal(summarizeDiscrepancies(list, { topN: 1 }).topConcepts.length, 1);
+  assert.deepEqual(summarizeDiscrepancies(list), summarizeDiscrepancies([...list].reverse()));
+});
+
+test("compactDiscrepancy previews long bodies and folds history into a count plus the latest decision", () => {
+  const list = projectionFixture();
+  const compact = list.map((item) => compactDiscrepancy(item));
+  for (const item of compact) {
+    assert.equal(item.compact, true);
+    assert.equal("history" in item, false);
+    for (const contribution of item.contributions) {
+      assert.equal(typeof contribution.truncated, "boolean");
+      assert.equal(typeof contribution.valueBytes, "number");
+      assert.equal(contribution.value.length <= 240, true, `preview over 240 chars for ${item.id}`);
+    }
+    if (typeof item.effectiveValue === "string") assert.equal(item.effectiveValue.length <= 240, true);
+  }
+  const long = compact.find((item) => item.conceptId === "decisions/cache" && item.originalKind === "section_content");
+  assert.equal(long.contributions[0].truncated, true);
+  assert.equal(long.contributions[0].valueBytes > 600, true);
+  assert.equal(long.contributions[0].valueKind, "string");
+  assert.equal(long.contributions[1].truncated, false);
+  const acked = compact.find((item) => item.status === "acknowledged");
+  assert.equal(acked.historyCount, 1);
+  assert.deepEqual(acked.latestDecision, { id: "ack-1", action: "acknowledge", decidedAt: "2026-08-03T00:00:00.000Z", transactionState: "not_required", reasonCode: "different_scopes" });
+  const fresh = compact.find((item) => item.originalKind === "frontmatter_value");
+  assert.equal(fresh.historyCount, 0);
+  assert.equal(fresh.latestDecision, null);
+  // Structured values keep their kind and are previewed as JSON.
+  const listValued = compactDiscrepancy({ ...list[0], contributions: [{ source: "a", value: ["x", "y"] }, { source: "b", value: { k: 1 } }] });
+  assert.equal(listValued.contributions[0].valueKind, "list");
+  assert.equal(listValued.contributions[0].value, '["x","y"]');
+  assert.equal(listValued.contributions[1].valueKind, "map");
+  // Never mutates the record it compacts.
+  assert.equal(Array.isArray(list[0].history), true);
+  assert.equal(typeof list[0].contributions[0].truncated, "undefined");
+});
+
+test("filterDiscrepancies narrows by status (with the actionable alias), kind, concept, target, source, owner, and type", () => {
+  const list = projectionFixture();
+  assert.equal(filterDiscrepancies(list, { status: "actionable" }).every((item) => ACTIONABLE_STATUSES.has(item.status)), true);
+  assert.equal(filterDiscrepancies(list, { status: "acknowledged" }).length, 1);
+  assert.equal(filterDiscrepancies(list, { status: "all" }).length, list.length);
+  assert.equal(filterDiscrepancies(list, { kind: "broken_link" }).length, 4);
+  assert.equal(filterDiscrepancies(list, { kind: "broken_link", target: "runbooks/missing" }).length, 3);
+  assert.equal(filterDiscrepancies(list, { conceptId: "notes/quiet" }).length, 1);
+  assert.equal(filterDiscrepancies(list, { source: "personal" }).length, 1);
+  assert.equal(filterDiscrepancies(list, { source: "company" }).length, 3);
+  assert.equal(filterDiscrepancies(list, { owner: "Me" }).length, 1);
+  assert.equal(filterDiscrepancies(list, { conceptType: "note" }).length, 1);
+  assert.deepEqual(filterDiscrepancies(list, {}), list);
+});
+
+// ---- broken-link candidates -------------------------------------------------------
+
+function candidateCorpus() {
+  return [
+    { id: "runbooks/missing-thing", frontmatter: { title: "Missing Thing", type: "runbook" } },
+    { id: "decisions/db", frontmatter: { type: "decision" } },
+    { id: "decisions/db-two", frontmatter: { type: "decision" } },
+    { id: "archive/README", frontmatter: {} },
+    { id: "docs/README", frontmatter: {} },
+    { id: "guides/Setup Guide", frontmatter: { title: "Setup Guide", type: "guide" } },
+  ];
+}
+
+test("candidatesFor names one structural reason per rule with the documented confidence", () => {
+  const index = buildLinkIndex(candidateCorpus());
+  const from = { linkingConceptId: "decisions/db", linkingConceptType: "decision" };
+  const only = (target) => { const c = candidatesFor(target, from, index); assert.equal(c.length, 1, `${target}: ${JSON.stringify(c)}`); return c[0]; };
+  assert.deepEqual(only("../runbooks/missing-thing"), { id: "runbooks/missing-thing", reason: "relative", confidence: 0.95 });
+  assert.deepEqual(only("Runbooks/Missing-Thing"), { id: "runbooks/missing-thing", reason: "case", confidence: 0.95 });
+  assert.deepEqual(only("runbooks/missing-thing.mdx"), { id: "runbooks/missing-thing", reason: "extension", confidence: 0.95 });
+  assert.deepEqual(only("runbooks/missing_thing"), { id: "runbooks/missing-thing", reason: "slug", confidence: 0.9 });
+  assert.deepEqual(only("old/missing-thing"), { id: "runbooks/missing-thing", reason: "moved", confidence: 0.85 });
+  assert.deepEqual(only("Missing Thing"), { id: "runbooks/missing-thing", reason: "title", confidence: 0.85 });
+  assert.deepEqual(only("old/Missing_Thing"), { id: "runbooks/missing-thing", reason: "slug_moved", confidence: 0.7 });
+  // A sibling reference resolves relative to the linking file's folder.
+  assert.deepEqual(only("db-two"), { id: "decisions/db-two", reason: "relative", confidence: 0.95 });
+  // Typos only when nothing structural matched: one edit, same type → 0.65.
+  assert.deepEqual(only("decisions/db-tow"), { id: "decisions/db-two", reason: "typo", confidence: 0.65 });
+  // Short basenames tolerate one edit, not two.
+  assert.deepEqual(candidatesFor("decisions/xx", from, index), []);
+  // Nothing close at all → empty, never a guess.
+  assert.deepEqual(candidatesFor("zzz/completely-unrelated", from, index), []);
+});
+
+test("bestCandidate needs a confident, unambiguous top; ambiguity yields null and candidates stay ≤5", () => {
+  const index = buildLinkIndex(candidateCorpus());
+  const from = { linkingConceptId: "decisions/db", linkingConceptType: "decision" };
+  const readme = candidatesFor("README", from, index);
+  assert.deepEqual(readme.map((c) => [c.id, c.reason, c.confidence]), [["archive/README", "moved", 0.6], ["docs/README", "moved", 0.6]]);
+  assert.equal(bestCandidateOf(readme), null);
+  assert.equal(bestCandidateOf(candidatesFor("Runbooks/Missing-Thing", from, index)).id, "runbooks/missing-thing");
+  assert.equal(bestCandidateOf(candidatesFor("decisions/db-tow", from, index)), null, "a typo is never a best candidate");
+  assert.equal(bestCandidateOf([{ id: "a", confidence: 0.95 }, { id: "b", confidence: 0.85 }]), null, "gap under 0.15");
+  assert.equal(bestCandidateOf([{ id: "a", confidence: 0.95 }, { id: "b", confidence: 0.6 }]).id, "a");
+  assert.equal(bestCandidateOf([]), null);
+  const crowded = buildLinkIndex(Array.from({ length: 12 }, (_, i) => ({ id: `dir${i}/shared`, frontmatter: {} })));
+  const many = candidatesFor("shared", from, crowded);
+  assert.equal(many.length, 5);
+  assert.deepEqual(many.map((c) => c.id), [...many.map((c) => c.id)].sort());
+});
+
+test("candidate search is memoized per (target, linking folder, linking type) and deterministic across builds", () => {
+  const corpus = candidateCorpus();
+  const index = buildLinkIndex(corpus);
+  const memo = new Map();
+  const a = candidatesFor("old/missing-thing", { linkingConceptId: "decisions/db", linkingConceptType: "decision" }, index, memo);
+  const b = candidatesFor("old/missing-thing", { linkingConceptId: "decisions/other", linkingConceptType: "decision" }, index, memo);
+  const c = candidatesFor("old/missing-thing", { linkingConceptId: "notes/other", linkingConceptType: "decision" }, index, memo);
+  assert.equal(a, b, "same folder shares one search");
+  assert.notEqual(a, c, "another folder is another key (relative and typo rules read it)");
+  assert.deepEqual(a, c);
+  assert.equal(memo.size, 2);
+  const again = candidatesFor("old/missing-thing", { linkingConceptId: "decisions/db", linkingConceptType: "decision" }, buildLinkIndex([...corpus].reverse()));
+  assert.deepEqual(again, a);
+});
+
+test("buildDiscrepancies attaches candidates and bestCandidate to broken links without touching revision", () => {
+  const linker = {
+    ...concept, id: "decisions/linker", frontmatterConflicts: [],
+    sections: [{ key: "choice", heading: "## Choice {#choice}", content: "See [[Runbooks/Missing-Thing]] and [[nowhere/at-all]].", sourceLayer: "team", sourceUpdated: "2026-08-01", conflicts: [] }],
+  };
+  const target = { id: "runbooks/missing-thing", contributors: [{ layer: "team", level: 2 }], frontmatter: { title: "Missing Thing", type: "runbook" }, frontmatterConflicts: [], sections: [] };
+  const links = buildDiscrepancies([linker, target], { coverageComplete: true }).discrepancies.filter((item) => item.kind === "broken_link");
+  const cased = links.find((item) => item.target === "Runbooks/Missing-Thing");
+  assert.deepEqual(cased.candidates, [{ id: "runbooks/missing-thing", reason: "case", confidence: 0.95 }]);
+  assert.equal(cased.bestCandidate.id, "runbooks/missing-thing");
+  const nowhere = links.find((item) => item.target === "nowhere/at-all");
+  assert.deepEqual(nowhere.candidates, []);
+  assert.equal(nowhere.bestCandidate, null);
+  // Adding a concept that changes the suggestion must not change the revision.
+  const withoutTarget = buildDiscrepancies([linker], { coverageComplete: true }).discrepancies.find((item) => item.target === "Runbooks/Missing-Thing");
+  assert.deepEqual(withoutTarget.candidates, []);
+  assert.equal(withoutTarget.revision, cased.revision);
+});
+
+test("candidate search stays bounded: 1,500 dangling links over 3,000 ids, deterministic", () => {
+  const ids = Array.from({ length: 3000 }, (_, i) => ({ id: `area-${i % 30}/note-${i}`, contributors: [{ layer: "team", level: 2 }], frontmatter: { type: "note", title: `Note ${i}` }, frontmatterConflicts: [], sections: [] }));
+  const linkers = Array.from({ length: 1500 }, (_, i) => ({
+    id: `linkers/l-${i}`, contributors: [{ layer: "team", level: 2 }], frontmatter: { type: "note" }, frontmatterConflicts: [],
+    sections: [{ key: "body", heading: "## Body {#body}", sourceLayer: "team", sourceUpdated: null, conflicts: [],
+      // A mix of shapes: renamed folder, case slip, typo, and hopeless.
+      content: i % 4 === 0 ? `[[old/note-${i}]]` : i % 4 === 1 ? `[[Area-${i % 30}/Note-${i}]]` : i % 4 === 2 ? `[[area-${i % 30}/note-${i}x]]` : `[[gone/${i}-nothing-like-it]]` }],
+  }));
+  const started = process.hrtime.bigint();
+  const first = buildDiscrepancies([...ids, ...linkers], { coverageComplete: true }).discrepancies.filter((item) => item.kind === "broken_link");
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.equal(first.length, 1500);
+  assert.equal(elapsedMs < 1500, true, `candidate search took ${elapsedMs.toFixed(0)}ms`);
+  const second = buildDiscrepancies([...ids, ...linkers], { coverageComplete: true }).discrepancies.filter((item) => item.kind === "broken_link");
+  assert.deepEqual(second.map((item) => [item.id, item.candidates, item.bestCandidate]), first.map((item) => [item.id, item.candidates, item.bestCandidate]));
+  assert.equal(first.filter((item) => item.bestCandidate).length >= 750, true, "renames and case slips resolve to a best candidate");
+});
+
+// ---- link text helpers -------------------------------------------------------------
+
+test("rewriteLinkTarget preserves ./, .md, #anchor, whitespace, and wikilink aliases; skips images and other targets", () => {
+  const text = "See [x](./runbooks/missing.md#setup), [[runbooks/missing|Alias]], [[runbooks/missing#sec]], [y]( runbooks/missing ), ![img](runbooks/missing), [z](runbooks/other), [w](https://example.com/runbooks/missing).";
+  const { text: out, replaced } = rewriteLinkTarget(text, "runbooks/missing", "runbooks/found");
+  assert.equal(replaced, 4);
+  assert.equal(out, "See [x](./runbooks/found.md#setup), [[runbooks/found|Alias]], [[runbooks/found#sec]], [y]( runbooks/found ), ![img](runbooks/missing), [z](runbooks/other), [w](https://example.com/runbooks/missing).");
+  assert.deepEqual(rewriteLinkTarget("no links here", "a", "b"), { text: "no links here", replaced: 0 });
+  assert.deepEqual(rewriteLinkTarget("[x](a)", "b", "c"), { text: "[x](a)", replaced: 0 });
+});
+
+test("removeLink turns links into their label, alias, or basename; images and other targets survive", () => {
+  const text = "See [the runbook](./runbooks/missing.md#setup), [[runbooks/missing|Alias]], [[runbooks/missing]], ![img](runbooks/missing), [z](runbooks/other).";
+  const { text: out, replaced } = removeLink(text, "runbooks/missing");
+  assert.equal(replaced, 3);
+  assert.equal(out, "See the runbook, Alias, missing, ![img](runbooks/missing), [z](runbooks/other).");
+  assert.deepEqual(removeLink("[[Missing Runbook]]", "Missing Runbook"), { text: "Missing Runbook", replaced: 1 });
 });

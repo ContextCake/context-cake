@@ -33,3 +33,76 @@
 .site-title {
   font-family: var(--cc-font-heading);
 }
+
+/* ---------------------------------------------------------------------------
+ * Comparison-page visuals (.cc-cmp-*). Used by the OpenMetadata comparison doc.
+ * Every color comes from a Starlight or ContextCake token so both themes work.
+ * ------------------------------------------------------------------------- */
+
+.sl-markdown-content .cc-cmp-figure {
+  margin: 2rem 0;
+}
+
+.cc-cmp-figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--cc-font-body);
+}
+
+.sl-markdown-content .cc-cmp-caption {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--sl-color-gray-3);
+  text-align: center;
+}
+
+/* Two-up cards: "run this when…" */
+.sl-markdown-content .cc-cmp-split {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+  margin: 1.75rem 0;
+}
+
+@media (min-width: 50rem) {
+  .sl-markdown-content .cc-cmp-split {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Starlight gives every adjacent sibling a top margin; inside the grid that
+ * pushes the second card down by a row's worth of space. */
+.sl-markdown-content .cc-cmp-split > * {
+  margin-top: 0;
+}
+
+.sl-markdown-content .cc-cmp-card {
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: var(--cc-radius-md);
+  padding: 1.1rem 1.25rem 1.25rem;
+  background: var(--sl-color-bg-inline-code);
+}
+
+.sl-markdown-content .cc-cmp-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.sl-markdown-content .cc-cmp-card ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.sl-markdown-content .cc-cmp-card li + li {
+  margin-top: 0.35rem;
+}
+
+.cc-cmp-card--om {
+  border-top: 3px solid var(--cc-layer-company);
+}
+
+.cc-cmp-card--cc {
+  border-top: 3px solid var(--cc-layer-team);
+}

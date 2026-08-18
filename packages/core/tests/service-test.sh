@@ -272,6 +272,22 @@ for _ in $(seq 1 60); do
 done
 [ "$SSTATUS" = "reopened" ] && pass "acknowledged discrepancy reopens when a fingerprint changes" || fail "acknowledgement did not reopen ($SOPEN)"
 
+echo "discrepancy read shapes: summary route, compact rows, ?id= detail — one projection"
+DSUM="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies/summary?wait=15000")"
+[ "$(JQ 'typeof d.summary?.total === "number" && typeof d.summary.byKind === "object" && typeof d.summary.byStatus === "object" && Array.isArray(d.summary.topTargets) && typeof d.summary.quickWins?.autoReady === "number" && typeof d.projectionRevision === "string" ? "shape-ok" : "bad"' <<<"$DSUM")" = "shape-ok" ] && pass "summary route carries counts, groupings, and a projection revision" || fail "summary shape ($DSUM)"
+DCOMPACT="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?fields=compact&wait=15000")"
+[ "$(JQ 'd.projectionRevision' <<<"$DCOMPACT")" = "$(JQ 'd.projectionRevision' <<<"$DSUM")" ] && pass "compact list and summary answer from the same projection" || fail "projection revisions differ ($DCOMPACT / $DSUM)"
+[ "$(JQ 'String(d.discrepancies.length > 0 && d.discrepancies.every((x) => x.compact === true && !("history" in x) && x.contributions.every((c) => typeof c.truncated === "boolean" && c.value.length <= 240)))' <<<"$DCOMPACT")" = "true" ] && pass "compact rows preview bodies, mark truncation, and drop history" || fail "compact rows shape ($DCOMPACT)"
+[ "$(JQ 'String(typeof d.summary === "object" && d.total === d.discrepancies.length && d.filtered === d.total)' <<<"$DCOMPACT")" = "true" ] && pass "compact envelope carries summary and counts" || fail "compact envelope ($DCOMPACT)"
+DBARE="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?wait=15000")"
+[ "$(JQ 'Object.keys(d).join(",")' <<<"$DBARE")" = "discrepancies,coverageComplete,indexing,indexingSources,errors,generation" ] && pass "bare GET keeps its original envelope" || fail "bare envelope changed ($(JQ 'Object.keys(d).join(",")' <<<"$DBARE"))"
+SID_ENC="$(node -e 'console.log(encodeURIComponent(process.argv[1]))' "$SID")"
+DDETAIL="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?id=$SID_ENC")"
+[ "$(JQ 'd.discrepancy?.id ?? ""' <<<"$DDETAIL")" = "$SID" ] && pass "?id= returns the full record" || fail "?id= detail ($DDETAIL)"
+[ "$(JQ 'String(Array.isArray(d.discrepancy?.history) && d.discrepancy.history.length >= 1 && d.discrepancy.contributions.every((c) => c.truncated === undefined))' <<<"$DDETAIL")" = "true" ] && pass "?id= record carries its decision history and untruncated bodies" || fail "?id= history missing ($DDETAIL)"
+[ "$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?id=no-such" | JQ 'String(d.discrepancy === null)')" = "true" ] && pass "?id= for an unknown id answers null, not 404" || fail "?id= unknown id"
+code 400 "$(C "${AUTH[@]}" "$BASE/api/discrepancies?limit=-1")" "an invalid limit is refused"
+
 printf -- '# Format only\n\n## Pick {#pick}\n\nUse **Postgres** for writes.\n' > "$TMP/bundle/format-only.md"
 printf -- '# Format only\n\n## Pick {#pick}\n\nUse postgres for writes\n' > "$TMP/m2/format-only.mdx"
 AUTO="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"format-only","sectionKey":"pick","selectedLayer":"t","method":"automatic"}' "$BASE/api/conflict-resolutions")"

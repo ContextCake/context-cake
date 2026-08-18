@@ -528,7 +528,7 @@ export function createEngineService({
     transactionJournal: discrepancyTransactionJournal,
     ruleStore: discrepancyRuleStore,
     priorityStore: discrepancyPriorityStore,
-    project: (waitMs) => discrepanciesApi(waitMs),
+    corpus: (waitMs) => discrepancyCorpus(waitMs),
     onWritten: () => invalidateIndex(),
     git: { commitPathsWithMutation, push: pushGit },
   });
@@ -790,6 +790,7 @@ export function createEngineService({
     searchIndex.close();
     if (corpusMemo) clearTimeout(corpusMemo.evictTimer);
     corpusMemo = null;
+    discrepancyOps.close();
     conceptTokens = new Map();
     if (prev) for (const s of prev.sources) s.close?.();
   }
@@ -1760,7 +1761,22 @@ export function createEngineService({
       if (p === "/api/resolve-all") { await streamResolveAll(res, await resolveAllApi(waitParam(url))); return true; }
       if (p === "/api/search") { json(res, 200, await searchApi(url, waitParam(url))); return true; }
       if (p === "/api/discrepancies" && req.method === "GET") {
-        json(res, 200, await discrepanciesApi(waitParam(url)));
+        // Three answers from one memoized projection (control/discrepancies.mjs):
+        // `?id=` is one full record; any filter/paging/fields param is the
+        // extended envelope (compact rows + summary + counts); a bare GET is
+        // the original envelope, byte-compatible.
+        const q = url.searchParams;
+        if (q.has("id")) { json(res, 200, await discrepancyOps.detail(waitParam(url), q.get("id"))); return true; }
+        const extended = ["fields", "status", "kind", "conceptId", "target", "source", "owner", "conceptType", "limit", "offset"];
+        if (extended.some((name) => q.has(name))) {
+          json(res, 200, await discrepancyOps.query(waitParam(url), Object.fromEntries(extended.map((name) => [name, q.get(name) ?? undefined]))));
+          return true;
+        }
+        json(res, 200, await discrepancyOps.list(waitParam(url)));
+        return true;
+      }
+      if (p === "/api/discrepancies/summary" && req.method === "GET") {
+        json(res, 200, await discrepancyOps.summary(waitParam(url)));
         return true;
       }
       if (p === "/api/discrepancies" && req.method === "PATCH") {
@@ -2166,8 +2182,16 @@ export function createEngineService({
    */
   function statusApi() {
     const { manifest, entries } = ensureIndexes();
+    return statusOf(manifest, entries.map(pinEntry));
+  }
+
+  // The status payload for an already-pinned set of entries. Split from
+  // statusApi so a caller that has to hand out a corpus AND the status it was
+  // resolved under (discrepancyCorpus) reads both from ONE pin — a snapshot
+  // landing between two pins would otherwise pair a corpus with a status from
+  // a different instant.
+  function statusOf(manifest, pinned) {
     const layerMeta = new Map((manifest.layers ?? []).map((l) => [l.name, l]));
-    const pinned = entries.map(pinEntry);
     const sources = pinned.map(({ source, snap, status, error, progress, health }) => {
       // Same four states, and the same degraded rule, as /api/graph — a client
       // that renders from this route must not disagree with one that renders
@@ -2437,6 +2461,10 @@ export function createEngineService({
     try {
       const written = await staged.commit();
       const saved = await conflictResolutionLog.append(record);
+      // A decision appended outside the control operations still has to
+      // move the projection memo — the log's stat covers the next process,
+      // this covers this one.
+      discrepancyOps.noteWrite();
       await discrepancyTransactionJournal.append({ id: transactionId, state: "committed", committedAt: new Date().toISOString() });
       await staged.cleanup();
       invalidateIndex();
@@ -2525,21 +2553,20 @@ export function createEngineService({
     return { concepts, errors, indexing: pending.length > 0, indexingSources: pending };
   }
 
-  async function discrepanciesApi(waitMs = 0) {
-    const resolved = await resolveAllApi(waitMs);
-    const status = statusApi();
-    const decisions = await conflictResolutionLog.list();
-    const [rules, priorities] = await Promise.all([discrepancyOps.effectiveRules(), discrepancyPriorityStore.list()]);
-    const coverageComplete = !resolved.indexing
-      && status.sources.every((source) => source.status !== "error" && source.status !== "degraded" && source.status !== "indexing");
+  // What control/discrepancies.mjs projects over: the shared resolved corpus
+  // (the same resolvedCorpus memo /api/resolve-all reads, so the console's
+  // concurrent bootstrap pair still materializes the corpus once) plus the
+  // status rows the projection reads for coverage and health — both from ONE
+  // pin. `resolved` is a thunk: on a projection-memo hit the corpus is never
+  // touched, so an evicted corpus memo is not rebuilt just to be ignored.
+  async function discrepancyCorpus(waitMs = 0) {
+    if (waitMs > 0) await awaitIndexes(waitMs);
+    const { manifest, entries } = ensureIndexes();
+    const pinned = entries.map(pinEntry);
     return {
-      ...buildDiscrepancies(resolved.concepts, {
-        decisions, rules, priorities, coverageComplete, sourceHealth: status.sources,
-      }),
-      indexing: resolved.indexing,
-      indexingSources: resolved.indexingSources,
-      errors: resolved.errors,
-      generation: status.generation,
+      corpusKey: contributingKey(pinned.filter((p) => p.snap)),
+      status: statusOf(manifest, pinned),
+      resolved: () => resolvedCorpus(pinned),
     };
   }
 

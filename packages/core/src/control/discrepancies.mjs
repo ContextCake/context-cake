@@ -10,11 +10,22 @@
 // the host's manifest view, git mutations against the live team layer arrive as
 // `git: { commitPathsWithMutation, push }` (git-core.mjs), and source-content
 // writes tell the host through `onWritten` so its index can re-read.
+//
+// The projection — buildDiscrepancies over the corpus plus this profile's
+// decisions, rules, and priorities — is memoized HERE, in one place, keyed on
+// what it reads: `corpusKey | sourceHealthSig | sidecarRevision`. Every reader
+// (the list, compact, summary, and detail routes; the decision guard; the
+// automatic-rules job) answers from the same memo, so a Discrepancy Center at
+// 1,500 rows costs one build per change instead of one per request. See
+// docs/architecture/notes/discrepancy-projection.md.
 
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { stageSectionTransaction, stageFrontmatterTransaction } from "../layer-files.mjs";
+import {
+  buildDiscrepancies, compactDiscrepancy, filterDiscrepancies, summarizeDiscrepancies,
+} from "../discrepancies.mjs";
 import { parseRuleDocument, serializeRuleDocument, suggestDiscrepancyRules } from "../discrepancy-rules.mjs";
 import { resolveLiveLayer } from "../sources/git-sync.mjs";
 import { withManifestLockAsync } from "../manifest.mjs";
@@ -26,6 +37,16 @@ const ACTIONS = new Set(["choose_contribution", "compose", "acknowledge"]);
 // never resolve (the concept was retired, renamed elsewhere, etc.) needs a
 // reason distinct from a genuine scoped disagreement.
 const ACKNOWLEDGE_REASONS = new Set(["different_scopes", "temporary_migration", "source_specific_authority", "target_missing", "other"]);
+// The compact route's paging ceiling. A client wanting more than this pages;
+// nothing else here bounds a full-fields request, which stays what it was.
+const QUERY_LIMIT_MAX = 5000;
+const PREVIEW_CHARS = 240;
+const SUMMARY_TOP_N = 25;
+// Idle eviction for the projection memo — it holds every record's contribution
+// bodies (corpus-scale strings), so like the service's corpus memo it lives
+// only while someone is reading it. Staleness is impossible by construction:
+// the key is re-derived from live state on every access.
+const PROJECTION_MEMO_TTL_MS = 30_000;
 
 export function createDiscrepancyOperations({
   manifestPath,        // required: the manifest whose lock serializes decisions
@@ -35,12 +56,14 @@ export function createDiscrepancyOperations({
   transactionJournal,  // createDiscrepancyTransactionJournal(...)
   ruleStore,           // createDiscrepancyRuleStore(...)
   priorityStore,       // createDiscrepancyPriorityStore(...)
-  project,             // async (waitMs) => the /api/discrepancies envelope
+  corpus,              // async (waitMs) => { corpusKey, status: { generation, indexing, indexingSources, sources }, resolved: () => Promise<{ concepts, errors }> }
   readLiveSection = null, // async ({ layer, conceptId, sectionKey }) => { content, text } | null
   onWritten = () => {},   // called after source content changed on disk
   git = null,          // { commitPathsWithMutation, push } from sources/git-core.mjs
+  memoTtlMs = PROJECTION_MEMO_TTL_MS,
 } = {}) {
   if (!manifestPath) throw new Error("createDiscrepancyOperations: manifestPath is required");
+  if (typeof corpus !== "function") throw new Error("createDiscrepancyOperations: corpus capability is required");
   const MANIFEST = path.resolve(manifestPath);
   const MANIFEST_DIR = path.dirname(MANIFEST);
   let recovery = null;
@@ -48,6 +71,135 @@ export function createDiscrepancyOperations({
   // lock — the same lock the source CRUD takes — so a decision can never
   // interleave with a manifest rewrite or with another decision's re-projection.
   const withManifestLock = (fn) => withManifestLockAsync(MANIFEST, fn);
+
+  // ---- projection memo ---------------------------------------------------------
+
+  let memo = null; // { key, promise, evictTimer }
+  // Every write this module performs bumps this counter, and it is part of the
+  // memo key beside the sidecar files' size:mtimeMs — so an in-process rewrite
+  // that lands the same size in the same millisecond still misses the memo.
+  // Cross-process writers (the CLI's second engine) are covered by the stat.
+  let writes = 0;
+  const noteWrite = () => { writes += 1; };
+
+  async function sidecarRevision() {
+    const files = [resolutionLog.file, ruleStore.file, priorityStore.file, liveRuleFile()?.file].filter(Boolean);
+    const stamps = await Promise.all(files.map((file) => fsp.stat(file).then((st) => `${st.size}:${st.mtimeMs}`, () => "0")));
+    return `${stamps.join(",")}#${writes}`;
+  }
+
+  // What the projection reads from a source row: name, status, error — the
+  // three fields healthSummary keeps and coverageComplete tests. Progress
+  // fields (loaded/total/phase) deliberately stay out, or an index in flight
+  // would miss the memo on every poll.
+  function sourceHealthSig(sources) {
+    return JSON.stringify(sources.map((source) => [source.name, source.status, source.error ?? null]));
+  }
+
+  async function buildProjection(c, key) {
+    const [{ concepts, errors }, decisions, rules, priorities] = await Promise.all([
+      c.resolved(), resolutionLog.list(), effectiveRules(), priorityStore.list(),
+    ]);
+    const coverageComplete = !c.status.indexing
+      && c.status.sources.every((source) => source.status !== "error" && source.status !== "degraded" && source.status !== "indexing");
+    const built = buildDiscrepancies(concepts, {
+      decisions, rules, priorities, coverageComplete, sourceHealth: c.status.sources,
+    });
+    let summary = null;
+    return {
+      discrepancies: built.discrepancies,
+      byId: new Map(built.discrepancies.map((item) => [item.id, item])),
+      conceptIds: new Set(concepts.map((concept) => concept.id)),
+      coverageComplete: built.coverageComplete,
+      indexing: c.status.indexing,
+      indexingSources: c.status.indexingSources,
+      errors,
+      // Names this exact projection: two responses carrying the same value
+      // were answered from the same build. A hash, not the key itself — the
+      // key embeds source names and file stamps.
+      revision: createHash("sha256").update(key).digest("hex").slice(0, 16),
+      summary: () => (summary ??= summarizeDiscrepancies(built.discrepancies, { topN: SUMMARY_TOP_N })),
+    };
+  }
+
+  /**
+   * The memoized projection. `waitMs` is forwarded to the corpus provider
+   * (the service's `?wait=`); `generation` is read live so a memo hit still
+   * names the status generation the caller would see on /api/status.
+   */
+  async function project(waitMs = 0) {
+    const c = await corpus(waitMs);
+    const key = `${c.corpusKey}|${sourceHealthSig(c.status.sources)}|${await sidecarRevision()}`;
+    if (!memo || memo.key !== key) {
+      if (memo) clearTimeout(memo.evictTimer);
+      let promise;
+      promise = buildProjection(c, key).catch((error) => {
+        if (memo?.promise === promise) { clearTimeout(memo.evictTimer); memo = null; }
+        throw error;
+      });
+      memo = { key, promise, evictTimer: null };
+    }
+    clearTimeout(memo.evictTimer);
+    memo.evictTimer = setTimeout(() => { memo = null; }, memoTtlMs);
+    memo.evictTimer.unref?.();
+    const value = await memo.promise;
+    return { ...value, generation: c.status.generation };
+  }
+
+  // The bare GET /api/discrepancies envelope — key order and every field
+  // exactly what it was before the memo existed.
+  async function list(waitMs = 0) {
+    const p = await project(waitMs);
+    return {
+      discrepancies: p.discrepancies, coverageComplete: p.coverageComplete,
+      indexing: p.indexing, indexingSources: p.indexingSources, errors: p.errors, generation: p.generation,
+    };
+  }
+
+  function parseCount(raw, name, { max = null } = {}) {
+    if (raw === undefined || raw === null || raw === "") return null;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0) throw new ControlError(`${name.toUpperCase()}_INVALID`, `${name} must be a non-negative integer`, { status: 400 });
+    return max === null ? n : Math.min(n, max);
+  }
+
+  // The filtered / paged / compact list, with the summary in the same round
+  // trip so a client never needs the full list to draw its header.
+  async function query(waitMs = 0, params = {}) {
+    const fields = params.fields ?? "full";
+    if (fields !== "full" && fields !== "compact") throw new ControlError("FIELDS_INVALID", "fields must be full or compact", { status: 400 });
+    const limit = parseCount(params.limit, "limit", { max: QUERY_LIMIT_MAX });
+    const offset = parseCount(params.offset, "offset") ?? 0;
+    const p = await project(waitMs);
+    const filtered = filterDiscrepancies(p.discrepancies, {
+      status: params.status, kind: params.kind, conceptId: params.conceptId, target: params.target,
+      source: params.source, owner: params.owner, conceptType: params.conceptType,
+    });
+    const page = filtered.slice(offset, limit === null ? undefined : offset + limit);
+    return {
+      discrepancies: fields === "compact" ? page.map((item) => compactDiscrepancy(item, { previewChars: PREVIEW_CHARS })) : page,
+      coverageComplete: p.coverageComplete, indexing: p.indexing, indexingSources: p.indexingSources, errors: p.errors, generation: p.generation,
+      summary: p.summary(), total: p.discrepancies.length, filtered: filtered.length, offset, limit, projectionRevision: p.revision,
+    };
+  }
+
+  async function detail(waitMs = 0, id) {
+    const p = await project(waitMs);
+    return { discrepancy: p.byId.get(id) ?? null, generation: p.generation, projectionRevision: p.revision };
+  }
+
+  async function summary(waitMs = 0) {
+    const p = await project(waitMs);
+    return {
+      summary: p.summary(), coverageComplete: p.coverageComplete, indexing: p.indexing, indexingSources: p.indexingSources,
+      generation: p.generation, projectionRevision: p.revision,
+    };
+  }
+
+  function close() {
+    if (memo) clearTimeout(memo.evictTimer);
+    memo = null;
+  }
 
   // ---- live team layer -------------------------------------------------------
 
@@ -95,21 +247,25 @@ export function createDiscrepancyOperations({
       const available = await rulesView();
       const suggestion = available.suggestions.find((item) => item.id === suggestionId);
       if (!suggestion) throw new ControlError("SUGGESTION_UNSUPPORTED", "That rule suggestion is no longer supported by three consistent decisions", { status: 409 });
-      return ruleStore.create(suggestion);
+      const rule = await ruleStore.create(suggestion);
+      noteWrite();
+      return rule;
     });
   }
 
   function patchRule(id, changes) {
     return withManifestLock(async () => {
-      try { return await ruleStore.patch(id, changes); }
-      catch (error) {
-        if (error.status !== 404) throw new ControlError("RULE_INVALID", error.message, { status: error.status ?? 400 });
-        const team = (await teamRules()).find((rule) => rule.id === id);
-        if (!team) throw new ControlError("RULE_NOT_FOUND", error.message, { status: 404 });
-        // Enabling a promoted rule automatically is deliberately a per-profile,
-        // local decision. The shared file itself remains recommendation-only.
-        return ruleStore.setLocalOverride(team, changes);
-      }
+      try {
+        try { return await ruleStore.patch(id, changes); }
+        catch (error) {
+          if (error.status !== 404) throw new ControlError("RULE_INVALID", error.message, { status: error.status ?? 400 });
+          const team = (await teamRules()).find((rule) => rule.id === id);
+          if (!team) throw new ControlError("RULE_NOT_FOUND", error.message, { status: 404 });
+          // Enabling a promoted rule automatically is deliberately a per-profile,
+          // local decision. The shared file itself remains recommendation-only.
+          return await ruleStore.setLocalOverride(team, changes);
+        }
+      } finally { noteWrite(); }
     });
   }
 
@@ -140,6 +296,7 @@ export function createDiscrepancyOperations({
       },
       author: live.profileName,
     });
+    noteWrite();
     const pushed = await git.push(live.root);
     return { promoted: true, rule: preview, pushed: pushed.pushed === true, queued: pushed.queued === true };
   }
@@ -149,6 +306,7 @@ export function createDiscrepancyOperations({
   async function setPriority(id, priority) {
     try { return await withManifestLock(() => priorityStore.set(id, priority)); }
     catch (error) { throw new ControlError("PRIORITY_INVALID", error.message, { status: 400 }); }
+    finally { noteWrite(); }
   }
 
   // ---- recovery -----------------------------------------------------------------
@@ -194,7 +352,7 @@ export function createDiscrepancyOperations({
     if (!payload.coverageComplete || payload.indexing) {
       throw new ControlError("COVERAGE_INCOMPLETE", "Sources are still indexing. Wait for settled coverage before deciding.", { status: 409 });
     }
-    const discrepancy = payload.discrepancies.find((item) => item.id === discrepancyId);
+    const discrepancy = payload.byId.get(discrepancyId);
     if (!discrepancy) throw new ControlError("NOT_OPEN", "This discrepancy is no longer open. Reload before deciding it.", { status: 409 });
     if (body.revision !== undefined && body.revision !== discrepancy.revision) {
       throw new ControlError("STALE", "This discrepancy changed after you opened it. Reload before deciding it.", { status: 409 });
@@ -260,7 +418,9 @@ export function createDiscrepancyOperations({
     if (action === "acknowledge") {
       decision.transactionState = "not_required";
       decision.writtenTargets = [];
-      return { ok: true, decision: await resolutionLog.append(decision), written: [] };
+      const saved = await resolutionLog.append(decision);
+      noteWrite();
+      return { ok: true, decision: saved, written: [] };
     }
     if (originalKind === "broken_link") throw new ControlError("BROKEN_LINK_NOT_WRITABLE", "Open the source file to repair this link, or acknowledge the scoped difference.", { status: 409 });
     // renderScalar's scalar branch would rewrite a YAML list OR map as a
@@ -299,6 +459,7 @@ export function createDiscrepancyOperations({
       decision.transactionState = "committed";
       decision.writtenTargets = staged.targets.map((target) => ({ layer: target.layer, path: target.path }));
       const saved = await resolutionLog.append(decision);
+      noteWrite();
       await transactionJournal.append({ id: transactionId, state: "committed", committedAt: new Date().toISOString() });
       await staged.cleanup();
       onWritten();
@@ -329,10 +490,11 @@ export function createDiscrepancyOperations({
   // converges. The host decides WHEN to call it (after a settled index pass).
   async function runAutomaticRules() {
     // This job runs after EVERY index pass, and project() below is a
-    // full-corpus resolve. With no enabled automatic rule there is nothing it
-    // could ever apply, so answer that from the rule stores (two small file
-    // reads) before paying for the corpus — the common case, since automatic
-    // rules are opt-in. Same `enabled !== false` reading as rule matching
+    // full-corpus resolve whenever the pass changed anything (which it just
+    // did). With no enabled automatic rule there is nothing it could ever
+    // apply, so answer that from the rule stores (two small file reads)
+    // before paying for the corpus — the common case, since automatic rules
+    // are opt-in. Same `enabled !== false` reading as rule matching
     // (discrepancies.mjs).
     const rules = await effectiveRules();
     if (!rules.some((rule) => rule.enabled !== false && rule.mode === "automatic")) return;
@@ -359,7 +521,7 @@ export function createDiscrepancyOperations({
         // previously scheduled action.
         const currentPayload = await project(15_000);
         if (!currentPayload.coverageComplete || currentPayload.indexing) return;
-        const current = currentPayload.discrepancies.find((item) => item.id === discrepancy.id);
+        const current = currentPayload.byId.get(discrepancy.id);
         if (!current || current.revision !== discrepancy.revision || current.status !== "auto_ready" || current.ruleConflict) return;
         const currentMatches = current.matchingRules.filter((item) => item.mode === "automatic");
         if (currentMatches.length !== 1 || currentMatches[0].id !== rule.id
@@ -382,6 +544,7 @@ export function createDiscrepancyOperations({
             contributorFingerprints: discrepancy.contributions.map((item) => ({ source: item.source, fingerprint: item.fingerprint })),
             contributions: discrepancy.contributions.map((item) => ({ layer: item.source, level: item.level, content: item.value, updated: item.updated })),
           });
+          noteWrite();
         }
       });
       return;
@@ -389,12 +552,17 @@ export function createDiscrepancyOperations({
   }
 
   return {
-    // reads
+    // projection reads
+    project, list, query, detail, summary,
+    // rules
     effectiveRules, rulesView, liveRuleFile,
     // decisions
     decide, applyDecision, ensureRecovery, runAutomaticRules,
     // rules + priorities
     approveSuggestion, patchRule, promoteRule, setPriority,
+    // hosts that append a decision outside these operations tell the memo
+    noteWrite,
+    close,
     // capabilities the host may want back (PR 3 write actions)
     readLiveSection,
   };

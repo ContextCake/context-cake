@@ -35,10 +35,10 @@ requireText(`app-v${sourceRelease.version}`, 'Source installation must use an ap
 requireText(sourceRelease.sha256, 'Archive checksum must remain visible in the generated page')
 
 requireOrder([
-  'Add a source you already have',
-  'Connect the AI client you use',
-  'Ask one question and inspect the answer',
-  'Need the engine without the app?',
+  'Choose a folder with Markdown files',
+  'Connect your AI tool',
+  'Run the test prompt',
+  'Run the source version on Intel Mac, Linux, or WSL.',
 ])
 
 forbidText('The next distribution layer', 'Planned distribution channels must not displace activation')

@@ -79,10 +79,10 @@ a minimal sediment/cake-slice mark. Renders as inline SVG. Favicon = the mark al
 
 ### Voice
 
-The README's voice is the brand voice: declarative, technical, zero filler.
-Tagline: **"Conflicts surfaced, not hidden."**
-Hero headline candidates: "Every layer of what your team knows — one effective view." /
-"Team knowledge, resolved."
+Plain and technically grounded. Write for people who work in technology but may not write
+software. Name what ContextCake does before introducing terms such as layers, resolution,
+OKF, or MCP, and explain those terms through their practical effect. The complete working
+guide is `specs/contextcake-site/voice.md`.
 
 ### Motion
 
@@ -262,12 +262,12 @@ acceptance criteria not addressed.** Do this before declaring the phase done.
 Everything below is verified against the engine as of this commit. Do not re-derive;
 do not invent copy where approved copy is given.
 
-### 11.1 Approved copy bank
+### 11.1 Copy source of truth
 
-- Tagline (footer, OG default): **"Conflicts surfaced, not hidden."**
-- Hero headline (shipped in scaffold): **"Every layer of what your team knows — one
-  effective view."**
-- Hero subhead: as in `apps/site/src/pages/index.astro` (keep).
+The public-site voice and copy rules live in `specs/contextcake-site/voice.md`. The current
+homepage and install page are the approved product explanation. Treat older headline and
+tagline candidates in git history as superseded.
+
 - Problem beats (§4.2), one short paragraph each:
   1. *Scattered* — your team's knowledge lives in repo docs, wikis, and heads; no two
      sources agree on what's current.

@@ -14,6 +14,7 @@ astro dev --background
 Before working here, read `specs/contextcake-site/spec.md` (EARS acceptance criteria)
 and `specs/contextcake-site/design.md` — §9 is the working contract: commands,
 structure, code style, and three-tier boundaries (✅ always / ⚠️ ask first / 🚫 never).
+For public-facing copy, also read `specs/contextcake-site/voice.md`.
 
 ## Architecture
 

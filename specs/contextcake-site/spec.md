@@ -18,9 +18,9 @@ provides a working install command.
 
 ## User Stories
 
-- As an **engineer evaluating ContextCake**, I want the core idea demonstrated visually in
+- As a **person evaluating ContextCake for a technical team**, I want the core idea demonstrated visually in
   under 10 seconds, so I can decide whether to keep reading.
-- As an **engineer adopting ContextCake**, I want a copy-paste install command and a
+- As a **person setting up ContextCake**, I want a clear download path and a
   5-minute quickstart, so I can see a cascade resolve on my own machine.
 - As an **agent operator**, I want reference docs for the MCP tools and manifest schema, so
   I can wire ContextCake into Claude/other agents without reading source.

@@ -8,32 +8,32 @@ const demoUrl = 'https://contextcake-console.pages.dev/';
 
 const narrativePoints = [
 	{
-		title: 'A source for each section',
-		body: 'Each selected value shows the layer it came from and the date of that source.',
+		title: 'Source and date for each section',
+		body: 'Every selected section shows which layer it came from and when that source changed.',
 	},
 	{
-		title: 'Structural discrepancies stay visible',
-		body: 'Shared OKF identities make aligned differences inspectable without claiming semantic contradiction detection.',
+		title: 'Other versions stay visible',
+		body: 'When the same section differs across layers, ContextCake keeps the other version beside the result.',
 	},
 	{
-		title: 'From the answer to the file',
-		body: 'Browse resolved concepts and their discrepancies, then open the document any section came from.',
+		title: 'Open the original file',
+		body: 'Start with the combined result, then open the document that supplied any section.',
 	},
 ];
 ---
 
 <Base
 	title="ContextCake demo"
-	description="See how ContextCake resolves company, team, and personal layers while keeping sources and disagreements visible."
+	description="See which company, team, or personal source supplies each part of a ContextCake answer."
 >
 	<main class="demo-page">
 		<section class="hero">
 			<div class="hero-copy">
 				<p class="eyebrow">Demo</p>
-				<h1>See how three layers become one answer.</h1>
+				<h1>See which source supplies each part of an answer.</h1>
 				<p class="lede">
-					This demo combines company policy, team practice, and a personal note. Open the
-					result to see which layer supplied each section and where another layer disagreed.
+					This example uses one company policy, one team decision, and one personal note.
+					Open the result to see how ContextCake combines them section by section.
 				</p>
 				<div class="actions">
 					<a class="cta primary" href="#demo-stage">Explore the console</a>
@@ -43,10 +43,10 @@ const narrativePoints = [
 
 			<aside class="scenario" aria-label="Demo framing">
 				<p class="scenario-label">What to look for</p>
-				<h2>Company, team, and personal layers.</h2>
+				<h2>Three sources with different priorities.</h2>
 				<p>
-					The same question can get a different answer at each layer. The resolver picks per
-					section and shows its work.
+					The same topic can differ across company, team, and personal files. ContextCake
+					chooses a source for each section and keeps the other version visible.
 				</p>
 			</aside>
 		</section>
@@ -109,7 +109,7 @@ const narrativePoints = [
 
 		<section class="signals">
 			<p class="eyebrow">Inside the console</p>
-			<h2>What to check in the result.</h2>
+			<h2>What the result shows.</h2>
 			<div class="signal-grid">
 				{narrativePoints.map((point) => (
 					<article class="signal">

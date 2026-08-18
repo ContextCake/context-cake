@@ -28,7 +28,7 @@ The tone is calm and direct. It is not cute, grand, breathless, or self-congratu
    compatible AI tool search and read your ContextCake sources" is more useful than
    "MCP-ready."
 5. **Earn every claim.** Use the exact fact: signed and notarized, six read-only tools, no
-   runtime packages, source and date on every section.
+   runtime packages, a source on every section, and a date when the source provides one.
 6. **Use the same name for the same thing.** On marketing pages, say "AI tool" by default.
    Use "client" or "agent" only when it is the exact product or interface term.
 7. **Make headings informative.** A reader scanning only the headings should understand the

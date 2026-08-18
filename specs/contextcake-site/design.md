@@ -95,7 +95,7 @@ equivalent.
 ```
 /            Homepage (custom Astro page, dark marketing)
 /docs/*      Starlight docs shell
-/demo        Full-page interactive cascade demo (Phase 5)
+/demo        Full-page interactive cascade demo
 /install     Install & setup (custom page; content gated on distribution decision)
 /changelog   Generated from GitHub releases at build time
 /404         In-brand
@@ -103,19 +103,15 @@ equivalent.
 
 ## 4. Homepage — section order
 
-1. **Hero** — headline, subhead, `gh release download` copy box (release-archive install,
-   not `npx`), CTAs (See the live demo → /demo, Read the docs → /docs, GitHub), cascade
-   visual. Launch state: static banded composite (real resolver output, bands striped by
-   layer color, provenance labels + dates on each band, one band showing a `conflicts[]`
-   chip). Phase 5 upgrades it to the animated stack→column→composite.
-2. **Problem** — three beats: knowledge scattered; agents read stale/contradictory docs;
-   overwriting loses the dissent.
-3. **How it works** — Stack / Resolve / Serve, one stratum color each.
-4. **Live demo strip** — embedded mini resolve view → links to /demo. (Phase 5; omit until then.)
-5. **Feature grid** — the seven features from spec AC.
-6. **For agents** — MCP tool table + a real `read_file` JSON response showing
-   `contributors`, per-section `sourceLayer`, `conflicts[]`.
-7. **Quickstart** — the 5-command path from README, then footer.
+1. **Hero** — plain value proposition, Mac download, live-demo and install-option links,
+   plus a static resolved-concept visual generated from real resolver output.
+2. **Problem** — one direct statement about company, team, and personal sources differing.
+3. **How it works** — three section-level merge rules with concrete examples.
+4. **App and AI tools** — what the Mac app does, what MCP connects, and the six read-only tools.
+5. **Packs** — short teaser and one route to the dedicated Packs page.
+6. **Details** — compact capability grid covering sources, conflicts, source kinds, review,
+   the MCP surface, and the dependency-free core.
+7. **Closing** — one Mac download action and one route to the other install options.
 
 ## 5. Docs information architecture
 
@@ -156,8 +152,8 @@ removed in the core re-arch.
 - **No Tailwind.** Styling = `tokens.css` custom properties + Astro scoped CSS. Keeps the
   dependency list short, consistent with project ethos.
 - **Icons:** Lucide, inlined as SVG (no icon-font, no emoji-as-icon).
-- **Hero/demo viz:** vanilla JS + SVG/canvas island. No three.js unless /demo genuinely
-  needs it (decide in Phase 5; occlusion risk noted in the brainstorm applies to /demo).
+- **Hero/demo:** the homepage renders real resolver output in Astro; `/demo` embeds the
+  canonical released Web Demo. Do not add a second renderer or visualization dependency.
 - **Demo data seam:** `apps/site/scripts/build-demo-data.mjs` enumerates concepts in
   `apps/playground/demo-layers/` (via the manifest) and calls the resolver per concept →
   `apps/site/src/data/demo-cascade.json`, run as a `prebuild` step. `resolver.mjs --concept`
@@ -168,21 +164,15 @@ removed in the core re-arch.
 ## 7. Deployment
 
 Cloudflare Pages, build root `apps/site/`, `npm run build` → `apps/site/dist`.
-Preview: push to main (`/deploy-preview`). Production: GitHub release (`/go-live`) →
-**contextcake.com** (registered 2026-07-02; the only TLD owned — .dev/.ai were available
-but not purchased). No secrets in the build; the GitHub-releases fetch is
-unauthenticated (private repo → skipped/empty until visibility resolves).
+Site-only changes deploy from `main`. An `app-v*` release deploys the site and matching Web
+Demo from the release commit. Production is **contextcake.com**. No secrets are included in
+the generated site.
 
-## 8. Build phases
+## 8. Delivery model
 
-| Phase | Deliverable | Status |
-|---|---|---|
-| 1 | Decisions (visibility, distribution, domain) | domain: **contextcake.com** · distribution: **versioned release archive first; source checkout secondary** |
-| 2 | Brand kit: logo SVG, tokens.css, OG template | scaffold has tokens; logo TODO |
-| 3 | Scaffold + homepage (static hero) | scaffold committed; homepage = agent task |
-| 4 | Docs port (all §5 pages) + `/doc-reviewer` pass | agent task |
-| 5 | Animated hero + /demo + demo-data seam | agent task (independent of 4) |
-| 6 | Launch pass: OG images, a11y audit, responsive 375/768/1024/1440, linkcheck, `/go-live` | agent task |
+The site, documentation, demo embed, and distribution routes are shipped. Ongoing changes
+land through focused pull requests, the site build gate, responsive review, and the
+deployment paths in §7.
 
 ## 9. Agent handoff — completeness
 
@@ -213,7 +203,7 @@ apps/site/
 ├── astro.config.mjs        # Starlight config: title, sidebar, customCss
 ├── package.json            # site-only deps
 ├── scripts/
-│   └── build-demo-data.mjs # Phase 5: resolver → demo-cascade.json
+│   └── build-demo-data.mjs # resolver → demo-cascade.json
 ├── public/                 # favicon, OG images, robots.txt
 └── src/
     ├── components/         # Hero.astro, StrataMark.astro, CopyCommand.astro, …
@@ -279,28 +269,26 @@ tagline candidates in git history as superseded.
   / **Serve** (personal amber). One sentence each, sourced from README's "layer cake"
   section.
 
-### 11.2 Feature grid (§4.5) — the seven items
+### 11.2 Capability grid (§4.6)
 
 | Feature | One-liner source |
 |---|---|
-| Section-level merge | README "higher layers win — per section" |
-| Conflicts carry dates | README `conflicts[]` description |
-| Provenance on every section | README `read_file` paragraph (`sourceLayer`, `frontmatterProvenance`) |
-| Foreign graphs stitch in | README `layers.json` shape (mcp source → OKF at read time) |
-| Write path captures from repos | README "Write path" pipeline |
-| Zero dependencies | README Quick start ("plain Node.js ≥ 18") + /install page framing |
-| Playground | `apps/playground/README.md` intro |
+| Sources and conflicting versions | Resolver section output (`sourceLayer`, optional `sourceUpdated`, `conflicts[]`) |
+| Folders, GitHub, and MCP sources | Manifest source adapters |
+| Review before sharing | Capture and promotion write path |
+| Six read-only MCP tools | `fixtures/mcp-tools-baseline.json` |
+| Plain Node.js core | Node.js 22+ core with built-ins only |
 
-### 11.3 "For agents" section (§4.6) — real payload
+### 11.3 Resolver-backed product proof
 
-The MCP tool table is README's four-row table verbatim. The JSON sample MUST be real
-output of:
+Any resolved concept shown on the homepage or install page MUST be real output of:
 
 ```bash
 node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db
 ```
 
-Truncate `content` strings for display; never alter structure. Shape (verified):
+The site may truncate content strings for display but must not alter the structure or
+hand-author a result. Shape (verified):
 
 ```jsonc
 {
@@ -332,38 +320,24 @@ Truncate `content` strings for display; never alter structure. Shape (verified):
    The directory is gitignored — this file is generated, never committed, never
    hand-edited. Wire as the site `prebuild` npm script.
 
-### 11.5 Hero visual (§4.1) & /demo — storyboard and constraints
+### 11.5 Hero visual and `/demo` constraints
 
 Band anatomy: a leading layer-colored **swatch** (a small rounded square) before the
-section heading — *not* a side-stripe border (amended 2026-07-03 after the design
-critique flagged `border-left` accents; the swatch reads as a legend key and keeps the
-deterministic detector clean); mono section heading; provenance right-aligned
-(`layer · date`); conflict chip in `--cc-conflict` on conflicted bands.
+section heading — not a side-stripe border; mono section heading; provenance visible;
+conflict state present when the resolved fixture contains one.
 
-Phase-5 animation storyboard: (1) three layer planes stacked in precedence order, each
-a card in its layer color; (2) a concept present on multiple layers highlights as a
-vertical column through the planes; (3) the column resolves into ONE banded composite —
-staggered band reveal, each band striped to its source layer, provenance labels visible
-from the first frame.
+The homepage uses the generated static composite. `/demo` embeds the canonical released
+Web Demo at `contextcake-console.pages.dev`; the site never builds another renderer copy.
 
 Hard constraints (from the reviewed prototype — violations were specifically flagged):
 - NEVER collapse to a single unstriped node (teaches whole-doc winner-takes-all — wrong).
 - Provenance visible by default, not behind a click.
 - Persona/viewer switching is a selector, not a linear "peel" (layer membership is a DAG).
-- `prefers-reduced-motion`: render the final composite statically, skip all motion.
+- `prefers-reduced-motion`: skip nonessential motion.
 
-Reference implementation: **`specs/contextcake-site/assets/cascade-viz-prototype.html`**
-(self-contained, no CDN, open directly in a browser) — implements the banded composite +
-persona selector against the real `primary-db` fixture. Vendored from the 2026-06-24
-brainstorm; treat as a working sketch to steal logic from, not code to ship.
+### 11.6 Ongoing definition of done
 
-### 11.6 Phase → acceptance-criteria traceability (definition of done)
-
-| Phase | Done when (spec.md §Acceptance Criteria) |
-|---|---|
-| 3 — Homepage | Homepage AC 1, 2, 4, 5, 6 (AC 3 in its static form) + all Site-wide ACs; `npm run build` exits 0 |
-| 4 — Docs port | All Docs ACs; every §5 page's TODO(agent) marker gone; `/doc-reviewer` pass clean |
-| 5 — Animation + /demo | Homepage AC 3 (animated), demo-data ACs (real resolver output), /demo page live |
-| 6 — Launch pass | OG images, a11y (4.5:1, focus, reduced-motion), responsive 375/768/1024/1440, zero broken links |
-
-Every phase ends the same way: run the §10 self-verification and paste the result.
+- `npm run build` exits 0, including install and internal-link checks.
+- Resolver output remains generated, never hand-authored.
+- Public copy follows `voice.md` and matches current product behavior.
+- Changed pages are checked at phone and desktop widths with no horizontal overflow.

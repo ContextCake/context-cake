@@ -38,7 +38,7 @@ mkdir contextcake &&
 tar -xzf ${archiveName} -C contextcake --strip-components=1 &&
 cd contextcake`;
 const resolveCommand = 'node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db';
-const firstPrompt = 'Use ContextCake to list the available concepts. Name the sources each one uses and the project questions it can help answer.';
+const testPrompt = 'Use ContextCake to list the available concepts. Name the sources each one uses and the project questions it can help answer.';
 
 const demoConceptId = 'decisions/primary-db';
 const primaryDb = demo.concepts.find((concept) => concept.id === demoConceptId);
@@ -82,19 +82,14 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 					<div class="download-module__top">
 						<div>
 							<p>Mac app</p>
-							<h2 id="download-title">ContextCake for Mac</h2>
-							<span>Apple silicon (M1 or later) · signed and notarized</span>
+							<h2 id="download-title">Apple silicon (M1 or later)</h2>
+							<span>{appDownloadName} · {formatFileSize(appDownloadBytes)} · signed and notarized</span>
 						</div>
 						<a class="button button--primary" href={appDownloadUrl} download>
 							<Icon name="download" size={18} />
 							Download for Mac
 						</a>
 					</div>
-					<ol class="mac-install-path" aria-label="Mac installation steps">
-						<li><span>1</span><strong>Download</strong><small>{appDownloadName} · {formatFileSize(appDownloadBytes)}</small></li>
-						<li><span>2</span><strong>Install</strong><small>Open the DMG and drag ContextCake to Applications.</small></li>
-						<li><span>3</span><strong>Choose a folder</strong><small>The app explains how to connect your AI tool next.</small></li>
-					</ol>
 					<div class="download-record" aria-label="Release details">
 						<span>{appTag}</span>
 						<a href={appReleaseUrl}>Release notes</a>
@@ -128,9 +123,9 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 				<div class="app-shell-preview">
 					<div class="preview-sidebar" aria-hidden="true">
 						<strong>ContextCake</strong>
-						<span class="active">Overview</span>
-						<span>Concepts</span>
-						<span>Conflicts</span>
+							<span class="active">Home</span>
+							<span>Sources</span>
+							<span>Review</span>
 					</div>
 					<div class="preview-content">
 						<p>First source</p>
@@ -163,7 +158,7 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 					<div class="step-copy">
 						<h3>Choose a folder with Markdown files</h3>
 						<p>
-							A repository docs folder, Obsidian vault, or wiki export works without conversion.
+								A repository docs folder, Obsidian vault, or Markdown wiki export works without conversion.
 							You can add more folders and repositories later.
 						</p>
 					</div>
@@ -195,12 +190,12 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 				<li>
 					<span class="step-number">3</span>
 					<div class="step-copy">
-						<h3>Run the test prompt</h3>
-						<p>
-							The app supplies a prompt that checks the connection. The answer should name
-							the source it used and show any conflicting version.
-						</p>
-						<CodeBlock lang="text" code={firstPrompt} label="First prompt" copy />
+							<h3>Run the test prompt</h3>
+							<p>
+								Try this prompt to check the connection. The answer should name
+								the source it used and show any conflicting version.
+							</p>
+							<CodeBlock lang="text" code={testPrompt} label="Test prompt" copy />
 					</div>
 					<figure class="result-preview" aria-labelledby="result-title">
 						<div class="result-header">
@@ -297,10 +292,10 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 				<h2 id="trust-title">How the Mac download is verified.</h2>
 			</div>
 			<div class="trust-copy">
-				<p>
-					The Mac app is Developer ID-signed and notarized. Each release lists the exact
-					DMG and its checksum. The updater verifies the signature before asking you to
-					relaunch, and ContextCake reads only the folders and MCP sources you add.
+					<p>
+						The Mac app is Developer ID-signed and notarized. Each release lists the exact
+						DMG and its checksum. Installed Macs reject an update unless it carries the same
+						Developer ID signature. ContextCake reads only the sources you add.
 				</p>
 				<dl class="release-details">
 					<div>
@@ -425,40 +420,6 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 	}
 	.download-module__top > div > span { color: var(--cc-text-body); font-size: 0.78rem; }
 	.download-module__top .button { flex: none; }
-	.mac-install-path {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 1px;
-		margin: 0;
-		padding: 1px 0 0;
-		list-style: none;
-		background: var(--cc-border);
-	}
-	.mac-install-path li {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
-		align-content: start;
-		gap: 0.15rem 0.55rem;
-		min-height: 5.8rem;
-		padding: 0.9rem 1rem;
-		background: var(--cc-surface-solid);
-	}
-	.mac-install-path li > span {
-		display: grid;
-		grid-row: span 2;
-		place-items: center;
-		width: 1.35rem;
-		height: 1.35rem;
-		margin-top: 0.05rem;
-		border-radius: 50%;
-		background: color-mix(in srgb, var(--cc-layer-team) 15%, var(--cc-surface-raised));
-		color: var(--cc-layer-team);
-		font-family: var(--cc-font-mono);
-		font-size: 0.65rem;
-		font-weight: 700;
-	}
-	.mac-install-path strong { color: var(--cc-text); font-size: 0.8rem; }
-	.mac-install-path small { color: var(--cc-text-muted); font-size: 0.69rem; line-height: 1.45; }
 	.download-record {
 		display: flex;
 		flex-wrap: wrap;
@@ -984,8 +945,6 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 		.conflict-row { grid-template-columns: auto minmax(0, 1fr); }
 		.result-row code,
 		.conflict-row code { grid-column: 2; white-space: normal; }
-		.mac-install-path { grid-template-columns: 1fr; }
-		.mac-install-path li { min-height: auto; }
 	}
 	@media (max-width: 520px) {
 		.install-page { padding-inline: 1rem; }

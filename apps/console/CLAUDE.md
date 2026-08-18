@@ -90,7 +90,26 @@ via their pre-hooks.
   prop or the step machine changes length under a mounted step index.
 - **Theming** — every color is a CSS variable in `src/styles.css` (light
   soft-control-plane default, dark primary surface under
-  `:root[data-theme="dark"]`). `C` in `src/theme.ts` holds the variable references; `css()` parses inline
+  `:root[data-theme="dark"]`). Beyond the primitives (page/surface/raised, the
+  ink ramp, lines, the layer trio and its blue/teal/amber ramps) the two blocks
+  declare **semantic role tokens** — `--cc-solid-bg/fg` (the inverted chip:
+  settings brand mark, resolver primary, and the light `--cc-cta-*` alias),
+  `--cc-cta-bg/fg` (the one primary action), `--cc-ask-bg/fg/ring` (Ask
+  button), `--cc-code-bg/fg` (terminal-style code block),
+  `--cc-neutral-fill-hover` — and components consume those. **A
+  `:root[data-theme="dark"] .cc-*` component override fails
+  `src/themes/tokens.test.ts` — extend a semantic token in both blocks (or add
+  one, named by role, not by color) instead.** The same suite refuses any
+  literal color (`#hex`, `rgb()`/`hsl()`/…, named colors) in a component
+  rule; a translucent tint is written as
+  `color-mix(in srgb, var(--cc-…) N%, transparent)`. `src/themes/contrast.ts`
+  (pure WCAG math + `var()`/`color-mix()` resolver) backs
+  `src/themes/contrast.test.ts`, which holds ink/body/caption and every
+  ramp/solid/code/cta/ask pair to a floor in both modes. The constants a
+  theme family extends — `PALETTES`, `PRIMITIVES`, `TOKEN_BLOCK_SELECTOR_RE`,
+  `INHERITS_FROM_LIGHT`, `LITERAL_ALLOWLIST` — live in `src/themes/gates.ts`,
+  not in a test file. `C` in
+  `src/theme.ts` holds the variable references; `css()` parses inline
   `"prop:val; …"` strings into style objects **and** remaps literal hex
   colors to their variables via `HEX_VARS`.
 - **Data** — `src/api.ts` is the single seam: demo mode imports a bundle
@@ -131,7 +150,10 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   literals and only theme correctly if the hex is in `HEX_VARS` in
   `src/theme.ts`. An unregistered hex renders fine in light mode and silently
   fails to adapt in dark mode. Prefer the `C.*` variable refs for new code;
-  if you must write a hex, add it to `HEX_VARS`.
+  if you must write a hex, add it to `HEX_VARS`. `src/theme.test.ts` walks
+  every string literal under `src/` and fails on an unregistered six-digit
+  hex, on any 3-, 4- or 8-digit hex (`css()` cannot remap those), and on a
+  `HEX_VARS` value that names no `--cc-*` token.
 - **Subscribing to the wrong store context fails silently.** Every view root is
   `React.memo`'d with no props, so the only thing that re-renders it is a context
   it actually subscribes to. A component that reads query-derived data without

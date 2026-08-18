@@ -107,6 +107,12 @@ src/
   store.tsx               application state and live reload/actions
   theme.ts                CSS-variable references and style helpers
   theme-mode.tsx          local theme plus optional desktop sync
+  themes/
+    contrast.ts           WCAG contrast + var()/color-mix() token resolver
+    css-blocks.ts         tiny stylesheet reader behind the theme gates
+    gates.ts              shared gate constants (PALETTES, PRIMITIVES, …)
+    tokens.test.ts        token-set / dark-block / no-override gates
+    contrast.test.ts      readability floors per palette and mode
   App.tsx                 shell, modal coordination, and keyboard ownership
   components/
     Sidebar.tsx           navigation, resize/collapse, mobile drawer

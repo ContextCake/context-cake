@@ -163,7 +163,7 @@ node write.mjs --signals <file> --manifest <file> [--profile <id>] --target-laye
 | `--signals <file>` | yes | The `signals.json` produced by `ingest.mjs`. |
 | `--manifest <file>` | yes | Manifest whose layers name the write targets. |
 | `--profile <id>` | no | Explicit profile override; otherwise use cwd mapping then `default`. |
-| `--target-layer <name>` | no | Curated local OKF layer to write into. Plain Markdown folders and live layers are rejected. Defaults to the highest eligible level below 3. |
+| `--target-layer <name>` | no | Curated local OKF layer to write into. Plain Markdown folders and live layers are rejected. Defaults to the highest eligible layer below the top of the cascade. |
 | `--dry-run` | no | Report what would be written without touching disk. |
 | `--help`, `-h` | no | Print usage and exit. |
 

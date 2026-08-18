@@ -41,6 +41,12 @@ function main() {
       requestedProfile: args.profile ?? null,
       cwd: process.cwd(),
     });
+    // The top of the cascade is whatever the profile's highest level IS — over
+    // every layer, before the eligibility filter below drops the ones this
+    // tool cannot write to. A hand-authored 5/4 or a 2/0 manifest with no
+    // personal layer has a top too; the literal `3` this replaced only knew
+    // the documented default.
+    const topLevel = topCascadeLevel(runtime.selection.layers);
     const layers = runtime.selection.layers
       // Plain Markdown folders and live repositories are read/capture surfaces,
       // not batch-ingest targets. Only curated OKF layers are writable here.
@@ -52,7 +58,7 @@ function main() {
         root: path.resolve(runtime.manifestDir, layer.path),
       }));
 
-    const targetLayer = selectTargetLayer(layers, args["target-layer"]);
+    const targetLayer = selectTargetLayer(layers, args["target-layer"], topLevel);
     return writeSignals(signals, targetLayer, { dryRun, date });
   });
 
@@ -165,7 +171,29 @@ function inferType(destination) {
   return "context";
 }
 
-function selectTargetLayer(layers, requested) {
+// The highest level any layer in the selected profile carries — the top of
+// the cascade, whatever integer that happens to be.
+export function topCascadeLevel(layers) {
+  let top = Number.NEGATIVE_INFINITY;
+  for (const layer of layers) {
+    const level = Number(layer.level);
+    if (Number.isFinite(level) && level > top) top = level;
+  }
+  return top;
+}
+
+/**
+ * Which eligible layer a batch write lands in when the caller didn't say.
+ * The top of the cascade is the personal layer by convention, and captured
+ * signals are shared context, so the default is the highest eligible layer
+ * BELOW the top — team on a 3/2/0 manifest, 4 on a hand-authored 5/4, the 0
+ * layer on a 2/0 manifest that has no personal layer at all. `topLevel` is
+ * measured over every layer in the profile (not just the eligible ones), so a
+ * Markdown-folder personal layer still counts as the top even though it can
+ * never be a target. Only when nothing sits below the top does the top layer
+ * itself get written, with a warning.
+ */
+export function selectTargetLayer(layers, requested, topLevel = topCascadeLevel(layers)) {
   if (layers.length === 0) throw new Error("Manifest contains no layers.");
 
   if (requested) {
@@ -174,12 +202,11 @@ function selectTargetLayer(layers, requested) {
     return layer;
   }
 
-  // Default: highest level that isn't personal (< 3), or level 3 if that's the only option.
   const sorted = [...layers].sort((a, b) => b.level - a.level);
-  const nonPersonal = sorted.find((l) => l.level < 3);
-  if (nonPersonal) return nonPersonal;
+  const belowTop = sorted.find((l) => l.level < topLevel);
+  if (belowTop) return belowTop;
 
-  console.warn("Warning: only a personal layer (level 3) is available. Pass --target-layer to choose.");
+  console.warn("Warning: only the top-of-cascade layer is writable — pass --target-layer to choose.");
   return sorted[0];
 }
 
@@ -224,7 +251,8 @@ Writes captured OKF concepts from ingest signals into a curated local OKF layer.
   review_required → staged under _review/ for human approval
   ignore / local  → skipped
 
-Default target layer: highest level < 3 in the manifest (team, group, or company).
+Default target layer: the highest eligible layer below the top of the cascade
+(team, group, or company — never the top layer unless it is the only one).
 Pass --target-layer <name> to specify explicitly. Profile selection order is
 explicit --profile, deepest project mapping for the current working directory,
 then default. Plain Markdown-folder sources and live layers are never batch

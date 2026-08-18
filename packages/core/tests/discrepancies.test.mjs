@@ -478,7 +478,10 @@ test("candidate search stays bounded: 1,500 dangling links over 3,000 ids, deter
   const first = buildDiscrepancies([...ids, ...linkers], { coverageComplete: true }).discrepancies.filter((item) => item.kind === "broken_link");
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
   assert.equal(first.length, 1500);
-  assert.equal(elapsedMs < 1500, true, `candidate search took ${elapsedMs.toFixed(0)}ms`);
+  // ~300ms on a laptop; the bound exists to catch a quadratic blowup (the
+  // unbanded first cut took 9s here), not to pin the constant, so it leaves
+  // room for a loaded CI runner.
+  assert.equal(elapsedMs < 3000, true, `candidate search took ${elapsedMs.toFixed(0)}ms`);
   const second = buildDiscrepancies([...ids, ...linkers], { coverageComplete: true }).discrepancies.filter((item) => item.kind === "broken_link");
   assert.deepEqual(second.map((item) => [item.id, item.candidates, item.bestCandidate]), first.map((item) => [item.id, item.candidates, item.bestCandidate]));
   assert.equal(first.filter((item) => item.bestCandidate).length >= 750, true, "renames and case slips resolve to a best candidate");

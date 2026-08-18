@@ -12,7 +12,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 core="$repo_root/packages/core/src"
 tmpdir="$(mktemp -d)"
-PORT="${PORT:-8871}"
+PORT="${PORT:-8907}"
 BASE="http://127.0.0.1:$PORT"
 PID=""
 cleanup() { [ -n "$PID" ] && kill "$PID" 2>/dev/null; rm -rf "$tmpdir"; }
@@ -124,6 +124,23 @@ FILES="$(cd "$live" && git show --name-only --format= HEAD | sed '/^$/d')"
 [ ! -f "$live/.contextcake.lock" ] || fail "repo lock released"
 pass "decision committed exactly the concept file, pushed, tree clean"
 
+# ---- 1b. the legacy "change a past decision" route takes the same locked path -------
+echo "legacy change-decision route: same locked commit"
+RID="$(JQ 'd.decision.id' <<<"$OUT")"
+CHANGED="$(curl -s -X POST -H 'content-type: application/json' \
+  -d "{\"conceptId\":\"decisions/db\",\"sectionKey\":\"choice\",\"selectedLayer\":\"team-live\",\"method\":\"manual\",\"resolutionId\":\"$RID\"}" \
+  "$BASE/api/conflict-resolutions")"
+[ "$(JQ 'String(d.ok)' <<<"$CHANGED")" = "true" ] || fail "change decision failed" "$CHANGED"
+grep -q 'team answer' "$live/decisions/db.md" || fail "changed decision restored the team answer in the live file"
+grep -q 'team answer' "$personal/decisions/db.md" || fail "changed decision restored the team answer in the personal file"
+[ "$(cd "$live" && git rev-list --count HEAD)" = "3" ] || fail "change decision added exactly one commit" "$(cd "$live" && git log --oneline)"
+[ "$(cd "$live" && git show HEAD:decisions/db.md | grep -c 'team answer')" = "1" ] || fail "the change-decision commit holds the restored bytes"
+[ -z "$(cd "$live" && git status --porcelain)" ] || fail "tree clean after change decision" "$(cd "$live" && git status --porcelain)"
+[ "$(git -C "$bare" rev-parse HEAD)" = "$(cd "$live" && git rev-parse HEAD)" ] || fail "change decision pushed"
+[ "$(JQ 'd.resolution.liveLayerCommit?.layer' <<<"$CHANGED")" = "team-live" ] || fail "change decision records liveLayerCommit" "$CHANGED"
+MSG="$(cd "$live" && git log -1 --format=%s)"
+pass "change decision committed through git-core, pushed, tree clean"
+
 # ---- 2. choosing the live layer's own answer leaves its file byte-identical: no commit
 echo "live-layer decision: byte-identical live file is not a commit"
 discrepancy decisions/cache
@@ -201,7 +218,7 @@ RMSG="$(cd "$live" && git log -1 --format=%s)"
 [ "$RMSG" = "chore(contextcake): roll back uncommitted discrepancy transaction tx-crash" ] || fail "recovery committed the restore" "$RMSG
 $(cat "$tmpdir/host.log")
 $(tail -3 "$JOURNAL")"
-grep -q 'personal answer' "$target" || fail "recovery restored the pre-crash bytes"
+grep -q 'team answer' "$target" || fail "recovery restored the pre-crash bytes"
 grep -q 'crashed write' "$target" && fail "crashed bytes survived recovery"
 [ -z "$(cd "$live" && git status --porcelain)" ] || fail "tree clean after recovery" "$(cd "$live" && git status --porcelain)"
 [ ! -f "$target.contextcake-tx-crash-0.new" ] && [ ! -f "$target.contextcake-tx-crash-0.bak" ] || fail "recovery removed the staged/backup files"

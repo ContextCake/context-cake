@@ -375,7 +375,7 @@ export function buildLinkIndex(concepts) {
  */
 export function candidatesFor(target, { linkingConceptId = "", linkingConceptType = "concept" } = {}, index, memo = null) {
   const dir = posix.dirname(String(linkingConceptId));
-  const memoKey = `${target} ${dir} ${linkingConceptType}`;
+  const memoKey = `${target}\u0000${dir}\u0000${linkingConceptType}`;
   if (memo?.has(memoKey)) return memo.get(memoKey);
   const found = new Map(); // id -> { id, reason, confidence }
   // Rules run in priority order and the first one to name an id keeps it: an

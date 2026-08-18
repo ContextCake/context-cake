@@ -279,6 +279,7 @@ export function createDiscrepancyOperations({
     if (!rule) throw new ControlError("RULE_NOT_FOUND", "Local discrepancy rule not found", { status: 404 });
     const live = liveRuleFile();
     if (!live) throw new ControlError("NO_LIVE_LAYER", "This profile has no writable live team layer", { status: 409 });
+    if (!git) throw new ControlError("GIT_UNAVAILABLE", "This host cannot commit into the live team layer.", { status: 500 });
     const preview = {
       id: rule.id, scope: "team", mode: "recommend", enabled: true,
       match: rule.match, action: rule.action, evidenceDecisionIds: rule.evidenceDecisionIds,
@@ -446,46 +447,61 @@ export function createDiscrepancyOperations({
     const roots = fileRoots();
     const writableSources = discrepancy.contributions.map((item) => item.source).filter((source) => roots.has(source));
     if (writableSources.length === 0) throw new ControlError("SOURCE_NOT_WRITABLE", "None of this discrepancy's contributors is locally writable. Open the source files to resolve it.", { status: 409 });
-    // Stage + journal, as one step, so it can run either directly or inside
-    // the live layer's git lock (below): staging reads and backs up each
-    // target, and for a file another ContextCake process may be pulling or
-    // writing, that read has to happen under the same lock the rename does.
+    const stage = (txId) => originalKind === "frontmatter_value"
+      ? stageFrontmatterTransaction(JSON.stringify({
+        conceptId: discrepancy.conceptId, key: discrepancy.key,
+        layers: writableSources, value,
+        expectedValues: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])),
+      }), roots, txId)
+      : stageSectionTransaction(JSON.stringify({
+        conceptId: discrepancy.conceptId, sectionKey: discrepancy.key,
+        layers: writableSources, content: value,
+        expectedContent: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])), requireAll: true,
+      }), roots, txId);
+    const { saved, written, git: gitResult } = await commitDecisionWrite({
+      transactionId, conceptId: discrepancy.conceptId, layers: writableSources, stage, decision, pushNow,
+      message: `chore(contextcake): resolve ${originalKind} ${discrepancy.conceptId}#${discrepancy.key} (${action})`,
+    });
+    return { ok: true, decision: saved, written, ...(gitResult ? { git: gitResult } : {}) };
+  }
+
+  /**
+   * The shared tail of every decision that changes source content — the
+   * discrepancy actions above and the legacy "change a past decision" route:
+   * stage + journal `prepared`, rename, append the decision, journal
+   * `committed`, clean up, tell the host, push. Fills `transactionState`,
+   * `writtenTargets`, and `liveLayerCommit` on `decision` before appending it.
+   *
+   * F30: when one of `layers` is the live team layer — a git working tree
+   * shared with every teammate's agent — staging AND the rename run inside
+   * git-core's repo lock as one pathspec commit; never a bare rename that
+   * leaves the clone dirty and the change unpushed. Staging is inside the lock
+   * deliberately: the read that backs a target up must not race another
+   * process's pull of the same file.
+   */
+  async function commitDecisionWrite({ transactionId, conceptId, layers, message, stage, decision, pushNow = true }) {
+    const now = new Date().toISOString();
+    const live = liveLayer();
+    const liveTouched = live !== null && layers.includes(live.name);
+    if (liveTouched && !git) throw new ControlError("GIT_UNAVAILABLE", "This host cannot commit into the live team layer.", { status: 500 });
+    const liveRel = liveTouched ? [`${conceptId}.md`] : [];
     let staged = null;
-    const stage = async () => {
-      staged = originalKind === "frontmatter_value"
-        ? await stageFrontmatterTransaction(JSON.stringify({
-          conceptId: discrepancy.conceptId, key: discrepancy.key,
-          layers: writableSources, value,
-          expectedValues: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])),
-        }), roots, transactionId)
-        : await stageSectionTransaction(JSON.stringify({
-          conceptId: discrepancy.conceptId, sectionKey: discrepancy.key,
-          layers: writableSources, content: value,
-          expectedContent: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])), requireAll: true,
-        }), roots, transactionId);
+    const stageAndJournal = async () => {
+      staged = await stage(transactionId);
       await transactionJournal.append({
         id: transactionId, state: "prepared", preparedAt: now,
         targets: staged.targets.map((target) => ({ path: target.path, staged: target.staged, backup: target.backup })),
       });
     };
-
-    // F30: a contributor inside the live team layer is a git working tree
-    // shared with every teammate's agent. Its bytes change only inside
-    // git-core's repo lock, as one pathspec commit — never a bare rename that
-    // leaves the clone dirty and the change unpushed.
-    const live = liveLayer();
-    const liveTouched = live !== null && writableSources.includes(live.name);
-    if (liveTouched && !git) throw new ControlError("GIT_UNAVAILABLE", "This host cannot commit into the live team layer.", { status: 500 });
-    const liveRel = liveTouched ? [`${discrepancy.conceptId}.md`] : [];
-    const message = `chore(contextcake): resolve ${originalKind} ${discrepancy.conceptId}#${discrepancy.key} (${action})`;
     let written = null;
     let gitOutcome = null; // { layer, paths, committed }
     let rolledBackUnderLock = false;
+    let saved = null;
     try {
       if (liveTouched) {
         const result = await git.commitPathsWithMutation(live.root, liveRel, message, {
           mutate: async () => {
-            await stage();
+            await stageAndJournal();
             const actual = relativeToLive(live, staged.targets.filter((target) => target.layer === live.name).map((target) => target.path));
             if (actual.length !== 1 || actual[0] !== liveRel[0]) {
               throw new Error(`live layer target resolved to ${JSON.stringify(actual)}, expected ${liveRel[0]}`);
@@ -502,25 +518,14 @@ export function createDiscrepancyOperations({
         });
         gitOutcome = { layer: live.name, paths: liveRel, committed: result.committed === true };
       } else {
-        await stage();
+        await stageAndJournal();
         written = await staged.commit();
       }
       decision.transactionState = "committed";
       decision.writtenTargets = staged.targets.map((target) => ({ layer: target.layer, path: target.path }));
       if (gitOutcome?.committed) decision.liveLayerCommit = { layer: gitOutcome.layer, paths: gitOutcome.paths };
-      const saved = await resolutionLog.append(decision);
+      saved = await resolutionLog.append(decision);
       noteWrite();
-      await transactionJournal.append({ id: transactionId, state: "committed", committedAt: new Date().toISOString() });
-      await staged.cleanup();
-      onWritten();
-      const response = { ok: true, decision: saved, written };
-      if (gitOutcome) {
-        // Push after the decision is durable, so a slow or offline remote can
-        // never leave the journal `prepared`. Never thrown: offline is a
-        // queued commit that POST /api/sources/sync lands later.
-        response.git = { ...gitOutcome, ...(gitOutcome.committed && pushNow ? await pushLive(live.root) : { pushed: false, queued: false }) };
-      }
-      return response;
     } catch (error) {
       // The live layer's lock is held by another ContextCake process: staging
       // runs inside that lock, so nothing was read, backed up, journaled, or
@@ -537,9 +542,20 @@ export function createDiscrepancyOperations({
         throw new ControlError("RECOVERY_REQUIRED", `A write could not be rolled back automatically. Recovery is required: ${error.message}`, { status: 500 });
       }
       try {
-        // git-core already ran the rollback under its lock when the commit
-        // failed; anything else (a rename failure) is restored here.
-        if (!rolledBackUnderLock) await staged.rollback();
+        if (gitOutcome?.committed) {
+          // The git commit landed but the decision never became durable (the
+          // log append failed). Restoring the bytes with a bare copy would
+          // leave HEAD holding a write the log says never happened, riding
+          // the next push — so the restore is itself a commit, under the
+          // same lock, exactly as startup recovery would record it.
+          await git.commitPathsWithMutation(live.root, liveRel, `chore(contextcake): roll back uncommitted discrepancy transaction ${transactionId}`, {
+            mutate: () => staged.rollback(), rollback: async () => {}, author: live.profileName, skipIfClean: true,
+          });
+        } else if (!rolledBackUnderLock) {
+          // git-core already ran the rollback under its lock when the commit
+          // failed; anything else (a rename failure) is restored here.
+          await staged.rollback();
+        }
         await transactionJournal.append({ id: transactionId, state: "rolled_back", rolledBackAt: new Date().toISOString(), error: error.message });
         await staged.cleanup();
       } catch (rollbackError) {
@@ -548,6 +564,26 @@ export function createDiscrepancyOperations({
       }
       throw new ControlError("ROLLED_BACK", `Nothing was changed. ${error.message}`, { status: 409 });
     }
+    // From here the decision is durable and the files are what the log says
+    // they are, so nothing below may roll anything back. A journal or cleanup
+    // failure is reported, not fatal: startup recovery reconciles a `prepared`
+    // transaction against the committed decision ("decision log confirmed
+    // commit") and removes the leftovers.
+    try {
+      await transactionJournal.append({ id: transactionId, state: "committed", committedAt: new Date().toISOString() });
+      await staged.cleanup();
+    } catch (error) {
+      console.error(`contextcake: decision ${saved.id} committed but its journal could not be finalized (${error.message}); startup recovery will reconcile it`);
+    }
+    onWritten();
+    let gitResult = null;
+    if (gitOutcome) {
+      // Push after the decision is durable, so a slow or offline remote can
+      // never leave the journal `prepared`. Never thrown: offline is a queued
+      // commit that POST /api/sources/sync lands later.
+      gitResult = { ...gitOutcome, ...(gitOutcome.committed && pushNow ? await pushLive(live.root) : { pushed: false, queued: false }) };
+    }
+    return { saved, written, git: gitResult };
   }
 
   // Which of `absPaths` sit inside the live layer's root, as the relative
@@ -667,7 +703,7 @@ export function createDiscrepancyOperations({
     // rules
     effectiveRules, rulesView, liveRuleFile,
     // decisions
-    decide, applyDecision, ensureRecovery, runAutomaticRules,
+    decide, applyDecision, commitDecisionWrite, ensureRecovery, runAutomaticRules,
     // rules + priorities
     approveSuggestion, patchRule, promoteRule, setPriority,
     // hosts that append a decision outside these operations tell the memo

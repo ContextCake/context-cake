@@ -98,25 +98,35 @@ and is called out in the spec.
 `stageSectionTransaction` and `stageFrontmatterTransaction` are the guarded
 writers every host uses, and they must not know what git is: a `files`
 folder, an `okf-local` bundle, and a live team clone all stage the same way.
-Whether a target is inside the live layer's root is a property of the
-manifest (`resolveLiveLayer`), and the operation already reads the manifest
-view. So the operation stages, journals `prepared`, then asks: are any staged
-targets inside the live root? If so the commit callback runs **inside**
+Whether a contributor is the live layer is a property of the manifest
+(`resolveLiveLayer`), and the operation already reads the manifest view. So
+`commitDecisionWrite` — the one write tail every content-changing decision
+takes, the legacy "change a past decision" route included — asks first: is
+one of the layers being written the live layer? If so, staging, the journal's
+`prepared` record, and the rename all run **inside**
 `git-core.commitPathsWithMutation` — the same lock and pathspec-only commit
-the capture and rules-promotion paths use — and a `LockBusy` answers 409
-`LIVE_LAYER_BUSY` with nothing changed. Push is once per request; offline is
-`{ pushed: false, queued: true }` in the response, never a thrown error, and
-`POST /api/sources/sync` lands the queue.
+the capture and rules-promotion paths use. Staging goes inside the lock on
+purpose: it reads the target to back it up, and that read must not race
+another process's pull of the same file. A `LockBusy` therefore answers 409
+`LIVE_LAYER_BUSY` with nothing read, journaled, or renamed. Push is once per
+request, after the decision is durable; offline is `{ pushed: false, queued:
+true }` in the response, never a thrown error, and `POST /api/sources/sync`
+lands the queue.
 
 `skipIfClean` exists in git-core for one reason: choosing the source that
 already wins writes its own bytes back to that layer, and a byte-identical
 file is not a commit — git would refuse "nothing to commit" and the decision
-would roll back for no reason.
+would roll back for no reason. `--literal-pathspecs` rides every pathspec
+call because the paths are concept ids, and a `[` in a name is a glob.
 
-The recovery edge is the crash between the git commit and the decision
-append: startup recovery restores the backups (the log has no decision, so
-the write did not happen), and now the tree disagrees with HEAD. Recovery
-commits the restored paths as `chore(contextcake): roll back uncommitted
-discrepancy transaction <id>` from inside the journal's restore step, before
-the journal marks `rolled_back`, so a failed commit leaves the transaction
-retryable rather than half-recorded.
+Two edges close the gap between "git has it" and "the log has it". If the
+git commit lands and the decision append then throws, the restore is itself a
+commit under the same lock (`chore(contextcake): roll back uncommitted
+discrepancy transaction <id>`), never a bare copy that would leave HEAD
+holding a write the log denies. If the process dies in that window instead,
+startup recovery restores the backups and commits the restore from inside
+the journal's restore step (`onRestored`), before the journal marks
+`rolled_back`, so a failed commit leaves the transaction retryable rather
+than half-recorded. And once the decision *is* appended, nothing rolls back:
+a journal or cleanup failure after that point is logged, and recovery
+reconciles the `prepared` record against the committed decision.

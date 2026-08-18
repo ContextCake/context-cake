@@ -2425,20 +2425,13 @@ export function createEngineService({
       return { ok: true, resolution: result.decision, written: result.written };
     }
 
+    // Changing a past decision reuses the same staged, journaled, live-layer-
+    // aware write every discrepancy decision takes (control/discrepancies.mjs
+    // commitDecisionWrite): a contributor inside the live team layer commits
+    // under git-core's lock here too, and the projection memo is told.
     const transactionId = randomUUID();
-    const staged = await stageSectionTransaction(JSON.stringify({
-      conceptId,
-      sectionKey,
-      layers: contributions.map((item) => item.layer),
-      content: chosen.content,
-      expectedContent,
-      requireAll: true,
-    }), fileRoots(), transactionId);
     await conflictResolutionLog.prepare();
-    await discrepancyTransactionJournal.append({
-      id: transactionId, state: "prepared", preparedAt: new Date().toISOString(),
-      targets: staged.targets.map((target) => ({ path: target.path, staged: target.staged, backup: target.backup })),
-    });
+    const layers = contributions.map((item) => item.layer);
     const record = {
       schemaVersion: 2, id: randomUUID(), discrepancyId: `section_content::${conceptId}::${sectionKey}`,
       conflictId,
@@ -2453,35 +2446,19 @@ export function createEngineService({
       actor: "local-user",
       decidedAt: new Date().toISOString(),
       discrepancyKind: "section_content", revision: `legacy-change:${supersedes}`,
-      action: "choose_contribution", transactionId, transactionState: "committed",
+      action: "choose_contribution", transactionId,
       contributorFingerprints: contributions.map((item) => ({ source: item.layer, fingerprint: createHash("sha256").update(item.content).digest("hex") })),
-      writtenTargets: staged.targets.map((target) => ({ layer: target.layer, path: target.path })),
       learningPattern: null, ruleAction: null,
       ...(supersedes ? { supersedes } : {}),
     };
-    try {
-      const written = await staged.commit();
-      const saved = await conflictResolutionLog.append(record);
-      // A decision appended outside the control operations still has to
-      // move the projection memo — the log's stat covers the next process,
-      // this covers this one.
-      discrepancyOps.noteWrite();
-      await discrepancyTransactionJournal.append({ id: transactionId, state: "committed", committedAt: new Date().toISOString() });
-      await staged.cleanup();
-      invalidateIndex();
-      return { ok: true, resolution: saved, written };
-    } catch (error) {
-      try {
-        await staged.rollback();
-        await discrepancyTransactionJournal.append({ id: transactionId, state: "rolled_back", rolledBackAt: new Date().toISOString(), error: error.message });
-        await staged.cleanup();
-        throw httpError(409, `Nothing was changed. ${error.message}`);
-      } catch (rollbackError) {
-        if (rollbackError.status === 409) throw rollbackError;
-        await discrepancyTransactionJournal.append({ id: transactionId, state: "recovery_required", failedAt: new Date().toISOString(), error: `${error.message}; rollback failed: ${rollbackError.message}` });
-        throw httpError(500, `A write could not be rolled back automatically. Recovery is required: ${rollbackError.message}`);
-      }
-    }
+    const { saved, written } = await discrepancyOps.commitDecisionWrite({
+      transactionId, conceptId, layers, decision: record,
+      message: `chore(contextcake): resolve section_content ${conceptId}#${sectionKey} (choose_contribution)`,
+      stage: (txId) => stageSectionTransaction(JSON.stringify({
+        conceptId, sectionKey, layers, content: chosen.content, expectedContent, requireAll: true,
+      }), fileRoots(), txId),
+    });
+    return { ok: true, resolution: saved, written };
   }
 
   // The one full-corpus resolve, shared by everything that needs it. Before

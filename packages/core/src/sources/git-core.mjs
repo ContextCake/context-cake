@@ -194,20 +194,26 @@ export async function commitPathsWithMutation(root, paths, message, {
   }, { lockRetryMs, lockRetries });
 }
 
+// The named paths are file names, not patterns: a concept id with `*`, `?`,
+// or `[` in it (`db[1].md`) would otherwise be a glob that sweeps a dirty
+// sibling (`db1.md`) into the pathspec commit. Every pathspec-taking call
+// below carries this so callers never have to escape.
+const LITERAL = "--literal-pathspecs";
+
 // True when none of the named paths differs from HEAD/index — modified,
 // staged, or untracked all count as dirty. Untracked files are listed
 // individually so a new file inside a listed directory is seen.
 async function pathsClean(root, paths) {
-  const status = await runGit(root, ["status", "--porcelain", "--untracked-files=all", "--", ...paths]);
+  const status = await runGit(root, [LITERAL, "status", "--porcelain", "--untracked-files=all", "--", ...paths]);
   return status.stdout === "";
 }
 
 async function commitPathsUnlocked(root, paths, message, author) {
-  await runGit(root, ["add", "--", ...paths]);
+  await runGit(root, [LITERAL, "add", "--", ...paths]);
   const ident = (await hasIdentity(root)) ? [] : identityArgs(author);
   // Pathspec commit: commit ONLY these paths, so a pre-existing staged change
   // (e.g. a prior failed op) can't be swept into this commit's message.
-  await runGit(root, [...ident, "commit", "-m", message, "--", ...paths]);
+  await runGit(root, [LITERAL, ...ident, "commit", "-m", message, "--", ...paths]);
   return { committed: true };
 }
 

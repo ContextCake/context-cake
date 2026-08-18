@@ -33,6 +33,15 @@
   --cc-amber-fill: #F6EADA; --cc-amber-fill2: #EFD9BC; --cc-amber-stroke: #C39A4A;
   --cc-amber-stroke-e: #C95F3F; --cc-amber-text: #6A3A24; --cc-amber-text2: #8D6640; --cc-amber-soft: #E2C994;
 
+  /* Semantic roles. Components use these — never a per-theme component
+     override — so a palette only has to redeclare tokens, not selectors
+     (themes/tokens.test.ts refuses a dark-only component selector). */
+  --cc-neutral-fill-hover: rgba(21,25,23,0.09);   /* pressed/hovered glass fill */
+  --cc-solid-bg: #17241f; --cc-solid-fg: #fffdf6; /* inverted "solid" chip: brand mark, resolver primary, cta in light */
+  --cc-cta-bg: var(--cc-solid-bg); --cc-cta-fg: var(--cc-solid-fg); /* the one big call-to-action */
+  --cc-ask-bg: var(--cc-solid-bg); --cc-ask-fg: var(--cc-solid-fg); --cc-ask-ring: transparent; /* Ask ContextCake button */
+  --cc-code-bg: #17201c; --cc-code-fg: #e9eee9;   /* terminal-style code block, dark in every mode */
+
   --cc-scrim: rgba(21,25,23,0.24);
   --cc-header-bg: rgba(255,253,246,0.74);
   /* z-index scale (drawer sits below the chat panel + setup wizard at 60) */
@@ -100,6 +109,12 @@
   --cc-amber-fill: rgba(201,95,63,0.17); --cc-amber-fill2: rgba(201,95,63,0.24); --cc-amber-stroke: #D9AB53;
   --cc-amber-stroke-e: #E07A56; --cc-amber-text: #F0C08B; --cc-amber-text2: #D7A76F; --cc-amber-soft: rgba(217,171,83,0.34);
 
+  --cc-neutral-fill-hover: rgba(243,239,230,0.10);
+  --cc-solid-bg: #E8E0D0; --cc-solid-fg: #11130F;
+  --cc-cta-bg: var(--cc-teal-stroke-e); --cc-cta-fg: var(--cc-on-teal);
+  --cc-ask-bg: rgba(141,195,168,0.16); --cc-ask-fg: #F3EFE6; --cc-ask-ring: rgba(141,195,168,0.08);
+  --cc-code-bg: #0a0d0b; --cc-code-fg: #e8eee9;
+
   --cc-scrim: rgba(0,0,0,0.62);
   --cc-header-bg: rgba(28,29,26,0.86);
   --cc-shadow: rgba(0,0,0,0.42);
@@ -159,24 +174,8 @@ body {
 
 button { font-family: inherit; }
 
-.cc-app-shell {
-  min-height: 100vh;
-  padding: 18px 20px 24px;
-  color: var(--cc-ink);
-  background:
-    radial-gradient(circle at 16% 12%, rgba(53,111,145,0.10), transparent 28%),
-    radial-gradient(circle at 72% 22%, rgba(201,95,63,0.09), transparent 24%),
-    linear-gradient(180deg, rgba(255,253,246,0.30), rgba(244,243,234,0.86)),
-    var(--cc-page);
-}
-
-:root[data-theme="dark"] .cc-app-shell {
-  background:
-    radial-gradient(circle at 16% 12%, rgba(111,160,184,0.10), transparent 28%),
-    radial-gradient(circle at 72% 22%, rgba(224,122,86,0.10), transparent 24%),
-    linear-gradient(180deg, rgba(28,29,26,0.20), rgba(16,17,15,0.94)),
-    var(--cc-page);
-}
+/* .cc-app-shell geometry and background live in the Mac-first section near
+   the end of this file. */
 
 .cc-shell-inner {
   max-width: 1600px;
@@ -266,20 +265,10 @@ button { font-family: inherit; }
 
 .cc-nav-label { flex: 1 1 auto; min-width: 0; }
 
-.cc-nav-button:hover { background: rgba(21,25,23,0.05); color: var(--cc-ink); }
+.cc-nav-button:hover { background: var(--cc-neutral-fill); color: var(--cc-ink); }
 .cc-nav-button[aria-current="true"] {
-  color: #fffdf6;
-  background: #17241f;
-}
-
-:root[data-theme="dark"] .cc-nav-button:hover {
-  background: rgba(243,239,230,0.06);
-  color: var(--cc-ink);
-}
-
-:root[data-theme="dark"] .cc-nav-button[aria-current="true"] {
-  color: #11130F;
-  background: #E8E0D0;
+  color: var(--cc-solid-fg);
+  background: var(--cc-solid-bg);
 }
 
 .cc-nav-badge {
@@ -290,12 +279,14 @@ button { font-family: inherit; }
   border-radius: 999px;
   padding: 0 6px;
   color: var(--cc-amber-text);
-  background: rgba(201,95,63,0.12);
+  /* A translucent tint of the conflict stroke, not the opaque amber fill: the
+     sidebar is glass over macOS vibrancy and the badge must stay see-through. */
+  background: color-mix(in srgb, var(--cc-amber-stroke-e) 12%, transparent);
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 10px;
   flex: 0 0 auto;
 }
-.cc-nav-button[aria-current="true"] .cc-nav-badge { background: rgba(201,95,63,0.2); }
+.cc-nav-button[aria-current="true"] .cc-nav-badge { background: color-mix(in srgb, var(--cc-amber-stroke-e) 20%, transparent); }
 
 /* ---- Sidebar foot: pinned utilities --------------------------------------- */
 .cc-sidebar-foot {
@@ -491,16 +482,14 @@ button { font-family: inherit; }
   gap: 8px;
   border: 0;
   border-radius: 11px;
-  background: rgba(21,25,23,0.05);
+  background: var(--cc-neutral-fill);
   color: var(--cc-ink);
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;
   font-weight: 600;
 }
-.cc-util-btn:hover { background: rgba(21,25,23,0.09); }
-:root[data-theme="dark"] .cc-util-btn { background: rgba(243,239,230,0.06); color: #C7BFB2; }
-:root[data-theme="dark"] .cc-util-btn:hover { background: rgba(243,239,230,0.1); }
+.cc-util-btn:hover { background: var(--cc-neutral-fill-hover); }
 .cc-util-btn--icon { flex: 0 0 auto; width: 38px; padding: 0; }
 
 .cc-ask-button {
@@ -517,15 +506,9 @@ button { font-family: inherit; }
   font: inherit;
   font-size: 13px;
   font-weight: 650;
-  background: #17241f;
-  color: #fffdf6;
-  box-shadow: 0 10px 24px rgba(23,36,31,0.18);
-}
-
-:root[data-theme="dark"] .cc-ask-button {
-  background: rgba(141,195,168,0.16);
-  color: #F3EFE6;
-  box-shadow: inset 0 0 0 1px rgba(141,195,168,0.08), 0 10px 24px rgba(0,0,0,0.25);
+  background: var(--cc-ask-bg);
+  color: var(--cc-ask-fg);
+  box-shadow: inset 0 0 0 1px var(--cc-ask-ring), 0 10px 24px var(--cc-shadow);
 }
 
 .cc-setup-cta {
@@ -568,8 +551,6 @@ button { font-family: inherit; }
   background: var(--cc-teal-fill);
   border-color: var(--cc-teal-stroke);
 }
-
-:root[data-theme="dark"] .cc-connect-cta { background: rgba(243,239,230,0.05); }
 
 @media (min-width: 900px) {
   .cc-sidebar-toggle {
@@ -697,14 +678,9 @@ button { font-family: inherit; }
   border: 0;
   border-radius: 11px;
   color: var(--cc-ink);
-  background: rgba(21,25,23,0.05);
+  background: var(--cc-neutral-fill);
   cursor: pointer;
   flex: 0 0 auto;
-}
-
-:root[data-theme="dark"] .round-icon {
-  background: rgba(243,239,230,0.06);
-  color: var(--cc-ink);
 }
 
 /* ---- Content column -------------------------------------------------------- */
@@ -726,12 +702,11 @@ button { font-family: inherit; }
   place-items: center;
   border: 0;
   border-radius: 12px;
-  background: rgba(21,25,23,0.06);
+  background: var(--cc-neutral-fill);
   color: var(--cc-ink);
   cursor: pointer;
   flex: 0 0 auto;
 }
-:root[data-theme="dark"] .cc-menu-btn { background: rgba(243,239,230,0.07); }
 
 .cc-view-title { flex: 1 1 auto; min-width: 0; }
 
@@ -765,21 +740,12 @@ button { font-family: inherit; }
   border: 0;
   border-radius: 999px;
   padding: 0 13px;
-  background: rgba(255,255,255,0.62);
-  box-shadow: inset 0 0 0 1px rgba(61,76,68,0.065);
+  background: var(--cc-neutral-fill);
+  box-shadow: inset 0 0 0 1px var(--cc-line-soft);
   color: var(--cc-ink);
   font-size: 13px;
   white-space: nowrap;
 }
-
-:root[data-theme="dark"] .cc-status-pill,
-:root[data-theme="dark"] .cc-search {
-  background: rgba(243,239,230,0.07);
-  color: #BDB5A8;
-  box-shadow: inset 0 0 0 1px rgba(235,226,207,0.045);
-}
-
-:root[data-theme="dark"] .cc-status-pill strong { color: #EEE7DA; }
 
 .cc-status-pill strong {
   color: var(--cc-caption);
@@ -794,11 +760,11 @@ button { font-family: inherit; }
   height: 8px;
   border-radius: 50%;
   background: var(--cc-teal-stroke-e);
-  box-shadow: 0 0 0 4px rgba(85,127,108,0.12);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cc-teal-stroke-e) 12%, transparent);
 }
 .cc-status-dot.warn {
   background: var(--cc-amber-stroke);
-  box-shadow: 0 0 0 4px rgba(195,154,74,0.14);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cc-amber-stroke) 14%, transparent);
 }
 
 .cc-search { min-width: min(300px, 30vw); }
@@ -899,12 +865,11 @@ button { font-family: inherit; }
   display: grid;
   place-items: center;
   border-radius: 9px;
-  background: #17241f;
-  color: #fffdf6;
+  background: var(--cc-solid-bg);
+  color: var(--cc-solid-fg);
   font-family: Georgia, "Times New Roman", serif;
   font-size: 17px;
 }
-:root[data-theme="dark"] .cc-settings-brand-mark { background: #E8E0D0; color: #11130F; }
 
 .cc-settings-nav {
   display: flex;
@@ -2047,7 +2012,7 @@ textarea:focus-visible,
   border-radius: 22px;
   background: var(--cc-raised);
   color: var(--cc-ink);
-  box-shadow: 0 30px 90px rgba(21,25,23,0.28);
+  box-shadow: 0 30px 90px var(--cc-scrim);
   animation: ccConnectIn 260ms var(--cc-ease-out);
 }
 
@@ -2233,14 +2198,12 @@ textarea:focus-visible,
 .cc-code-copy:hover { background: var(--cc-neutral-fill); border-color: var(--cc-teal-stroke); color: var(--cc-ink); }
 .cc-copy-button--primary,
 .cc-connect-primary {
-  border-color: #17241f;
-  background: #17241f;
-  color: #fffdf6;
+  border-color: var(--cc-cta-bg);
+  background: var(--cc-cta-bg);
+  color: var(--cc-cta-fg);
 }
 .cc-copy-button--primary:hover,
 .cc-connect-primary:hover { background: var(--cc-teal-btn-hover); color: var(--cc-on-teal); }
-:root[data-theme="dark"] .cc-copy-button--primary,
-:root[data-theme="dark"] .cc-connect-primary { border-color: var(--cc-teal-stroke-e); background: var(--cc-teal-stroke-e); color: var(--cc-on-teal); }
 
 .cc-connect-steps {
   display: flex;
@@ -2305,10 +2268,9 @@ textarea:focus-visible,
   overflow: hidden;
   border: 1px solid var(--cc-line);
   border-radius: 11px;
-  background: #17201c;
-  color: #e9eee9;
+  background: var(--cc-code-bg);
+  color: var(--cc-code-fg);
 }
-:root[data-theme="dark"] .cc-code-block { background: #0a0d0b; color: #e8eee9; }
 .cc-code-block pre {
   flex: 1 1 auto;
   min-width: 0;
@@ -2320,16 +2282,19 @@ textarea:focus-visible,
   overflow-wrap: anywhere;
 }
 .cc-code-block code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; font-variant-ligatures: none; }
+/* The copy affordance is carved out of the code surface's own foreground, so
+   it follows --cc-code-* wherever a palette takes them. 92% of the foreground
+   over the block reproduces the ported resting tint (d6ded8 on the light block). */
 .cc-code-copy {
   min-width: 82px;
   align-self: stretch;
   border: 0;
-  border-left: 1px solid rgba(255,255,255,0.12);
+  border-left: 1px solid color-mix(in srgb, var(--cc-code-fg) 12%, transparent);
   border-radius: 0;
-  background: rgba(255,255,255,0.06);
-  color: #d6ded8;
+  background: color-mix(in srgb, var(--cc-code-fg) 6%, transparent);
+  color: color-mix(in srgb, var(--cc-code-fg) 92%, transparent);
 }
-.cc-code-copy:hover { border-color: rgba(255,255,255,0.18); background: rgba(255,255,255,0.1); color: #fffdf6; }
+.cc-code-copy:hover { border-color: color-mix(in srgb, var(--cc-code-fg) 18%, transparent); background: color-mix(in srgb, var(--cc-code-fg) 10%, transparent); color: var(--cc-code-fg); }
 .cc-code-block--compact pre { padding-block: 11px; }
 
 .cc-first-prompt {
@@ -2393,7 +2358,7 @@ textarea:focus-visible,
   .cc-connect-body { font-size: 15px; }
   .cc-connect-steps > li { grid-template-columns: 26px minmax(0, 1fr); gap: 9px; }
   .cc-code-block { flex-direction: column; }
-  .cc-code-copy { min-height: 44px; align-self: auto; border-left: 0; border-top: 1px solid rgba(255,255,255,0.12); }
+  .cc-code-copy { min-height: 44px; align-self: auto; border-left: 0; border-top: 1px solid color-mix(in srgb, var(--cc-code-fg) 12%, transparent); }
   .cc-first-prompt { align-items: stretch; flex-direction: column; }
   .cc-first-prompt .cc-copy-button { width: 100%; }
   .cc-cli-status { align-items: flex-start; flex-wrap: wrap; }
@@ -2776,12 +2741,10 @@ textarea:focus-visible,
 }
 .cc-conflict-wand,
 .cc-conflict-primary {
-  border: 1px solid #17241f;
-  background: #17241f;
-  color: #fffdf6;
+  border: 1px solid var(--cc-solid-bg);
+  background: var(--cc-solid-bg);
+  color: var(--cc-solid-fg);
 }
-:root[data-theme="dark"] .cc-conflict-wand,
-:root[data-theme="dark"] .cc-conflict-primary { border-color: #e8e0d0; background: #e8e0d0; color: #11130f; }
 .cc-conflict-wand:hover:not(:disabled),
 .cc-conflict-primary:hover:not(:disabled) { transform: translateY(-1px); }
 .cc-conflict-wand:disabled,
@@ -3001,8 +2964,7 @@ textarea:focus-visible,
 
 /* ---- Mac-first application shell ---------------------------------------- */
 html, body, #root { width: 100%; height: 100%; overflow: hidden; }
-.cc-app-shell { width: 100%; height: 100vh; min-height: 560px; padding: 0; overflow: hidden; background: var(--cc-page); }
-:root[data-theme="dark"] .cc-app-shell { background: var(--cc-page); }
+.cc-app-shell { width: 100%; height: 100vh; min-height: 560px; padding: 0; overflow: hidden; color: var(--cc-ink); background: var(--cc-page); }
 .cc-shell-inner { width: 100%; max-width: none; height: 100vh; margin: 0; gap: 0; }
 .cc-sidebar, .cc-toolbar { border-radius: 0; box-shadow: none; backdrop-filter: none; }
 .cc-sidebar { padding: 40px 10px 10px; gap: 8px; border-right: 1px solid var(--cc-line); background: var(--cc-header-bg); overflow: hidden; }
@@ -3027,7 +2989,6 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .cc-nav { gap: 2px; padding-top: 5px; }
 .cc-nav-button { min-height: var(--cc-row-height); gap: 10px; padding: 0 10px; border-radius: var(--cc-radius-md); font-size: 13px; font-weight: 500; }
 .cc-nav-button[aria-current="page"] { border: 1px solid var(--cc-teal-badge-bd); background: var(--cc-teal-fill); color: var(--cc-teal-text); }
-:root[data-theme="dark"] .cc-nav-button[aria-current="page"] { border-color: var(--cc-teal-badge-bd); background: var(--cc-teal-fill); color: var(--cc-teal-text); }
 .cc-nav-badge.is-error { color: var(--cc-amber-text); background: var(--cc-amber-fill); }
 .cc-sidebar-foot { gap: 4px; padding-top: 8px; }
 .cc-settings-cta { min-height: var(--cc-row-height); justify-content: flex-start; padding: 0 10px; border: 0; border-radius: var(--cc-radius-md); background: transparent; color: var(--cc-caption); box-shadow: none; font-size: 13px; font-weight: 500; }

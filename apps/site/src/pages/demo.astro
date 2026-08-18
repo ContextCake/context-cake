@@ -8,51 +8,42 @@ const demoUrl = 'https://contextcake-console.pages.dev/';
 
 const narrativePoints = [
 	{
-		title: 'A source for each section',
-		body: 'Each selected value shows the layer it came from and the date of that source.',
+		title: 'Source and available date',
+		body: 'Every selected section shows which layer it came from. Any available source date appears with it.',
 	},
 	{
-		title: 'Structural discrepancies stay visible',
-		body: 'Shared OKF identities make aligned differences inspectable without claiming semantic contradiction detection.',
+		title: 'Other versions stay visible',
+		body: 'When the same section differs across layers, ContextCake keeps the other version beside the result.',
 	},
 	{
-		title: 'From the answer to the file',
-		body: 'Browse resolved concepts and their discrepancies, then open the document any section came from.',
+		title: 'Open the original file',
+		body: 'Start with the combined result, then open the document that supplied any section.',
 	},
 ];
 ---
 
 <Base
 	title="ContextCake demo"
-	description="See how ContextCake resolves company, team, and personal layers while keeping sources and disagreements visible."
+	description="See which company, team, or personal source supplies each part of a ContextCake answer."
 >
 	<main class="demo-page">
 		<section class="hero">
 			<div class="hero-copy">
 				<p class="eyebrow">Demo</p>
-				<h1>See how three layers become one answer.</h1>
+				<h1>See which source supplies each part of an answer.</h1>
 				<p class="lede">
-					This demo combines company policy, team practice, and a personal note. Open the
-					result to see which layer supplied each section and where another layer disagreed.
+					This example uses one company policy, one team decision, and one personal note.
+					Open the result to see how ContextCake combines them section by section.
 				</p>
 				<div class="actions">
 					<a class="cta primary" href="#demo-stage">Explore the console</a>
-					<a class="cta" href="/docs/getting-started/first-cascade">First cascade</a>
+					<a class="cta" href="/docs/getting-started/first-cascade">Set up your own</a>
 				</div>
 			</div>
-
-			<aside class="scenario" aria-label="Demo framing">
-				<p class="scenario-label">What to look for</p>
-				<h2>Company, team, and personal layers.</h2>
-				<p>
-					The same question can get a different answer at each layer. The resolver picks per
-					section and shows its work.
-				</p>
-			</aside>
 		</section>
 
 		<section class="frame-section">
-			<p class="simulation-note"><strong>Simulation—no files will change.</strong> Actions and history reset on reload; automatic rules never run.</p>
+			<p class="simulation-note"><strong>Simulation—no files will change.</strong> Look for a source label and any alternate version. Actions and history reset on reload.</p>
 			<div class="stage" id="demo-stage" data-demo-stage>
 				<figure class="frame-wrap" data-demo-frame>
 					<div class="chrome">
@@ -109,7 +100,7 @@ const narrativePoints = [
 
 		<section class="signals">
 			<p class="eyebrow">Inside the console</p>
-			<h2>What to check in the result.</h2>
+			<h2>What the result shows.</h2>
 			<div class="signal-grid">
 				{narrativePoints.map((point) => (
 					<article class="signal">
@@ -247,13 +238,9 @@ const narrativePoints = [
 		padding-bottom: 3rem;
 	}
 	.hero {
-		display: grid;
-		grid-template-columns: minmax(0, 1.05fr) minmax(18rem, 0.95fr);
-		gap: 2rem;
-		align-items: start;
+		max-width: 50rem;
 	}
-	.eyebrow,
-	.scenario-label {
+	.eyebrow {
 		margin: 0 0 0.85rem;
 		color: var(--cc-layer-team);
 		font-family: var(--cc-font-mono);
@@ -278,7 +265,6 @@ const narrativePoints = [
 		line-height: 1.08;
 	}
 	.lede,
-	.scenario p,
 	.signal p {
 		color: var(--cc-text-body);
 	}
@@ -332,23 +318,11 @@ const narrativePoints = [
 		background: var(--cc-cta-hover);
 		border-color: var(--cc-cta-hover);
 	}
-	.scenario,
 	.signal {
 		background: var(--cc-surface);
 		border: 1px solid var(--cc-border);
 		border-radius: var(--cc-radius-lg);
 		box-shadow: var(--cc-shadow-panel);
-	}
-	.scenario {
-		padding: 1.3rem;
-	}
-	.scenario h2 {
-		font-size: clamp(1.4rem, 2.2vw, 1.85rem);
-		line-height: 1.15;
-		margin-bottom: 0.9rem;
-	}
-	.scenario p {
-		margin: 0;
 	}
 
 	/* Live demo stage ------------------------------------------------------ */

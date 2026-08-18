@@ -38,7 +38,7 @@ mkdir contextcake &&
 tar -xzf ${archiveName} -C contextcake --strip-components=1 &&
 cd contextcake`;
 const resolveCommand = 'node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db';
-const firstPrompt = 'Use ContextCake to list the concepts available to you. Briefly describe the contributing layers, then tell me which project-specific questions you can answer from this context.';
+const testPrompt = 'Use ContextCake to list the available concepts. Name the sources each one uses and the project questions it can help answer.';
 
 const demoConceptId = 'decisions/primary-db';
 const primaryDb = demo.concepts.find((concept) => concept.id === demoConceptId);
@@ -67,34 +67,29 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 <Base
 	tone="dark"
 	title="Install ContextCake"
-	description="Download ContextCake for Mac, add a Markdown source, and connect your AI agent over local MCP."
+	description="Download ContextCake for Mac, choose a folder of Markdown files, and connect Codex, Claude, Cursor, or another MCP-compatible AI tool."
 >
 	<main class="install-page">
 		<section class="install-hero" aria-labelledby="install-title">
 			<div class="hero-copy">
 				<p class="eyebrow">ContextCake for Mac · {appTag}</p>
-				<h1 id="install-title">Install the app. Add your knowledge. Ask your agent.</h1>
+				<h1 id="install-title">Download ContextCake for Mac.</h1>
 				<p class="lede">
-					ContextCake runs locally on your Mac. Point it at a Markdown folder, connect
-					your AI client, and get a sourced answer without building a manifest by hand.
+					ContextCake runs locally. After you install it, choose a folder of Markdown files
+					and connect the AI tool you use. The app walks you through both steps.
 				</p>
 				<section class="download-module" aria-labelledby="download-title">
 					<div class="download-module__top">
 						<div>
-							<p>Recommended desktop app</p>
-							<h2 id="download-title">ContextCake for Mac</h2>
-							<span>Apple silicon (M1 or later) · signed and notarized</span>
+							<p>Mac app</p>
+							<h2 id="download-title">Apple silicon (M1 or later)</h2>
+							<span>{appDownloadName} · {formatFileSize(appDownloadBytes)} · signed and notarized</span>
 						</div>
 						<a class="button button--primary" href={appDownloadUrl} download>
 							<Icon name="download" size={18} />
 							Download for Mac
 						</a>
 					</div>
-					<ol class="mac-install-path" aria-label="Mac installation steps">
-						<li><span>1</span><strong>Download</strong><small>{appDownloadName} · {formatFileSize(appDownloadBytes)}</small></li>
-						<li><span>2</span><strong>Move to Applications</strong><small>Open the DMG and drag ContextCake over.</small></li>
-						<li><span>3</span><strong>Set up your first source</strong><small>The app guides the rest.</small></li>
-					</ol>
 					<div class="download-record" aria-label="Release details">
 						<span>{appTag}</span>
 						<a href={appReleaseUrl}>Release notes</a>
@@ -102,15 +97,15 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 					</div>
 				</section>
 				<nav class="install-alternatives" aria-label="Other installation options">
-					<a href="#source-install"><span>Not on Apple silicon?</span> Install the versioned source <b aria-hidden="true">→</b></a>
-					<a href={appReleaseUrl}><span>Need another build or the full history?</span> Browse app releases <b aria-hidden="true">→</b></a>
+					<a href="#source-install"><span>Using an Intel Mac, Linux, or WSL?</span> Run the versioned source <b aria-hidden="true">→</b></a>
+					<a href={appReleaseUrl}><span>Looking for an older build?</span> See all app releases <b aria-hidden="true">→</b></a>
 				</nav>
 				{appMcpb && (
 					<section class="mcpb-route" aria-labelledby="mcpb-route-title">
 						<div>
 							<p>Claude Desktop</p>
-							<h2 id="mcpb-route-title">Install the local MCP bundle</h2>
-							<span>Choose your ContextCake manifest during setup. Anonymous activation metrics are off by default.</span>
+							<h2 id="mcpb-route-title">Add ContextCake to Claude Desktop</h2>
+							<span>Install the MCP bundle, then choose the ContextCake manifest you want Claude to use. Activation metrics are off by default.</span>
 						</div>
 						<a class="button button--secondary" href={appMcpb.url} download>
 							<Icon name="download" size={17} /> Download .mcpb
@@ -128,43 +123,43 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 				<div class="app-shell-preview">
 					<div class="preview-sidebar" aria-hidden="true">
 						<strong>ContextCake</strong>
-						<span class="active">Overview</span>
-						<span>Concepts</span>
-						<span>Conflicts</span>
+							<span class="active">Home</span>
+							<span>Sources</span>
+							<span>Review</span>
 					</div>
 					<div class="preview-content">
 						<p>First source</p>
-						<h2 id="app-preview-title">Add your Markdown folder</h2>
+						<h2 id="app-preview-title">Choose a folder with Markdown files</h2>
 						<div class="folder-choice">
 							<Icon name="layers" size={18} />
-							<div><strong>Markdown folder</strong><span>Recommended · use your existing notes</span></div>
+							<div><strong>Markdown folder</strong><span>Recommended · no conversion required</span></div>
 							<span class="selected-mark">✓</span>
 						</div>
 						<div class="preview-success">
 							<span></span>
-							<div><strong>Source ready</strong><small>Your cascade has something to answer from.</small></div>
+							<div><strong>Folder added</strong><small>ContextCake can now read these files.</small></div>
 						</div>
-						<div class="preview-action"><span>Connect an agent</span><span>→</span></div>
+						<div class="preview-action"><span>Connect an AI tool</span><span>→</span></div>
 					</div>
 				</div>
-				<figcaption>The app guides source setup before it connects an agent.</figcaption>
+				<figcaption>Choose your files first. The app gives you the connection steps next.</figcaption>
 			</figure>
 		</section>
 
 		<section class="activation" aria-labelledby="activation-title">
 			<header class="section-intro">
-				<h2 id="activation-title">From download to a sourced answer.</h2>
-				<p>Open the DMG, move ContextCake to Applications, then let the app handle source and agent setup.</p>
+				<h2 id="activation-title">Set up the app in three steps.</h2>
+				<p>You do not need to write a manifest or run a terminal command for the standard Mac setup.</p>
 			</header>
 
 			<ol class="activation-steps">
 				<li>
 					<span class="step-number">1</span>
 					<div class="step-copy">
-						<h3>Add a source you already have</h3>
+						<h3>Choose a folder with Markdown files</h3>
 						<p>
-							Open the app and choose a Markdown folder. A repository docs folder, Obsidian
-							vault, or wiki export works without conversion. You can add more sources later.
+								A repository docs folder, Obsidian vault, or Markdown wiki export works without conversion.
+							You can add more folders and repositories later.
 						</p>
 					</div>
 					<div class="step-proof source-proof" aria-label="Example source selection">
@@ -177,10 +172,10 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 				<li>
 					<span class="step-number">2</span>
 					<div class="step-copy">
-						<h3>Connect the AI client you use</h3>
+						<h3>Connect your AI tool</h3>
 						<p>
-							Choose <strong>Connect an agent</strong> in ContextCake. The app prepares the
-							exact local MCP setup and verification steps for your client.
+							Choose <strong>Connect an agent</strong> in the app. MCP is the local connection
+							that lets compatible AI tools search and read your ContextCake sources.
 						</p>
 					</div>
 					<div class="step-proof client-proof" aria-label="Supported AI clients">
@@ -195,12 +190,12 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 				<li>
 					<span class="step-number">3</span>
 					<div class="step-copy">
-						<h3>Ask one question and inspect the answer</h3>
-						<p>
-							Use the first prompt supplied by the app. A good answer names the winning
-							source and keeps any disagreement visible.
-						</p>
-						<CodeBlock lang="text" code={firstPrompt} label="First prompt" copy />
+							<h3>Run the test prompt</h3>
+							<p>
+								Try this prompt to check the connection. The answer should name
+								the source it used and show any conflicting version.
+							</p>
+							<CodeBlock lang="text" code={testPrompt} label="Test prompt" copy />
 					</div>
 					<figure class="result-preview" aria-labelledby="result-title">
 						<div class="result-header">
@@ -225,7 +220,7 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 
 			<div class="download-strip">
 				<div>
-					<strong>Ready to use your own knowledge?</strong>
+					<strong>Use ContextCake with your own files.</strong>
 					<span>ContextCake {appVersion} · Apple silicon</span>
 				</div>
 				<a class="button button--primary" href={appDownloadUrl} download>
@@ -237,11 +232,10 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 		<section class="source-install" id="source-install" aria-labelledby="source-title">
 			<header class="section-intro section-intro--source">
 				<div>
-					<h2 id="source-title">Need the engine without the app?</h2>
+					<h2 id="source-title">Run the source version on Intel Mac, Linux, or WSL.</h2>
 					<p>
-						The versioned source route stays available for Intel Macs, Linux, WSL,
-						contribution work, and anyone who wants to audit every file before running it.
-						The app itself ships for Apple silicon only.
+						The Mac app requires Apple silicon. Use the versioned source for other supported
+						platforms, contribution work, or a complete audit before you run anything.
 					</p>
 				</div>
 				<span>Node.js 22+ · macOS, Linux, or WSL · no npm install</span>
@@ -255,9 +249,9 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 				<div class="source-details-body">
 					<section class="source-route" aria-labelledby="archive-title">
 						<div class="route-heading">
-							<span>Recommended source route</span>
+							<span>Source archive</span>
 							<h3 id="archive-title">Download and verify the archive</h3>
-							<p>The checksum stops the workflow before extraction if the bytes don’t match.</p>
+							<p>The checksum verifies that the downloaded file matches the published release.</p>
 						</div>
 						<CodeBlock lang="bash" code={terminalDownload} label="Download tagged source" copy />
 						<CodeBlock lang="bash" code={unpackCommand} label="Verify and unpack" copy />
@@ -269,7 +263,7 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 
 					<section class="source-route" aria-labelledby="git-title">
 						<div class="route-heading">
-							<span>Source-control route</span>
+							<span>Git checkout</span>
 							<h3 id="git-title">Clone the tagged source</h3>
 							<p>Use Git when you want a checkout for inspection, history, or contribution work.</p>
 						</div>
@@ -282,9 +276,9 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 
 					<section class="resolver-proof" aria-labelledby="resolver-title">
 						<div>
-							<span>Same engine, visible result</span>
-							<h3 id="resolver-title">Prove the resolver works</h3>
-							<p>Resolve the bundled concept and inspect its winning source and preserved dissent.</p>
+							<span>Included example</span>
+							<h3 id="resolver-title">Run the bundled example</h3>
+							<p>The result shows which source supplied each section and where another source differs.</p>
 						</div>
 						<CodeBlock lang="bash" code={resolveCommand} label="Resolve the demo" copy />
 					</section>
@@ -295,13 +289,13 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 		<section class="trust" aria-labelledby="trust-title">
 			<div>
 				<Icon name="shield" size={24} />
-				<h2 id="trust-title">A download you can inspect.</h2>
+				<h2 id="trust-title">How the Mac download is verified.</h2>
 			</div>
 			<div class="trust-copy">
-				<p>
-					The Mac app is Developer ID-signed and notarized. Its release record names the
-					exact DMG and checksum; its updater verifies a signed update before asking you
-					to relaunch. ContextCake still only reads folders and MCP sources you choose.
+					<p>
+						The Mac app is Developer ID-signed and notarized. Each release lists the exact
+						DMG and its checksum. Installed Macs reject an update unless it carries the same
+						Developer ID signature. ContextCake reads only the sources you add.
 				</p>
 				<dl class="release-details">
 					<div>
@@ -320,7 +314,7 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 				<nav aria-label="Install trust links">
 					<a href="/docs/concepts/trust-boundary">Read the trust model</a>
 					<a href={sourceTagUrl}>Inspect source {sourceTag} <Icon name="external-link" size={15} /></a>
-					<a href="/docs/getting-started/connect-an-agent">Agent connection guide</a>
+					<a href="/docs/getting-started/connect-an-agent">AI tool connection guide</a>
 				</nav>
 			</div>
 		</section>
@@ -426,40 +420,6 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 	}
 	.download-module__top > div > span { color: var(--cc-text-body); font-size: 0.78rem; }
 	.download-module__top .button { flex: none; }
-	.mac-install-path {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 1px;
-		margin: 0;
-		padding: 1px 0 0;
-		list-style: none;
-		background: var(--cc-border);
-	}
-	.mac-install-path li {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
-		align-content: start;
-		gap: 0.15rem 0.55rem;
-		min-height: 5.8rem;
-		padding: 0.9rem 1rem;
-		background: var(--cc-surface-solid);
-	}
-	.mac-install-path li > span {
-		display: grid;
-		grid-row: span 2;
-		place-items: center;
-		width: 1.35rem;
-		height: 1.35rem;
-		margin-top: 0.05rem;
-		border-radius: 50%;
-		background: color-mix(in srgb, var(--cc-layer-team) 15%, var(--cc-surface-raised));
-		color: var(--cc-layer-team);
-		font-family: var(--cc-font-mono);
-		font-size: 0.65rem;
-		font-weight: 700;
-	}
-	.mac-install-path strong { color: var(--cc-text); font-size: 0.8rem; }
-	.mac-install-path small { color: var(--cc-text-muted); font-size: 0.69rem; line-height: 1.45; }
 	.download-record {
 		display: flex;
 		flex-wrap: wrap;
@@ -985,8 +945,6 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 		.conflict-row { grid-template-columns: auto minmax(0, 1fr); }
 		.result-row code,
 		.conflict-row code { grid-column: 2; white-space: normal; }
-		.mac-install-path { grid-template-columns: 1fr; }
-		.mac-install-path li { min-height: auto; }
 	}
 	@media (max-width: 520px) {
 		.install-page { padding-inline: 1rem; }

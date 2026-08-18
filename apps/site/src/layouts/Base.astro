@@ -166,8 +166,8 @@ const footerColumns = [
 							<span>ContextCake</span>
 						</a>
 						<p class="footer-tagline">
-							Keep company rules, team practices, and personal notes in separate layers.
-							ContextCake resolves them without hiding the source or disagreement.
+							ContextCake combines company rules, team decisions, and personal notes when an
+							AI tool needs them. Each section keeps its source and any available date.
 						</p>
 						<a class="footer-repo" href={repoUrl} rel="noreferrer">
 							<Icon name="github" size={17} strokeWidth={2} />
@@ -191,7 +191,6 @@ const footerColumns = [
 					<p class="footer-legal">
 						© {year} ContextCake · Open source, MIT licensed
 					</p>
-					<p class="footer-motto">Sources and disagreements stay visible.</p>
 				</div>
 			</div>
 		</footer>
@@ -464,12 +463,6 @@ const footerColumns = [
 	.footer-legal {
 		margin: 0;
 	}
-	.footer-motto {
-		margin: 0;
-		font-family: var(--cc-font-mono);
-		font-size: 0.8rem;
-		color: var(--cc-text-faint);
-	}
 	@media (max-width: 780px) {
 		.footer-top {
 			grid-template-columns: 1fr;
@@ -574,8 +567,7 @@ const footerColumns = [
 	}
 	.theme-paper .footer-tagline,
 	.theme-paper .footer-heading,
-	.theme-paper .footer-bottom,
-	.theme-paper .footer-motto {
+	.theme-paper .footer-bottom {
 		color: var(--cc-ink-muted);
 	}
 	.theme-paper .footer-repo {

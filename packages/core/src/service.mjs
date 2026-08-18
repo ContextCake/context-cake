@@ -26,6 +26,7 @@ import { buildSourcesQuarantined, createErrorSource, resolveTokenState } from ".
 import { MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createSourceOperations, normalizeRepo } from "./control/sources.mjs";
+import { createDiscrepancyOperations } from "./control/discrepancies.mjs";
 import { patchSettings, settingsView } from "./control/settings.mjs";
 import { withDeadline } from "./control/util.mjs";
 import { mergeConcepts, resolveConcept } from "./resolver.mjs";
@@ -39,17 +40,14 @@ import {
 } from "./http-util.mjs";
 import {
   layerRootMap, listFilesApi, readFileApi, serveRawApi, writeFileApi, writeSectionApi,
-  stageSectionTransaction, stageFrontmatterTransaction,
+  stageSectionTransaction,
 } from "./layer-files.mjs";
 import {
   createConflictResolutionLog, createDiscrepancyTransactionJournal, trivialConflictReason,
 } from "./conflict-resolutions.mjs";
 import { buildDiscrepancies } from "./discrepancies.mjs";
-import {
-  createDiscrepancyRuleStore, parseRuleDocument, serializeRuleDocument, suggestDiscrepancyRules,
-} from "./discrepancy-rules.mjs";
+import { createDiscrepancyRuleStore } from "./discrepancy-rules.mjs";
 import { createDiscrepancyPriorityStore } from "./discrepancy-priorities.mjs";
-import { resolveLiveLayer } from "./sources/git-sync.mjs";
 import { commitPathsWithMutation, push as pushGit } from "./sources/git-core.mjs";
 import { indexEntryKeys, layerIdentity } from "./index-keys.mjs";
 import { memorySnapshot } from "./memory-pressure.mjs";
@@ -518,7 +516,22 @@ export function createEngineService({
     manifestPath: MANIFEST,
     gitCredentialsForUrl: (url) => gitCredentialsForUrl(url),
   });
-  let discrepancyRecovery = null;
+  // Discrepancy decisions, rules, priorities, and recovery
+  // (control/discrepancies.mjs). Same shape: the routes parse, the operations
+  // decide. The corpus comes from this service's background index; git against
+  // the live team layer arrives as a capability so nothing here spawns it.
+  const discrepancyOps = createDiscrepancyOperations({
+    manifestPath: MANIFEST,
+    fileRoots: () => fileRoots(),
+    selectedLayers: () => openSources().manifest.layers ?? [],
+    resolutionLog: conflictResolutionLog,
+    transactionJournal: discrepancyTransactionJournal,
+    ruleStore: discrepancyRuleStore,
+    priorityStore: discrepancyPriorityStore,
+    project: (waitMs) => discrepanciesApi(waitMs),
+    onWritten: () => invalidateIndex(),
+    git: { commitPathsWithMutation, push: pushGit },
+  });
   let automaticTimer = null;
   let automaticTail = Promise.resolve();
 
@@ -1755,32 +1768,20 @@ export function createEngineService({
         const id = url.searchParams.get("id");
         if (!id) throw httpError(400, "Provide ?id=<discrepancy-id>");
         const body = parseJson(await readBody(req));
-        try {
-          const priority = await withManifestLockAsync(MANIFEST, () => discrepancyPriorityStore.set(id, body.priority));
-          json(res, 200, { id, priority });
-        } catch (error) { throw httpError(400, error.message); }
+        json(res, 200, { id, priority: await discrepancyOps.setPriority(id, body.priority) });
         return true;
       }
       if (p === "/api/discrepancy-decisions" && req.method === "POST") {
         if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
-        const rawBody = await readBody(req);
-        json(res, 200, await withManifestLockAsync(MANIFEST, () => decideDiscrepancyApi(rawBody)));
+        json(res, 200, await discrepancyOps.decide(parseJson(await readBody(req))));
         return true;
       }
       if (p === "/api/discrepancy-rules") {
-        if (req.method === "GET") { json(res, 200, await discrepancyRulesApi()); return true; }
+        if (req.method === "GET") { json(res, 200, await discrepancyOps.rulesView()); return true; }
         if (req.method === "POST") {
           if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
           const body = parseJson(await readBody(req));
-          const rule = await withManifestLockAsync(MANIFEST, async () => {
-            // Re-evaluate evidence inside the same lock used by decisions so a
-            // reversal cannot race approval after the preview was shown.
-            const available = await discrepancyRulesApi();
-            const suggestion = available.suggestions.find((item) => item.id === body.suggestionId);
-            if (!suggestion) throw httpError(409, "That rule suggestion is no longer supported by three consistent decisions");
-            return discrepancyRuleStore.create(suggestion);
-          });
-          json(res, 200, { rule });
+          json(res, 200, { rule: await discrepancyOps.approveSuggestion(body.suggestionId) });
           return true;
         }
         if (req.method === "PATCH") {
@@ -1788,14 +1789,14 @@ export function createEngineService({
           const id = url.searchParams.get("id");
           if (!id) throw httpError(400, "Provide ?id=<rule-id>");
           const body = parseJson(await readBody(req));
-          try { json(res, 200, { rule: await withManifestLockAsync(MANIFEST, () => patchDiscrepancyRule(id, body)) }); }
+          try { json(res, 200, { rule: await discrepancyOps.patchRule(id, body) }); }
           catch (error) { throw httpError(error.status ?? 400, error.message); }
           return true;
         }
       }
       if (p === "/api/discrepancy-rules/promote" && req.method === "POST") {
         if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
-        json(res, 200, await promoteDiscrepancyRule(parseJson(await readBody(req))));
+        json(res, 200, await discrepancyOps.promoteRule(parseJson(await readBody(req))));
         return true;
       }
       if (p === "/api/conflict-resolutions") {
@@ -2370,7 +2371,7 @@ export function createEngineService({
       title = resolved.frontmatter?.title ?? conceptId;
       sectionHeading = section.heading;
       currentDiscrepancy = buildDiscrepancies([resolved], {
-        decisions: await conflictResolutionLog.list(), rules: await effectiveDiscrepancyRules(),
+        decisions: await conflictResolutionLog.list(), rules: await discrepancyOps.effectiveRules(),
         coverageComplete: false, sourceHealth: statusApi().sources,
       }).discrepancies.find((item) => item.id === `section_content::${conceptId}::${sectionKey}`) ?? null;
     }
@@ -2393,7 +2394,7 @@ export function createEngineService({
       const discrepancyId = `section_content::${conceptId}::${sectionKey}`;
       const discrepancy = currentDiscrepancy;
       if (!discrepancy) throw httpError(409, "This conflict changed while it was being resolved. Reload before trying again.");
-      const result = await applyDiscrepancyDecision(discrepancy, {
+      const result = await discrepancyOps.applyDecision(discrepancy, {
         discrepancyId, revision: discrepancy.revision, action: "choose_contribution", selectedSource: selectedLayer,
       }, { methodOverride: method, reasonOverride: method === "automatic" ? safeReason : undefined });
       return { ok: true, resolution: result.decision, written: result.written };
@@ -2528,7 +2529,7 @@ export function createEngineService({
     const resolved = await resolveAllApi(waitMs);
     const status = statusApi();
     const decisions = await conflictResolutionLog.list();
-    const [rules, priorities] = await Promise.all([effectiveDiscrepancyRules(), discrepancyPriorityStore.list()]);
+    const [rules, priorities] = await Promise.all([discrepancyOps.effectiveRules(), discrepancyPriorityStore.list()]);
     const coverageComplete = !resolved.indexing
       && status.sources.every((source) => source.status !== "error" && source.status !== "degraded" && source.status !== "indexing");
     return {
@@ -2542,77 +2543,6 @@ export function createEngineService({
     };
   }
 
-  async function discrepancyRulesApi() {
-    const rules = await effectiveDiscrepancyRules();
-    const decisions = await conflictResolutionLog.list();
-    return { rules, suggestions: suggestDiscrepancyRules(decisions, rules) };
-  }
-
-  function liveRuleFile() {
-    const selected = openSources().manifest.layers ?? [];
-    const live = resolveLiveLayer(selected, MANIFEST_DIR);
-    return live ? { ...live, relative: ".contextcake/discrepancy-rules.json", file: path.join(live.root, ".contextcake", "discrepancy-rules.json") } : null;
-  }
-
-  async function teamDiscrepancyRules() {
-    const live = liveRuleFile();
-    if (!live) return [];
-    try { return parseRuleDocument(await fsp.readFile(live.file, "utf8")); }
-    catch (error) { if (error.code === "ENOENT") return []; throw httpError(409, `Team discrepancy rules are unreadable: ${error.message}`); }
-  }
-
-  async function effectiveDiscrepancyRules() {
-    const [local, team] = await Promise.all([discrepancyRuleStore.list(), teamDiscrepancyRules()]);
-    const localById = new Map(local.map((rule) => [rule.id, rule]));
-    return [
-      ...team.map((rule) => localById.get(rule.id) ?? rule),
-      ...local.filter((rule) => !team.some((shared) => shared.id === rule.id)),
-    ];
-  }
-
-  async function patchDiscrepancyRule(id, body) {
-    try { return await discrepancyRuleStore.patch(id, body); }
-    catch (error) {
-      if (error.status !== 404) throw error;
-      const team = (await teamDiscrepancyRules()).find((rule) => rule.id === id);
-      if (!team) throw error;
-      // Enabling a promoted rule automatically is deliberately a per-profile,
-      // local decision. The shared file itself remains recommendation-only.
-      return discrepancyRuleStore.setLocalOverride(team, body);
-    }
-  }
-
-  async function promoteDiscrepancyRule(body) {
-    const rule = (await discrepancyRuleStore.list()).find((item) => item.id === body.id);
-    if (!rule) throw httpError(404, "Local discrepancy rule not found");
-    const live = liveRuleFile();
-    if (!live) throw httpError(409, "This profile has no writable live team layer");
-    const preview = {
-      id: rule.id, scope: "team", mode: "recommend", enabled: true,
-      match: rule.match, action: rule.action, evidenceDecisionIds: rule.evidenceDecisionIds,
-      createdAt: rule.createdAt, promotedAt: new Date().toISOString(),
-    };
-    if (body.confirm !== true) return { requiresConfirmation: true, preview, target: `${live.name}/${live.relative}` };
-    let previous = null;
-    try { previous = await fsp.readFile(live.file); } catch (error) { if (error.code !== "ENOENT") throw error; }
-    const current = previous ? parseRuleDocument(previous.toString("utf8")) : [];
-    const next = [...current.filter((item) => item.id !== preview.id), preview];
-    const nextText = serializeRuleDocument(next);
-    await commitPathsWithMutation(live.root, [live.relative], `chore: promote discrepancy rule ${rule.id}`, {
-      mutate: async () => {
-        await fsp.mkdir(path.dirname(live.file), { recursive: true });
-        await fsp.writeFile(live.file, nextText, { encoding: "utf8", mode: 0o600 });
-      },
-      rollback: async () => {
-        if (previous) await fsp.writeFile(live.file, previous);
-        else await fsp.unlink(live.file).catch(() => {});
-      },
-      author: live.profileName,
-    });
-    const pushed = await pushGit(live.root);
-    return { promoted: true, rule: preview, pushed: pushed.pushed === true, queued: pushed.queued === true };
-  }
-
   function scheduleAutomaticRules() {
     if (!allowMutations || closed || automaticTimer) return;
     automaticTimer = setTimeout(() => {
@@ -2624,226 +2554,15 @@ export function createEngineService({
     automaticTimer.unref?.();
   }
 
-  async function runAutomaticRules() {
+  // Automatic rules only run against a quiescent index — a pass in flight, a
+  // follow-up waiting out its quiet period, or a source that never reached
+  // ready all mean the projection would be answering from a moving target.
+  // The decision itself (control/discrepancies.mjs) re-checks everything under
+  // the manifest lock; this is only the cheap "is now a good time" gate.
+  function runAutomaticRules() {
     const { entries } = ensureIndexes();
     if (entries.some(({ entry }) => entry.running || entry.followUp || entry.status !== "ready")) return;
-    // This job runs after EVERY index pass, and discrepanciesApi() below is a
-    // full-corpus resolve. With no enabled automatic rule there is nothing it
-    // could ever apply, so answer that from the rule stores (two small file
-    // reads) before paying for the corpus — the common case, since automatic
-    // rules are opt-in. Same `enabled !== false` reading as rule matching
-    // (discrepancies.mjs).
-    const rules = await effectiveDiscrepancyRules();
-    if (!rules.some((rule) => rule.enabled !== false && rule.mode === "automatic")) return;
-    const payload = await discrepanciesApi(0);
-    if (!payload.coverageComplete) return;
-    const decisions = await conflictResolutionLog.list();
-    for (const discrepancy of payload.discrepancies) {
-      if (discrepancy.status !== "auto_ready") continue;
-      const matches = discrepancy.matchingRules.filter((rule) => rule.mode === "automatic");
-      if (matches.length !== 1) continue;
-      const rule = matches[0];
-      if (decisions.some((row) => row.discrepancyId === discrepancy.id && row.revision === discrepancy.revision
-        && row.method === "automatic" && ["committed", "blocked", "not_required"].includes(row.transactionState))) continue;
-      const sourceHealthy = discrepancy.sourceHealth.every((health) => health && health.status === "ok");
-      const allWritable = discrepancy.contributions.every((item) => fileRoots().has(item.source));
-      if (!sourceHealthy || (rule.action.type === "prefer_source" && !allWritable)) continue;
-      const request = rule.action.type === "prefer_source"
-        ? { discrepancyId: discrepancy.id, revision: discrepancy.revision, action: "choose_contribution", selectedSource: rule.action.source, ruleId: rule.id }
-        : { discrepancyId: discrepancy.id, revision: discrepancy.revision, action: "acknowledge", reasonCode: rule.action.reasonCode, ruleId: rule.id };
-      await withManifestLockAsync(MANIFEST, async () => {
-        // Rule state can change while this job waits for the manifest lock.
-        // Re-read everything under the lock so disabling a rule, introducing
-        // an ambiguity, or changing a source generation always wins over a
-        // previously scheduled action.
-        const currentPayload = await discrepanciesApi(15_000);
-        if (!currentPayload.coverageComplete || currentPayload.indexing) return;
-        const current = currentPayload.discrepancies.find((item) => item.id === discrepancy.id);
-        if (!current || current.revision !== discrepancy.revision || current.status !== "auto_ready" || current.ruleConflict) return;
-        const currentMatches = current.matchingRules.filter((item) => item.mode === "automatic");
-        if (currentMatches.length !== 1 || currentMatches[0].id !== rule.id
-          || JSON.stringify(currentMatches[0].action) !== JSON.stringify(rule.action)) return;
-        if (!current.sourceHealth.every((health) => health && health.status === "ok")) return;
-        if (rule.action.type === "prefer_source" && !current.contributions.every((item) => fileRoots().has(item.source))) return;
-        try {
-          await applyDiscrepancyDecision(current, request, { methodOverride: "automatic" });
-        } catch (error) {
-          // The failure record participates in the same serialization boundary
-          // as successful decisions. Otherwise a manual decision can commit
-          // after this lock is released but before `blocked` is appended,
-          // leaving the failed automatic attempt as the misleading latest
-          // disposition for this revision.
-          await conflictResolutionLog.append({
-            schemaVersion: 2, id: randomUUID(), discrepancyId: discrepancy.id,
-            discrepancyKind: discrepancy.originalKind ?? discrepancy.kind, revision: discrepancy.revision,
-            action: request.action, method: "automatic", actor: "local-user", ruleId: rule.id,
-            transactionState: "blocked", reason: error.message, decidedAt: new Date().toISOString(),
-            contributorFingerprints: discrepancy.contributions.map((item) => ({ source: item.source, fingerprint: item.fingerprint })),
-            contributions: discrepancy.contributions.map((item) => ({ layer: item.source, level: item.level, content: item.value, updated: item.updated })),
-          });
-        }
-      });
-      return;
-    }
-  }
-
-  async function ensureDiscrepancyRecovery() {
-    if (!discrepancyRecovery) {
-      const roots = [...fileRoots().values()].map((entry) => entry.root);
-      discrepancyRecovery = conflictResolutionLog.list().then((decisions) => discrepancyTransactionJournal.recover(
-        roots,
-        decisions.filter((row) => row.transactionState === "committed").map((row) => row.transactionId).filter(Boolean),
-      )).catch((error) => {
-        discrepancyRecovery = null;
-        throw error;
-      });
-    }
-    return discrepancyRecovery;
-  }
-
-  async function decideDiscrepancyApi(rawBody, { methodOverride = null, reasonOverride = null } = {}) {
-    await ensureDiscrepancyRecovery();
-    const body = parseJson(rawBody);
-    const { discrepancyId, action, selectedSource, content, reasonCode, note, ruleId } = body;
-    if (ruleId !== undefined && methodOverride !== "automatic") {
-      throw httpError(400, "Rule authority is reserved for approved background actions");
-    }
-    if (typeof discrepancyId !== "string" || !discrepancyId) throw httpError(400, "Provide discrepancyId");
-    if (!["choose_contribution", "compose", "acknowledge"].includes(action)) throw httpError(400, "Unsupported discrepancy action");
-    // A file watcher may have invalidated the index between the review GET and
-    // this mutation. Decisions must re-resolve against a settled generation;
-    // treating an in-flight empty snapshot as "no longer open" is both
-    // misleading and can make a valid current-revision decision impossible.
-    const payload = await discrepanciesApi(15_000);
-    if (!payload.coverageComplete || payload.indexing) {
-      throw httpError(409, "Sources are still indexing. Wait for settled coverage before deciding.");
-    }
-    const discrepancy = payload.discrepancies.find((item) => item.id === discrepancyId);
-    if (!discrepancy) throw httpError(409, "This discrepancy is no longer open. Reload before deciding it.");
-    if (body.revision !== undefined && body.revision !== discrepancy.revision) {
-      throw httpError(409, "This discrepancy changed after you opened it. Reload before deciding it.");
-    }
-    return applyDiscrepancyDecision(discrepancy, body, { methodOverride, reasonOverride });
-  }
-
-  async function applyDiscrepancyDecision(discrepancy, body, { methodOverride = null, reasonOverride = null } = {}) {
-    await ensureDiscrepancyRecovery();
-    const { action, selectedSource, content, reasonCode, note, ruleId } = body;
-    if (ruleId !== undefined && methodOverride !== "automatic") {
-      throw httpError(400, "Rule authority is reserved for approved background actions");
-    }
-    if (!discrepancy || body.revision !== discrepancy.revision) {
-      throw httpError(409, "This discrepancy changed after you opened it. Reload before deciding it.");
-    }
-    // target_missing is broken-link-shaped: acknowledging why a link target
-    // will never resolve (the concept was retired, renamed elsewhere, etc.)
-    // needs a reason distinct from a genuine scoped disagreement.
-    const allowedReasons = new Set(["different_scopes", "temporary_migration", "source_specific_authority", "target_missing", "other"]);
-    if (action === "acknowledge" && !allowedReasons.has(reasonCode)) throw httpError(400, "Choose why this scoped difference should remain");
-    const chosen = action === "choose_contribution"
-      ? discrepancy.contributions.find((item) => item.source === selectedSource)
-      : null;
-    if (action === "choose_contribution" && !chosen) throw httpError(400, "Choose one of this discrepancy's contributing sources");
-    if (action === "compose" && typeof content !== "string") throw httpError(400, "Provide reconciled content");
-
-    const transactionId = randomUUID();
-    const now = new Date().toISOString();
-    const originalKind = discrepancy.originalKind ?? discrepancy.kind;
-    const previousDecision = discrepancy.history?.at(-1) ?? null;
-    const decision = {
-      schemaVersion: 2,
-      id: randomUUID(), discrepancyId: discrepancy.id,
-      ...(discrepancy.legacyId ? { conflictId: discrepancy.legacyId } : {}),
-      conceptId: discrepancy.conceptId, title: discrepancy.conceptTitle,
-      discrepancyKind: originalKind, sectionKey: originalKind === "section_content" ? discrepancy.key : undefined,
-      sectionHeading: discrepancy.label, fieldKey: originalKind === "frontmatter_value" ? discrepancy.key : undefined,
-      revision: discrepancy.revision, action,
-      conceptType: discrepancy.conceptType, owner: discrepancy.owner, priority: discrepancy.priority,
-      contributions: discrepancy.contributions.map((item) => ({ layer: item.source, level: item.level, content: item.value, updated: item.updated })),
-      contributorFingerprints: discrepancy.contributions.map((item) => ({ source: item.source, fingerprint: item.fingerprint })),
-      chosen: chosen ? { layer: chosen.source, level: chosen.level, content: chosen.value, updated: chosen.updated } : null,
-      method: methodOverride ?? "manual", actor: "local-user", decidedAt: now,
-      reason: reasonOverride ?? (action === "acknowledge" ? reasonCode : action === "compose" ? "You wrote a reconciled answer." : `You chose the ${selectedSource} answer.`),
-      ...(reasonCode ? { reasonCode } : {}), ...(typeof note === "string" && note.trim() ? { note: note.trim() } : {}),
-      ...(ruleId ? { ruleId } : {}), transactionId,
-      ...(previousDecision ? { supersedes: previousDecision.id, supersededDecisionId: previousDecision.id } : {}),
-      ...(action === "compose" ? { reconciledContent: content } : {}),
-      learningPattern: {
-        kind: originalKind, conceptType: discrepancy.conceptType, key: discrepancy.key,
-        sources: discrepancy.contributions.map((item) => item.source).sort(),
-        // A broken link's identity IS the missing target — unlike section_content/
-        // frontmatter_value, where the same key across many concepts of a type is a
-        // meaningful pattern, generalizing a broken-link rule across targets would
-        // auto-acknowledge a future, unrelated dangling link (e.g. a typo) that was
-        // never reviewed. Scope broken_link evidence to the exact target.
-        ...(originalKind === "broken_link" ? { target: discrepancy.target } : {}),
-      },
-      ruleAction: action === "choose_contribution"
-        ? { type: "prefer_source", source: selectedSource }
-        : action === "acknowledge" ? { type: "acknowledge", reasonCode } : null,
-    };
-
-    if (action === "acknowledge") {
-      decision.transactionState = "not_required";
-      decision.writtenTargets = [];
-      return { ok: true, decision: await conflictResolutionLog.append(decision), written: [] };
-    }
-    if (originalKind === "broken_link") throw httpError(409, "Open the source file to repair this link, or acknowledge the scoped difference.");
-    // renderScalar's scalar branch would rewrite a YAML list OR map as a
-    // quoted string (a plain object stringifies to "[object Object]" through
-    // the same String(value) call an array would otherwise skip) — silently
-    // downgrading the field's type in every writable layer. Compose only ever
-    // produces a string, so a structured-value field has no safe reconciled
-    // answer to write.
-    if (originalKind === "frontmatter_value" && action === "compose"
-      && discrepancy.contributions.some((item) => typeof item.value === "object" && item.value !== null)) {
-      throw httpError(400, "This field holds a structured value (list or map); compose isn't available for it — use \"Use this answer everywhere\" or edit the file directly.");
-    }
-
-    const value = action === "compose" ? content : chosen.value;
-    const writableSources = discrepancy.contributions.map((item) => item.source).filter((source) => fileRoots().has(source));
-    if (writableSources.length === 0) throw httpError(409, "None of this discrepancy's contributors is locally writable. Open the source files to resolve it.");
-    let staged;
-    if (originalKind === "frontmatter_value") {
-      staged = await stageFrontmatterTransaction(JSON.stringify({
-        conceptId: discrepancy.conceptId, key: discrepancy.key,
-        layers: writableSources, value,
-        expectedValues: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])),
-      }), fileRoots(), transactionId);
-    } else {
-      staged = await stageSectionTransaction(JSON.stringify({
-        conceptId: discrepancy.conceptId, sectionKey: discrepancy.key,
-        layers: writableSources, content: value,
-        expectedContent: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])), requireAll: true,
-      }), fileRoots(), transactionId);
-    }
-    const journalTargets = staged.targets.map((target) => ({ path: target.path, staged: target.staged, backup: target.backup }));
-    await discrepancyTransactionJournal.append({ id: transactionId, state: "prepared", preparedAt: now, targets: journalTargets });
-    try {
-      const written = await staged.commit();
-      decision.transactionState = "committed";
-      decision.writtenTargets = staged.targets.map((target) => ({ layer: target.layer, path: target.path }));
-      const saved = await conflictResolutionLog.append(decision);
-      await discrepancyTransactionJournal.append({ id: transactionId, state: "committed", committedAt: new Date().toISOString() });
-      await staged.cleanup();
-      invalidateIndex();
-      return { ok: true, decision: saved, written };
-    } catch (error) {
-      if (error.code !== "RecoveryRequired") {
-        try {
-          await staged.rollback();
-          await discrepancyTransactionJournal.append({ id: transactionId, state: "rolled_back", rolledBackAt: new Date().toISOString(), error: error.message });
-          await staged.cleanup();
-          throw httpError(409, `Nothing was changed. ${error.message}`);
-        } catch (rollbackError) {
-          if (rollbackError.status === 409) throw rollbackError;
-          await discrepancyTransactionJournal.append({ id: transactionId, state: "recovery_required", failedAt: new Date().toISOString(), error: `${error.message}; rollback failed: ${rollbackError.message}` });
-          throw httpError(500, `A write could not be rolled back automatically. Recovery is required: ${rollbackError.message}`);
-        }
-      }
-      await discrepancyTransactionJournal.append({ id: transactionId, state: "recovery_required", failedAt: new Date().toISOString(), error: error.message });
-      throw httpError(500, `A write could not be rolled back automatically. Recovery is required: ${error.message}`);
-    }
+    return discrepancyOps.runAutomaticRules();
   }
 
   // ---- settings ---------------------------------------------------------------
@@ -2986,7 +2705,7 @@ export function createEngineService({
   // Recovery is a startup responsibility, not something deferred until a user
   // happens to open the Discrepancy Center. Failure remains visible through
   // the journal and is retried before any later decision.
-  queueMicrotask(() => ensureDiscrepancyRecovery().catch((error) => {
+  queueMicrotask(() => discrepancyOps.ensureRecovery().catch((error) => {
     console.error(`contextcake: discrepancy transaction recovery requires attention: ${error.message}`);
   }));
 

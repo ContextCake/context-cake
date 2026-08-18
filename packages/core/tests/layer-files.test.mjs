@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { listFilesApi } from "../src/layer-files.mjs";
+import { listFilesApi, readLayerSection } from "../src/layer-files.mjs";
 
 test("a genuinely empty layer folder reports zero files with no error", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-files-empty-"));
@@ -56,5 +56,25 @@ test("one vanished layer does not blank the listing for a healthy sibling", asyn
     assert.equal(healthy.error, null);
   } finally {
     fs.rmSync(healthyRoot, { recursive: true, force: true });
+  }
+});
+
+test("readLayerSection reads one section's current body straight from the layer file", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-files-section-"));
+  fs.mkdirSync(path.join(root, "decisions"));
+  fs.writeFileSync(path.join(root, "decisions", "db.md"), "---\ntype: decision\n---\n\n# DB\n\n## Choice {#choice}\n\nUse Postgres.\n\n## Other {#other}\n\nx\n");
+  try {
+    const roots = new Map([["team", { root, kind: "okf-local" }]]);
+    const hit = await readLayerSection(roots, { layer: "team", conceptId: "decisions/db", sectionKey: "choice" });
+    assert.equal(hit.content, "Use Postgres.");
+    assert.equal(hit.ext, ".md");
+    assert.match(hit.text, /## Other/);
+    assert.equal((await readLayerSection(roots, { layer: "team", conceptId: "decisions/db", sectionKey: "missing" })).content, null);
+    assert.equal(await readLayerSection(roots, { layer: "team", conceptId: "decisions/nope", sectionKey: "choice" }), null);
+    assert.equal(await readLayerSection(roots, { layer: "nope", conceptId: "decisions/db", sectionKey: "choice" }), null);
+    // Same sandbox as every other layer-file read.
+    await assert.rejects(readLayerSection(roots, { layer: "team", conceptId: "../escape", sectionKey: "choice" }), { status: 403 });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

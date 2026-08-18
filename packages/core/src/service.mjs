@@ -39,7 +39,7 @@ import {
   assertInsideRoot, guardMutatingRequest, httpError, json, MIME, parseJson, readBody,
 } from "./http-util.mjs";
 import {
-  layerRootMap, listFilesApi, readFileApi, serveRawApi, writeFileApi, writeSectionApi,
+  layerRootMap, listFilesApi, readFileApi, readLayerSection, serveRawApi, writeFileApi, writeSectionApi,
   stageSectionTransaction,
 } from "./layer-files.mjs";
 import {
@@ -529,6 +529,7 @@ export function createEngineService({
     ruleStore: discrepancyRuleStore,
     priorityStore: discrepancyPriorityStore,
     corpus: (waitMs) => discrepancyCorpus(waitMs),
+    readLiveSection: (args) => readLayerSection(fileRoots(), args),
     onWritten: () => invalidateIndex(),
     git: { commitPathsWithMutation, push: pushGit },
   });
@@ -2676,6 +2677,17 @@ export function createEngineService({
         throw httpError(502, `Sync failed: ${health.lastError}`, { ...detail, ok: false });
       }
       return { ok: true, ...detail };
+    }
+    if (layer.live === true) {
+      // The live team layer: withGitSync's sync() lands any queued (offline)
+      // commits — decisions committed while the remote was unreachable
+      // included — then force-refreshes the tree. The re-index that follows
+      // is what makes a teammate's pushed change visible.
+      const source = sources.find((candidate) => candidate.name === name);
+      if (!source || typeof source.sync !== "function") throw httpError(400, `"${name}" does not support Sync`);
+      const lastSynced = await source.sync();
+      invalidateIndex(name);
+      return { ok: true, synced: name, lastSynced };
     }
     if (!layer.origin) throw httpError(400, `"${name}" is not a git-backed source`);
     const { url, slug } = normalizeRepo(layer.origin);

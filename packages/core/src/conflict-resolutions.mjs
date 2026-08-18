@@ -5,6 +5,7 @@
 // contributing files were made to agree. It lives beside the manifest so the
 // history follows this ContextCake setup without entering any source layer.
 
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { ensureSidecarMigrated, sidecarDir } from "./sidecar-state.mjs";
@@ -110,7 +111,13 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
     });
   }
 
-  async function recover(allowedRoots = [], committedTransactionIds = []) {
+  // `onRestored(tx, paths)` runs after every backup of a rolled-back
+  // transaction has been copied into place and BEFORE the staged/backup files
+  // are removed or the journal marks `rolled_back`: a host that has to record
+  // the restore elsewhere (the live team layer commits it, so git and this log
+  // agree) gets to do so while a failure still leaves the transaction pending
+  // and retryable — the backups are only dropped once the hook has returned.
+  async function recover(allowedRoots = [], committedTransactionIds = [], { onRestored = null } = {}) {
     const records = await list();
     const final = new Set(records.filter((r) => r.state === "committed" || r.state === "rolled_back").map((r) => r.id));
     const committedDecisions = new Set(committedTransactionIds);
@@ -140,6 +147,9 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
             throw new Error("journal target is outside the selected source roots");
           }
           await fsp.copyFile(target.backup, target.path);
+        }
+        if (onRestored) await onRestored(tx, (tx.targets ?? []).map((target) => target.path));
+        for (const target of tx.targets ?? []) {
           await fsp.unlink(target.staged).catch(() => {});
           await fsp.unlink(target.backup).catch(() => {});
         }
@@ -157,11 +167,24 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
   return { file, append, list, recover };
 }
 
+// Containment for journal targets. Both sides are compared as real paths:
+// the writers record realpaths (assertInsideRoot resolves symlinks before a
+// target is ever staged) while a manifest's layer path may reach the same
+// folder through a symlink — every macOS temp dir, /var → /private/var — and
+// a string compare would then refuse to recover a perfectly contained file.
+// A path that no longer exists (a staged file already cleaned up) resolves
+// through its parent, the same rule assertInsideRoot uses.
 function insideAnyRoot(target, roots) {
-  const resolved = path.resolve(String(target));
+  const resolved = realpathLenient(String(target));
   return roots.some((root) => {
-    const base = path.resolve(root);
+    const base = realpathLenient(root);
     const rel = path.relative(base, resolved);
     return rel && !rel.startsWith("..") && !path.isAbsolute(rel);
   });
+}
+
+function realpathLenient(p) {
+  const abs = path.resolve(p);
+  try { return fs.realpathSync.native(abs); } catch { /* fall through */ }
+  try { return path.join(fs.realpathSync.native(path.dirname(abs)), path.basename(abs)); } catch { return abs; }
 }

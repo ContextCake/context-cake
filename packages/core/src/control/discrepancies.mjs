@@ -19,6 +19,7 @@
 // 1,500 rows costs one build per change instead of one per request. See
 // docs/architecture/notes/discrepancy-projection.md.
 
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -47,6 +48,10 @@ const SUMMARY_TOP_N = 25;
 // only while someone is reading it. Staleness is impossible by construction:
 // the key is re-derived from live state on every access.
 const PROJECTION_MEMO_TTL_MS = 30_000;
+
+function realpathOr(p) {
+  try { return fs.realpathSync.native(p); } catch { return path.resolve(p); }
+}
 
 export function createDiscrepancyOperations({
   manifestPath,        // required: the manifest whose lock serializes decisions
@@ -320,6 +325,7 @@ export function createDiscrepancyOperations({
       recovery = resolutionLog.list().then((decisions) => transactionJournal.recover(
         roots,
         decisions.filter((row) => row.transactionState === "committed").map((row) => row.transactionId).filter(Boolean),
+        { onRestored: commitRestoredLivePaths },
       )).catch((error) => {
         recovery = null;
         throw error;
@@ -361,8 +367,10 @@ export function createDiscrepancyOperations({
   }
 
   // Apply one decision to a discrepancy the caller already projected. The
-  // caller holds the manifest lock; this never takes it.
-  async function applyDecision(discrepancy, body, { methodOverride = null, reasonOverride = null } = {}) {
+  // caller holds the manifest lock; this never takes it. `push: false` lets a
+  // caller applying several decisions (the automatic-rules job, a batch) push
+  // the live layer once at the end instead of once per item.
+  async function applyDecision(discrepancy, body, { methodOverride = null, reasonOverride = null, push: pushNow = true } = {}) {
     await ensureRecovery();
     const { action, selectedSource, content, reasonCode, note, ruleId } = body;
     if (ruleId !== undefined && methodOverride !== "automatic") {
@@ -438,48 +446,150 @@ export function createDiscrepancyOperations({
     const roots = fileRoots();
     const writableSources = discrepancy.contributions.map((item) => item.source).filter((source) => roots.has(source));
     if (writableSources.length === 0) throw new ControlError("SOURCE_NOT_WRITABLE", "None of this discrepancy's contributors is locally writable. Open the source files to resolve it.", { status: 409 });
-    let staged;
-    if (originalKind === "frontmatter_value") {
-      staged = await stageFrontmatterTransaction(JSON.stringify({
-        conceptId: discrepancy.conceptId, key: discrepancy.key,
-        layers: writableSources, value,
-        expectedValues: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])),
-      }), roots, transactionId);
-    } else {
-      staged = await stageSectionTransaction(JSON.stringify({
-        conceptId: discrepancy.conceptId, sectionKey: discrepancy.key,
-        layers: writableSources, content: value,
-        expectedContent: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])), requireAll: true,
-      }), roots, transactionId);
-    }
-    const journalTargets = staged.targets.map((target) => ({ path: target.path, staged: target.staged, backup: target.backup }));
-    await transactionJournal.append({ id: transactionId, state: "prepared", preparedAt: now, targets: journalTargets });
+    // Stage + journal, as one step, so it can run either directly or inside
+    // the live layer's git lock (below): staging reads and backs up each
+    // target, and for a file another ContextCake process may be pulling or
+    // writing, that read has to happen under the same lock the rename does.
+    let staged = null;
+    const stage = async () => {
+      staged = originalKind === "frontmatter_value"
+        ? await stageFrontmatterTransaction(JSON.stringify({
+          conceptId: discrepancy.conceptId, key: discrepancy.key,
+          layers: writableSources, value,
+          expectedValues: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])),
+        }), roots, transactionId)
+        : await stageSectionTransaction(JSON.stringify({
+          conceptId: discrepancy.conceptId, sectionKey: discrepancy.key,
+          layers: writableSources, content: value,
+          expectedContent: Object.fromEntries(discrepancy.contributions.map((item) => [item.source, item.value])), requireAll: true,
+        }), roots, transactionId);
+      await transactionJournal.append({
+        id: transactionId, state: "prepared", preparedAt: now,
+        targets: staged.targets.map((target) => ({ path: target.path, staged: target.staged, backup: target.backup })),
+      });
+    };
+
+    // F30: a contributor inside the live team layer is a git working tree
+    // shared with every teammate's agent. Its bytes change only inside
+    // git-core's repo lock, as one pathspec commit — never a bare rename that
+    // leaves the clone dirty and the change unpushed.
+    const live = liveLayer();
+    const liveTouched = live !== null && writableSources.includes(live.name);
+    if (liveTouched && !git) throw new ControlError("GIT_UNAVAILABLE", "This host cannot commit into the live team layer.", { status: 500 });
+    const liveRel = liveTouched ? [`${discrepancy.conceptId}.md`] : [];
+    const message = `chore(contextcake): resolve ${originalKind} ${discrepancy.conceptId}#${discrepancy.key} (${action})`;
+    let written = null;
+    let gitOutcome = null; // { layer, paths, committed }
+    let rolledBackUnderLock = false;
     try {
-      const written = await staged.commit();
+      if (liveTouched) {
+        const result = await git.commitPathsWithMutation(live.root, liveRel, message, {
+          mutate: async () => {
+            await stage();
+            const actual = relativeToLive(live, staged.targets.filter((target) => target.layer === live.name).map((target) => target.path));
+            if (actual.length !== 1 || actual[0] !== liveRel[0]) {
+              throw new Error(`live layer target resolved to ${JSON.stringify(actual)}, expected ${liveRel[0]}`);
+            }
+            written = await staged.commit();
+          },
+          rollback: async () => {
+            if (!staged) return;
+            await staged.rollback();
+            rolledBackUnderLock = true;
+          },
+          author: live.profileName,
+          skipIfClean: true,
+        });
+        gitOutcome = { layer: live.name, paths: liveRel, committed: result.committed === true };
+      } else {
+        await stage();
+        written = await staged.commit();
+      }
       decision.transactionState = "committed";
       decision.writtenTargets = staged.targets.map((target) => ({ layer: target.layer, path: target.path }));
+      if (gitOutcome?.committed) decision.liveLayerCommit = { layer: gitOutcome.layer, paths: gitOutcome.paths };
       const saved = await resolutionLog.append(decision);
       noteWrite();
       await transactionJournal.append({ id: transactionId, state: "committed", committedAt: new Date().toISOString() });
       await staged.cleanup();
       onWritten();
-      return { ok: true, decision: saved, written };
-    } catch (error) {
-      if (error.code !== "RecoveryRequired") {
-        try {
-          await staged.rollback();
-          await transactionJournal.append({ id: transactionId, state: "rolled_back", rolledBackAt: new Date().toISOString(), error: error.message });
-          await staged.cleanup();
-          throw new ControlError("ROLLED_BACK", `Nothing was changed. ${error.message}`, { status: 409 });
-        } catch (rollbackError) {
-          if (rollbackError.status === 409) throw rollbackError;
-          await transactionJournal.append({ id: transactionId, state: "recovery_required", failedAt: new Date().toISOString(), error: `${error.message}; rollback failed: ${rollbackError.message}` });
-          throw new ControlError("RECOVERY_REQUIRED", `A write could not be rolled back automatically. Recovery is required: ${rollbackError.message}`, { status: 500 });
-        }
+      const response = { ok: true, decision: saved, written };
+      if (gitOutcome) {
+        // Push after the decision is durable, so a slow or offline remote can
+        // never leave the journal `prepared`. Never thrown: offline is a
+        // queued commit that POST /api/sources/sync lands later.
+        response.git = { ...gitOutcome, ...(gitOutcome.committed && pushNow ? await pushLive(live.root) : { pushed: false, queued: false }) };
       }
-      await transactionJournal.append({ id: transactionId, state: "recovery_required", failedAt: new Date().toISOString(), error: error.message });
-      throw new ControlError("RECOVERY_REQUIRED", `A write could not be rolled back automatically. Recovery is required: ${error.message}`, { status: 500 });
+      return response;
+    } catch (error) {
+      // The live layer's lock is held by another ContextCake process: staging
+      // runs inside that lock, so nothing was read, backed up, journaled, or
+      // renamed — the decision simply did not happen yet.
+      if (error.code === "LockBusy") {
+        throw new ControlError("LIVE_LAYER_BUSY", "Nothing was changed. The team layer is busy — another ContextCake process holds its lock. Try again in a moment.", { status: 409 });
+      }
+      // Staging itself refused (a stale expectedContent, a missing file, a
+      // too-large document): nothing was journaled or renamed, so the
+      // refusal is the answer as it always was.
+      if (!staged) throw error;
+      if (error.code === "RecoveryRequired" || error.code === "RollbackFailed") {
+        await transactionJournal.append({ id: transactionId, state: "recovery_required", failedAt: new Date().toISOString(), error: error.message });
+        throw new ControlError("RECOVERY_REQUIRED", `A write could not be rolled back automatically. Recovery is required: ${error.message}`, { status: 500 });
+      }
+      try {
+        // git-core already ran the rollback under its lock when the commit
+        // failed; anything else (a rename failure) is restored here.
+        if (!rolledBackUnderLock) await staged.rollback();
+        await transactionJournal.append({ id: transactionId, state: "rolled_back", rolledBackAt: new Date().toISOString(), error: error.message });
+        await staged.cleanup();
+      } catch (rollbackError) {
+        await transactionJournal.append({ id: transactionId, state: "recovery_required", failedAt: new Date().toISOString(), error: `${error.message}; rollback failed: ${rollbackError.message}` });
+        throw new ControlError("RECOVERY_REQUIRED", `A write could not be rolled back automatically. Recovery is required: ${rollbackError.message}`, { status: 500 });
+      }
+      throw new ControlError("ROLLED_BACK", `Nothing was changed. ${error.message}`, { status: 409 });
     }
+  }
+
+  // Which of `absPaths` sit inside the live layer's root, as the relative
+  // paths git wants. Both sides are realpath'd: staged targets already are
+  // (assertInsideRoot), and a manifest path through a symlink — every macOS
+  // temp dir — would otherwise never match its own files.
+  function relativeToLive(live, absPaths) {
+    const root = realpathOr(live.root);
+    const out = [];
+    for (const abs of absPaths) {
+      const rel = path.relative(root, realpathOr(abs));
+      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) out.push(rel.split(path.sep).join("/"));
+    }
+    return out;
+  }
+
+  async function pushLive(root) {
+    try {
+      const result = await git.push(root);
+      return { pushed: result.pushed === true, queued: result.queued === true };
+    } catch (error) {
+      // A push that cannot even take the lock is a queued push, not a failed
+      // decision: the commit is local and sync() lands it.
+      return { pushed: false, queued: true, error: error.message };
+    }
+  }
+
+  // The recovery edge of F30: a crash between the git commit and the decision
+  // append leaves HEAD holding a write the log never recorded. Startup
+  // recovery restores the backups; this commits the restore from inside the
+  // journal's restore step so git and the log agree, and a failure here keeps
+  // the transaction pending (retried before the next decision) rather than
+  // half-recorded.
+  async function commitRestoredLivePaths(tx, paths) {
+    if (!git) return;
+    const live = liveLayer();
+    if (!live) return;
+    const rel = relativeToLive(live, paths);
+    if (rel.length === 0) return;
+    await git.commitPathsWithMutation(live.root, rel, `chore(contextcake): roll back uncommitted discrepancy transaction ${tx.id}`, {
+      mutate: async () => {}, rollback: async () => {}, author: live.profileName, skipIfClean: true,
+    });
   }
 
   // ---- automatic rules -----------------------------------------------------------

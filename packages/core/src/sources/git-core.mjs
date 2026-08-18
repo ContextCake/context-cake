@@ -158,10 +158,17 @@ export async function commitPaths(root, paths, message, { author = null, lockRet
 // Acquires the repo lock before a caller mutates the working tree, then commits
 // only the named paths. If add/commit fails, rollback runs while the same lock
 // is still held so the operation can remain safely retryable.
+//
+// `skipIfClean`: when the mutation left every named path byte-identical to
+// the index (a decision that writes a layer's own winning value back to it,
+// a recovery that restored files git never saw change), answer
+// `{ committed: false, clean: true }` instead of letting `git commit` refuse
+// with "nothing to commit" — which would otherwise roll a correct write back.
 export async function commitPathsWithMutation(root, paths, message, {
   mutate,
   rollback,
   author = null,
+  skipIfClean = false,
   lockRetryMs,
   lockRetries,
 } = {}) {
@@ -172,6 +179,7 @@ export async function commitPathsWithMutation(root, paths, message, {
   return withRepoLock(root, "commit", async () => {
     await mutate();
     try {
+      if (skipIfClean && await pathsClean(root, paths)) return { committed: false, clean: true };
       return await commitPathsUnlocked(root, paths, message, author);
     } catch (error) {
       try {
@@ -184,6 +192,14 @@ export async function commitPathsWithMutation(root, paths, message, {
       throw error;
     }
   }, { lockRetryMs, lockRetries });
+}
+
+// True when none of the named paths differs from HEAD/index — modified,
+// staged, or untracked all count as dirty. Untracked files are listed
+// individually so a new file inside a listed directory is seen.
+async function pathsClean(root, paths) {
+  const status = await runGit(root, ["status", "--porcelain", "--untracked-files=all", "--", ...paths]);
+  return status.stdout === "";
 }
 
 async function commitPathsUnlocked(root, paths, message, author) {

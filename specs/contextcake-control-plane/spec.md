@@ -260,12 +260,15 @@ auditable CLI — never in tools an agent can invoke implicitly.
 
 ### 5.8 Reconciliation
 
-- [ ] WHEN `discrepancy list|show|resolve|priority`, `rule
+- [ ] WHEN `discrepancy list|show|summary|resolve|priority`, `rule
   list|suggestions|approve|update|remove|promote`, and `resolution log` run
   THE SYSTEM SHALL reuse the existing discrepancy, rule, priority, and
   transaction-journal machinery, including rollback/recovery and
   contributor-fingerprint checks; resolution SHALL require the expected
-  discrepancy revision.
+  discrepancy revision. (Engine side shipped 2026-08-18 as
+  `packages/core/src/control/discrepancies.mjs` —
+  `createDiscrepancyOperations(caps)`, the HTTP service is a shim over it;
+  the CLI adapter is pending.)
 
 ### 5.9 Packs
 

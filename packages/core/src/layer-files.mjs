@@ -319,6 +319,32 @@ export async function writeSectionApi(rawBody, roots) {
 }
 
 /**
+ * Read one section's current body straight from a layer's file — the live
+ * read a decision needs when it must see what an earlier write in the same
+ * request just changed (the projection it was decided against is a snapshot).
+ * Same file lookup, sandbox, and size cap as the section writers; null when
+ * the layer has no document for the concept, `content: null` when the
+ * document has no such section.
+ */
+export async function readLayerSection(roots, { layer, conceptId, sectionKey }) {
+  const root = roots.get(layer);
+  if (!root || typeof conceptId !== "string" || typeof sectionKey !== "string") return null;
+  for (const ext of root.kind === "files" ? FILES_EXTENSIONS : [".md"]) {
+    const candidate = resolveLayerFile(`${layer}/${conceptId}${ext}`, roots);
+    let stat;
+    try { stat = await fsp.stat(candidate.abs); } catch { continue; }
+    if (!stat.isFile()) continue;
+    if (stat.size > MAX_EDITABLE_BYTES) throw httpError(413, `File is too large to edit: ${layer}/${conceptId}${ext}`);
+    const text = await fsp.readFile(candidate.abs, "utf8");
+    return {
+      layer, abs: candidate.abs, ext: candidate.ext, text, mtime: stat.mtime.toISOString(),
+      content: readSectionBody(text, sectionKey, { plainText: candidate.ext === ".txt" }),
+    };
+  }
+  return null;
+}
+
+/**
  * Stage a recoverable multi-file section transaction. New and original bytes
  * live beside each target so rename/copy never crosses filesystems. The caller
  * journals `targets` before commit and owns final cleanup.

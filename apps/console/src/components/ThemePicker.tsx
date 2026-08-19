@@ -43,7 +43,7 @@ export function ThemePicker() {
           )
         })}
       </div>
-      <p className="cc-theme-picker-note" aria-live="polite">{describeFamily(selected)}</p>
+      <p className="cc-theme-picker-note">{describeFamily(selected)}</p>
     </>
   )
 }

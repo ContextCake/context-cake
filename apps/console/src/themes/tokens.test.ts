@@ -8,7 +8,6 @@ import {
 } from './gates'
 import { DEFAULT_PALETTE, PALETTES as FAMILIES, PALETTE_IDS, isPaletteId } from './registry'
 import INDEX_CSS from './index.css?raw'
-import MAIN_TSX from '../main.tsx?raw'
 
 // Structural gates over styles.css and src/themes/. A theme family redeclares
 // tokens, never selectors, so a palette can only work if (a) the set of color
@@ -222,10 +221,11 @@ describe('_derived.css covers everything a family does not declare (d)', () => {
     expect(extra).toEqual([])
   })
 
-  it('leaves nothing of ContextCake\'s dark block to reach a family, color or not', () => {
-    // The dark block is not palette-scoped, so any token it declares that
-    // neither a family nor the derived block redeclares (a shadow, say) would
-    // show through in every family's dark mode.
+  it('redeclares everything ContextCake\'s dark block does, color or not', () => {
+    // The dark block is palette-scoped, so it does not reach a family — which
+    // means a token it declares that neither a family nor the derived block
+    // redeclares (a shadow, say) would fall back to :root's LIGHT value in a
+    // family's dark mode.
     const dark = ccTokens(declarationsFor(BLOCKS, DARK_SELECTOR))
     const leaking = [...dark.keys()].filter((token) => !PRIMITIVES.includes(token) && !derivedLight.has(token))
     expect(leaking).toEqual([])
@@ -295,17 +295,26 @@ describe('registry and files agree (e)', () => {
     }
   })
 
-  it('index.css imports the derived block first, then every family, and main.tsx loads it after styles.css', () => {
+  it('index.css imports the derived block and every family', () => {
     // The glob in gates.ts finds a family file whether or not it is imported;
     // a registered family whose file is not imported would pass every gate and
     // then render as ContextCake primitives under a family's derived tokens.
     const imports = [...INDEX_CSS.matchAll(/@import\s+'\.\/([\w-]+)\.css'/g)].map((m) => m[1])
-    expect(imports[0]).toBe('_derived')
-    expect(imports.slice(1).sort()).toEqual(THIRD_PARTY.map((family) => family.id).sort())
-    const styles = MAIN_TSX.indexOf("import './styles.css'")
-    const themes = MAIN_TSX.indexOf("import './themes/index.css'")
-    expect(styles).toBeGreaterThan(-1)
-    expect(themes).toBeGreaterThan(styles)
+    expect(imports).toContain('_derived')
+    expect(imports.filter((id) => id !== '_derived').sort()).toEqual(THIRD_PARTY.map((family) => family.id).sort())
+  })
+
+  it("ContextCake's dark block is scoped to its own palette, so families never compete with it", () => {
+    // Structural, not an import-order proxy: at (0,2,0) the derived block and
+    // an unscoped `:root[data-theme="dark"]` would tie on specificity and be
+    // decided by bundle order. Scoping the dark block to `contextcake` (or to
+    // a root with no data-palette yet — the pre-paint instant) removes the tie.
+    const dark = BLOCKS.find((block) => block.selectors.includes(DARK_SELECTOR))
+    expect(dark, DARK_SELECTOR).toBeDefined()
+    expect(DARK_SELECTOR).toMatch(/^:root:where\(\[data-palette="contextcake"\], :not\(\[data-palette\]\)\)\[data-theme="dark"\]$/)
+    // And no other block re-declares tokens on a bare dark root.
+    const bare = BLOCKS.filter((block) => block.selectors.includes(':root[data-theme="dark"]'))
+    expect(bare.map((block) => block.selector)).toEqual([])
   })
 
   it('a bare .cc-theme-swatch layout rule is a component rule, not a token block', () => {

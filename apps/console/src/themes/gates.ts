@@ -16,7 +16,8 @@ export const STYLESHEET: string = STYLES
 export const BLOCKS: readonly CssBlock[] = parseCssBlocks(STYLES)
 
 export const LIGHT_SELECTOR = ':root'
-export const DARK_SELECTOR = ':root[data-theme="dark"]'
+/** ContextCake's dark block: palette-scoped, so a theme family never competes with it (see styles.css). */
+export const DARK_SELECTOR = ':root:where([data-palette="contextcake"], :not([data-palette]))[data-theme="dark"]'
 
 /**
  * Every `themes/<id>.css` family file, keyed by id, read as text. Vite's
@@ -136,20 +137,19 @@ export function contextCakeModes(): PaletteMode[] {
 
 /**
  * A family's mode exactly as the cascade resolves it on <html>, in cascade
- * order: ContextCake's `:root` (0,1,0), in dark mode ContextCake's dark
- * block (0,2,0 — it is not palette-scoped, so it does apply), then the
- * derived block and its dark half (0,2,0, later in the cascade, so they win
- * over the dark block), then the family's own block (0,3,0). Modelling the
- * real order rather than the intended one means a hole in `_derived.css`
- * would show up here as ContextCake's value leaking into a family — which is
- * what a user would see — as well as failing gate (d).
+ * order: ContextCake's `:root` (0,1,0 — the fallback for anything nobody
+ * redeclares), then the derived block and, in dark mode, its dark half
+ * (0,2,0), then the family's own block (0,3,0). ContextCake's dark block is
+ * palette-scoped (DARK_SELECTOR) and so does not apply to a family at all —
+ * a hole in `_derived.css` therefore shows up here as ContextCake's LIGHT
+ * value in a family's dark mode, which is what a user would see, as well as
+ * failing gate (d).
  */
 export function familyModes(id: PaletteId, css: string): PaletteMode[] {
   const blocks = parseCssBlocks(css)
   const out: PaletteMode[] = []
   for (const mode of ['light', 'dark'] as const) {
     const decls = new Map(ccTokens(declarationsFor(BLOCKS, LIGHT_SELECTOR)))
-    if (mode === 'dark') for (const [token, value] of ccTokens(declarationsFor(BLOCKS, DARK_SELECTOR))) decls.set(token, value)
     for (const [token, value] of ccTokens(declarationsFor(DERIVED_BLOCKS, DERIVED_SELECTOR))) decls.set(token, value)
     if (mode === 'dark') for (const [token, value] of ccTokens(declarationsFor(DERIVED_BLOCKS, DERIVED_DARK_SELECTOR))) decls.set(token, value)
     for (const [token, value] of ccTokens(declarationsFor(blocks, familySelector(id, mode)))) decls.set(token, value)

@@ -24,10 +24,14 @@ const SOURCE_KEYS = new Set([
 const CACHE_KEYS = new Set(['dir', 'ttlSeconds'])
 const PROFILE_KEYS = new Set(['active', 'id', 'label', 'name', 'preferences', 'sources'])
 const MANIFEST_PROFILE_KEYS = new Set(['label', 'layers', 'preferences'])
-// `palette` (the theme family) is checked by shape (PALETTE_ID), not against
-// a list: an older client must accept a newer client's family id on pull
-// rather than throw — the console falls back to ContextCake for an id it lacks.
-const PROFILE_PREFERENCE_KEYS = new Set(['theme', 'palette'])
+// Profile-level preferences are NAME-checked only (assertOnlyKeys), and
+// `profiles` is a field every client already syncs, so a key added here is
+// not dropped by an older client's SYNC_FIELDS — it makes that client's pull
+// throw "unsupported profile preference field" and fail wholesale. Nothing
+// writes a per-profile palette today; add it here only together with a
+// consumer and a shape check. The top-level `palette` IS synced (SYNC_FIELDS)
+// and shape-checked (PALETTE_ID) below.
+const PROFILE_PREFERENCE_KEYS = new Set(['theme'])
 
 function scrubMarker(kind) {
   return { __scrubbed: kind }

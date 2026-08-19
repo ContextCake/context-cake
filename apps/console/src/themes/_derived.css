@@ -12,10 +12,11 @@
 
    Selector shape and why. `:root[data-palette]:where(:not([data-palette="contextcake"]))`
    has specificity (0,2,0):
-     - it BEATS ContextCake's dark block `:root[data-theme="dark"]` (0,2,0,
-       earlier in the cascade because styles.css is imported first) — which is
-       required: that block is not palette-scoped, so without this a family in
-       dark mode would render ContextCake's blue/teal/amber ramps;
+     - it BEATS ContextCake's `:root` (0,1,0), the fallback for every token;
+     - it never meets ContextCake's dark block: that block is scoped to
+       `[data-palette="contextcake"]` (or no `data-palette` at all) in
+       styles.css, so a family's dark mode is these tokens plus its own,
+       regardless of stylesheet order;
      - it LOSES to every family block `:root[data-palette="x"][data-theme="y"]`
        (0,3,0), so a family may override any derived token (Rosé Pine and
        GitHub bring their own border tones);

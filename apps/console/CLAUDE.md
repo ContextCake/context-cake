@@ -115,10 +115,12 @@ via their pre-hooks.
   `.cc-theme-swatch[data-palette="x"][data-theme="y"]` for the picker's
   self-previewing tiles (ContextCake's blocks list the swatch selector too),
   so a preview is the real palette painted on a `<span>`, never a hand-picked
-  sample. The derived block sits at (0,2,0) so it beats ContextCake's dark
-  block by order (that block is not palette-scoped) and loses to every family
-  block; a family may override a derived token (Rosé Pine and GitHub bring
-  their own border tones). Non-default families are opaque, and
+  sample. ContextCake's dark block is scoped to its own palette
+  (`:root:where([data-palette="contextcake"], :not([data-palette]))[data-theme="dark"]`,
+  still (0,2,0)) so a family never competes with it; the derived block sits
+  at (0,2,0), above `:root`, below every family block, and a family may
+  override a derived token (Rosé Pine and GitHub bring their own border
+  tones). Non-default families are opaque, and
   `_derived.css` turns the sidebar blur off for them. **A
   `:root[data-theme="dark"] .cc-*` component override fails
   `src/themes/tokens.test.ts` — extend a semantic token in both blocks (or add

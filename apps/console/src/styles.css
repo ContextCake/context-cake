@@ -84,9 +84,16 @@
   --cc-panel-padding: 12px;
 }
 
-:root[data-theme="dark"],
+:root:where([data-palette="contextcake"], :not([data-palette]))[data-theme="dark"],
 .cc-theme-swatch[data-palette="contextcake"][data-theme="dark"] {
-  /* ---------- dark soft control plane theme ---------- */
+  /* ---------- dark soft control plane theme ----------
+     Scoped to ContextCake's own palette (and to a root that carries no
+     `data-palette` at all — the pre-paint instant, or a host page that never
+     sets one) so it never competes with a theme family's tokens: families
+     declare their own primitives (src/themes/<id>.css) and derive the rest
+     (src/themes/_derived.css) without this block in the way. `:where()` keeps
+     the specificity at (0,2,0), the same as the plain
+     `:root[data-theme="dark"]` it replaces. */
   --cc-page: #10110F;
   --cc-surface: rgba(30,31,28,0.78);
   --cc-raised: #23241F;

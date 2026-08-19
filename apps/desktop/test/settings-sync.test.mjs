@@ -83,14 +83,17 @@ test('system theme, theme family and application density are sync-safe global pr
   for (const bad of ['Solarized', '../x', 'x'.repeat(33), 7]) {
     assert.throws(() => prepareSyncPayload({ palette: bad }), /invalid palette/, `palette ${JSON.stringify(bad)}`)
   }
-  assert.deepEqual(
-    prepareSyncPayload({ profiles: [{ id: 'work', preferences: { theme: 'dark', palette: 'gruvbox' } }] }),
-    { profiles: [{ id: 'work', preferences: { theme: 'dark', palette: 'gruvbox' } }] },
-  )
-  assert.throws(
-    () => prepareSyncPayload({ profiles: [{ id: 'work', preferences: { density: 'compact' } }] }),
-    /unsupported profile preference field/,
-  )
+  // A per-profile palette is deliberately NOT accepted: profile preference
+  // keys are name-checked only, and an older client pulling a blob that
+  // carries one throws instead of dropping it (profiles is a field it syncs).
+  // Rejecting it on push keeps such a blob from ever existing.
+  for (const preferences of [{ palette: 'gruvbox' }, { density: 'compact' }]) {
+    assert.throws(
+      () => prepareSyncPayload({ profiles: [{ id: 'work', preferences }] }),
+      /unsupported profile preference field/,
+      `profile preferences ${JSON.stringify(preferences)} must be rejected`,
+    )
+  }
 })
 
 test('Pack files and local registry stay out of sync while identity metadata is safe', () => {

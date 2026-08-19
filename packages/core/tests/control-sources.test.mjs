@@ -107,15 +107,30 @@ test("assignCascadeLevels renumbers N..1 on ties or an insert", () => {
   assert.deepEqual(assignCascadeLevels([{ name: "a", level: 2 }, { name: "b", level: 2 }, { name: "c", level: 0 }]), [
     { name: "a", level: 3 }, { name: "b", level: 2 }, { name: "c", level: 1 },
   ]);
-  // An insert onto 3/2/0: the newcomer has no level, so the pool is short by one.
+  // An insert onto 3/2/0: the newcomer has NO level (not even null), so the
+  // pool is short by one.
   assert.deepEqual(assignCascadeLevels([
-    { name: "personal", level: 3 }, { name: "new", level: null }, { name: "team", level: 2 }, { name: "company", level: 0 },
+    { name: "personal", level: 3 }, { name: "new" }, { name: "team", level: 2 }, { name: "company", level: 0 },
   ]), [
     { name: "personal", level: 4 }, { name: "new", level: 3 }, { name: "team", level: 2 }, { name: "company", level: 1 },
   ]);
   // Numeric-string levels a hand-authored manifest may carry still count as existing.
   assert.deepEqual(assignCascadeLevels([{ name: "a", level: "3" }, { name: "b", level: "0" }]), [
     { name: "a", level: 3 }, { name: "b", level: 0 },
+  ]);
+  // So do the other shapes the manifest accepts, read as the manifest (and the
+  // resolver) read them: `null` is 0, `true` is 1. A valid manifest that
+  // happens to hold them still round-trips as a permutation rather than being
+  // renumbered on the first reorder.
+  assert.deepEqual(assignCascadeLevels([{ name: "team", level: 2 }, { name: "personal", level: 3 }, { name: "company", level: null }]), [
+    { name: "team", level: 3 }, { name: "personal", level: 2 }, { name: "company", level: 0 },
+  ]);
+  assert.deepEqual(assignCascadeLevels([{ name: "mid", level: true }, { name: "personal", level: 3 }, { name: "company", level: 0 }]), [
+    { name: "mid", level: 3 }, { name: "personal", level: 1 }, { name: "company", level: 0 },
+  ]);
+  // A value the manifest would refuse is not "existing" either.
+  assert.deepEqual(assignCascadeLevels([{ name: "a", level: 3 }, { name: "b", level: "abc" }]), [
+    { name: "a", level: 2 }, { name: "b", level: 1 },
   ]);
   // Degenerate inputs.
   assert.deepEqual(assignCascadeLevels([]), []);
@@ -167,6 +182,22 @@ test("reorderSources permutes existing distinct levels, reports the order, and n
   // Round trip: putting it back restores 3/2/0 exactly.
   ops.reorderSources({ order: ["personal", "team", "company"] });
   assert.deepEqual(levelsOf(manifestPath), { personal: 3, team: 2, company: 0 });
+});
+
+test("reorderSources keeps a valid manifest's null / true levels as a permutation, the way the manifest reads them", (t) => {
+  const dir = tempDir(t);
+  const manifestPath = writeManifest(dir, [
+    folderLayer(dir, "personal", 3),
+    folderLayer(dir, "mid", true),
+    folderLayer(dir, "company", null),
+  ], { v2: true });
+  const ops = createSourceOperations({ manifestPath });
+  // The manifest accepts `true` (1) and `null` (0), so this is a 3/1/0
+  // cascade — three distinct levels for three layers, a permutation, not a
+  // renumber to 3/2/1.
+  const result = ops.reorderSources({ order: ["mid", "personal", "company"] });
+  assert.deepEqual(result.order, [{ name: "mid", level: 3 }, { name: "personal", level: 1 }, { name: "company", level: 0 }]);
+  assert.deepEqual(levelsOf(manifestPath), { personal: 1, mid: 3, company: 0 });
 });
 
 test("reorderSources renumbers N..1 when levels are tied", (t) => {
@@ -344,6 +375,23 @@ test("addSource with position inserts into the cascade and renumbers N..1; level
   const middle = await ops.addSource({ kind: "files", name: "middle", path: path.join(dir, "new"), position: 3 });
   assert.equal(middle.level, 5);
   assert.deepEqual(levelsOf(manifestPath), { top: 7, personal: 6, middle: 5, team: 4, company: 3, bottom: 2, clamped: 1 });
+});
+
+test("addSource with position ranks a hand-authored `true` level as 1, where the graph ranks it", async (t) => {
+  const dir = tempDir(t);
+  // Cascade order is a(2), z(1 — `true`), c(0). A stricter parse read `true`
+  // as "no level", sorted z at 0 tied with c, broke the tie by name (c < z)
+  // and landed a position-2 insert one slot off.
+  const manifestPath = writeManifest(dir, [
+    folderLayer(dir, "a", 2),
+    folderLayer(dir, "z", true),
+    folderLayer(dir, "c", 0),
+  ], { v2: true });
+  fs.mkdirSync(path.join(dir, "new"));
+  const ops = createSourceOperations({ manifestPath });
+  const added = await ops.addSource({ kind: "files", name: "new", path: path.join(dir, "new"), position: 2 });
+  assert.deepEqual(added.order.map((entry) => entry.name), ["a", "new", "z", "c"]);
+  assert.deepEqual(levelsOf(manifestPath), { a: 4, new: 3, z: 2, c: 1 });
 });
 
 test("addSource with position onto a tied cascade breaks the tie by name and keeps a Pack assignment in step", async (t) => {

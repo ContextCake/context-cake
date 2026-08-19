@@ -30,6 +30,11 @@ import type { LayerFiles } from '../types'
 // Sync of a clone-backed source runs `git pull` server-side (bounded at 120s
 // there) — same headroom as the wizard's mutations.
 const MUTATION_TIMEOUT_MS = 150_000
+// After a reorder commits, how long the list may stay stale before another
+// refresh is asked for, and how many times — then the controls come back with
+// a warning rather than staying locked on a store that will not catch up.
+const REORDER_REFRESH_MS = 6_000
+const REORDER_REFRESH_RETRIES = 5
 
 async function callApi(path: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
   const res = await apiFetch(path, { ...init, signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS) })
@@ -425,8 +430,8 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
   const [movingName, setMovingName] = useState<string | null>(null)
   // `next` is the order the engine accepted; `prev` the order the move was
   // computed from, so a stale store can be told apart from a fresh one that
-  // some other writer changed.
-  const [awaiting, setAwaiting] = useState<{ next: string[]; prev: string[] } | null>(null)
+  // some other writer changed; `retries` counts the refreshes asked for since.
+  const [awaiting, setAwaiting] = useState<{ next: string[]; prev: string[]; retries: number } | null>(null)
   const [reorderErr, setReorderErr] = useState<string | null>(null)
   const [announcement, setAnnouncement] = useState('')
   const [dragName, setDragName] = useState<string | null>(null)
@@ -444,15 +449,27 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     if (!awaiting) return
     // Caught up — or moved on: a list that is neither the old order nor the
     // accepted one came from another writer, and it is fresh, so it unlocks.
-    if (!sameOrder(orderNames, awaiting.prev) || sameOrder(orderNames, awaiting.next)) { setAwaiting(null); return }
+    if (!sameOrder(orderNames, awaiting.prev) || sameOrder(orderNames, awaiting.next)) {
+      setAwaiting(null)
+      setReorderErr((current) => (current?.startsWith('Saved') ? null : current))
+      return
+    }
     // Still the pre-move list after a while: the reload after the PUT did not
     // land (the refresh banner says why). Unlocking over the OLD list would let
     // the next move be computed from it and silently undo the one the engine
-    // already holds, so the lock stays and another refresh is asked for.
+    // already holds, so the lock stays and another refresh is asked for — a
+    // bounded number of times, then the list is handed back with a warning
+    // rather than held forever.
     const timer = setTimeout(() => {
-      setReorderErr('Saved, but the list could not be refreshed yet — retrying. Leave Reorder mode to work from what is shown.')
+      if (awaiting.retries >= REORDER_REFRESH_RETRIES) {
+        setAwaiting(null)
+        setReorderErr('Saved; the list could not be refreshed — it may be out of date. Leave and re-enter Reorder to continue.')
+        return
+      }
+      setAwaiting({ ...awaiting, retries: awaiting.retries + 1 })
+      setReorderErr(`Saved, but the list could not be refreshed yet — retrying (${awaiting.retries + 1} of ${REORDER_REFRESH_RETRIES}).`)
       reload()
-    }, 6_000)
+    }, REORDER_REFRESH_MS)
     return () => clearTimeout(timer)
   }, [awaiting, orderNames, reload])
 
@@ -488,7 +505,7 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
     if (via) pendingFocus.current = { name, which: via }
     try {
       await reorderSources(next)
-      setAwaiting({ next, prev: orderNames })
+      setAwaiting({ next, prev: orderNames, retries: 0 })
       setAnnouncement(`Moved ${name} to position ${position} of ${next.length}`)
       reload()
     } catch (e) {

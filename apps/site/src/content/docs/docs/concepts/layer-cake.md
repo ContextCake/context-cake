@@ -22,8 +22,11 @@ Company   (level 0)  ← org-wide canonical knowledge
 
 Levels are the precedence axis, and they are a visible setting in the
 [manifest](/docs/reference/manifest) — not hidden magic. Higher level wins, and you
-can see (and change) the order. The default levels leave gaps (3, 2, 0) so more
-layers can slot in later without renumbering.
+can see (and change) the order. The default levels (3, 2, 0) leave gaps, which
+only matters if you edit the manifest by hand — a new layer can take a number in
+between. The console assigns levels for you when you add or reorder a source, and
+may renumber the whole stack (3/2/0 becomes 4/3/2/1 after an insert); the order
+is what it preserves, not the particular integers.
 
 ## Cascade order
 

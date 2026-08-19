@@ -20,22 +20,29 @@ import { createMcpSource } from "../sources/mcp.mjs";
 import {
   classifyManifest,
   getManifestProfileLayers,
+  manifestLevel,
   mutateContextManifest,
   readContextManifest,
   readContextManifestQuarantined,
   repairContextManifest,
+  syncPackAssignmentLevel,
 } from "../manifest.mjs";
 import { ControlError } from "./errors.mjs";
 import { withDeadline } from "./util.mjs";
 
+// Re-exported for the callers (and tests) that reached it here before it
+// moved next to the pack-layer-drift validation it protects.
+export { syncPackAssignmentLevel };
+
 const execFileP = promisify(execFile);
 
-// A layer's `level` as the manifest may carry it: a JSON number, or a numeric
-// string a hand-authored manifest is allowed to hold (validateLayer accepts
-// `Number(level)` being an integer). Returns the safe integer, or null when the
-// value is not one — `null`, `""`, `"abc"`, `1.5`, `true` all answer null. The
-// old `Number.isFinite(+value)` test let `null` through as 0 and silently
-// ignored `"abc"`; both are now the caller's LEVEL_INVALID.
+// A `level` (or `position`) as a CLIENT sends it on add/patch: a JSON number
+// or a numeric string, and a safe integer. Returns the integer, or null when
+// the value is not one — `null`, `""`, `"abc"`, `1.5`, `true` all answer
+// null. The old `Number.isFinite(+value)` test let `null` through as 0 and
+// silently ignored `"abc"`; both are now the caller's LEVEL_INVALID. This is
+// input validation only: what a manifest ALREADY holds is read through
+// manifestLevel (manifest.mjs), which is looser on purpose — see there.
 export function parseLevel(value) {
   if (typeof value === "number") return Number.isSafeInteger(value) ? value : null;
   if (typeof value === "string" && value.trim() !== "") {
@@ -64,13 +71,16 @@ export function parseLevel(value) {
  *     number to reuse, so 2/2/0 becomes 3/2/1 and an add-at-position onto
  *     3/2/0 becomes 4/3/2/1.
  *
- * Only safe-integer levels count as "existing"; a layer whose level is
- * missing or unparseable is simply not in the pool, which is exactly what
- * makes an insert renumber rather than land on an arbitrary number.
+ * A level counts as "existing" when the manifest itself would accept it
+ * (manifestLevel: a hand-authored `null` is 0, `true` is 1 — the same numbers
+ * the resolver ranks them as), so a valid manifest always round-trips as a
+ * permutation. A layer with NO level — the newcomer of an insert by position
+ * — is not in the pool, which is exactly what makes an insert renumber rather
+ * than land on an arbitrary number.
  */
 export function assignCascadeLevels(orderedLayers) {
   const layers = Array.isArray(orderedLayers) ? orderedLayers : [];
-  const pool = [...new Set(layers.map((layer) => parseLevel(layer?.level)).filter((level) => level !== null))]
+  const pool = [...new Set(layers.map((layer) => manifestLevel(layer)).filter((level) => level !== null))]
     .sort((a, b) => b - a);
   const total = layers.length;
   return layers.map((layer, index) => ({
@@ -83,39 +93,29 @@ export function assignCascadeLevels(orderedLayers) {
 // name (code-point order — `a < b`, not localeCompare, so it is the same on
 // every machine) so the answer is deterministic and matches what a rank
 // display shows. Used by the add-at-position insert, the only place the
-// engine has to derive an order rather than be handed one. A level the
-// manifest validated but parseLevel does not accept (a hand-authored `null`)
-// sorts as 0, which is how the resolver's `>` comparison treats it too.
+// engine has to derive an order rather than be handed one. Levels are read
+// the way the manifest and the resolver read them (manifestLevel: `null` is
+// 0, `true` is 1), so an insert lands where the graph says the neighbours
+// are; a layer with no level at all sorts as 0.
 function cascadeOrder(layers) {
   return [...layers].sort((a, b) => {
-    const la = parseLevel(a.level) ?? 0;
-    const lb = parseLevel(b.level) ?? 0;
+    const la = manifestLevel(a) ?? 0;
+    const lb = manifestLevel(b) ?? 0;
     if (la !== lb) return lb - la;
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   });
 }
 
-// A Pack layer carries a second copy of its level in the registry
-// (`manifest.packs[id].assignments[].level`), and validateContextManifest
-// refuses to write a manifest where the two disagree (`pack-layer-drift`).
-// So every place a pack layer's level moves has to move the assignment with
-// it, or the strict write dies on the operation's own change. Default profile
-// only — that is the only profile these operations touch. Returns whether an
-// assignment was updated.
-export function syncPackAssignmentLevel(manifest, layer) {
-  if (typeof layer?.origin !== "string" || !layer.origin.startsWith("pack:")) return false;
-  const match = /^pack:([^@]+)@/.exec(layer.origin);
-  if (!match) return false;
-  const record = manifest.packs?.[match[1]];
-  if (!record || typeof record !== "object" || !Array.isArray(record.assignments)) return false;
-  // Legacy manifests key the default profile as `null`; v2 as "default" (with
-  // a tolerated null spelling that validation warns about but accepts).
-  const assignment = record.assignments.find((entry) => (
-    entry && typeof entry === "object" && (entry.profile ?? "default") === "default" && entry.layerName === layer.name
-  ));
-  if (!assignment) return false;
-  assignment.level = layer.level;
-  return true;
+// One wording for "the manifest is broken in a way no default-profile row
+// explains" — the reorder op answers it from two places.
+function manifestInvalidError(manifestPath, verb, cause) {
+  return new ControlError("MANIFEST_INVALID", `Nothing was ${verb}: the manifest is invalid in a way this operation cannot work around. Edit ${manifestPath} by hand — ${cause}`, { status: 409 });
+}
+
+// `"name" (error); "name" (error)` — the invalid rows a refusal names, in the
+// shape removal and reorder both use.
+function formatBlocking(blocking) {
+  return blocking.map((entry) => `"${entry.name}" (${entry.error})`).join("; ");
 }
 
 // Accept "owner/name", an https URL, or a git@ SSH URL. Reject other schemes —
@@ -280,7 +280,10 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
     if (b.position !== undefined) {
       position = parseLevel(b.position);
       if (position === null || position < 1) throw new ControlError("POSITION_INVALID", "position must be an integer of 1 or more (1 = top of the cascade)", { status: 400 });
-      level = null; // assigned by position; not in the existing-level pool
+      // Assigned by position below. `undefined`, not `null`: a null level is a
+      // legal manifest value (it reads as 0), and the newcomer must be the one
+      // layer NOT in the existing-level pool so the insert renumbers.
+      level = undefined;
     }
 
     let layer;
@@ -444,7 +447,7 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
       // bad between the tolerant read above and the lock. Neither is an
       // internal failure; say which, the way removal and settings do.
       refuseIfQuarantined();
-      throw new ControlError("MANIFEST_INVALID", `Nothing was reordered: the manifest is invalid in a way this operation cannot work around. Edit ${MANIFEST} by hand — ${err.message}`, { status: 409 });
+      throw manifestInvalidError(MANIFEST, "reordered", err.message);
     }
     return { ok: true, order: assigned };
   }
@@ -458,11 +461,11 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
     try {
       ({ quarantined } = readContextManifestQuarantined(MANIFEST, { allowMissing: false }));
     } catch (err) {
-      throw new ControlError("MANIFEST_INVALID", `Nothing was reordered: the manifest is invalid in a way this operation cannot work around. Edit ${MANIFEST} by hand — ${err.message}`, { status: 409 });
+      throw manifestInvalidError(MANIFEST, "reordered", err.message);
     }
     const blocking = quarantined.filter((entry) => entry.profileId === "default");
     if (blocking.length) {
-      const listed = blocking.map((entry) => `"${entry.name}" (${entry.error})`).join("; ");
+      const listed = formatBlocking(blocking);
       throw new ControlError("REORDER_BLOCKED", `Nothing was reordered: ${blocking.length} source${blocking.length === 1 ? " is" : "s are"} invalid and cannot be given a position. Remove ${blocking.length === 1 ? "it" : "them"} first — ${listed}`, { status: 409, detail: { blocking: blocking.map((entry) => ({ name: entry.name, error: entry.error })) } });
     }
   }
@@ -525,7 +528,7 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
     } catch (err) {
       if (err.status) throw err;
       if (blocking.length > 0) {
-        const listed = blocking.map((entry) => `"${entry.name}" (${entry.error})`).join("; ");
+        const listed = formatBlocking(blocking);
         throw new ControlError("REMOVE_BLOCKED", `Nothing was removed: ${blocking.length} other source${blocking.length === 1 ? " is" : "s are"} also invalid, and the manifest cannot be saved while ${blocking.length === 1 ? "it remains" : "they remain"}. Remove ${blocking.length === 1 ? "it" : "them"} in the same request — ${listed}`, { status: 409 });
       }
       // A manifest broken in a way no single layer explains (two layers sharing

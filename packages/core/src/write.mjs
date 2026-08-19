@@ -192,6 +192,10 @@ export function topCascadeLevel(layers) {
  * Markdown-folder personal layer still counts as the top even though it can
  * never be a target. Only when nothing sits below the top does the top layer
  * itself get written, with a warning.
+ *
+ * The chosen default is ALWAYS named on stderr, with the rule: it used to be
+ * the literal 3, and a manifest with no personal layer (team 2 / company 0)
+ * changed destination when the rule did — silently, unless it is said.
  */
 export function selectTargetLayer(layers, requested, topLevel = topCascadeLevel(layers)) {
   if (layers.length === 0) throw new Error("Manifest contains no layers.");
@@ -204,9 +208,12 @@ export function selectTargetLayer(layers, requested, topLevel = topCascadeLevel(
 
   const sorted = [...layers].sort((a, b) => b.level - a.level);
   const belowTop = sorted.find((l) => l.level < topLevel);
-  if (belowTop) return belowTop;
+  if (belowTop) {
+    console.warn(`writing to "${belowTop.name}" — the highest layer below the top of the cascade; pass --target-layer to choose`);
+    return belowTop;
+  }
 
-  console.warn("Warning: only the top-of-cascade layer is writable — pass --target-layer to choose.");
+  console.warn(`writing to "${sorted[0].name}" — only the top-of-cascade layer is writable; pass --target-layer to choose`);
   return sorted[0];
 }
 

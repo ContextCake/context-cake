@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, apiFetch, computeLevelBuckets, LiveDataError, mergeSourceStatus, selectMode,
-  trivialConflictReason,
+  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, apiFetch, computeLevelBuckets, computeSourceBuckets, LiveDataError,
+  mergeSourceStatus, selectMode, trivialConflictReason,
 } from './api'
 import type { DiscrepancyRecord, GraphSummary, ResolvedConcept } from './types'
 
@@ -529,6 +529,29 @@ describe('adaptConcept with headingless documents', () => {
 })
 
 describe('adaptSources', () => {
+  // A quarantined manifest entry arrives with a level (whatever the file
+  // said) but is not in the cascade. Bucketing over it shifted every real
+  // source down a lane: with `broken` at 9, the level-3 vault — rank #1 —
+  // wore the Team chip and the Personal lane sat empty. Lanes and ranks must
+  // come from the same list, and that list excludes quarantined rows.
+  it('buckets lanes over the sources that are in the cascade — a quarantined row never shifts them', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 0, resolvedTokens: 0, concepts: 6, sources: 4 },
+      concepts: [],
+      sources: [
+        { name: 'broken', level: 9, kind: 'notarealkind', conceptCount: 0, tokens: 0, latestUpdated: null, status: 'error', error: 'unsupported source kind: notarealkind', quarantined: true },
+        { name: 'vault', level: 3, kind: 'files', conceptCount: 4, tokens: 0, latestUpdated: null, status: 'ok', error: null },
+        { name: 'shared', level: 2, kind: 'files', conceptCount: 1, tokens: 0, latestUpdated: null, status: 'ok', error: null },
+        { name: 'archive', level: 0, kind: 'files', conceptCount: 1, tokens: 0, latestUpdated: null, status: 'ok', error: null },
+      ],
+    }
+    const lanes = Object.fromEntries(adaptSources(graph).map((s) => [s.name, s.layer]))
+    expect(lanes).toEqual({ broken: 'company', vault: 'personal', shared: 'team', archive: 'company' })
+    // The same helper the store's readAll and the rank display use.
+    expect(computeSourceBuckets(graph.sources).get(3)).toBe('personal')
+    expect(computeSourceBuckets(graph.sources).has(9)).toBe(false)
+  })
+
   // The field report, in one assertion: a 3,000-note vault fifteen seconds into
   // its first read rendered as "synced · 0 concepts". The app claimed to be
   // finished with work it had barely started, and there was nowhere to look.

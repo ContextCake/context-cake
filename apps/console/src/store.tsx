@@ -7,7 +7,7 @@ import {
 } from './data'
 import {
   adaptConcept, adaptConflicts, adaptDiscrepancies, adaptGraphConcept, adaptSources, attachConflictStubs,
-  computeLevelBuckets, createDataSource, LiveDataError, mergeSourceStatus,
+  computeSourceBuckets, createDataSource, LiveDataError, mergeSourceStatus,
   type CascadeOrderResult, type IndexingActivity, type IndexingControlAction, type Mode,
 } from './api'
 import type {
@@ -478,7 +478,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // /api/resolve at a time. `compactRef` keeps the compact form of every row
   // so an evicted detail can fall back to it instead of to nothing;
   // `loadedDetailsRef` is the LRU order of full details currently held.
-  const bucketsRef = useRef<ReturnType<typeof computeLevelBuckets> | null>(null)
+  const bucketsRef = useRef<ReturnType<typeof computeSourceBuckets> | null>(null)
   const compactRef = useRef<Map<string, Concept>>(new Map())
   const loadedDetailsRef = useRef<string[]>([])
   const detailInFlightRef = useRef<Set<string>>(new Set())
@@ -629,11 +629,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setLoading(false) // the shell can render now — everything else streams in
 
       // Rank-based level→lane buckets for this pass, computed once from every
-      // source in the graph and threaded through every adapter below — see
-      // computeLevelBuckets in api.ts for why a narrower computation (e.g. per
-      // concept) would bucket the same source differently depending on what
-      // happened to touch it.
-      const buckets = computeLevelBuckets(g.sources.map((s) => s.level))
+      // source in the graph that is actually in the cascade (quarantined rows
+      // hold no position) and threaded through every adapter below — see
+      // computeSourceBuckets in cascade-order.ts for why a narrower or wider
+      // computation would bucket the same source differently depending on
+      // what happened to touch it.
+      const buckets = computeSourceBuckets(g.sources)
       bucketsRef.current = buckets
 
       // Concepts come from the GRAPH rows — compact identity, lanes and the

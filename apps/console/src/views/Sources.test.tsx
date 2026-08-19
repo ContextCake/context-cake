@@ -458,6 +458,23 @@ describe('Sources rename + reposition', () => {
     expect(container.querySelector<HTMLSelectElement>('#src-edit-position')!.value).toBe('3')
   })
 
+  it('clamps a chosen position the shrunken cascade can no longer offer, and saves what the select showed', async () => {
+    await mount(cascade())
+    await act(async () => buttonByAria('Rename, reposition or repoint notes').click())
+    await choosePosition(3)
+    // A source disappears under the open drawer (removed elsewhere, seen via
+    // the poll): the select can only offer 1..2 now, shows 2 — and 2 is what
+    // must be saved, not the 3 no option ever showed.
+    await afterPoll([src({ name: 'notes', level: 3, layer: 'personal' }), src({ name: 'wiki', level: 2, layer: 'team' })])
+    const select = container.querySelector<HTMLSelectElement>('#src-edit-position')!
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual(['1 — top (wins over everything)', '2 — bottom (below wiki)'])
+    expect(select.value).toBe('2')
+
+    await act(async () => button('Save').click())
+    expect(mocks.reorderSources).toHaveBeenCalledWith(['wiki', 'notes'])
+    expect(container.textContent).toContain('Moved to position 2 of 2.')
+  })
+
   it('leaves the cascade alone when saving without any change', async () => {
     await mount(cascade())
     await act(async () => sourceButton('wiki').click())
@@ -800,6 +817,56 @@ describe('Sources reorder mode', () => {
     expect(buttonByAria('Move notes down').disabled).toBe(false)
     expect(buttonByAria('Move wiki up').disabled).toBe(true)
     expect(container.querySelector('.cc-source-reorder li')?.getAttribute('draggable')).toBe('true')
+  })
+
+  it('asks for a refresh again while the list stays stale, then hands the controls back with a warning', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await mount(cascade())
+      await act(async () => button('Reorder').click())
+      await act(async () => buttonByAria('Move notes down').click())
+      expect(mocks.reload).toHaveBeenCalledTimes(1)
+      expect(buttonByAria('Move notes down').getAttribute('aria-disabled')).toBe('true')
+
+      // The store never catches up (the reload keeps failing). Every 6s another
+      // refresh is asked for and the row says so — five times, bounded.
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        await act(async () => { vi.advanceTimersByTime(6_000) })
+        expect(mocks.reload).toHaveBeenCalledTimes(1 + attempt)
+        expect(container.querySelector('[role="alert"]')?.textContent).toContain(`retrying (${attempt} of 5)`)
+        expect(buttonByAria('Move notes down').getAttribute('aria-disabled')).toBe('true')
+      }
+
+      // After the last attempt: unlocked, and honest that the list may be stale.
+      await act(async () => { vi.advanceTimersByTime(6_000) })
+      expect(mocks.reload).toHaveBeenCalledTimes(6)
+      expect(buttonByAria('Move notes down').getAttribute('aria-disabled')).toBeNull()
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain('Leave and re-enter Reorder to continue')
+      expect(container.querySelector('.cc-source-reorder li')?.getAttribute('draggable')).toBe('true')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the retry notice once the store catches up', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await mount(cascade())
+      await act(async () => button('Reorder').click())
+      await act(async () => buttonByAria('Move notes down').click())
+      await act(async () => { vi.advanceTimersByTime(6_000) })
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain('retrying (1 of 5)')
+
+      await afterWrite([
+        src({ name: 'wiki', level: 3, layer: 'personal' }),
+        src({ name: 'notes', level: 2, layer: 'team' }),
+        src({ name: 'graph', level: 0, layer: 'company', sourceKind: 'mcp', kind: 'mcp', status: 'serving' }),
+      ])
+      expect(container.querySelector('[role="alert"]')).toBeNull()
+      expect(buttonByAria('Move notes down').getAttribute('aria-disabled')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps keyboard focus on the moved row — on the pressed arrow, or its twin when the row reached an end', async () => {

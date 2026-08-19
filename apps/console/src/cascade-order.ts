@@ -43,6 +43,21 @@ export function computeLevelBuckets(levels: Iterable<number>): LevelBuckets {
   return buckets
 }
 
+/**
+ * The buckets for a resolve pass, from the sources that are actually IN the
+ * cascade. A quarantined manifest entry arrives with a level too (whatever
+ * the file said — 9 is as likely as 0) but contributes nothing and holds no
+ * position; ranking it would shift every real source's lane. This is the one
+ * place both the graph adapters (`adaptSources`, the store's `readAll`) and
+ * the rank display take their level list from, so lane and rank cannot
+ * disagree over which sources count.
+ */
+export function computeSourceBuckets(sources: Iterable<{ level: number; quarantined?: boolean }>): LevelBuckets {
+  const levels: number[] = []
+  for (const source of sources) if (source.quarantined !== true) levels.push(source.level)
+  return computeLevelBuckets(levels)
+}
+
 /** Map a source/layer name (falling back to its rank bucket) to a console LayerId. */
 export function layerOf(name: string, level: number, buckets: LevelBuckets): LayerId {
   if (isLayerId(name)) return name

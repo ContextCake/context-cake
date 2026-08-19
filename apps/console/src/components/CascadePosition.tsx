@@ -3,6 +3,7 @@
 // naming the source it lands below. Shared by the Sources edit drawer and the
 // add-a-source wizard so both speak in positions, never in the manifest's
 // level integer — see cascade-order.ts for why the number stays hidden.
+import { useEffect } from 'react'
 import { positionOptions } from '../cascade-order'
 import { C, css } from '../theme'
 
@@ -24,8 +25,13 @@ export function CascadePosition({
 }) {
   const options = positionOptions(namesAbove)
   // A value the list cannot show (the cascade shrank under an open form)
-  // would leave the select rendering blank; clamp so it always names a slot.
+  // would leave the select rendering blank; clamp so it always names a slot —
+  // and write the clamp back, so what is saved is what the select showed,
+  // never a position no option ever offered.
   const shown = Math.min(Math.max(1, value), options.length)
+  useEffect(() => {
+    if (shown !== value) onChange(shown)
+  }, [shown, value, onChange])
   return (
     <div>
       <label htmlFor={id} style={css(`display:block; font-size:12px; font-weight:600; color:${C.body}; margin-bottom:5px;`)}>Position in cascade</label>

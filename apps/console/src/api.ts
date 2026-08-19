@@ -19,11 +19,11 @@ import type {
 } from './types'
 import type { Concept, ConceptSection, Conflict, Dissent, Source } from './data'
 import type { LayerId } from './theme'
-import { computeLevelBuckets, layerOf, type LevelBuckets } from './cascade-order'
+import { computeLevelBuckets, computeSourceBuckets, layerOf, type LevelBuckets } from './cascade-order'
 
 // The level→lane mapping moved to cascade-order.ts so ranks and lanes derive
 // from one list; ~12 call sites and the tests keep importing it from here.
-export { computeLevelBuckets }
+export { computeLevelBuckets, computeSourceBuckets }
 export type { LevelBuckets }
 
 const demoBundle = demoBundleRaw as unknown as DemoBundle
@@ -281,7 +281,7 @@ class DemoSource implements DataSource {
   async search(): Promise<SearchHit[] | null> { return null }
   async conflictResolutions(): Promise<ConflictResolutionRecord[]> { return this.resolutions }
   async discrepancies(): Promise<DiscrepanciesResponse> {
-    const buckets = computeLevelBuckets(this.bundle.graph.sources.map((s) => s.level))
+    const buckets = computeSourceBuckets(this.bundle.graph.sources)
     const conflicts = adaptConflicts(this.bundle.concepts, this.resolutions, buckets)
     return {
       discrepancies: conflicts.map((conflict) => legacyConflictRecord(conflict)),
@@ -733,7 +733,9 @@ export function progressPercent(p: { loaded?: number; total?: number | null } | 
 
 /** Graph sources → the console's Source[] (coverage/focus/status derived honestly). */
 export function adaptSources(g: GraphSummary): Source[] {
-  const buckets = computeLevelBuckets(g.sources.map((s) => s.level))
+  // Over the sources that are in the cascade: a quarantined row's level (the
+  // file's, whatever it says) must not shift the lanes of the real ones.
+  const buckets = computeSourceBuckets(g.sources)
   return g.sources.map((s: GraphSource) => {
     const errored = s.status === 'error'
     // A remote source that can't reach its API doesn't throw — it answers with

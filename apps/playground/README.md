@@ -43,7 +43,9 @@ Adding/removing a source edits `apps/playground/manifest.json` in place.
 
 - **Canvas** — each layer/source is a draggable card, arranged by precedence
   (highest level on top), fanning into a single **Resolved concept** node. Drag
-  to pan, scroll to zoom, drag a card to move it.
+  to pan, scroll to zoom, drag a card to move it. The `L{n}` badges here still
+  show the raw manifest level (higher wins); the console shows the same order as
+  positions (#1 wins). Converting the playground's badges is deferred.
 - **Left rail** — every concept across all layers. A ⚠ badge means the layers
   disagree on at least one section. The colored dots show which layers contribute.
 - **Inspector** (right) — select a concept to see the effective merge:

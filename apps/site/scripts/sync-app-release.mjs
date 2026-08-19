@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import { readFile, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+import { HIDDEN_REDIRECT_LINES, assertSiteFlags, isCommerceVisible } from './site-flags.mjs'
 
 const REPOSITORY = 'ContextCake/context-cake'
 const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases`
 const TAG_PATTERN = /^app-v(\d+)\.(\d+)\.(\d+)$/
 const DATA_URL = new URL('../src/data/app-release.json', import.meta.url)
 const REDIRECTS_URL = new URL('../public/_redirects', import.meta.url)
+const FLAGS_URL = new URL('../src/config/flags.json', import.meta.url)
 
 function versionParts(tag) {
   const match = TAG_PATTERN.exec(tag)
@@ -116,6 +118,38 @@ export function renderDownloadRedirect(record) {
   return `/download/mac ${record.artifacts.dmg.url} 302\n`
 }
 
+// The whole public/_redirects file. It is derived, never hand-edited: every
+// build re-renders it (`npm run render-redirects`, wired as prebuild) and every
+// release sync rewrites it after updating the record, so any route that must
+// 302 has to be rendered here.
+//
+// While commerce is hidden (src/config/flags.json) the prerendered /pricing and
+// /creators pages are meta-refresh stubs; HIDDEN_REDIRECT_LINES make Cloudflare
+// answer a real 302 before the stub is ever served.
+export function renderRedirects(record, flags = {}) {
+  const lines = [renderDownloadRedirect(record)]
+  if (!isCommerceVisible(flags)) {
+    lines.push(...HIDDEN_REDIRECT_LINES.map((line) => `${line}\n`))
+  }
+  return lines.join('')
+}
+
+// Render public/_redirects from the committed release record and flags. No
+// network: this is the offline half of the sync, and what prebuild runs so a
+// flag flip never leaves a stale _redirects behind. The URL parameters exist so
+// tests can point it at temp files.
+export async function renderRedirectsFile({
+  recordUrl = DATA_URL,
+  flagsUrl = FLAGS_URL,
+  redirectsUrl = REDIRECTS_URL,
+} = {}) {
+  const record = JSON.parse(await readFile(recordUrl, 'utf8'))
+  const flags = assertSiteFlags(JSON.parse(await readFile(flagsUrl, 'utf8')), flagsUrl.pathname)
+  const text = renderRedirects(record, flags)
+  await writeFile(redirectsUrl, text)
+  return text
+}
+
 function requestHeaders(token) {
   return {
     Accept: 'application/vnd.github+json',
@@ -201,7 +235,7 @@ export async function fetchAppReleaseRecord({ tag, token, fetchImpl = globalThis
 
 export async function writeAppReleaseRecord(record) {
   await writeFile(DATA_URL, `${JSON.stringify(record, null, 2)}\n`)
-  await writeFile(REDIRECTS_URL, renderDownloadRedirect(record))
+  await renderRedirectsFile()
 }
 
 function parseArgs(argv) {

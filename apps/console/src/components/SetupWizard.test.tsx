@@ -4,16 +4,24 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deriveSourceName, parseCommandLine, SetupWizard } from './SetupWizard'
 
-const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), reload: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  apiFetch: vi.fn(),
+  reload: vi.fn(),
+  /** The cascade the wizard is adding into (add mode reads `sources` for the position picker). */
+  sources: [] as Array<{ name: string; level: number }>,
+}))
 
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
   apiFetch: mocks.apiFetch,
 }))
 vi.mock('../store', () => {
-  const store = () => ({ reload: mocks.reload })
+  const store = () => ({ reload: mocks.reload, sources: mocks.sources })
   return { useStore: store, useStoreData: store, useStoreNav: store, useStoreInput: store, useStoreChat: store }
 })
+
+/** The conventional trio, as the store would hold it, for add-mode tests. */
+const TRIO = [{ name: 'personal', level: 3 }, { name: 'team', level: 2 }, { name: 'company', level: 0 }]
 
 let container: HTMLDivElement
 let root: Root
@@ -53,6 +61,7 @@ beforeEach(() => {
   root = createRoot(container)
   mocks.apiFetch.mockReset()
   mocks.reload.mockReset()
+  mocks.sources = []
   delete window.__CC_DESKTOP
   mocks.apiFetch.mockImplementation(async (url: string) => new Response(
     JSON.stringify(url === '/api/graph' ? { concepts: [{ id: 'systems/app' }] } : {}),
@@ -120,18 +129,29 @@ describe('SetupWizard first run', () => {
     expect(postCalls()).toHaveLength(1)
   })
 
-  it('lets the level stepper change precedence away from the 3/2/0 defaults', async () => {
+  // The first-run narrative IS the order — personal wins, then team, then
+  // company — so no precedence control is offered, and the payloads carry the
+  // conventional levels the docs, fixtures and engine defaults agree on. The
+  // review step reads them back as positions, never as the integer.
+  it('shows no precedence control and reads the added layers back as positions', async () => {
     await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
 
     await act(async () => button('Get started').click())
-    expect(container.querySelector('#wiz-personal-level')?.textContent).toBe('3')
+    expect(container.querySelector('#wiz-personal-level')).toBeNull()
+    expect(container.querySelector('button[aria-label="Lower level"]')).toBeNull()
+    expect(container.querySelector('#wiz-personal-position')).toBeNull()
     await enter('#wiz-personal-path', '/tmp/vault')
-    const lower = container.querySelector<HTMLButtonElement>('button[aria-label="Lower level"]')
-    await act(async () => lower?.click())
-    expect(container.querySelector('#wiz-personal-level')?.textContent).toBe('2')
     await act(async () => button('Next').click())
+    await act(async () => button('GitHub repo').click())
+    await enter('#wiz-team-repo', 'acme/payments-docs')
+    await act(async () => button('Next').click())
+    await act(async () => button('Skip for now').click())
 
-    expect(postCalls()[0]).toMatchObject({ level: 2 })
+    expect(postCalls()[0]).toMatchObject({ level: 3 })
+    expect(postCalls()[1]).toMatchObject({ level: 2 })
+    expect(container.textContent).toContain('vault · #1 · files')
+    expect(container.textContent).toContain('payments-docs · #2 · github · public (REST)')
+    expect(container.textContent).not.toContain('level 3')
   })
 
   it('makes the structured ContextCake option deliberate rather than the default', async () => {
@@ -610,22 +630,73 @@ describe('SetupWizard first run', () => {
 })
 
 describe('SetupWizard add-a-source mode', () => {
-  it('collapses to one step with a four-kind picker and per-kind level defaults', async () => {
+  const position = () => container.querySelector<HTMLSelectElement>('#wiz-add-position')
+
+  async function choosePosition(value: number) {
+    await act(async () => {
+      const select = position()!
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+      setter?.call(select, String(value))
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  }
+
+  it('collapses to one step with a four-kind picker and per-kind default positions', async () => {
+    mocks.sources = TRIO
     await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
 
     // No welcome detour — the form IS the first screen.
     expect(container.textContent).toContain('Add a source')
+    expect(container.textContent).toContain('at the position you choose')
     for (const label of ['Markdown folder', 'ContextCake folder', 'GitHub repo', 'MCP server']) {
       expect(sourceChoice(label)).toBeTruthy()
     }
-    expect(container.querySelector('#wiz-add-level')?.textContent).toBe('3')
+    // A folder is something you wrote: it starts on top. A repo or an MCP
+    // graph is something you read: it starts at the bottom (N + 1).
+    expect(position()?.value).toBe('1')
+    expect(Array.from(position()!.options).map((option) => option.textContent)).toEqual([
+      '1 — top (wins over everything)', '2 — below personal', '3 — below team', '4 — bottom (below company)',
+    ])
+    expect(container.querySelector('#wiz-add-level')).toBeNull()
 
     await act(async () => sourceChoice('GitHub repo').click())
-    expect(container.querySelector('#wiz-add-level')?.textContent).toBe('2')
+    expect(position()?.value).toBe('4')
     await act(async () => sourceChoice('MCP server').click())
-    expect(container.querySelector('#wiz-add-level')?.textContent).toBe('0')
+    expect(position()?.value).toBe('4')
     await act(async () => sourceChoice('Markdown folder').click())
-    expect(container.querySelector('#wiz-add-level')?.textContent).toBe('3')
+    expect(position()?.value).toBe('1')
+    await act(async () => sourceChoice('ContextCake folder').click())
+    expect(position()?.value).toBe('1')
+  })
+
+  it('keeps a position the user chose when the kind changes', async () => {
+    mocks.sources = TRIO
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+    await choosePosition(2)
+    await act(async () => sourceChoice('MCP server').click())
+    expect(position()?.value).toBe('2')
+  })
+
+  it('offers only position 1 into an empty cascade', async () => {
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+    expect(Array.from(position()!.options).map((option) => option.textContent)).toEqual(['1 — the only source'])
+    expect(container.textContent).toContain('Your first source')
+  })
+
+  it('shows the position the engine reports back after the add', async () => {
+    mocks.sources = TRIO
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
+      JSON.stringify(url === '/api/sources' && init?.method === 'POST'
+        ? { ok: true, added: 'design-system', level: 1, order: [{ name: 'personal', level: 4 }, { name: 'team', level: 3 }, { name: 'company', level: 2 }, { name: 'design-system', level: 1 }] }
+        : url === '/api/graph' ? { concepts: [] } : {}),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ))
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+    await act(async () => sourceChoice('GitHub repo').click())
+    await enter('#wiz-add-repo', 'acme/design-system')
+    await act(async () => button('Add source').click())
+
+    expect(container.textContent).toContain('design-system · #4 · github · public (REST)')
   })
 
   // F22b: `role="radio"` buttons get no native arrow-key behavior — unlike a
@@ -661,7 +732,10 @@ describe('SetupWizard add-a-source mode', () => {
     expect(sourceChoice('MCP server').getAttribute('aria-checked')).toBe('true')
   })
 
-  it('accepts a second repo beside team under its own name (EARS)', async () => {
+  // Add mode sends `position` (1 wins), never `level`: the engine assigns the
+  // integer, and sending both is a 400 (LEVEL_AND_POSITION).
+  it('accepts a second repo beside team under its own name, at the bottom of the cascade (EARS)', async () => {
+    mocks.sources = TRIO
     await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
 
     await act(async () => sourceChoice('GitHub repo').click())
@@ -669,11 +743,13 @@ describe('SetupWizard add-a-source mode', () => {
     expect(container.querySelector<HTMLInputElement>('#wiz-add-name')?.value).toBe('design-system')
     await act(async () => button('Add source').click())
 
-    expect(postCalls()[0]).toEqual({ kind: 'github-rest', name: 'design-system', level: 2, repo: 'acme/design-system' })
+    expect(postCalls()[0]).toEqual({ kind: 'github-rest', name: 'design-system', position: 4, repo: 'acme/design-system' })
+    expect(postCalls()[0]).not.toHaveProperty('level')
     expect(container.textContent).toContain('Source added')
   })
 
   it('accepts a second MCP server under a distinct name with the trust gate intact (EARS)', async () => {
+    mocks.sources = TRIO
     await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
 
     await act(async () => sourceChoice('MCP server').click())
@@ -684,9 +760,20 @@ describe('SetupWizard add-a-source mode', () => {
     await act(async () => button('Add source').click())
 
     expect(postCalls()[0]).toMatchObject({
-      kind: 'mcp', name: 'design-graph-mcp', level: 0, command: 'npx', args: ['-y', '@acme/design-graph-mcp'], trusted: true,
+      kind: 'mcp', name: 'design-graph-mcp', position: 4, command: 'npx', args: ['-y', '@acme/design-graph-mcp'], trusted: true,
     })
+    expect(postCalls()[0]).not.toHaveProperty('level')
     expect(container.textContent).toContain('Source added')
+  })
+
+  it('sends the position the user picked', async () => {
+    mocks.sources = TRIO
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+    await enter('#wiz-add-path', '/tmp/repo-b')
+    await choosePosition(2)
+    await act(async () => button('Add source').click())
+
+    expect(postCalls()[0]).toEqual({ kind: 'files', name: 'repo-b', position: 2, path: '/tmp/repo-b' })
   })
 
   it('requires a name when the user clears the derived one', async () => {
@@ -701,6 +788,7 @@ describe('SetupWizard add-a-source mode', () => {
   })
 
   it('sends a private repo through the clone kind in add mode too', async () => {
+    mocks.sources = TRIO
     await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
 
     await act(async () => sourceChoice('GitHub repo').click())
@@ -708,7 +796,7 @@ describe('SetupWizard add-a-source mode', () => {
     await enter('#wiz-add-repo', 'acme/secret-docs')
     await act(async () => button('Add source').click())
 
-    expect(postCalls()[0]).toEqual({ kind: 'github', name: 'secret-docs', level: 2, repo: 'acme/secret-docs' })
+    expect(postCalls()[0]).toEqual({ kind: 'github', name: 'secret-docs', position: 4, repo: 'acme/secret-docs' })
   })
 })
 

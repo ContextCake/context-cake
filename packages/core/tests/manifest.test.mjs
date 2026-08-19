@@ -12,6 +12,7 @@ import {
   createProfileId,
   getManifestProfileLayers,
   listManifestProfiles,
+  manifestLevel,
   manifestRevision,
   migrateManifestToV2,
   mutateContextManifest,
@@ -28,6 +29,30 @@ import {
   writeContextManifest,
 } from "../src/manifest.mjs";
 import { withCache } from "../src/sources/cache.mjs";
+
+test("manifestLevel reads a level exactly as validation accepts it — null is 0, true is 1, strings coerce, garbage is null", () => {
+  assert.equal(manifestLevel({ level: 3 }), 3);
+  assert.equal(manifestLevel({ level: "2" }), 2);
+  assert.equal(manifestLevel({ level: null }), 0);
+  assert.equal(manifestLevel({ level: true }), 1);
+  assert.equal(manifestLevel({ level: "" }), 0);
+  assert.equal(manifestLevel({ level: [2] }), 2);
+  assert.equal(manifestLevel({ level: 1.5 }), null);
+  assert.equal(manifestLevel({ level: "abc" }), null);
+  assert.equal(manifestLevel({ level: {} }), null);
+  assert.equal(manifestLevel({}), null);
+  assert.equal(manifestLevel(undefined), null);
+  // The pairing that matters: whatever validation lets through, manifestLevel
+  // reads as an integer, and whatever it refuses, manifestLevel calls null.
+  for (const level of [3, "2", null, true, "", [2]]) {
+    assert.doesNotThrow(() => validateContextManifest({ layers: [{ name: "x", level, path: "x" }] }), `level ${JSON.stringify(level)} should validate`);
+    assert.notEqual(manifestLevel({ level }), null);
+  }
+  for (const level of [1.5, "abc", {}, undefined]) {
+    assert.throws(() => validateContextManifest({ layers: [{ name: "x", level, path: "x" }] }), /integer level/);
+    assert.equal(manifestLevel({ level }), null);
+  }
+});
 import { buildSources } from "../src/sources/index.mjs";
 import { mergeSyncedSettings, prepareSyncPayload } from "../../../apps/desktop/src/main/settings-sync.mjs";
 

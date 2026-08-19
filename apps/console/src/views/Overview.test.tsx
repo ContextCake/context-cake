@@ -62,33 +62,97 @@ it('surfaces a prominent Connect an agent CTA when onConnectAgent is supplied', 
   expect(onConnectAgent).toHaveBeenCalledOnce()
 })
 
-// F3: the Cascade summary used to render the static company/team/personal
-// blurb and level no matter what actually fed a lane. A level-1 source with
-// no name matching its lane should read as itself — its real name and level —
-// not the generic "runbooks, decisions, system docs" / "2" it happened to
-// inherit from the lane it ranked into.
-it('names the real source and level behind a lane instead of the static blurb', async () => {
+// The Cascade order section is the real cascade, position 1 first, one row
+// per source: its name, its rank, and who it wins over. Never the manifest
+// level (F3 named a level-1 source as itself; this pass stops showing the
+// number at all) and never the static "runbooks, decisions, system docs" blurb.
+it('lists every source in cascade order with its position and what it wins over', async () => {
   mocks.useStore.mockReturnValue({
     mode: 'live', setView: mocks.setView,
     signals: [], conflicts: [],
-    sources: [{ name: 'messy-vault', status: 'synced', layer: 'team', level: 1, conceptCount: 4 }],
+    sources: [
+      { name: 'company-graph', status: 'serving', layer: 'company', level: 0, conceptCount: 126, sourceKind: 'mcp' },
+      { name: 'messy-vault', status: 'synced', layer: 'personal', level: 1, conceptCount: 4, sourceKind: 'files' },
+    ],
     concepts: [], activity: [], loadErrors: [],
   })
   await act(async () => root.render(<Overview />))
-  expect(container.textContent).toContain('messy-vault')
-  expect(container.textContent).toContain('1')
+  expect(container.textContent).toContain('Cascade order')
+  expect(container.textContent).toContain('Position 1 wins wherever it speaks')
+  const rows = Array.from(container.querySelectorAll('.cc-cascade-order > li')).map((row) => row.textContent ?? '')
+  expect(rows).toHaveLength(2)
+  expect(rows[0]).toContain('#1')
+  expect(rows[0]).toContain('messy-vault')
+  expect(rows[0]).toContain('Wins over company-graph')
+  expect(rows[0]).toContain('4 concepts')
+  expect(rows[1]).toContain('#2')
+  expect(rows[1]).toContain('company-graph')
+  expect(rows[1]).toContain('Base — everything above inherits from it')
+  expect(rows[1]).toContain('126 concepts')
+  // The manifest integer never shows here — position is the only number.
+  expect(container.querySelector('.cc-cascade-rank')?.textContent).toBe('#1')
+  expect(container.textContent).not.toContain('level 1')
   expect(container.textContent).not.toContain('runbooks, decisions, system docs')
 })
 
-// Demo mode's sources are already the canonical trio; the honest-labeling
-// pass must not disturb its existing static blurb.
-it('keeps the static cascade blurb in demo mode', async () => {
+// A quarantined manifest entry contributes nothing to resolution, so it holds
+// no position: it must not appear as "#2 (tied)" beside a real source.
+it('leaves a quarantined entry out of the cascade order', async () => {
   mocks.useStore.mockReturnValue({
-    mode: 'demo', setView: mocks.setView,
+    mode: 'live', setView: mocks.setView,
     signals: [], conflicts: [],
-    sources: [{ name: 'team', status: 'synced', layer: 'team', level: 2, conceptCount: 4 }],
+    sources: [
+      { name: 'notes', status: 'synced', layer: 'personal', level: 3, conceptCount: 4, sourceKind: 'files' },
+      { name: 'base', status: 'synced', layer: 'company', level: 0, conceptCount: 2, sourceKind: 'files' },
+      { name: 'bad-kind', status: 'error', layer: 'company', level: 0, conceptCount: 0, sourceKind: 'notarealkind', quarantined: true, error: 'unsupported source kind' },
+    ],
     concepts: [], activity: [], loadErrors: [],
   })
   await act(async () => root.render(<Overview />))
-  expect(container.textContent).toContain('runbooks, decisions, system docs')
+  const rows = Array.from(container.querySelectorAll('.cc-cascade-order > li')).map((row) => row.textContent ?? '')
+  expect(rows).toHaveLength(2)
+  expect(rows[0]).toContain('Wins over base')
+  expect(rows[1]).toContain('Base — everything above inherits from it')
+  expect(rows.join(' ')).not.toContain('bad-kind')
+  expect(container.textContent).not.toContain('tied')
+  // Still surfaced where it belongs — as something to fix.
+  expect(container.textContent).toContain('bad-kind is error')
+})
+
+it('sends "Reorder in Sources" to the Sources view', async () => {
+  mocks.useStore.mockReturnValue({
+    mode: 'live', setView: mocks.setView,
+    signals: [], conflicts: [],
+    sources: [{ name: 'notes', status: 'synced', layer: 'personal', level: 3, conceptCount: 4, sourceKind: 'files' }],
+    concepts: [], activity: [], loadErrors: [],
+  })
+  await act(async () => root.render(<Overview />))
+  const reorder = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Reorder in Sources')
+  expect(reorder).toBeDefined()
+  await act(async () => reorder?.click())
+  expect(mocks.setView).toHaveBeenCalledWith('sources')
+})
+
+// Demo mode renders the same real rows from its own sources — the static
+// "runbooks, decisions, system docs" fallback is gone — but Sources is
+// read-only there, so the button only offers a look, not a reorder.
+it('renders real cascade rows in demo mode too, and does not promise a reorder', async () => {
+  mocks.useStore.mockReturnValue({
+    mode: 'demo', setView: mocks.setView,
+    signals: [], conflicts: [],
+    sources: [
+      { name: 'team', status: 'synced', layer: 'team', level: 2, conceptCount: 4, sourceKind: 'okf-local' },
+      { name: 'personal', status: 'synced', layer: 'personal', level: 3, conceptCount: 2, sourceKind: 'okf-local' },
+    ],
+    concepts: [], activity: [], loadErrors: [],
+  })
+  await act(async () => root.render(<Overview />))
+  expect(container.textContent).not.toContain('Reorder in Sources')
+  expect(container.textContent).toContain('Open Sources')
+  const rows = Array.from(container.querySelectorAll('.cc-cascade-order > li')).map((row) => row.textContent ?? '')
+  expect(rows[0]).toContain('#1')
+  expect(rows[0]).toContain('personal')
+  expect(rows[1]).toContain('#2')
+  expect(rows[1]).toContain('team')
+  expect(container.textContent).not.toContain('runbooks, decisions, system docs')
 })

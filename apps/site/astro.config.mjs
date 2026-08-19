@@ -1,11 +1,22 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
+import { isCommerceVisible, isHiddenCommercePath, readSiteFlags } from './scripts/site-flags.mjs';
+
+// Starlight adds @astrojs/sitemap itself unless the config already has one.
+// Declaring it here is only so the sitemap can leave out /pricing and /creators
+// while commerce is hidden (src/config/flags.json) — those routes build as
+// redirect stubs and must not be advertised as pages.
+const commerceVisible = isCommerceVisible(await readSiteFlags());
 
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://contextcake.com',
 	integrations: [
+		sitemap({
+			filter: (page) => commerceVisible || !isHiddenCommercePath(new URL(page).pathname),
+		}),
 		starlight({
 			title: 'ContextCake',
 			favicon: '/favicon.svg?v=stacked-1',

@@ -1,5 +1,6 @@
 ---
 import Base from '../../../layouts/Base.astro';
+import { COMMERCE_VISIBLE } from '../../../config/flags';
 import { creatorBriefs } from '../../../data/commerce';
 
 export function getStaticPaths() {
@@ -27,13 +28,15 @@ const interestHref = `mailto:creators@contextcake.com?subject=${encodeURICompone
 				<p class="lede">{brief.summary}</p>
 				<div class="hero-actions">
 					<a class="button primary" href={applicationHref}>Apply to create this Pack</a>
-					<a class="button" href="/creators">How the creator program works</a>
+					{COMMERCE_VISIBLE && <a class="button" href="/creators">How the creator program works</a>}
 				</div>
 			</div>
 			<aside class="brief-facts" aria-label="Creator brief facts">
 				<p><span>Stage</span><strong>Seeking an expert creator</strong></p>
 				<p><span>Best for</span><strong>{brief.audience}</strong></p>
-				<p><span>Target license</span><strong>{brief.price.replace('Target ', '')} · {brief.teamPrice.replace('Target ', '')}</strong></p>
+				{COMMERCE_VISIBLE && (
+					<p><span>Target license</span><strong>{brief.price.replace('Target ', '')} · {brief.teamPrice.replace('Target ', '')}</strong></p>
+				)}
 				<p><span>Proposed upkeep</span><strong>{brief.updateCadence}</strong></p>
 			</aside>
 		</header>
@@ -72,7 +75,14 @@ const interestHref = `mailto:creators@contextcake.com?subject=${encodeURICompone
 		</section>
 
 		<aside class="stage-note">
-			<div><strong>This is not a product listing yet.</strong><p>No Pack has been approved or published, and no final price is set. There is no preorder or checkout. A listing becomes purchasable only after the content and rights review passes and checkout opens.</p></div>
+			<div>
+				<strong>This is not a product listing yet.</strong>
+				{COMMERCE_VISIBLE ? (
+					<p>No Pack has been approved or published, and no final price is set. There is no preorder or checkout. A listing becomes purchasable only after the content and rights review passes and checkout opens.</p>
+				) : (
+					<p>No Pack has been approved or published for this brief. A Pack joins the catalog only after its content and rights review passes.</p>
+				)}
+			</div>
 			<a href={interestHref}>I’d use this Pack →</a>
 		</aside>
 	</main>

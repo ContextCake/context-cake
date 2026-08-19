@@ -1,6 +1,7 @@
 ---
 import { fileURLToPath } from 'node:url';
 import PackProductPage from '../../components/PackProductPage.astro';
+import { COMMERCE_VISIBLE, PAYMENTS_LIVE } from '../../config/flags';
 import { loadPackExplorer } from '../../lib/pack-explorer';
 
 const packRoot = fileURLToPath(
@@ -14,10 +15,10 @@ const fileCount = explorer.files.length;
 const folderCount = explorer.treeEntries.filter((entry) => entry.kind === 'dir').length;
 
 // Checkout stays dormant while the complete Pack ships as a free preview.
+// Both switches (payments live, commerce visible) live in src/config/flags.json.
 const LEMONSQUEEZY_BASE_PACK_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_BASE_PACK';
 const LEMONSQUEEZY_TEAM_PACK_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_TEAM_PACK';
 const LEMONSQUEEZY_UPDATES_URL = 'https://STORE.lemonsqueezy.com/buy/REPLACE_UPDATES';
-const paymentsLive = false;
 
 const featuredFiles = [
 	{ label: 'Start here', path: 'skills/data-analytics-team-pack/START-HERE.md' },
@@ -26,7 +27,16 @@ const featuredFiles = [
 	{ label: 'Source rules', path: 'skills/data-analytics-team-pack/policies-and-rules/source-of-truth-precedence.md' },
 ];
 
-const availabilityPlans = paymentsLive
+const previewPlan = {
+	label: 'Preview open now', price: 'Free', priceSuffix: 'in preview',
+	cadence: COMMERCE_VISIBLE ? 'Read the complete Pack before commercial launch.' : 'Every file is open to read.',
+	body: `Inspect all ${fileCount} files across ${folderCount} directories, including the workflows, templates, examples, policies, and tool guides.`,
+	href: '#explorer', link: 'Read the full Pack', primary: true,
+};
+
+// Three states: payments live → buy links; commerce visible → priced cards
+// marked coming soon; hidden → the free preview card alone, no prices at all.
+const availabilityPlans = PAYMENTS_LIVE
 	? [
 		{
 			label: 'Personal license', price: '$99', priceSuffix: 'one-time',
@@ -47,13 +57,9 @@ const availabilityPlans = paymentsLive
 			href: LEMONSQUEEZY_UPDATES_URL, link: 'Add updates',
 		},
 	]
-	: [
-		{
-			label: 'Preview open now', price: 'Free', priceSuffix: 'in preview',
-			cadence: 'Read the complete Pack before commercial launch.',
-			body: `Inspect all ${fileCount} files across ${folderCount} directories, including the workflows, templates, examples, policies, and tool guides.`,
-			href: '#explorer', link: 'Read the full Pack', primary: true,
-		},
+	: COMMERCE_VISIBLE
+	? [
+		previewPlan,
 		{
 			label: 'Personal license', price: '$99', priceSuffix: 'one-time',
 			cadence: 'One named user · yours to keep.',
@@ -66,7 +72,51 @@ const availabilityPlans = paymentsLive
 			body: 'Optional editorial updates are planned separately. Canceling updates never disables files you already have.',
 			link: 'Coming soon', disabled: true,
 		},
-	];
+	]
+	: [previewPlan];
+
+const availability = PAYMENTS_LIVE
+	? {
+		title: 'Buy once. Add updates only if they help.',
+		description: 'The base Pack is a one-time purchase. A separate subscription adds future editorial releases but is not required to keep using what you bought.',
+		note: undefined,
+	}
+	: COMMERCE_VISIBLE
+	? {
+		title: 'Read it now. Paid licenses come later.',
+		description: 'The full Pack is open during preview. Commercial pricing is set; checkout remains off until fulfillment and entitlements are ready.',
+		note: 'No checkout yet. The complete Pack stays open for inspection while fulfillment, entitlements, and update delivery are finished.',
+	}
+	: {
+		title: 'Free to read during the preview',
+		description: 'The complete Pack is open. Read every file here, use what helps, and keep your own rules in a separate local overlay.',
+		note: 'No account is needed. Every release ships with a visible changelog.',
+	};
+
+// The optional-updates FAQ and the Pro FAQ describe the paid update subscription
+// and the app plans; both go with the priced cards.
+const faqs = [
+	{ q: 'Is this a BI tool or data catalog?', a: 'No. It’s a file-based working kit and doesn’t connect to your warehouse or manage live data.' },
+	{ q: 'Do we need special software?', a: 'No. Plain files are the baseline. Claude Code packaging is optional.' },
+	{ q: 'Can we customize it?', a: 'Yes. Keep team-specific rules in a separate local overlay so Pack updates remain easy to review.' },
+	...(COMMERCE_VISIBLE
+		? [
+			{ q: 'What do optional updates include?', a: 'Curated editorial releases with clearer examples, sharper guidance, and new templates.' },
+			{ q: 'Do I need ContextCake Pro?', a: 'No. Packs are separate products, and the Free app can install any Pack you own.' },
+		]
+		: []),
+];
+
+const updatesRow: [string, string] = COMMERCE_VISIBLE
+	? ['Updates', 'Corrections remain available; new editorial releases may be licensed separately.']
+	: ['Updates', 'Corrections remain available, and every release keeps a visible changelog.'];
+
+const credibilityLinks = COMMERCE_VISIBLE
+	? [
+		{ label: 'Create a Pack', href: '/creators' },
+		{ label: 'See app pricing', href: '/pricing' },
+	]
+	: [];
 ---
 
 <PackProductPage
@@ -79,11 +129,11 @@ const availabilityPlans = paymentsLive
 	lede="Use the same process each time a stakeholder asks for a metric, dashboard, or analysis: clarify the request, agree on the definition, validate the result, and explain the answer."
 	actions={[
 		{ label: 'Browse the files', href: '#explorer', primary: true },
-		{ label: 'Preview & pricing', href: '#availability' },
+		{ label: COMMERCE_VISIBLE ? 'Preview & pricing' : 'See availability', href: '#availability' },
 	]}
 	quickFacts={[
 		['Creator', 'ContextCake'],
-		['License', '$99 personal · $249 team'],
+		COMMERCE_VISIBLE ? ['License', '$99 personal · $249 team'] : ['Availability', 'Free preview'],
 		['Reviewed', 'July 17, 2026'],
 		['Permissions', 'Content only'],
 	]}
@@ -119,12 +169,10 @@ const availabilityPlans = paymentsLive
 	}}
 	availability={{
 		id: 'availability',
-		title: paymentsLive ? 'Buy once. Add updates only if they help.' : 'Read it now. Paid licenses come later.',
-		description: paymentsLive
-			? 'The base Pack is a one-time purchase. A separate subscription adds future editorial releases but is not required to keep using what you bought.'
-			: 'The full Pack is open during preview. Commercial pricing is set; checkout remains off until fulfillment and entitlements are ready.',
+		title: availability.title,
+		description: availability.description,
 		plans: availabilityPlans,
-		note: paymentsLive ? undefined : 'No checkout yet. The complete Pack stays open for inspection while fulfillment, entitlements, and update delivery are finished.',
+		note: availability.note,
 	}}
 	useCases={[
 		['Dashboard requests', 'Handle the same stakeholder question when it returns with slightly different framing.'],
@@ -151,18 +199,9 @@ const availabilityPlans = paymentsLive
 		['Source', 'Original first-party workflows, templates, examples, and guidance.'],
 		['Rights', 'ContextCake owns or can commercially distribute every included item.'],
 		['Permissions', 'No executable code, network access, bundled server, credentials, or escaping symlinks.'],
-		['Updates', 'Corrections remain available; new editorial releases may be licensed separately.'],
+		updatesRow,
 	]}
-	faqs={[
-		{ q: 'Is this a BI tool or data catalog?', a: 'No. It’s a file-based working kit and doesn’t connect to your warehouse or manage live data.' },
-		{ q: 'Do we need special software?', a: 'No. Plain files are the baseline. Claude Code packaging is optional.' },
-		{ q: 'Can we customize it?', a: 'Yes. Keep team-specific rules in a separate local overlay so Pack updates remain easy to review.' },
-		{ q: 'What do optional updates include?', a: 'Curated editorial releases with clearer examples, sharper guidance, and new templates.' },
-		{ q: 'Do I need ContextCake Pro?', a: 'No. Packs are separate products, and the Free app can install any Pack you own.' },
-	]}
+	faqs={faqs}
 	credibility="Made and reviewed by ContextCake. Pack Contract v1 · content only · no scripts, network access, credentials, or bundled services."
-	credibilityLinks={[
-		{ label: 'Create a Pack', href: '/creators' },
-		{ label: 'See app pricing', href: '/pricing' },
-	]}
+	credibilityLinks={credibilityLinks}
 />

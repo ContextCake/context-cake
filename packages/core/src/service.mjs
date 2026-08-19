@@ -26,6 +26,7 @@ import { buildSourcesQuarantined, createErrorSource, resolveTokenState } from ".
 import { MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createSourceOperations, normalizeRepo } from "./control/sources.mjs";
+import { ControlError } from "./control/errors.mjs";
 import { patchSettings, settingsView } from "./control/settings.mjs";
 import { withDeadline } from "./control/util.mjs";
 import { mergeConcepts, resolveConcept } from "./resolver.mjs";
@@ -1876,9 +1877,22 @@ export function createEngineService({
         json(res, 200, await syncSourceApi(url.searchParams.get("name")));
         return true;
       }
+      if (p === "/api/sources/order" && req.method === "PUT") {
+        if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
+        json(res, 200, reorderSourcesApi(await readBody(req)));
+        return true;
+      }
       return false; // an /api/* route this service doesn't own (e.g. the playground's editor endpoints)
     } catch (err) {
-      json(res, err.status ?? 500, { error: err.message, ...(err.detail ?? {}) });
+      // A ControlError's stable machine `code` rides along beside the message
+      // (additive; only ControlErrors — a Node fs error's `code` is not a
+      // contract), so a client can branch on ORDER_INVALID / LEVEL_INVALID /
+      // REORDER_BLOCKED rather than on the wording of the message.
+      json(res, err.status ?? 500, {
+        error: err.message,
+        ...(err instanceof ControlError ? { code: err.code } : {}),
+        ...(err.detail ?? {}),
+      });
       return true;
     } finally {
       // The write happens DURING a mutating handler, so the entry-time clear
@@ -2892,6 +2906,16 @@ export function createEngineService({
 
   async function patchSourceApi(rawBody) {
     const result = await sourceOps.patchSource(parseJson(rawBody));
+    reload();
+    return result;
+  }
+
+  // PUT /api/sources/order {order: [name, ...]} — the whole cascade, first
+  // wins. Levels change, index identities don't (level is a presentation
+  // field), so the reload below rebuilds the source list against the new
+  // levels and adopts every existing index as-is.
+  function reorderSourcesApi(rawBody) {
+    const result = sourceOps.reorderSources(parseJson(rawBody));
     reload();
     return result;
   }

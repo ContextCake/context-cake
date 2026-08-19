@@ -38,7 +38,6 @@
   --cc-line-soft: color-mix(in srgb, var(--cc-ink) 8%, transparent);
   --cc-track: color-mix(in srgb, var(--cc-ink) 7%, transparent);
   --cc-neutral-fill: color-mix(in srgb, var(--cc-ink) 6%, transparent);
-  --cc-neutral-fill-hover: color-mix(in srgb, var(--cc-ink) 10%, transparent);
   --cc-scrollbar: color-mix(in srgb, var(--cc-ink) 22%, transparent);
   --cc-canvas-dot: color-mix(in srgb, var(--cc-ink) 11%, transparent);
   --cc-lane-line: color-mix(in srgb, var(--cc-ink) 8%, transparent);
@@ -85,9 +84,6 @@
   --cc-solid-fg: var(--cc-page);
   --cc-cta-bg: var(--cc-solid-bg);
   --cc-cta-fg: var(--cc-solid-fg);
-  --cc-ask-bg: var(--cc-solid-bg);
-  --cc-ask-fg: var(--cc-solid-fg);
-  --cc-ask-ring: transparent;
   --cc-code-bg: var(--cc-ink);
   --cc-code-fg: var(--cc-page);
 
@@ -141,9 +137,6 @@
 
   --cc-cta-bg: var(--cc-teal-stroke-e);
   --cc-cta-fg: var(--cc-on-teal);
-  --cc-ask-bg: color-mix(in srgb, var(--cc-layer-team) 16%, transparent);
-  --cc-ask-fg: var(--cc-ink);
-  --cc-ask-ring: color-mix(in srgb, var(--cc-layer-team) 8%, transparent);
   --cc-code-bg: color-mix(in srgb, var(--cc-canvas-bg) 75%, black);
   --cc-code-fg: var(--cc-ink);
 

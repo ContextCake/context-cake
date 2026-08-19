@@ -336,7 +336,7 @@ function partitionLayers(layers, owner, transitional) {
         // a broken layer that also reuses a valid layer's name would otherwise
         // take that healthy layer down with it.
         index,
-        level: Number.isInteger(Number(layer?.level)) ? Number(layer.level) : 0,
+        level: manifestLevel(layer) ?? 0,
         // The declared kind, as a scalar. The layer OBJECT deliberately never
         // leaves this module — that is what makes it structurally impossible to
         // build or persist — but a row that reports the kind the user actually
@@ -667,12 +667,54 @@ function validateTransitionalLayer(layer, owner) {
   else validateAuthReference(layer.auth, `Pending source ${layer.name}`, { allowScrubbed: true });
 }
 
+/**
+ * A layer's `level` as THIS module defines validity: `Number(level)` must be
+ * an integer, so a hand-authored `null` (0), `true` (1), `""` (0), `"2"` (2)
+ * or `[2]` (2) is a legal level and reads as that integer — the same coercion
+ * the resolver applies when it compares levels. Returns the integer, or null
+ * when the manifest would refuse the value (missing, `"abc"`, `1.5`, `{}`).
+ * Anything that reasons about existing manifest levels (reorder, insert by
+ * position, the pack-assignment mirror) must go through this rather than a
+ * stricter parse, or a manifest the reader accepts gets a different order
+ * than the one it resolves with. API INPUT (a level a client sends on
+ * add/patch) is validated more strictly — see control/sources.mjs parseLevel.
+ */
+export function manifestLevel(layer) {
+  const level = Number(layer?.level);
+  return Number.isInteger(level) ? level : null;
+}
+
+/**
+ * A Pack layer carries a second copy of its level in the registry
+ * (`manifest.packs[id].assignments[].level`), and validateContextManifest
+ * refuses to write a manifest where the two disagree (`pack-layer-drift`,
+ * below). So every place a pack layer's level moves has to move the
+ * assignment with it, or the strict write dies on the operation's own change.
+ * Default profile only — that is the only profile the source operations
+ * touch. Returns whether an assignment was updated.
+ */
+export function syncPackAssignmentLevel(manifest, layer) {
+  if (typeof layer?.origin !== "string" || !layer.origin.startsWith("pack:")) return false;
+  const match = /^pack:([^@]+)@/.exec(layer.origin);
+  if (!match) return false;
+  const record = manifest.packs?.[match[1]];
+  if (!record || typeof record !== "object" || !Array.isArray(record.assignments)) return false;
+  // Legacy manifests key the default profile as `null`; v2 as "default" (with
+  // a tolerated null spelling that validation warns about but accepts).
+  const assignment = record.assignments.find((entry) => (
+    entry && typeof entry === "object" && (entry.profile ?? "default") === "default" && entry.layerName === layer.name
+  ));
+  if (!assignment) return false;
+  assignment.level = layer.level;
+  return true;
+}
+
 function validateLayer(layer, owner) {
   assertObject(layer, `Layer in ${owner}`);
   rejectCredentialFields(layer, `Layer in ${owner}`);
   rejectCredentialValues(layer, `Layer in ${owner}`);
   if (typeof layer.name !== "string" || !layer.name.trim()) throw new Error(`Layer in ${owner} must have a non-empty name.`);
-  if (!Number.isInteger(Number(layer.level))) throw new Error(`Layer ${layer.name} in ${owner} must have an integer level.`);
+  if (manifestLevel(layer) === null) throw new Error(`Layer ${layer.name} in ${owner} must have an integer level.`);
   const kind = layer.source ?? "okf-local";
   if (!RUNNABLE_SOURCE_KINDS.has(kind)) throw new Error(`Layer ${layer.name} has unsupported source kind: ${kind}`);
   if ((kind === "okf-local" || kind === "files") && typeof layer.path !== "string") {

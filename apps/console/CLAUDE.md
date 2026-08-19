@@ -67,10 +67,17 @@ via their pre-hooks.
   cross-links, no Save — `canEdit = live && file.editable` gates the save
   button, the ⌘S binding and the textarea, and the raw-preview fetch is skipped
   because a snapshot carries text, not bytes. Sources manages the layers themselves —
-  rename + re-level + repoint a folder-backed source (PATCH `/api/sources`),
+  rename + repoint a folder-backed source (PATCH `/api/sources`), reposition
+  (the drawer's position select, or Reorder mode's drag/arrows; each move is
+  one PUT `/api/sources/order` with the complete order, then `reload()`),
   remove with confirm (DELETE), Sync-now for github kinds (POST
   `/api/sources/sync`) — read-only in demo mode; `live: true` layers get a
-  capture warning on rename/remove.
+  capture warning on rename/remove. Precedence is shown everywhere as a
+  cascade position (#1 wins) computed by `src/cascade-order.ts` from the same
+  distinct-level list as the lane buckets; the manifest `level` integer is
+  never something the user types (Sources sends orders, not levels; only the
+  first-run wizard still sends the conventional 3/2/0) and shows in exactly
+  one place, the Sources detail's "Manifest level" row.
 - **Files ⇄ Concepts** — the two ends of one thing, and walkable both ways. An
   open document names the concept it resolves to (`conceptForFile`: the file's
   `rel` minus its document extension, matched against a loaded concept id —
@@ -82,7 +89,11 @@ via their pre-hooks.
   component: the first-run guided narrative (personal → optional team →
   optional company MCP → review) and a one-step add-a-source mode (four-kind
   picker). Names are derived (folder basename / repo slug / MCP command
-  target) but always editable; levels are steppers, not constants. GitHub
+  target) but always editable. Precedence is never a number the user types:
+  the first-run narrative fixes the order (payloads still send the
+  conventional `level` 3/2/0), and add mode sends `position` (1 wins;
+  folders default to the top, repos and MCP graphs to the bottom) through
+  the shared `CascadePosition` select. GitHub
   sources fork on a public/private radio: public → `github-rest` (no clone,
   never sends `auth`/`apiBase`), private → the `github` clone kind. The mode
   is frozen at mount (`isAdding`) because the shell's `addingSource` prop
@@ -96,14 +107,14 @@ via their pre-hooks.
   (`contextcake` default, then `solarized`, `catppuccin`, `gruvbox`,
   `tokyo-night`, `rose-pine`, `one`, `github`; `src/themes/registry.ts` is the
   list, `THIRD_PARTY_THEMES.md` the notices). Every color is a CSS variable.
-  ContextCake's own values live in `src/styles.css`: `:root` (light) and
-  `:root[data-theme="dark"]`, and beyond the primitives (page/surface/raised,
+  ContextCake's own values live in `src/styles.css`: `:root` (light) and the
+  palette-scoped dark block, and beyond the primitives (page/surface/raised,
   the ink ramp, lines, the layer trio and its blue/teal/amber ramps) the two
-  blocks declare **semantic role tokens** — `--cc-solid-bg/fg` (the inverted
-  chip: settings brand mark, resolver primary, and the light `--cc-cta-*`
-  alias), `--cc-cta-bg/fg` (the one primary action), `--cc-ask-bg/fg/ring`
-  (Ask button), `--cc-code-bg/fg` (terminal-style code block),
-  `--cc-neutral-fill-hover` — and components consume those. **A theme family
+  blocks declare **semantic role tokens** — `--cc-cta-bg/fg` (the one primary
+  action: connect + copy), `--cc-solid-bg/fg` (the inverted chip that is the
+  light-mode source of the cta pair), `--cc-code-bg/fg` (terminal-style code
+  block) — and components consume those; a role token with no consumer left
+  is removed from both blocks and from `_derived.css`, not kept. **A theme family
   is a file `src/themes/<id>.css` with two blocks that declare the 13
   `PRIMITIVES` (+ `color-scheme`) per mode — `tokens.test.ts` enforces "every
   primitive, and only canonical token names" — and `src/themes/_derived.css`

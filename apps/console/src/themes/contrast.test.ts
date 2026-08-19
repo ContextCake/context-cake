@@ -120,7 +120,6 @@ const CHECKS: Check[] = [
   { fg: '--cc-solid-fg', bg: '--cc-solid-bg', min: 4.5 },
   { fg: '--cc-code-fg', bg: '--cc-code-bg', min: 4.5 },
   { fg: '--cc-cta-fg', bg: '--cc-cta-bg', backdrop: ['--cc-raised', '--cc-page'], min: 3 },
-  { fg: '--cc-ask-fg', bg: '--cc-ask-bg', backdrop: ['--cc-header-bg', '--cc-page'], min: 4.5 },
 ]
 
 describe('contrast gate', () => {

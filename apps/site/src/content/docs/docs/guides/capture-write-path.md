@@ -97,8 +97,11 @@ node write.mjs --signals apps/control-surface/signals.json --manifest layers.jso
 ```
 
 Flags: `--signals <file>` (required), `--manifest <file>` (required),
-`--target-layer <name>` (defaults to the highest layer level below 3 — i.e.
-not personal — or level 3 if that's the only layer available),
+`--target-layer <name>` (defaults to the highest eligible layer below the top
+of the cascade — i.e. never the top layer itself, whatever its level or name;
+on a conventional 3/2/0 manifest that is team, and on a manifest with no
+personal layer it is the layer under whichever one is on top — or the top
+layer if it's the only one available; the chosen default is always printed),
 `--dry-run` (prints what would be written without touching disk), `--help`.
 The target must be a non-live local OKF layer; plain Markdown-folder sources
 and live capture repositories are not batch-write targets.

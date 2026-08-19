@@ -1,16 +1,28 @@
 // Source setup wizard — live mode only. Two shapes from one component:
 //   first run    — guided narrative (personal → optional team → optional
-//                  company MCP → review), every step with an editable name
-//                  and precedence level, so N sources fit where three did.
-//   addingSource — a single step: kind picker + name + level + kind fields.
+//                  company MCP → review), every step with an editable name.
+//                  The narrative IS the order: personal wins, then team, then
+//                  company, so no precedence control is shown — the payloads
+//                  still carry the conventional levels (3/2/0) the docs and
+//                  fixtures use.
+//   addingSource — a single step: kind picker + name + kind fields + a
+//                  position in the existing cascade (#1 wins). The payload
+//                  sends `position`, and the engine assigns the level.
 // Both write the manifest through the engine's source API (POST /api/sources).
 // Names are never hardcoded: they derive from what the user picked (folder
 // basename / repo slug / MCP command) and stay editable, so a second repo or
 // MCP server lands under its own name instead of colliding with "team".
+//
+// Old-engine note: an engine that predates `position` on POST /api/sources
+// ignores the field and lands the layer at its own default level. Accepted —
+// the Mac app ships engine and console together, the Web Demo has no add
+// path, and `console:live` runs against this repo's engine.
 import { useEffect, useRef, useState } from 'react'
 import { C, css, MONO } from '../theme'
 import { useStoreData } from '../store'
 import { apiFetch, isTimeout, progressLabel, progressPercent } from '../api'
+import { cascadeOrderNames, computeCascadeOrder } from '../cascade-order'
+import { CascadePosition } from './CascadePosition'
 import type { GraphSummary, SourceStatus, StatusSummary } from '../types'
 
 type StepId = 'welcome' | 'personal' | 'team' | 'company' | 'source' | 'review' | 'success'
@@ -23,7 +35,21 @@ type RepoAccess = 'public' | 'private'
 interface AddedLayer {
   kind: SourceKind | 'github-rest'
   name: string
+  /** The level the layer holds — sent explicitly (first run) or assigned by the engine (add by position). */
   level: number
+  /**
+   * Its position in the whole cascade when the engine reported one (an add
+   * by position answers with the full order); null when only `level` is
+   * known, in which case the review list ranks the added layers among
+   * themselves — which on a first run IS the whole cascade.
+   */
+  position: number | null
+  /**
+   * A position was requested but the engine did not report where the layer
+   * landed (an engine older than `position` ignores the field). The review
+   * row then says so rather than asserting the number that was asked for.
+   */
+  positionUnconfirmed?: true
   detail: string
 }
 
@@ -37,6 +63,10 @@ interface AddResult {
   hasDocuments?: boolean
   /** False when the quick look stopped early — "none found" is then unproven. */
   scanComplete?: boolean
+  /** The level the new layer was given (always answered by an engine that knows `position`). */
+  level?: number
+  /** The whole cascade after an add by position, first wins. */
+  order?: { name: string; level: number }[]
 }
 
 /** A non-2xx answer from the source API, with the status the retry logic needs. */
@@ -233,8 +263,15 @@ interface Draft {
   name: string
   /** The user edited the name — stop re-deriving it from path/repo/command. */
   nameTouched: boolean
+  /** Sent as `level` when `position` is null (the first-run narrative's conventional 3/2/0). */
   level: number
-  levelTouched: boolean
+  /**
+   * 1-based cascade position (1 wins), sent INSTEAD of `level` when set —
+   * the engine refuses both together (LEVEL_AND_POSITION). Add mode only.
+   */
+  position: number | null
+  /** The user chose a position — stop re-deriving it from the kind's default. */
+  positionTouched: boolean
   path: string
   repo: string
   repoAccess: RepoAccess
@@ -242,9 +279,9 @@ interface Draft {
   trusted: boolean
 }
 
-function makeDraft(kind: SourceKind, level: number): Draft {
+function makeDraft(kind: SourceKind, level: number, position: number | null = null): Draft {
   return {
-    kind, name: '', nameTouched: false, level, levelTouched: false,
+    kind, name: '', nameTouched: false, level, position, positionTouched: false,
     path: '', repo: '', repoAccess: 'public', command: '', trusted: false,
   }
 }
@@ -253,18 +290,23 @@ function withDerivedName(d: Draft): Draft {
   return d.nameTouched ? d : { ...d, name: deriveSourceName(d) }
 }
 
+/** Whichever precedence field this draft carries — never both. */
+function precedenceField(d: Draft): { position: number } | { level: number } {
+  return d.position === null ? { level: d.level } : { position: d.position }
+}
+
 /** The one request shape per draft — public repos become the clone-free `github-rest` kind. */
 function buildPayload(d: Draft): { body: Record<string, unknown>; kind: AddedLayer['kind'] } | { error: string } {
   const name = d.name.trim()
   if (!name) return { error: 'Give this source a short name, such as “Work notes”.' }
   if (d.kind === 'files' || d.kind === 'local') {
     if (!d.path.trim()) return { error: 'Provide a folder path.' }
-    return { kind: d.kind, body: { kind: d.kind, name, level: d.level, path: d.path.trim() } }
+    return { kind: d.kind, body: { kind: d.kind, name, ...precedenceField(d), path: d.path.trim() } }
   }
   if (d.kind === 'github') {
     if (!d.repo.trim()) return { error: 'Provide a repo as owner/name.' }
     const kind = d.repoAccess === 'public' ? 'github-rest' : 'github'
-    return { kind, body: { kind, name, level: d.level, repo: d.repo.trim() } }
+    return { kind, body: { kind, name, ...precedenceField(d), repo: d.repo.trim() } }
   }
   let parts: string[]
   try {
@@ -277,7 +319,7 @@ function buildPayload(d: Draft): { body: Record<string, unknown>; kind: AddedLay
   // The API also requires this explicit acknowledgement. Keeping the consent
   // bit in the request prevents a caller from bypassing the UI's trust
   // checkbox and turning source creation into an accidental RCE API.
-  return { kind: 'mcp', body: { kind: 'mcp', name, level: d.level, command, args, trusted: true } }
+  return { kind: 'mcp', body: { kind: 'mcp', name, ...precedenceField(d), command, args, trusted: true } }
 }
 
 function draftDetail(d: Draft, kind: AddedLayer['kind'], result: AddResult): string {
@@ -441,52 +483,37 @@ const REPO_ACCESS_CHOICES: Array<{ value: RepoAccess; title: string; detail: str
   },
 ]
 
-/** Level defaults per kind when adding a single source (3/3/2/0). */
-const ADD_LEVEL_DEFAULTS: Record<SourceKind, number> = { files: 3, local: 3, github: 2, mcp: 0 }
+/**
+ * Where a single added source lands by default: a folder is something you
+ * wrote (it goes on top and wins), a repo or an MCP graph is something you
+ * read (it goes underneath and is inherited from). The user can move it in
+ * the same form; the wizard only picks the starting slot.
+ */
+const ADD_POSITION_DEFAULTS: Record<SourceKind, 'top' | 'bottom'> = { files: 'top', local: 'top', github: 'bottom', mcp: 'bottom' }
 
-export function LevelStepper({ id, value, onChange }: { id: string; value: number; onChange: (v: number) => void }) {
-  const stepBtn = (disabled: boolean): React.CSSProperties => css(
-    `width:30px; height:34px; display:grid; place-items:center; border-radius:8px; border:1px solid ${C.line}; background:${disabled ? C.neutralFill : C.surface}; color:${disabled ? C.faint : C.body}; cursor:${disabled ? 'not-allowed' : 'pointer'}; font:inherit; font-size:15px; line-height:1;`,
-  )
-  return (
-    <div>
-      <label htmlFor={id} style={fieldLabelStyle()}>Level</label>
-      <div style={css('display:flex; align-items:stretch; gap:5px;')} title="Precedence: where layers disagree, the higher level wins per section.">
-        <button type="button" aria-label="Lower level" disabled={value <= 0} style={stepBtn(value <= 0)} onClick={() => onChange(Math.max(0, value - 1))}>−</button>
-        <output
-          id={id}
-          aria-label="Level"
-          aria-live="polite"
-          style={css(`min-width:34px; display:grid; place-items:center; border-radius:8px; border:1px solid ${C.line}; background:${C.surface}; color:${C.ink}; font-family:${MONO}; font-size:14px; font-weight:600;`)}
-        >{value}</output>
-        <button type="button" aria-label="Raise level" disabled={value >= 9} style={stepBtn(value >= 9)} onClick={() => onChange(Math.min(9, value + 1))}>+</button>
-      </div>
-    </div>
-  )
+/** 1-based position for a kind's default, against a cascade of `existing` sources. */
+function defaultPosition(kind: SourceKind, existing: number): number {
+  return ADD_POSITION_DEFAULTS[kind] === 'top' ? 1 : existing + 1
 }
 
-function NameLevelRow({
-  idPrefix, draft, onName, onLevel,
+function NameRow({
+  idPrefix, draft, onName,
 }: {
   idPrefix: string
   draft: Draft
   onName: (name: string) => void
-  onLevel: (level: number) => void
 }) {
   return (
-    <div style={css('display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:start;')}>
-      <div>
-        <label htmlFor={`${idPrefix}-name`} style={fieldLabelStyle()}>Source name</label>
-        <input
-          id={`${idPrefix}-name`}
-          style={inputStyle()}
-          value={draft.name}
-          onChange={(e) => onName(e.target.value)}
-          placeholder="e.g. Work notes"
-          autoComplete="off"
-        />
-      </div>
-      <LevelStepper id={`${idPrefix}-level`} value={draft.level} onChange={onLevel} />
+    <div>
+      <label htmlFor={`${idPrefix}-name`} style={fieldLabelStyle()}>Source name</label>
+      <input
+        id={`${idPrefix}-name`}
+        style={inputStyle()}
+        value={draft.name}
+        onChange={(e) => onName(e.target.value)}
+        placeholder="e.g. Work notes"
+        autoComplete="off"
+      />
     </div>
   )
 }
@@ -669,7 +696,11 @@ export function SetupWizard({
   onConnectAgent?: () => void
   addingSource?: boolean
 }) {
-  const { reload } = useStoreData()
+  const { reload, sources } = useStoreData()
+  // The cascade a new source is being placed into (add mode). `?? []`
+  // because the older test mocks of the store hand back no `sources` at all;
+  // a quarantined entry has no position and is not in the list.
+  const existingOrder = cascadeOrderNames((sources ?? []).filter((source) => !source.quarantined))
   // Frozen at mount: adding the first source flips the shell's live
   // `sources.length > 0` mid-flow (reload() lands while the success fetch is
   // in flight), and letting that swap the step array under a live stepIdx
@@ -681,6 +712,9 @@ export function SetupWizard({
   const step = steps[stepIdx]
   const [added, setAdded] = useState<AddedLayer[]>([])
 
+  // First run: the narrative fixes the order (personal → team → company),
+  // and the payloads carry the conventional levels every doc, fixture and
+  // engine default agrees on. Nothing here is a control the user sees.
   const [personal, setPersonal] = useState<Draft>(() => makeDraft('files', 3))
   const [personalErr, setPersonalErr] = useState<string | null>(null)
   const [personalBusy, setPersonalBusy] = useState(false)
@@ -694,7 +728,9 @@ export function SetupWizard({
   const [mcpErr, setMcpErr] = useState<string | null>(null)
   const [mcpBusy, setMcpBusy] = useState(false)
 
-  const [addDraft, setAddDraft] = useState<Draft>(() => makeDraft('files', ADD_LEVEL_DEFAULTS.files))
+  // Add mode: a position (1 wins) rather than a level. `level` is a
+  // placeholder here — never sent, because `position` is set.
+  const [addDraft, setAddDraft] = useState<Draft>(() => makeDraft('files', 0, defaultPosition('files', existingOrder.length)))
   const [addErr, setAddErr] = useState<string | null>(null)
   const [addBusy, setAddBusy] = useState(false)
 
@@ -787,10 +823,18 @@ export function SetupWizard({
         }
       }
       completedRef.current.add(key)
+      // The engine's answer is the truth about where the layer landed: an add
+      // by position reports the assigned level and the whole cascade; an add
+      // by level echoes the level. Fall back to the draft only for an engine
+      // too old to say (see the old-engine note at the top of this file).
+      const order = Array.isArray(result.order) ? result.order : null
+      const position = order ? order.findIndex((entry) => entry.name === name) + 1 : 0
       setAdded((prev) => [...prev, {
         kind: built.kind,
-        name: String(built.body.name),
-        level: draft.level,
+        name,
+        level: typeof result.level === 'number' ? result.level : draft.level,
+        position: position > 0 ? position : draft.position,
+        ...(draft.position !== null && position === 0 ? { positionUnconfirmed: true as const } : {}),
         detail: draftDetail(draft, built.kind, result),
       }])
       return true
@@ -893,7 +937,7 @@ export function SetupWizard({
     setAddDraft((d) => withDerivedName({
       ...d,
       kind,
-      level: d.levelTouched ? d.level : ADD_LEVEL_DEFAULTS[kind],
+      position: d.positionTouched ? d.position : defaultPosition(kind, existingOrder.length),
     }))
     setAddErr(null)
   }
@@ -904,6 +948,14 @@ export function SetupWizard({
   const patchAdd = patchDraft(setAddDraft)
 
   const addSubmitDisabled = addBusy || (addDraft.kind === 'mcp' && (!addDraft.trusted || !addDraft.command.trim()))
+
+  // What the review/success lists show beside each name: the position the
+  // engine reported, else the rank among what this run added — on a first
+  // run the added layers ARE the cascade, so the two agree.
+  const addedRanks = new Map(computeCascadeOrder(added).map((entry) => [entry.name, entry.rank]))
+  // `name · #2 · kind` — or `name · kind` when the engine never said where the
+  // layer landed, rather than asserting the number that was asked for.
+  const addedLine = (a: AddedLayer) => [a.name, ...(a.positionUnconfirmed ? [] : [`#${a.position ?? addedRanks.get(a.name) ?? 1}`]), kindLabel(a.kind)].join(' · ')
 
   return (
     <div style={css('position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:var(--cc-scrim);')}>
@@ -942,11 +994,10 @@ export function SetupWizard({
             subtitle="Choose the kind of folder you already have. Markdown folders do not need to be converted before ContextCake can read them."
           >
             <ChoiceCards label="Folder format" value={personal.kind as 'files' | 'local'} onChange={(kind) => patchPersonal({ kind })} choices={FOLDER_CHOICES} />
-            <NameLevelRow
+            <NameRow
               idPrefix="wiz-personal"
               draft={personal}
               onName={(name) => { patchPersonal({ name, nameTouched: true }); setPersonalErr(null) }}
-              onLevel={(level) => patchPersonal({ level, levelTouched: true })}
             />
             <div>
               <FolderPathField
@@ -998,11 +1049,10 @@ export function SetupWizard({
                 onClick={() => { patchTeam({ kind: 'github' }); setTeamErr(null) }}
               >GitHub repo</button>
             </div>
-            <NameLevelRow
+            <NameRow
               idPrefix="wiz-team"
               draft={team}
               onName={(name) => { patchTeam({ name, nameTouched: true }); setTeamErr(null) }}
-              onLevel={(level) => patchTeam({ level, levelTouched: true })}
             />
             {team.kind === 'local' || team.kind === 'files' ? (
               <FolderPathField
@@ -1058,11 +1108,10 @@ export function SetupWizard({
                   onCommand={(command) => { patchCompany({ command }); setMcpErr(null) }}
                   onTrusted={(trusted) => patchCompany({ trusted })}
                 />
-                <NameLevelRow
+                <NameRow
                   idPrefix="wiz-mcp"
                   draft={company}
                   onName={(name) => { patchCompany({ name, nameTouched: true }); setMcpErr(null) }}
-                  onLevel={(level) => patchCompany({ level, levelTouched: true })}
                 />
               </>
             )}
@@ -1091,14 +1140,23 @@ export function SetupWizard({
             stepIndex={0}
             stepCount={steps.length}
             title="Add a source"
-            subtitle="Pick where this knowledge lives. It joins your cascade under its own name and precedence level."
+            subtitle="Pick where this knowledge lives. It joins your cascade at the position you choose — you can reorder any time in Sources."
           >
             <ChoiceCards label="Source kind" value={addDraft.kind} onChange={setAddKind} choices={ALL_KIND_CHOICES} />
-            <NameLevelRow
+            <NameRow
               idPrefix="wiz-add"
               draft={addDraft}
               onName={(name) => { patchAdd({ name, nameTouched: true }); setAddErr(null) }}
-              onLevel={(level) => patchAdd({ level, levelTouched: true })}
+            />
+            <CascadePosition
+              id="wiz-add-position"
+              value={addDraft.position ?? 1}
+              namesAbove={existingOrder}
+              onChange={(position) => patchAdd({ position, positionTouched: true })}
+              disabled={addBusy}
+              hint={existingOrder.length === 0
+                ? 'Your first source — it starts the cascade at position 1.'
+                : 'Position 1 wins wherever it speaks; everything else is inherited from the layers below.'}
             />
             {(addDraft.kind === 'files' || addDraft.kind === 'local') && (
               <FolderPathField
@@ -1163,7 +1221,7 @@ export function SetupWizard({
                     key={a.name}
                     style={css(`display:flex; flex-direction:column; gap:2px; padding:10px 12px; border-radius:9px; background:${C.surface}; border:1px solid ${C.line};`)}
                   >
-                    <span style={css(`font-family:${MONO}; font-size:12px; font-weight:600; color:${C.ink};`)}>{a.name} · level {a.level} · {kindLabel(a.kind)}</span>
+                    <span style={css(`font-family:${MONO}; font-size:12px; font-weight:600; color:${C.ink};`)}>{addedLine(a)}</span>
                     <span style={css(`font-size:11.5px; color:${C.caption};`)}>{a.detail}</span>
                   </li>
                 ))}
@@ -1194,7 +1252,7 @@ export function SetupWizard({
                     key={a.name}
                     style={css(`display:flex; flex-direction:column; gap:4px; padding:10px 12px; border-radius:9px; background:${C.surface}; border:1px solid ${C.line};`)}
                   >
-                    <span style={css(`font-family:${MONO}; font-size:12px; font-weight:600; color:${C.ink};`)}>{a.name} · level {a.level} · {kindLabel(a.kind)}</span>
+                    <span style={css(`font-family:${MONO}; font-size:12px; font-weight:600; color:${C.ink};`)}>{addedLine(a)}</span>
                     <span style={css(`font-size:11.5px; color:${C.caption};`)}>{a.detail}</span>
                     <LiveSourceStatus name={a.name} watched={watched} />
                   </li>

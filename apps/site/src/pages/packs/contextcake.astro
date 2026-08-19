@@ -1,6 +1,7 @@
 ---
 import { fileURLToPath } from 'node:url';
 import PackProductPage from '../../components/PackProductPage.astro';
+import { COMMERCE_VISIBLE } from '../../config/flags';
 import { loadPackExplorer } from '../../lib/pack-explorer';
 
 const packRoot = fileURLToPath(
@@ -16,6 +17,17 @@ const featuredFiles = [
 	{ label: 'Layers', path: 'architecture/layers-and-precedence.md' },
 	{ label: 'Install', path: 'getting-started/installation.md' },
 	{ label: 'Changelog', path: 'updates/CHANGELOG.md' },
+];
+
+// Plan names and the pricing page only appear while commerce is visible
+// (src/config/flags.json); the Pack itself is free either way.
+const faqs = [
+	{ q: 'Is this just the ContextCake docs?', a: 'The facts overlap, but this Pack can live inside a project and travel with an AI agent.' },
+	{ q: 'Do I need it to use ContextCake?', a: 'No. It gives your assistant a local reference for setup, architecture, and common mistakes.' },
+	{ q: 'How current is it?', a: 'It was reviewed on July 17, 2026. Every release carries a freshness date and visible changelog.' },
+	...(COMMERCE_VISIBLE
+		? [{ q: 'What becomes paid later?', a: 'Not this Pack. Managed sync and other professional Packs may be paid separately.' }]
+		: []),
 ];
 ---
 
@@ -70,7 +82,9 @@ const featuredFiles = [
 	availability={{
 		id: 'availability',
 		title: 'Free to read, install, and keep',
-		description: 'This first-party Pack and its corrections stay free. You don’t need ContextCake Pro or an account to use it.',
+		description: COMMERCE_VISIBLE
+			? 'This first-party Pack and its corrections stay free. You don’t need ContextCake Pro or an account to use it.'
+			: 'This first-party Pack and its corrections stay free. You don’t need an account to use it.',
 		plans: [{
 			label: 'Free Pack',
 			price: 'Free',
@@ -81,7 +95,9 @@ const featuredFiles = [
 			link: 'Read the full Pack',
 			primary: true,
 		}],
-		note: 'No checkout is attached to this Pack. Its content, license, file tree, and changelog are available above.',
+		note: COMMERCE_VISIBLE
+			? 'No checkout is attached to this Pack. Its content, license, file tree, and changelog are available above.'
+			: 'Nothing to sign up for. The Pack’s content, license, file tree, and changelog are above.',
 	}}
 	useCases={[
 		['Adopting ContextCake', 'Add ContextCake to a repository with an accurate reference for setup and conventions.'],
@@ -109,12 +125,7 @@ const featuredFiles = [
 		['Permissions', 'Content only. No scripts, network access, credentials, or hidden services.'],
 		['Updates', 'Corrections remain free and every release keeps a visible changelog.'],
 	]}
-	faqs={[
-		{ q: 'Is this just the ContextCake docs?', a: 'The facts overlap, but this Pack can live inside a project and travel with an AI agent.' },
-		{ q: 'Do I need it to use ContextCake?', a: 'No. It gives your assistant a local reference for setup, architecture, and common mistakes.' },
-		{ q: 'How current is it?', a: 'It was reviewed on July 17, 2026. Every release carries a freshness date and visible changelog.' },
-		{ q: 'What becomes paid later?', a: 'Not this Pack. Managed sync and other professional Packs may be paid separately.' },
-	]}
+	faqs={faqs}
 	credibility="Made and reviewed by ContextCake. Pack Contract v1 · content only · no scripts, network access, credentials, or hidden services."
-	credibilityLinks={[{ label: 'See app pricing', href: '/pricing' }]}
+	credibilityLinks={COMMERCE_VISIBLE ? [{ label: 'See app pricing', href: '/pricing' }] : []}
 />

@@ -30,7 +30,9 @@ That is a thin return for a hosted Postgres holding user rows in a product whose
 claim is that context stays on your machine — and it was the only thing making
 that claim need an asterisk. The stated justification was a hook for
 entitlements, and Packs shipped as a free preview with payments dormant behind
-`paymentsLive`, so nothing is being entitled yet.
+`paymentsLive` (now in `apps/site/src/config/flags.json`, next to the
+`commerceVisible` flag that hides prices from the site entirely), so nothing is
+being entitled yet.
 
 The code, migrations and tests are all still here and still run in CI. Turning
 accounts back on is one environment variable, and the better version — settings

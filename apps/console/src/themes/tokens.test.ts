@@ -65,10 +65,9 @@ describe('canonical color tokens (a)', () => {
 
   it('declares the semantic role tokens components lean on', () => {
     for (const token of [
-      '--cc-neutral-fill', '--cc-neutral-fill-hover',
+      '--cc-neutral-fill',
       '--cc-solid-bg', '--cc-solid-fg',
       '--cc-cta-bg', '--cc-cta-fg',
-      '--cc-ask-bg', '--cc-ask-fg', '--cc-ask-ring',
       '--cc-code-bg', '--cc-code-fg',
     ]) expect(canonical.has(token), token).toBe(true)
   })

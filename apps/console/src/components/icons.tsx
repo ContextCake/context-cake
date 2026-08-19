@@ -21,4 +21,8 @@ export const CloseIcon = (props: IconProps) => <Icon {...props}><path d="m6 6 12
 export const IndexingIcon = (props: IconProps) => <Icon {...props}><ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6M4.5 12v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6" /></Icon>
 export const AccountIcon = (props: IconProps) => <Icon {...props}><circle cx="12" cy="8" r="3.4" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" /></Icon>
 export const PrivacyIcon = (props: IconProps) => <Icon {...props}><path d="M12 3 5 6v5c0 4.8 2.8 8.1 7 10 4.2-1.9 7-5.2 7-10V6z" /><path d="m9 12 2 2 4-4" /></Icon>
+/** Six-dot drag handle — the standard grip affordance for a reorderable row. */
+export const GripIcon = (props: IconProps) => <Icon {...props}><g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" /><circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" /><circle cx="9" cy="18" r="1.5" /><circle cx="15" cy="18" r="1.5" /></g></Icon>
+export const ArrowUpIcon = (props: IconProps) => <Icon {...props}><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></Icon>
+export const ArrowDownIcon = (props: IconProps) => <Icon {...props}><path d="M12 5v14M5.5 12.5 12 19l6.5-6.5" /></Icon>
 export const ConnectionsIcon = (props: IconProps) => <Icon {...props}><path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.8-2.8a4 4 0 0 0-5.7-5.7l-1.6 1.6M13.5 10.5a4 4 0 0 0-5.7 0L5 13.3a4 4 0 1 0 5.7 5.7l1.6-1.6" /></Icon>

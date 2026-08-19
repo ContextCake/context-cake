@@ -19,6 +19,12 @@ import type {
 } from './types'
 import type { Concept, ConceptSection, Conflict, Dissent, Source } from './data'
 import type { LayerId } from './theme'
+import { computeLevelBuckets, computeSourceBuckets, layerOf, type LevelBuckets } from './cascade-order'
+
+// The level→lane mapping moved to cascade-order.ts so ranks and lanes derive
+// from one list; ~12 call sites and the tests keep importing it from here.
+export { computeLevelBuckets, computeSourceBuckets }
+export type { LevelBuckets }
 
 const demoBundle = demoBundleRaw as unknown as DemoBundle
 
@@ -29,13 +35,23 @@ export type LiveErrorKind = 'unreachable' | 'bad-status' | 'bad-shape'
 export class LiveDataError extends Error {
   kind: LiveErrorKind
   status?: number
-  constructor(kind: LiveErrorKind, message: string, status?: number) {
+  /**
+   * The engine's stable machine code for a refused mutation (`ORDER_INVALID`,
+   * `REORDER_BLOCKED`, `LEVEL_INVALID`, …), when the error body carried one.
+   * Branch on this, never on the wording of `message`.
+   */
+  code?: string
+  constructor(kind: LiveErrorKind, message: string, status?: number, code?: string) {
     super(message)
     this.name = 'LiveDataError'
     this.kind = kind
     this.status = status
+    this.code = code
   }
 }
+
+/** One row of the engine's answer to a reorder: the name and the level it now holds. */
+export interface CascadeOrderResult { name: string; level: number }
 
 /** Bulk resolve result: per-concept failures never sink the whole load. */
 export interface ResolveAllResult {
@@ -76,6 +92,15 @@ export interface DataSource {
   patchDiscrepancyRule(id: string, changes: { mode?: 'recommend' | 'automatic'; enabled?: boolean }): Promise<DiscrepancyRule>
   promoteDiscrepancyRule(id: string, confirm: boolean): Promise<Record<string, unknown>>
   setDiscrepancyPriority(id: string, priority: string): Promise<void>
+  /**
+   * Rewrite the cascade order (PUT /api/sources/order): `order` is the
+   * COMPLETE list of source names, index 0 wins. Levels are reassigned
+   * server-side (a permutation of the existing ones where possible); nothing
+   * re-indexes. Callers reload the graph afterwards — winners changed.
+   * Rejects with a `LiveDataError` carrying the engine's `code`
+   * (`ORDER_INVALID`, `REORDER_BLOCKED`, `MANIFEST_INVALID`).
+   */
+  reorderSources(order: string[]): Promise<CascadeOrderResult[]>
   /**
    * A scheduling hint: which layer is currently on screen (e.g. the Files
    * view scoped to one source), so the engine's indexing queue lets that
@@ -256,7 +281,7 @@ class DemoSource implements DataSource {
   async search(): Promise<SearchHit[] | null> { return null }
   async conflictResolutions(): Promise<ConflictResolutionRecord[]> { return this.resolutions }
   async discrepancies(): Promise<DiscrepanciesResponse> {
-    const buckets = computeLevelBuckets(this.bundle.graph.sources.map((s) => s.level))
+    const buckets = computeSourceBuckets(this.bundle.graph.sources)
     const conflicts = adaptConflicts(this.bundle.concepts, this.resolutions, buckets)
     return {
       discrepancies: conflicts.map((conflict) => legacyConflictRecord(conflict)),
@@ -292,6 +317,7 @@ class DemoSource implements DataSource {
   async patchDiscrepancyRule(): Promise<DiscrepancyRule> { throw new LiveDataError('bad-status', 'Automatic rules never run in simulation.', 405) }
   async promoteDiscrepancyRule(): Promise<Record<string, unknown>> { throw new LiveDataError('bad-status', 'Simulation cannot promote team rules.', 405) }
   async setDiscrepancyPriority(): Promise<void> { /* simulation-only local state is owned by the store */ }
+  async reorderSources(): Promise<CascadeOrderResult[]> { throw new LiveDataError('bad-status', 'Demo data is read-only. Reordering the cascade needs the live engine.', 405) }
   setActiveSource(): void { /* the demo bundle is pre-resolved — nothing to schedule */ }
   async resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord> {
     const prior = request.resolutionId
@@ -454,6 +480,12 @@ class LiveSource implements DataSource {
       method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ priority }),
     })
   }
+  async reorderSources(order: string[]): Promise<CascadeOrderResult[]> {
+    const out = await this.request<{ ok: boolean; order: CascadeOrderResult[] }>('/api/sources/order', {
+      method: 'PUT', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ order }),
+    })
+    return Array.isArray(out?.order) ? out.order : []
+  }
   setActiveSource(name: string | null): void {
     // Best-effort: an older engine 404s this route, a stalled network drops
     // it. Either way the queue just falls back to arrival order, so nothing
@@ -497,11 +529,13 @@ class LiveSource implements DataSource {
     }
     if (!res.ok) {
       let detail = ''
+      let code: string | undefined
       try {
-        const body = await res.clone().json() as { error?: unknown }
+        const body = await res.clone().json() as { error?: unknown; code?: unknown }
         if (typeof body.error === 'string') detail = body.error
+        if (typeof body.code === 'string') code = body.code
       } catch { /* keep the status fallback */ }
-      throw new LiveDataError('bad-status', detail || `Server returned ${res.status} for ${path}`, res.status)
+      throw new LiveDataError('bad-status', detail || `Server returned ${res.status} for ${path}`, res.status, code)
     }
     try {
       return (await res.json()) as T
@@ -516,39 +550,12 @@ export function createDataSource(mode: Mode = selectMode()): DataSource {
 }
 
 // ---- Adapters: raw engine types → console view model -----------------------
-
-const LAYER_IDS: LayerId[] = ['company', 'team', 'personal']
-const isLayerId = (s: string): s is LayerId => (LAYER_IDS as string[]).includes(s)
-
-/**
- * Rank-based bucket assignment for one resolve pass. `LayerId` stays a
- * closed, three-value union — styling in ~8 files depends on it — so an
- * arbitrary manifest level still needs an honest lane without widening that
- * type. The highest level actually present becomes 'personal', the next
- * 'team', and everything else 'company'. That fixes the fixed-threshold bug
- * where a lone level-1 source (nothing above it) read as 'company' with the
- * Team lane sitting empty: ranked among the levels that actually exist, level
- * 1 is the *second* highest and lands in 'team'.
- *
- * Must be computed once per resolve pass from every source in play (not per
- * concept or per record) and threaded through every adapter below — computing
- * it from a narrower slice would bucket the same source differently
- * depending on what happened to touch it.
- */
-export type LevelBuckets = ReadonlyMap<number, LayerId>
-
-export function computeLevelBuckets(levels: Iterable<number>): LevelBuckets {
-  const distinct = [...new Set(levels)].sort((a, b) => b - a)
-  const buckets = new Map<number, LayerId>()
-  distinct.forEach((level, rank) => buckets.set(level, rank === 0 ? 'personal' : rank === 1 ? 'team' : 'company'))
-  return buckets
-}
-
-/** Map a source/layer name (falling back to its rank bucket) to a console LayerId. */
-function layerOf(name: string, level: number, buckets: LevelBuckets): LayerId {
-  if (isLayerId(name)) return name
-  return buckets.get(level) ?? 'company'
-}
+//
+// The rank-based level→lane mapping (`computeLevelBuckets`, `layerOf`) lives
+// in cascade-order.ts. It must be computed once per resolve pass from every
+// source in play (not per concept or per record) and threaded through every
+// adapter below — computing it from a narrower slice would bucket the same
+// source differently depending on what happened to touch it.
 
 /**
  * `## Choice {#choice}` → `Choice`.
@@ -726,7 +733,9 @@ export function progressPercent(p: { loaded?: number; total?: number | null } | 
 
 /** Graph sources → the console's Source[] (coverage/focus/status derived honestly). */
 export function adaptSources(g: GraphSummary): Source[] {
-  const buckets = computeLevelBuckets(g.sources.map((s) => s.level))
+  // Over the sources that are in the cascade: a quarantined row's level (the
+  // file's, whatever it says) must not shift the lanes of the real ones.
+  const buckets = computeSourceBuckets(g.sources)
   return g.sources.map((s: GraphSource) => {
     const errored = s.status === 'error'
     // A remote source that can't reach its API doesn't throw — it answers with

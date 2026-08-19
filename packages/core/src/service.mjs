@@ -1905,7 +1905,10 @@ export function createEngineService({
       }
       return false; // an /api/* route this service doesn't own (e.g. the playground's editor endpoints)
     } catch (err) {
-      json(res, err.status ?? 500, { error: err.message, ...(err.detail ?? {}) });
+      // `code` is additive: a ControlError's stable machine code (the batch
+      // route already answers it per item), so a client can branch on the
+      // single routes the same way. Errors without one keep the old envelope.
+      json(res, err.status ?? 500, { error: err.message, ...(typeof err.code === "string" ? { code: err.code } : {}), ...(err.detail ?? {}) });
       return true;
     } finally {
       // The write happens DURING a mutating handler, so the entry-time clear

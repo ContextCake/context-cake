@@ -576,9 +576,13 @@ export function summarizeDiscrepancies(list, { topN = 25 } = {}) {
     bump(conceptTypes, String(item.conceptType ?? "concept"), item, { conceptType: String(item.conceptType ?? "concept") });
     bump(concepts, item.conceptId, item, { conceptId: item.conceptId, conceptTitle: item.conceptTitle ?? item.conceptId });
     if ((item.originalKind ?? item.kind) === "broken_link" && typeof item.target === "string") {
-      const row = bump(targets, item.target, item, { target: item.target, bestCandidate: item.bestCandidate ?? null, agree: true });
-      if (row.count > 1 && (row.bestCandidate?.id ?? null) !== (item.bestCandidate?.id ?? null)) row.agree = false;
+      const row = bump(targets, item.target, item, { target: item.target, bestCandidate: null, agree: true });
+      // The shared candidate is agreed over the ACTIONABLE rows only: a
+      // resolved row (the audit trail of a link already fixed) carries none,
+      // and must not veto the "rewrite the rest → X" default for the group.
       if (isActionable) {
+        if (row.actionable === 1) row.bestCandidate = item.bestCandidate ?? null;
+        else if ((row.bestCandidate?.id ?? null) !== (item.bestCandidate?.id ?? null)) row.agree = false;
         quickWins.brokenLinksTotal += 1;
         if (item.bestCandidate) quickWins.brokenLinksWithBestCandidate += 1;
       }

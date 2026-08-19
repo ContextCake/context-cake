@@ -119,10 +119,14 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
   // and retryable — the backups are only dropped once the hook has returned.
   //
   // A target with `created: true` was being CREATED by the transaction (it had
-  // no backup — `backup: null`); restoring it means removing whatever sits at
-  // `path`. That is bounded to the journal's `prepared` window, and it can in
-  // principle remove bytes someone wrote there between the crash and this
-  // restart — accepted, and called out in the discrepancy spec.
+  // no backup — `backup: null`); restoring it means removing what the
+  // transaction placed at `path`. While the staged copy is still beside it,
+  // the two are compared and a file whose bytes differ is left alone — it is
+  // someone's edit, not our placement. Only when the staged copy is already
+  // gone is the file removed unconditionally; that is bounded to the
+  // journal's `prepared` window and can in principle remove bytes someone
+  // wrote there between the crash and this restart — accepted, and called
+  // out in the discrepancy spec.
   async function recover(allowedRoots = [], committedTransactionIds = [], { onRestored = null } = {}) {
     const records = await list();
     const final = new Set(records.filter((r) => r.state === "committed" || r.state === "rolled_back").map((r) => r.id));
@@ -157,7 +161,9 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
         for (const target of tx.targets ?? []) {
           assertContained(target, ["path", "backup", "staged"]);
           if (target.created === true) {
-            await fsp.unlink(target.path).catch((error) => { if (error.code !== "ENOENT") throw error; });
+            if (await placedByTransaction(target)) {
+              await fsp.unlink(target.path).catch((error) => { if (error.code !== "ENOENT") throw error; });
+            }
           } else {
             await fsp.copyFile(target.backup, target.path);
           }
@@ -184,6 +190,18 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
 async function unlinkIfPresent(file) {
   if (typeof file !== "string") return;
   await fsp.unlink(file).catch(() => {});
+}
+
+// Whether the file at a created target's `path` is the transaction's own
+// placement: byte-identical to the staged copy. With no staged copy left to
+// compare against, the answer is yes (see recover()).
+async function placedByTransaction(target) {
+  if (typeof target.staged !== "string") return true;
+  let staged;
+  try { staged = await fsp.readFile(target.staged); } catch { return true; }
+  let placed;
+  try { placed = await fsp.readFile(target.path); } catch (error) { return error.code !== "ENOENT"; }
+  return staged.equals(placed);
 }
 
 // Containment for journal targets. Both sides are compared as real paths:

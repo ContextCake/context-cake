@@ -52,6 +52,11 @@ const ACKNOWLEDGE_REASONS = new Set(["different_scopes", "temporary_migration", 
 // many per pass for the same reason; the host re-runs it after the pass the
 // writes trigger, and the queue converges.
 const BATCH_LIMIT = 500;
+// How long one batch may keep applying while it holds the manifest lock —
+// under MANIFEST_LOCK_TIMEOUT_MS (15s) with room for a waiter that arrived
+// just before the batch took the lock. Items past it come back
+// BATCH_TIME_BUDGET (not attempted) for the caller to resubmit.
+const BATCH_TIME_BUDGET_MS = 10_000;
 const STUB_TYPE_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/i;
 const STUB_TITLE_MAX = 200;
 // The compact route's paging ceiling. A client wanting more than this pages;
@@ -78,6 +83,7 @@ export function createDiscrepancyOperations({
   onWritten = () => {},   // called after source content changed on disk
   git = null,          // { commitPathsWithMutation, push } from sources/git-core.mjs
   memoTtlMs = PROJECTION_MEMO_TTL_MS,
+  batchTimeBudgetMs = BATCH_TIME_BUDGET_MS, // how long one batch may keep applying under the lock
 } = {}) {
   if (!manifestPath) throw new Error("createDiscrepancyOperations: manifestPath is required");
   if (typeof corpus !== "function") throw new Error("createDiscrepancyOperations: corpus capability is required");
@@ -421,17 +427,19 @@ export function createDiscrepancyOperations({
    *   link actions read `conceptIds` from it (a rewrite may only point at a
    *   concept that exists).
    */
-  async function applyDecision(discrepancy, body, {
-    methodOverride = null, reasonOverride = null, push: pushNow = true, notify = true, dryRun = false, projection = null,
-  } = {}) {
-    await ensureRecovery();
-    const { action, selectedSource, content, reasonCode, note, ruleId } = body;
-    if (ruleId !== undefined && methodOverride !== "automatic") {
-      throw new ControlError("RULE_AUTHORITY", "Rule authority is reserved for approved background actions", { status: 400 });
-    }
-    if (!discrepancy || body.revision !== discrepancy.revision) {
-      throw new ControlError("STALE", "This discrepancy changed after you opened it. Reload before deciding it.", { status: 409 });
-    }
+  /**
+   * Every check on a decision that needs only the request, the projected
+   * record, and the roots — no disk read, no lock. Shared by applyDecision
+   * (which runs it again, cheaply) and by the batch's first phase, so a
+   * malformed item — wrong kind for the action, missing reason, unknown
+   * source, a rewrite to a concept that does not exist, a stub with no layer —
+   * is reported before any sibling is applied. What stays in the apply path is
+   * what genuinely needs the disk: the live section read (LINK_GONE), a stub's
+   * collision (TARGET_EXISTS), and the staged transaction's own preconditions.
+   * Returns the derived values the apply path reuses.
+   */
+  function validateDecisionParams(discrepancy, body, { projection = null } = {}) {
+    const { action, selectedSource, content, reasonCode } = body;
     const originalKind = discrepancy.originalKind ?? discrepancy.kind;
     // The kind gate, both ways: a broken link has exactly one contribution (the
     // effective section that links out), so there is no alternative answer to
@@ -449,6 +457,71 @@ export function createDiscrepancyOperations({
       : null;
     if (action === "choose_contribution" && !chosen) throw new ControlError("SOURCE_INVALID", "Choose one of this discrepancy's contributing sources", { status: 400 });
     if (action === "compose" && typeof content !== "string") throw new ControlError("CONTENT_REQUIRED", "Provide reconciled content", { status: 400 });
+    // renderScalar's scalar branch would rewrite a YAML list OR map as a
+    // quoted string (a plain object stringifies to "[object Object]" through
+    // the same String(value) call an array would otherwise skip) — silently
+    // downgrading the field's type in every writable layer. Compose only ever
+    // produces a string, so a structured-value field has no safe reconciled
+    // answer to write.
+    if (originalKind === "frontmatter_value" && action === "compose"
+      && discrepancy.contributions.some((item) => typeof item.value === "object" && item.value !== null)) {
+      throw new ControlError("COMPOSE_STRUCTURED", "This field holds a structured value (list or map); compose isn't available for it — use \"Use this answer everywhere\" or edit the file directly.", { status: 400 });
+    }
+    const roots = fileRoots();
+    const out = { originalKind, chosen, roots, writableSources: [], newTarget: null, stub: null };
+    if (action === "choose_contribution" || action === "compose") {
+      out.writableSources = discrepancy.contributions.map((item) => item.source).filter((source) => roots.has(source));
+      if (out.writableSources.length === 0) throw new ControlError("SOURCE_NOT_WRITABLE", "None of this discrepancy's contributors is locally writable. Open the source files to resolve it.", { status: 409 });
+    }
+    if (action === "rewrite_link") {
+      if (typeof body.newTarget !== "string" || !body.newTarget.trim()) throw new ControlError("NEW_TARGET_REQUIRED", "Provide newTarget: the concept id the link should point at", { status: 400 });
+      try { out.newTarget = normalizeConceptId(body.newTarget.trim()); }
+      catch { throw new ControlError("NEW_TARGET_INVALID", `"${body.newTarget}" is not a valid concept id`, { status: 400 }); }
+      if (!projection?.conceptIds?.has(out.newTarget)) {
+        throw new ControlError("LINK_TARGET_MISSING", `${out.newTarget} does not exist in the selected sources. Point the link at a concept that exists, or create it first.`, { status: 409 });
+      }
+    }
+    if (action === "rewrite_link" || action === "unlink") {
+      if (!roots.has(discrepancy.effectiveSource)) {
+        throw new ControlError("SOURCE_NOT_WRITABLE", `The section that carries this link (${discrepancy.effectiveSource}) is not locally writable. Open the source file to repair it, or acknowledge.`, { status: 409 });
+      }
+    }
+    if (action === "create_stub") {
+      const layer = body.layer;
+      if (typeof layer !== "string" || !layer) throw new ControlError("LAYER_REQUIRED", "Provide layer: the writable layer to create the missing concept in", { status: 400 });
+      if (!roots.has(layer)) throw new ControlError("SOURCE_NOT_WRITABLE", `${layer} is not a locally writable layer (only okf-local bundles and files folders are). Choose another layer.`, { status: 409 });
+      const target = discrepancy.target;
+      let stubId = null;
+      try { stubId = normalizeConceptId(target); } catch { stubId = null; }
+      // A stub has to be a file the indexer will read back, or the link stays
+      // broken while the decision says resolved: no empty or dot-prefixed
+      // segment (a trailing `/`, a hidden file), no node_modules — the walk
+      // skips those.
+      if (!stubId || stubId.split("/").some((segment) => !segment || segment.startsWith(".") || segment === "node_modules")) {
+        throw new ControlError("TARGET_INVALID", `"${target}" cannot name a concept file in ${layer}.`, { status: 400 });
+      }
+      const rel = `${stubId}.md`;
+      let file;
+      try { file = resolveLayerFile(`${layer}/${rel}`, roots); }
+      catch (error) { throw new ControlError("TARGET_INVALID", `"${target}" cannot name a concept file in ${layer}: ${error.message}`, { status: 400 }); }
+      out.stub = { layer, stubId, rel, abs: file.abs, title: stubTitle(body.title, stubId), type: stubType(body.type) };
+    }
+    return out;
+  }
+
+  async function applyDecision(discrepancy, body, {
+    methodOverride = null, reasonOverride = null, push: pushNow = true, notify = true, dryRun = false, projection = null,
+  } = {}) {
+    await ensureRecovery();
+    const { action, selectedSource, content, reasonCode, note, ruleId } = body;
+    if (ruleId !== undefined && methodOverride !== "automatic") {
+      throw new ControlError("RULE_AUTHORITY", "Rule authority is reserved for approved background actions", { status: 400 });
+    }
+    if (!discrepancy || body.revision !== discrepancy.revision) {
+      throw new ControlError("STALE", "This discrepancy changed after you opened it. Reload before deciding it.", { status: 409 });
+    }
+    const params = validateDecisionParams(discrepancy, body, { projection });
+    const { originalKind, chosen } = params;
 
     const transactionId = randomUUID();
     const now = new Date().toISOString();
@@ -500,23 +573,11 @@ export function createDiscrepancyOperations({
       return { ok: true, decision: saved, written: [] };
     }
     if (originalKind === "broken_link") {
-      return applyLinkDecision(discrepancy, body, decision, { transactionId, pushNow, notify, dryRun, projection, reasonOverride });
-    }
-    // renderScalar's scalar branch would rewrite a YAML list OR map as a
-    // quoted string (a plain object stringifies to "[object Object]" through
-    // the same String(value) call an array would otherwise skip) — silently
-    // downgrading the field's type in every writable layer. Compose only ever
-    // produces a string, so a structured-value field has no safe reconciled
-    // answer to write.
-    if (originalKind === "frontmatter_value" && action === "compose"
-      && discrepancy.contributions.some((item) => typeof item.value === "object" && item.value !== null)) {
-      throw new ControlError("COMPOSE_STRUCTURED", "This field holds a structured value (list or map); compose isn't available for it — use \"Use this answer everywhere\" or edit the file directly.", { status: 400 });
+      return applyLinkDecision(discrepancy, body, decision, params, { transactionId, pushNow, notify, dryRun, reasonOverride });
     }
 
     const value = action === "compose" ? content : chosen.value;
-    const roots = fileRoots();
-    const writableSources = discrepancy.contributions.map((item) => item.source).filter((source) => roots.has(source));
-    if (writableSources.length === 0) throw new ControlError("SOURCE_NOT_WRITABLE", "None of this discrepancy's contributors is locally writable. Open the source files to resolve it.", { status: 409 });
+    const { roots, writableSources } = params;
     const stage = (txId, options) => originalKind === "frontmatter_value"
       ? stageFrontmatterTransaction(JSON.stringify({
         conceptId: discrepancy.conceptId, key: discrepancy.key,
@@ -557,37 +618,25 @@ export function createDiscrepancyOperations({
    * created concept is the audit trail for the ones this decision did not
    * itself record.
    */
-  async function applyLinkDecision(discrepancy, body, decision, { transactionId, pushNow, notify, dryRun, projection, reasonOverride }) {
+  async function applyLinkDecision(discrepancy, body, decision, params, { transactionId, pushNow, notify, dryRun, reasonOverride }) {
     const { action } = body;
-    const roots = fileRoots();
+    const { roots, newTarget, stub } = params;
     const conceptId = discrepancy.conceptId;
     const sectionKey = discrepancy.key;
     const target = discrepancy.target;
     const effectiveSource = discrepancy.effectiveSource;
 
     if (action === "create_stub") {
-      const layer = body.layer;
-      if (typeof layer !== "string" || !layer) throw new ControlError("LAYER_REQUIRED", "Provide layer: the writable layer to create the missing concept in", { status: 400 });
-      const rootEntry = roots.get(layer);
-      if (!rootEntry) throw new ControlError("SOURCE_NOT_WRITABLE", `${layer} is not a locally writable layer (only okf-local bundles and files folders are). Choose another layer.`, { status: 409 });
-      let stubId;
-      try { stubId = normalizeConceptId(target); } catch { stubId = null; }
-      if (!stubId || stubId === "." || stubId.startsWith("/")) throw new ControlError("TARGET_INVALID", `"${target}" cannot name a concept file in ${layer}.`, { status: 400 });
-      const rel = `${stubId}.md`;
-      let file;
-      try { file = resolveLayerFile(`${layer}/${rel}`, roots); }
-      catch (error) { throw new ControlError("TARGET_INVALID", `"${target}" cannot name a concept file in ${layer}: ${error.message}`, { status: 400 }); }
+      const { layer, stubId, rel, abs, title, type } = stub;
       let exists = true;
-      try { await fsp.lstat(file.abs); } catch (error) { if (error.code === "ENOENT") exists = false; else throw error; }
+      try { await fsp.lstat(abs); } catch (error) { if (error.code === "ENOENT") exists = false; else throw error; }
       if (exists) throw new ControlError("TARGET_EXISTS", `${layer}/${rel} already exists. Reload — this link may already resolve.`, { status: 409 });
-      const title = stubTitle(body.title, stubId);
-      const type = stubType(body.type);
       const text = renderStub({ title, type, conceptId });
-      if (dryRun) return { ok: true, dryRun: true, wouldWrite: [{ layer, path: file.abs, created: true }] };
+      const stage = (txId, options) => stageFileCreationTransaction({ layer, rel, text }, roots, txId, options);
+      if (dryRun) return probeWrite(stage);
       decision.createdTargets = [{ layer, conceptId: stubId, path: rel }];
       decision.reason = reasonOverride ?? `You created ${stubId} in ${layer}.`;
       decision.ruleAction = null; // deliberately not learnable: creating concepts is never a policy
-      const stage = (txId, options) => stageFileCreationTransaction({ layer, rel, text }, roots, txId, options);
       const { saved, written, git: gitResult } = await commitDecisionWrite({
         // The concept whose file this transaction writes is the created one.
         transactionId, conceptId: stubId, layers: [layer], stage, decision, pushNow, notify,
@@ -596,18 +645,6 @@ export function createDiscrepancyOperations({
       return { ok: true, decision: saved, written, ...(gitResult ? { git: gitResult } : {}) };
     }
 
-    let newTarget = null;
-    if (action === "rewrite_link") {
-      if (typeof body.newTarget !== "string" || !body.newTarget.trim()) throw new ControlError("NEW_TARGET_REQUIRED", "Provide newTarget: the concept id the link should point at", { status: 400 });
-      try { newTarget = normalizeConceptId(body.newTarget.trim()); }
-      catch { throw new ControlError("NEW_TARGET_INVALID", `"${body.newTarget}" is not a valid concept id`, { status: 400 }); }
-      if (!projection?.conceptIds?.has(newTarget)) {
-        throw new ControlError("LINK_TARGET_MISSING", `${newTarget} does not exist in the selected sources. Point the link at a concept that exists, or create it first.`, { status: 409 });
-      }
-    }
-    if (!roots.has(effectiveSource)) {
-      throw new ControlError("SOURCE_NOT_WRITABLE", `The section that carries this link (${effectiveSource}) is not locally writable. Open the source file to repair it, or acknowledge.`, { status: 409 });
-    }
     if (typeof readLiveSection !== "function") throw new ControlError("LIVE_READ_UNAVAILABLE", "This host cannot read a section live, so it cannot rewrite or remove links.", { status: 500 });
     const live = await readLiveSection({ layer: effectiveSource, conceptId, sectionKey });
     if (!live || typeof live.content !== "string") {
@@ -870,9 +907,20 @@ export function createDiscrepancyOperations({
   // locked projection before it applies (false → skipped silently, never
   // recorded); `onApplyError(discrepancy, request, error)` runs for an apply
   // failure before the item is reported (the automatic job appends `blocked`).
+  //
+  // The lock is held for the whole batch, and the manifest lock has waiters:
+  // a concurrent decision, rule edit, or source add gives up after
+  // MANIFEST_LOCK_TIMEOUT_MS. So the apply loop has a wall-clock budget
+  // (BATCH_TIME_BUDGET_MS, under that timeout): items not reached in time
+  // come back `BATCH_TIME_BUDGET` — not failed, not attempted — and the caller
+  // resubmits them (the console's "continue"; the automatic job simply picks
+  // them up on its next pass). 500 acknowledgements or local rewrites fit
+  // comfortably; 500 commits into the live layer do not, and should not hold
+  // every other writer off for a minute.
   async function decideBatchUnlocked(requests, {
     methodOverride = null, stopOnError = false, dryRun = false, guard = null, onApplyError = null,
   } = {}) {
+    const startedAt = Date.now();
     await ensureRecovery();
     const payload = await settledProjection();
     const failureOf = (discrepancyId, error) => ({
@@ -880,12 +928,19 @@ export function createDiscrepancyOperations({
       code: typeof error.code === "string" ? error.code : "ERROR", error: error.message,
     });
 
-    // Phase 1 — validate everything against the one projection. An id that
-    // appears twice is decided once: the first occurrence keeps it (however
-    // it fares), every later one is a DUPLICATE.
+    // Phase 1 — validate everything against the one projection: shape,
+    // NOT_OPEN, STALE, and every parameter check that needs no disk read
+    // (validateDecisionParams), so a malformed item is reported before any
+    // sibling is applied. An id that appears twice is decided once: the first
+    // occurrence keeps it (however it fares), every later one is a DUPLICATE.
     const seen = new Set();
     const items = requests.map((raw) => {
       const discrepancyId = raw && typeof raw === "object" && typeof raw.discrepancyId === "string" ? raw.discrepancyId : null;
+      // Set once the item is located and past the guard: a parameter failure
+      // after that point is the decision's own answer (the automatic job
+      // records it as `blocked`, exactly as if the apply had thrown), while a
+      // shape/NOT_OPEN/STALE failure before it is not.
+      let located = null;
       try {
         if (discrepancyId !== null) {
           if (seen.has(discrepancyId)) throw new ControlError("DUPLICATE", "This discrepancy appears more than once in the batch; decide it once.", { status: 400 });
@@ -894,9 +949,11 @@ export function createDiscrepancyOperations({
         validateRequestShape(raw, methodOverride);
         const discrepancy = locateInProjection(payload, raw);
         if (guard && !guard(discrepancy, raw)) return { discrepancyId, raw, discrepancy: null, error: null, skipped: true };
+        located = discrepancy;
+        validateDecisionParams(discrepancy, raw, { projection: payload });
         return { discrepancyId, raw, discrepancy, error: null, skipped: false };
       } catch (error) {
-        return { discrepancyId, raw, discrepancy: null, error, skipped: false };
+        return { discrepancyId, raw, discrepancy: located, error, skipped: false };
       }
     });
 
@@ -904,23 +961,33 @@ export function createDiscrepancyOperations({
     const results = [];
     let applied = 0;
     let failed = 0;
-    let stopped = null; // reason the rest is skipped
+    let notAttempted = 0;
+    let attempted = 0; // items that reached applyDecision
+    let stopped = null; // { code, reason } once the rest is no longer attempted
     let anyWritten = false;
     let liveCommits = 0;
     for (const item of items) {
       if (item.skipped) continue; // an automatic item its guard declined: silently, as before
+      // The budget never stops a batch before its first attempt: a run whose
+      // projection alone outlasted it must still make progress, or a queue of
+      // automatic work could never converge.
+      if (!stopped && !dryRun && attempted > 0 && Date.now() - startedAt > batchTimeBudgetMs) {
+        stopped = { code: "BATCH_TIME_BUDGET", reason: "Not attempted: this batch used its time budget. Resubmit the remaining decisions." };
+      }
       if (stopped) {
-        results.push({ discrepancyId: item.discrepancyId, ok: false, status: 409, code: "SKIPPED", error: stopped });
-        failed += 1;
+        results.push({ discrepancyId: item.discrepancyId, ok: false, status: 409, code: stopped.code, error: stopped.reason });
+        notAttempted += 1;
         continue;
       }
       if (item.error) {
+        if (item.discrepancy && onApplyError) await onApplyError(item.discrepancy, item.raw, item.error);
         results.push(failureOf(item.discrepancyId, item.error));
         failed += 1;
-        if (stopOnError) stopped = "Skipped: an earlier decision in this batch failed and stopOnError was set.";
+        if (stopOnError) stopped = { code: "SKIPPED", reason: "Skipped: an earlier decision in this batch failed and stopOnError was set." };
         continue;
       }
       try {
+        attempted += 1;
         const out = await applyDecision(item.discrepancy, item.raw, {
           methodOverride, push: false, notify: false, dryRun, projection: payload,
         });
@@ -934,13 +1001,17 @@ export function createDiscrepancyOperations({
           if (out.git?.committed) liveCommits += 1;
         }
       } catch (error) {
+        // A typed refusal (ControlError, an httpError from the writers) is the
+        // item's answer; anything else is a bug that must not hide inside a
+        // 200 per-item result.
+        if (error.status === undefined) console.error(`contextcake: batch decision ${item.discrepancyId} failed unexpectedly: ${error.stack ?? error.message}`);
         if (onApplyError) await onApplyError(item.discrepancy, item.raw, error);
         results.push(failureOf(item.discrepancyId, error));
         failed += 1;
         // A write that could not be rolled back needs a person before anything
         // else is applied — regardless of stopOnError.
-        if (error.code === "RECOVERY_REQUIRED") stopped = "Skipped: an earlier write in this batch requires recovery.";
-        else if (stopOnError) stopped = "Skipped: an earlier decision in this batch failed and stopOnError was set.";
+        if (error.code === "RECOVERY_REQUIRED") stopped = { code: "SKIPPED", reason: "Skipped: an earlier write in this batch requires recovery." };
+        else if (stopOnError) stopped = { code: "SKIPPED", reason: "Skipped: an earlier decision in this batch failed and stopOnError was set." };
       }
     }
 
@@ -952,7 +1023,7 @@ export function createDiscrepancyOperations({
     }
     const [decisions, rules] = await Promise.all([resolutionLog.list(), effectiveRules()]);
     return {
-      ok: failed === 0, applied, failed, dryRun, results,
+      ok: failed === 0 && notAttempted === 0, applied, failed, notAttempted, dryRun, results,
       ...(gitSummary ? { git: gitSummary } : {}),
       suggestions: suggestDiscrepancyRules(decisions, rules),
     };
@@ -996,6 +1067,10 @@ export function createDiscrepancyOperations({
       planned.set(discrepancy.id, { rule, request: automaticRequest(discrepancy, rule) });
     }
     if (planned.size === 0) return;
+    // The batch refuses an unsettled projection with COVERAGE_INCOMPLETE. For
+    // this job that is a normal condition (a pass landed while it waited for
+    // the lock), and the answer is the same as the old loop's silent return:
+    // the next pass re-runs it.
     await withManifestLock(() => decideBatchUnlocked([...planned.values()].map((entry) => entry.request), {
       methodOverride: "automatic",
       guard: (current, request) => {
@@ -1022,7 +1097,10 @@ export function createDiscrepancyOperations({
         });
         noteWrite();
       },
-    }));
+    })).catch((error) => {
+      if (error.code === "COVERAGE_INCOMPLETE") return;
+      throw error;
+    });
   }
 
   // The health and writability guards an automatic action needs, evaluated
@@ -1065,4 +1143,4 @@ export function createDiscrepancyOperations({
   };
 }
 
-export { BATCH_LIMIT };
+export { BATCH_LIMIT, BATCH_TIME_BUDGET_MS };

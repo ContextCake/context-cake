@@ -16,6 +16,7 @@ import { createConflictResolutionLog, createDiscrepancyTransactionJournal } from
 import { createDiscrepancyRuleStore } from "../src/discrepancy-rules.mjs";
 import { createDiscrepancyPriorityStore } from "../src/discrepancy-priorities.mjs";
 import { readLayerSection } from "../src/layer-files.mjs";
+import { withManifestLockAsync } from "../src/manifest.mjs";
 import { parseConcept } from "../src/sources/okf-local.mjs";
 import { mergeConcepts } from "../src/resolver.mjs";
 
@@ -55,7 +56,7 @@ async function corpusFromDisk(layers) {
   });
 }
 
-async function fixture() {
+async function fixture(opsOptions = {}) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-batch-"));
   const team = path.join(dir, "team");
   const company = path.join(dir, "company");
@@ -104,13 +105,14 @@ async function fixture() {
     readLiveSection: (args) => readLayerSection(roots, args),
     onWritten: () => { state.written += 1; },
     git,
+    ...opsOptions,
   });
   const record = async (predicate) => (await ops.project()).discrepancies.find(predicate);
   const section = (conceptId) => record((item) => item.originalKind === "section_content" && item.conceptId === conceptId && item.status !== "resolved");
   const link = (conceptId, target) => record((item) => item.kind === "broken_link" && item.conceptId === conceptId && item.target === target);
   const read = (layer, rel) => fsp.readFile(path.join(layer === "team-live" ? team : company, rel), "utf8");
   return {
-    dir, team, company, ops, state, gitCalls, resolutionLog, ruleStore, section, link, read,
+    dir, team, company, manifestPath, roots, ops, state, gitCalls, resolutionLog, ruleStore, section, link, read,
     cleanup: async () => { ops.close(); await fsp.rm(dir, { recursive: true, force: true }); },
   };
 }
@@ -183,7 +185,9 @@ test("stopOnError applies up to the first failure and skips the rest; validation
     ] });
     assert.deepEqual(out.results.map((r) => [r.ok, r.code ?? null]), [[true, null], [false, "STALE"], [false, "SKIPPED"]]);
     assert.equal(out.applied, 1);
-    assert.equal(out.failed, 2);
+    assert.equal(out.failed, 1, "the stale item failed");
+    assert.equal(out.notAttempted, 1, "the skipped item was never attempted — it is not a failure");
+    assert.equal(out.ok, false);
     assert.match(out.results[2].error, /stopOnError/);
     assert.equal(await f.read("team-live", "decisions/db.md"), before, "the skipped rewrite wrote nothing");
     assert.equal(f.gitCalls.pushes.length, 0);
@@ -201,6 +205,80 @@ test("stopOnError applies up to the first failure and skips the rest; validation
     ] });
     assert.deepEqual(dup.results.map((r) => [r.status, r.code]), [[400, "ACTION_INVALID"], [400, "DUPLICATE"]]);
     assert.equal(await f.read("team-live", "decisions/db.md"), before);
+    // Parameter checks that need no disk read run BEFORE anything is applied:
+    // with stopOnError, a first item whose rewrite target does not exist stops
+    // the batch and the (valid) acknowledgement behind it is never applied.
+    const search = await f.section("decisions/search");
+    const logBefore = (await f.resolutionLog.list()).length;
+    const early = await f.ops.decideBatch({ stopOnError: true, decisions: [
+      { discrepancyId: db.id, revision: db.revision, action: "rewrite_link", newTarget: "runbooks/nowhere" },
+      { discrepancyId: search.id, revision: search.revision, action: "acknowledge", reasonCode: "different_scopes" },
+    ] });
+    assert.deepEqual(early.results.map((r) => [r.status, r.code]), [[409, "LINK_TARGET_MISSING"], [409, "SKIPPED"]]);
+    assert.equal((await f.resolutionLog.list()).length, logBefore, "nothing was applied");
+    for (const [body, code] of [
+      [{ discrepancyId: search.id, revision: search.revision, action: "acknowledge" }, "REASON_REQUIRED"],
+      [{ discrepancyId: search.id, revision: search.revision, action: "choose_contribution", selectedSource: "nope" }, "SOURCE_INVALID"],
+      [{ discrepancyId: search.id, revision: search.revision, action: "compose" }, "CONTENT_REQUIRED"],
+      [{ discrepancyId: search.id, revision: search.revision, action: "rewrite_link", newTarget: "runbooks/postgres" }, "ACTION_INVALID"],
+      [{ discrepancyId: db.id, revision: db.revision, action: "choose_contribution", selectedSource: "team-live" }, "BROKEN_LINK_NOT_WRITABLE"],
+      [{ discrepancyId: db.id, revision: db.revision, action: "create_stub" }, "LAYER_REQUIRED"],
+      [{ discrepancyId: db.id, revision: db.revision, action: "create_stub", layer: "nope" }, "SOURCE_NOT_WRITABLE"],
+      [{ discrepancyId: db.id, revision: db.revision, action: "create_stub", layer: "team-live", type: "bad type" }, "STUB_TYPE_INVALID"],
+      [{ discrepancyId: db.id, revision: db.revision, action: "rewrite_link", newTarget: "../x" }, "NEW_TARGET_INVALID"],
+    ]) {
+      const res = await f.ops.decideBatch({ decisions: [body] });
+      assert.equal(res.results[0].code, code, JSON.stringify(res.results[0]));
+    }
+  } finally { await f.cleanup(); }
+});
+
+test("the time budget stops a batch after its first attempt with BATCH_TIME_BUDGET (not attempted, not failed); dry runs are exempt", async () => {
+  const f = await fixture({ batchTimeBudgetMs: 0 });
+  try {
+    const queue = await f.section("decisions/queue");
+    const search = await f.section("decisions/search");
+    const cache = await f.section("decisions/cache");
+    const decisions = [queue, search, cache].map((item) => ({ discrepancyId: item.id, revision: item.revision, action: "acknowledge", reasonCode: "different_scopes" }));
+    const dry = await f.ops.decideBatch({ dryRun: true, decisions });
+    assert.equal(dry.applied, 3, "a dry run is not budgeted");
+    const out = await f.ops.decideBatch({ decisions });
+    assert.deepEqual(out.results.map((r) => [r.ok, r.code ?? null]), [[true, null], [false, "BATCH_TIME_BUDGET"], [false, "BATCH_TIME_BUDGET"]]);
+    assert.equal(out.applied, 1, "at least one item is always attempted");
+    assert.equal(out.failed, 0);
+    assert.equal(out.notAttempted, 2);
+    assert.equal(out.ok, false);
+    assert.match(out.results[1].error, /Resubmit/);
+    assert.equal((await f.resolutionLog.list()).length, 1);
+    // Resubmitting the remainder finishes the job.
+    const again = await f.ops.decideBatch({ decisions: decisions.slice(1) });
+    assert.equal(again.applied, 1);
+    assert.equal(again.notAttempted, 1);
+  } finally { await f.cleanup(); }
+});
+
+test("a rewrite whose link vanished from the live section is LINK_GONE, and an unwritable effective layer is SOURCE_NOT_WRITABLE — nothing written", async () => {
+  const f = await fixture();
+  try {
+    const db = await f.link("decisions/db", "Runbooks/Postgres");
+    // The section on disk changed underneath the projection (the fixture's
+    // corpus key is fixed, so the projection still shows the link).
+    const original = await f.read("team-live", "decisions/db.md");
+    await fsp.writeFile(path.join(f.team, "decisions", "db.md"), original.replace("[[Runbooks/Postgres]]", "[[runbooks/postgres]]"));
+    const gone = await f.ops.decideBatch({ decisions: [{ discrepancyId: db.id, revision: db.revision, action: "rewrite_link", newTarget: "runbooks/postgres" }] });
+    assert.deepEqual(gone.results.map((r) => [r.status, r.code]), [[409, "LINK_GONE"]]);
+    assert.match(gone.results[0].error, /no longer in decisions\/db#choice/);
+    await fsp.writeFile(path.join(f.team, "decisions", "db.md"), original);
+    // The effective layer stops being writable (a remote layer, say).
+    const teamRoot = f.roots.get("team-live");
+    f.roots.delete("team-live");
+    const unwritable = await f.ops.decideBatch({ decisions: [{ discrepancyId: db.id, revision: db.revision, action: "rewrite_link", newTarget: "runbooks/postgres" }] });
+    assert.deepEqual(unwritable.results.map((r) => [r.status, r.code]), [[409, "SOURCE_NOT_WRITABLE"]]);
+    assert.match(unwritable.results[0].error, /team-live.*not locally writable/);
+    f.roots.set("team-live", teamRoot);
+    assert.equal(await f.read("team-live", "decisions/db.md"), original);
+    assert.deepEqual(await f.resolutionLog.list(), []);
+    assert.equal(f.gitCalls.commits.length, 0);
   } finally { await f.cleanup(); }
 });
 
@@ -354,7 +432,7 @@ test("automatic rules apply as one batch under one lock: one projection build, e
   } finally { await f.cleanup(); }
 });
 
-test("an automatic item is re-checked under the lock: a rule disabled after the plan was built is not applied", async () => {
+test("an automatic item is re-checked under the lock: a rule disabled while the job waited for the lock is not applied", async () => {
   const f = await fixture();
   try {
     const rule = await f.ruleStore.create({
@@ -362,14 +440,29 @@ test("an automatic item is re-checked under the lock: a rule disabled after the 
       action: { type: "acknowledge", reasonCode: "target_missing" }, evidenceDecisionIds: [],
     });
     await f.ruleStore.patch(rule.id, { mode: "automatic" });
-    // Build the projection the job will plan from, then flip the rule off
-    // before the job runs: the batch's guard re-reads the (now different)
-    // projection under the lock and declines every item silently.
-    await f.ops.project();
+    // Hold the manifest lock while the job plans from the current projection
+    // (four auto_ready links), disable the rule while it waits, then release:
+    // the batch re-projects under the lock, the guard sees no automatic rule
+    // on any item, and every item is declined silently — nothing recorded.
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    let lockTaken;
+    const lockHeld = new Promise((resolve) => { lockTaken = resolve; });
+    const holder = withManifestLockAsync(f.manifestPath, async () => { lockTaken(); await held; });
+    await lockHeld;
+    const resolvesBefore = f.state.resolves;
+    const job = f.ops.runAutomaticRules();
+    // Wait until the job has built its plan (one projection) and is parked on the lock.
+    for (let i = 0; i < 200 && f.state.resolves === resolvesBefore; i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(f.state.resolves, resolvesBefore + 1, "the job planned from one projection");
+    await new Promise((r) => setTimeout(r, 60));
     await f.ruleStore.patch(rule.id, { enabled: false });
     f.ops.noteWrite();
-    await f.ops.runAutomaticRules();
+    release();
+    await holder;
+    await job;
     assert.deepEqual(await f.resolutionLog.list(), [], "nothing applied, nothing recorded");
+    assert.equal(f.state.resolves, resolvesBefore + 2, "the batch re-projected under the lock (the sidecar changed)");
     // Re-enable: the acknowledgements land, four in one pass, no writes, no push.
     await f.ruleStore.patch(rule.id, { enabled: true });
     f.ops.noteWrite();
@@ -379,5 +472,11 @@ test("an automatic item is re-checked under the lock: a rule disabled after the 
     assert.equal(log.every((row) => row.action === "acknowledge" && row.method === "automatic" && row.transactionState === "not_required"), true);
     assert.equal(f.gitCalls.pushes.length, 0);
     assert.equal(f.state.written, 0);
+    // A pass that lands mid-index while the job waits is quiet: COVERAGE_INCOMPLETE is swallowed.
+    f.state.indexing = true;
+    f.ops.noteWrite();
+    await f.ops.runAutomaticRules();
+    f.state.indexing = false;
+    assert.equal((await f.resolutionLog.list()).length, 4);
   } finally { await f.cleanup(); }
 });

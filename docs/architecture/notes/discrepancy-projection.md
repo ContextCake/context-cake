@@ -101,12 +101,26 @@ decision log stays 1:1 with the files that changed; and the recovery path
 cost — N git commits into the live layer for a batch of N — is auditability,
 and is called out in the spec. Two things the batch does hold in common:
 every item is validated against the projection *before* anything is applied
-(NOT_OPEN, STALE, DUPLICATE, malformed), so a client that sent one bad
-revision learns about it in the same response as the 40 that landed; and the
+(NOT_OPEN, STALE, DUPLICATE, and every parameter check that needs no disk
+read — `validateDecisionParams`, the same function `applyDecision` runs), so a
+client that sent one bad revision or one rewrite to a concept that does not
+exist learns about it in the same response as the 40 that landed; and the
 push, the `onWritten`, and the suggestion mining happen once at the end.
 `stopOnError` turns the rest of the list into `SKIPPED` after the first
 failure; a `RECOVERY_REQUIRED` does that regardless, because a write that
 could not be rolled back needs a person before anything else is applied.
+
+The lock is held for the whole batch, and the manifest lock has waiters: a
+concurrent decision, rule edit, or source add gives up after
+`MANIFEST_LOCK_TIMEOUT_MS` (15 s). So the apply loop has a wall-clock budget
+(`BATCH_TIME_BUDGET_MS`, 10 s): items not reached in time come back
+`BATCH_TIME_BUDGET` — counted as `notAttempted`, not `failed` — and the caller
+resubmits them (the console's "continue"; the automatic job simply picks them
+up on its next pass). The budget never stops a batch before its first attempt,
+so a run whose projection alone outlasted it still makes progress and a queue
+of automatic work still converges. 500 acknowledgements or local rewrites fit
+comfortably; 500 commits into the live layer do not, and should not hold every
+other writer off for a minute.
 
 `dryRun` reuses the same code path with the stage's `probe` flag: every
 precondition a real apply checks — writability, the live section read, the

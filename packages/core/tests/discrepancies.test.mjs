@@ -441,6 +441,39 @@ test("summarizeDiscrepancies counts kinds, statuses, groupings, targets, and qui
   assert.deepEqual(summarizeDiscrepancies(list), summarizeDiscrepancies([...list].reverse()));
 });
 
+test("a target group's shared bestCandidate is agreed over the open rows; a resolved row (no candidate) counts but does not veto it", () => {
+  const linker = (id, extra = "") => ({
+    ...concept, id, frontmatterConflicts: [],
+    sections: [{ key: "choice", heading: "## Choice {#choice}", content: `See [[Runbooks/Missing-Thing]].${extra}`, sourceLayer: "team", sourceUpdated: "2026-08-01", conflicts: [] }],
+  });
+  const target = { id: "runbooks/missing-thing", contributors: [{ layer: "team", level: 2 }], frontmatter: { title: "Missing Thing", type: "runbook" }, frontmatterConflicts: [], sections: [] };
+  // A third concept already had its link rewritten: only the decision remains, so
+  // it is rebuilt as a resolved row carrying the target and no candidates.
+  const decisions = [{
+    schemaVersion: 2, id: "d1", discrepancyId: "broken_link::decisions/done::choice::Runbooks/Missing-Thing", action: "rewrite_link",
+    discrepancyKind: "broken_link", transactionState: "committed", conceptId: "decisions/done", title: "Done", conceptType: "decision", sectionKey: "choice",
+    linkTarget: "Runbooks/Missing-Thing", newTarget: "runbooks/missing-thing",
+    contributions: [{ layer: "team", level: 2, content: "Runbooks/Missing-Thing", updated: "2026-08-01" }],
+  }];
+  const list = buildDiscrepancies([linker("decisions/a"), linker("decisions/b"), target], { decisions, coverageComplete: true }).discrepancies;
+  const resolved = list.find((item) => item.status === "resolved");
+  assert.equal(resolved.target, "Runbooks/Missing-Thing");
+  assert.equal(resolved.effectiveValue, "runbooks/missing-thing");
+  const row = summarizeDiscrepancies(list).topTargets.find((item) => item.target === "Runbooks/Missing-Thing");
+  assert.equal(row.count, 3, "resolved rows count toward the group");
+  assert.equal(row.actionable, 2);
+  assert.equal(row.bestCandidate?.id, "runbooks/missing-thing", "the open rows still agree on the candidate");
+  // Two open rows that disagree still yield no shared candidate: the same bare
+  // target resolves relative to each linker's own folder.
+  const bare = (id) => ({ ...linker(id), sections: [{ ...linker(id).sections[0], content: "See [[missing-thing]]." }] });
+  const both = buildDiscrepancies([bare("runbooks/a"), bare("other/b"), target, { ...target, id: "other/missing-thing" }], { coverageComplete: true }).discrepancies;
+  const opens = both.filter((item) => item.kind === "broken_link");
+  assert.deepEqual(opens.map((item) => item.bestCandidate.id).sort(), ["other/missing-thing", "runbooks/missing-thing"]);
+  assert.equal(summarizeDiscrepancies(both).topTargets.find((item) => item.target === "missing-thing").bestCandidate, null, "open rows disagree → no shared candidate");
+  // A group whose only rows are resolved has no candidate to offer.
+  assert.equal(summarizeDiscrepancies([resolved]).topTargets[0].bestCandidate, null);
+});
+
 test("compactDiscrepancy previews long bodies and folds history into a count plus the latest decision", () => {
   const list = projectionFixture();
   const compact = list.map((item) => compactDiscrepancy(item));

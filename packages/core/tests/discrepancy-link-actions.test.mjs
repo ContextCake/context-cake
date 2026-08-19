@@ -123,7 +123,10 @@ test("rewrite_link rewrites the effective contributor's section only, records th
     assert.equal(resolved.effectiveValue, "guides/deploy");
     assert.equal(resolved.latestDecision.action, "rewrite_link");
     assert.ok(await link(f.get, "guides/setup", "notes", "Guides/Deploy"), "the notes-section link is a separate, still-open record");
-    assert.equal(after.body.summary.topTargets.find((row) => row.target === "Guides/Deploy").count, 2);
+    const group = after.body.summary.topTargets.find((row) => row.target === "Guides/Deploy");
+    assert.equal(group.count, 2, "the resolved row still counts toward its target group");
+    assert.equal(group.actionable, 1);
+    assert.equal(group.bestCandidate?.id, "guides/deploy", "the group's shared candidate survives the first fix (agreed over open rows)");
   } finally { await f.cleanup(); }
 });
 

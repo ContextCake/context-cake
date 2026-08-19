@@ -52,8 +52,9 @@ doc Cache    "team cache"    > "$live/decisions/cache.md"
 doc Queue    "team queue"    > "$live/decisions/queue.md"
 doc Search   "team search"   > "$live/decisions/search.md"
 # Two dangling links in one section of a live-only concept: a case slip and a
-# moved basename, both with an unambiguous candidate — the batch fixture.
-doc Links    "See [[Decisions/Cache]] and [[old/queue]] for the rest." > "$live/decisions/links.md"
+# moved basename, both with an unambiguous candidate — the batch fixture. A
+# third with no candidate at all is the create_stub fixture.
+doc Links    "See [[Decisions/Cache]] and [[old/queue]] for the rest; policy in [[playbooks/on-call]]." > "$live/decisions/links.md"
 ( cd "$live" && git add -A && git commit --quiet -m "seed" && git push --quiet -u origin main )
 # Reflog on the bare so pushes can be counted: one push that lands two commits
 # moves refs/heads/main once.
@@ -164,7 +165,7 @@ echo "live-layer batch: two rewrite_link decisions → two pathspec commits, one
 LSET=""
 for _ in $(seq 1 60); do
   LSET="$(curl -s "$BASE/api/discrepancies?wait=15000")"
-  [ "$(JQ 'String(d.coverageComplete && d.discrepancies.filter((x) => x.kind === "broken_link" && x.conceptId === "decisions/links").length === 2)' <<<"$LSET")" = "true" ] && break
+  [ "$(JQ 'String(d.coverageComplete && d.discrepancies.filter((x) => x.kind === "broken_link" && x.conceptId === "decisions/links").length === 3)' <<<"$LSET")" = "true" ] && break
   sleep 0.1
 done
 L1="$(JQ 'd.discrepancies.find((x) => x.kind === "broken_link" && x.conceptId === "decisions/links" && x.target === "Decisions/Cache")' <<<"$LSET")"
@@ -179,7 +180,7 @@ BATCH="$(curl -s -X POST -H 'content-type: application/json' \
 [ "$(JQ '`${d.ok}:${d.applied}:${d.failed}`' <<<"$BATCH")" = "true:2:0" ] || fail "batch of two rewrites applied" "$BATCH"
 [ "$(JQ '`${d.git?.layer}:${d.git?.commits}:${d.git?.pushed}:${d.git?.queued}`' <<<"$BATCH")" = "team-live:2:true:false" ] || fail "batch reports two commits and one push" "$BATCH"
 [ "$(JQ 'String(d.results.every((r) => r.ok && r.git?.committed === true && r.git?.pushed === false))' <<<"$BATCH")" = "true" ] || fail "each item committed, none pushed on its own" "$BATCH"
-grep -q 'See \[\[decisions/cache\]\] and \[\[decisions/queue\]\] for the rest\.' "$live/decisions/links.md" || fail "both rewrites landed in the live file" "$(cat "$live/decisions/links.md")"
+grep -q 'See \[\[decisions/cache\]\] and \[\[decisions/queue\]\] for the rest; policy in \[\[playbooks/on-call\]\]\.' "$live/decisions/links.md" || fail "both rewrites landed in the live file, the third link untouched" "$(cat "$live/decisions/links.md")"
 [ "$(cd "$live" && git rev-list --count HEAD)" = "$((HEAD_BEFORE + 2))" ] || fail "exactly two commits were added" "$(cd "$live" && git log --oneline)"
 [ "$(cd "$live" && git log -2 --format=%s | sort -u | wc -l | tr -d ' ')" = "1" ] || fail "both commits carry the rewrite_link message" "$(cd "$live" && git log -2 --format=%s)"
 [ "$(cd "$live" && git log -1 --format=%s)" = "chore(contextcake): resolve broken_link decisions/links#choice (rewrite_link)" ] || fail "commit message" "$(cd "$live" && git log -1 --format=%s)"
@@ -187,8 +188,29 @@ grep -q 'See \[\[decisions/cache\]\] and \[\[decisions/queue\]\] for the rest\.'
 [ -z "$(cd "$live" && git status --porcelain)" ] || fail "tree clean after the batch" "$(cd "$live" && git status --porcelain)"
 [ "$(git -C "$bare" rev-parse HEAD)" = "$(cd "$live" && git rev-parse HEAD)" ] || fail "the batch reached the remote"
 [ "$(git -C "$bare" reflog show refs/heads/main | wc -l | tr -d ' ')" = "$((PUSHES_BEFORE + 1))" ] || fail "the two commits arrived in ONE push" "$(git -C "$bare" reflog show refs/heads/main)"
-MSG="$(cd "$live" && git log -1 --format=%s)"
 pass "batch: two locked commits, both links rewritten, one push, tree clean"
+
+# ---- 2c. create_stub into the live layer: the new file is one pathspec commit -------
+echo "live-layer create_stub: the created concept is one locked commit, pushed"
+L3="$(JQ 'd.discrepancies.find((x) => x.kind === "broken_link" && x.conceptId === "decisions/links" && x.target === "playbooks/on-call")' <<<"$LSET")"
+[ "$(JQ 'JSON.stringify(d.candidates)' <<<"$L3")" = "[]" ] || fail "the stub fixture has no candidate" "$L3"
+STUB="$(curl -s -X POST -H 'content-type: application/json' \
+  -d "{\"discrepancyId\":$(JQ 'JSON.stringify(d.id)' <<<"$L3"),\"revision\":$(JQ 'JSON.stringify(d.revision)' <<<"$L3"),\"action\":\"create_stub\",\"layer\":\"team-live\",\"title\":\"On-call playbook\",\"type\":\"runbook\"}" \
+  "$BASE/api/discrepancy-decisions")"
+[ "$(JQ 'String(d.ok && d.git?.committed && d.git?.pushed)' <<<"$STUB")" = "true" ] || fail "create_stub committed and pushed" "$STUB"
+[ "$(JQ 'JSON.stringify(d.decision.createdTargets)' <<<"$STUB")" = '[{"layer":"team-live","conceptId":"playbooks/on-call","path":"playbooks/on-call.md"}]' ] || fail "decision records createdTargets" "$STUB"
+[ "$(JQ 'String(d.decision.writtenTargets[0].created)' <<<"$STUB")" = "true" ] || fail "writtenTargets marks the created file" "$STUB"
+[ "$(JQ 'JSON.stringify(d.decision.liveLayerCommit?.paths)' <<<"$STUB")" = '["playbooks/on-call.md"]' ] || fail "liveLayerCommit names the created file" "$STUB"
+grep -q '^title: On-call playbook$' "$live/playbooks/on-call.md" || fail "the stub carries its title" "$(cat "$live/playbooks/on-call.md")"
+grep -q '^type: runbook$' "$live/playbooks/on-call.md" || fail "the stub carries its type"
+grep -q 'Created from ContextCake to satisfy a link from decisions/links\.' "$live/playbooks/on-call.md" || fail "the stub says why it exists"
+[ "$(cd "$live" && git log -1 --format=%s)" = "chore(contextcake): create playbooks/on-call for decisions/links#choice" ] || fail "stub commit message" "$(cd "$live" && git log -1 --format=%s)"
+[ "$(cd "$live" && git show --name-only --format= HEAD | sed '/^$/d')" = "playbooks/on-call.md" ] || fail "the stub commit lists only the created file" "$(cd "$live" && git show --name-only --format= HEAD)"
+[ -z "$(cd "$live" && git status --porcelain)" ] || fail "tree clean after the stub" "$(cd "$live" && git status --porcelain)"
+[ "$(git -C "$bare" rev-parse HEAD)" = "$(cd "$live" && git rev-parse HEAD)" ] || fail "the stub reached the remote"
+ls "$live/playbooks/" | grep -q 'contextcake-' && fail "staged leftovers beside the stub" "$(ls "$live/playbooks/")"
+MSG="$(cd "$live" && git log -1 --format=%s)"
+pass "create_stub: one locked commit of exactly the new file, pushed, tree clean"
 
 # ---- 3. offline: the commit lands locally and the push is queued, not thrown ------
 echo "live-layer decision: offline remote queues the push"

@@ -271,6 +271,115 @@ test("a broken_link rule pinned to one target does not swallow a different dangl
   assert.equal(unrelated.matchingRules.length, 0);
 });
 
+test("a rule may wildcard conceptType and key, never the target; a rewrite_link rule round-trips and is broken-link only", () => {
+  const wildcard = {
+    id: "w1", scope: "team", mode: "automatic", enabled: true,
+    match: { kind: "broken_link", conceptType: "*", key: "*", sources: ["team"], target: "runbooks/missing" },
+    action: { type: "rewrite_link", newTarget: "runbooks/found" }, evidenceDecisionIds: ["d1", "d2", "d3"],
+  };
+  const [parsed] = parseRuleDocument(serializeRuleDocument([wildcard]));
+  assert.deepEqual(parsed.match, wildcard.match);
+  assert.deepEqual(parsed.action, { type: "rewrite_link", newTarget: "runbooks/found" });
+  // The destination is normalized (`.md`, `./`) and must differ from the target.
+  assert.deepEqual(parseRuleDocument(serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link", newTarget: "./runbooks/found.md" } }]))[0].action.newTarget, "runbooks/found");
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link", newTarget: "runbooks/missing" } }]), /somewhere other than the missing target/);
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link", newTarget: "*" } }]), /must name the concept/);
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link", newTarget: "../escape" } }]), /Invalid rewrite_link destination/);
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link" } }]), /must name the concept/);
+  // The target is never a wildcard.
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, match: { ...wildcard.match, target: "*" } }]), /never a wildcard/);
+  // rewrite_link is a broken-link action only; prefer_source is still refused for broken links.
+  assert.throws(() => serializeRuleDocument([{
+    id: "w2", scope: "team", mode: "recommend", enabled: true,
+    match: { kind: "section_content", conceptType: "*", key: "choice", sources: ["company", "team"] },
+    action: { type: "rewrite_link", newTarget: "x" },
+  }]), /Only a broken-link rule may rewrite a link/);
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "prefer_source", source: "team" } }]), /has no source to prefer/);
+  // Wildcards are legal on content-conflict rules too.
+  const [content] = parseRuleDocument(serializeRuleDocument([{
+    id: "w3", scope: "team", mode: "recommend", enabled: true,
+    match: { kind: "section_content", conceptType: "*", key: "*", sources: ["company", "team"] },
+    action: { type: "prefer_source", source: "team" },
+  }]));
+  assert.deepEqual(content.match, { kind: "section_content", conceptType: "*", key: "*", sources: ["company", "team"] });
+});
+
+test("a wildcard rule matches across sections; a wildcard and an exact rule that disagree are a conflict", () => {
+  const otherConcept = {
+    ...concept, id: "notes/other", frontmatter: { title: "Other", type: "note", owner: "Me" }, frontmatterConflicts: [],
+    sections: [{ key: "body", heading: "## Body {#body}", content: "See [[runbooks/missing]].", sourceLayer: "team", sourceUpdated: "2026-08-01", conflicts: [] }],
+  };
+  const wildcard = {
+    id: "w1", scope: "local", mode: "automatic", enabled: true,
+    match: { kind: "broken_link", conceptType: "*", key: "*", sources: ["team"], target: "runbooks/missing" },
+    action: { type: "acknowledge", reasonCode: "target_missing" },
+  };
+  const links = buildDiscrepancies([concept, otherConcept], { rules: [wildcard], coverageComplete: true })
+    .discrepancies.filter((item) => item.kind === "broken_link");
+  assert.equal(links.length, 2);
+  for (const link of links) {
+    assert.equal(link.status, "auto_ready", `${link.id} should match the wildcard rule`);
+    assert.deepEqual(link.matchingRules.map((rule) => rule.id), ["w1"]);
+  }
+  // A different target is not matched — the target stays exact.
+  const typo = { ...otherConcept, id: "notes/typo", sections: [{ ...otherConcept.sections[0], content: "See [[runbooks/typo]]." }] };
+  const unrelated = buildDiscrepancies([typo], { rules: [wildcard], coverageComplete: true }).discrepancies.find((item) => item.kind === "broken_link");
+  assert.equal(unrelated.status, "needs_review");
+  // A source mismatch is not matched either.
+  const personal = { ...otherConcept, id: "notes/personal", contributors: [{ layer: "personal", level: 3 }], sections: [{ ...otherConcept.sections[0], sourceLayer: "personal" }] };
+  assert.equal(buildDiscrepancies([personal], { rules: [wildcard], coverageComplete: true }).discrepancies.find((item) => item.kind === "broken_link").status, "needs_review");
+  // Wildcard + exact disagreement: both match, automation is disabled.
+  const exact = {
+    id: "e1", scope: "local", mode: "automatic", enabled: true,
+    match: { kind: "broken_link", conceptType: "decision", key: "choice", sources: ["team"], target: "runbooks/missing" },
+    action: { type: "rewrite_link", newTarget: "runbooks/found" },
+  };
+  const contested = buildDiscrepancies([concept], { rules: [wildcard, exact], coverageComplete: true }).discrepancies.find((item) => item.kind === "broken_link");
+  assert.equal(contested.ruleConflict, true);
+  assert.equal(contested.status, "needs_review");
+  assert.deepEqual(contested.matchingRules.map((rule) => rule.id).sort(), ["e1", "w1"]);
+  // Agreeing wildcard + exact rules are not a conflict.
+  const agreeing = { ...exact, action: wildcard.action };
+  assert.equal(buildDiscrepancies([concept], { rules: [wildcard, agreeing], coverageComplete: true }).discrepancies.find((item) => item.kind === "broken_link").status, "auto_ready");
+});
+
+test("a generalized broken-link suggestion needs three consistent decisions across two (conceptType, key) pairs", () => {
+  const decision = (id, conceptType, key, action) => ({
+    schemaVersion: 2, id: `d-${id}`, discrepancyId: `broken_link::${id}::${key}::old/decisions`, method: "manual",
+    learningPattern: { kind: "broken_link", conceptType, key, sources: ["team"], target: "old/decisions" },
+    ruleAction: action,
+  });
+  const ack = { type: "acknowledge", reasonCode: "target_missing" };
+  const rewrite = { type: "rewrite_link", newTarget: "decisions/index" };
+  // Same section three times: an exact suggestion, no generalized one.
+  const oneSection = [decision("a", "decision", "choice", ack), decision("b", "decision", "choice", ack), decision("c", "decision", "choice", ack)];
+  const exactOnly = suggestDiscrepancyRules(oneSection);
+  assert.equal(exactOnly.length, 1);
+  assert.equal(exactOnly[0].generalized, undefined);
+  assert.deepEqual(exactOnly[0].match, { kind: "broken_link", conceptType: "decision", key: "choice", sources: ["team"], target: "old/decisions" });
+  // Two sections: the exact patterns are too thin, the generalized one is offered.
+  const spread = [decision("a", "decision", "choice", rewrite), decision("b", "decision", "choice", rewrite), decision("c", "note", "body", rewrite)];
+  const generalized = suggestDiscrepancyRules(spread);
+  assert.equal(generalized.length, 1);
+  assert.equal(generalized[0].generalized, true);
+  assert.deepEqual(generalized[0].match, { kind: "broken_link", conceptType: "*", key: "*", sources: ["team"], target: "old/decisions" });
+  assert.deepEqual(generalized[0].action, rewrite);
+  assert.equal(generalized[0].evidenceCount, 3);
+  assert.deepEqual(generalized[0].evidenceDecisionIds, ["d-a", "d-b", "d-c"]);
+  // Inconsistent actions across the group → nothing.
+  assert.equal(suggestDiscrepancyRules([decision("a", "decision", "choice", rewrite), decision("b", "decision", "choice", ack), decision("c", "note", "body", rewrite)]).length, 0);
+  // Two distinct targets never merge into one suggestion.
+  const otherTarget = { ...decision("z", "note", "body", rewrite), learningPattern: { kind: "broken_link", conceptType: "note", key: "body", sources: ["team"], target: "old/other" } };
+  assert.equal(suggestDiscrepancyRules([spread[0], spread[1], otherTarget]).length, 0);
+  // Skipped when an equivalent (wildcard) rule already exists.
+  const existing = [{ id: "r", match: { kind: "broken_link", conceptType: "*", key: "*", sources: ["team"], target: "old/decisions" }, action: rewrite }];
+  assert.equal(suggestDiscrepancyRules(spread, existing).length, 0);
+  // Unlink and create_stub decisions carry no ruleAction and are never evidence.
+  assert.equal(suggestDiscrepancyRules(spread.map((row) => ({ ...row, ruleAction: null }))).length, 0);
+  // Approving the generalized suggestion yields a rule the store accepts.
+  assert.deepEqual(parseRuleDocument(serializeRuleDocument([{ id: "g", scope: "local", mode: "recommend", ...generalized[0] }]))[0].match, generalized[0].match);
+});
+
 test("serialized shared rules contain structural metadata only", () => {
   const text = serializeRuleDocument([{
     id: "r1", scope: "local", mode: "automatic", enabled: true,

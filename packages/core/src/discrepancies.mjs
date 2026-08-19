@@ -148,8 +148,11 @@ export function buildDiscrepancies(concepts, {
       conceptTitle: latest.title ?? latest.conceptId, conceptType: latest.conceptType ?? "concept",
       key: latest.sectionKey ?? latest.fieldKey ?? latest.linkTarget ?? "unknown",
       label: latest.sectionHeading ?? latest.fieldKey ?? latest.linkTarget ?? "Resolved discrepancy",
+      // A resolved broken link keeps naming its target so it groups and filters
+      // beside the open ones; a rewrite's effective value is where it points now.
+      ...(typeof latest.linkTarget === "string" ? { target: latest.linkTarget } : {}),
       owner: latest.owner ?? "Unassigned", effectiveSource: latest.chosen?.layer ?? null,
-      effectiveValue: latest.chosen?.content ?? latest.reconciledContent ?? null,
+      effectiveValue: latest.chosen?.content ?? latest.reconciledContent ?? latest.newTarget ?? null,
       winnerReason: "This value was established by the recorded decision.", contributions,
       revision: latest.revision, fresherDissent: false, sourceHealth: [], priority: latest.priority ?? "unassigned",
       freshness: { effectiveUpdated: latest.chosen?.updated ?? null, newestUpdated: newestDate(contributions.map((entry) => entry.updated)), hasNewerDissent: false },
@@ -210,12 +213,20 @@ function sameFingerprints(recorded, current) {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+// `conceptType` and `key` may be the literal wildcard "*" (a rule generalized
+// from evidence spanning several sections — see suggestDiscrepancyRules);
+// `kind`, `sources`, and a broken link's `target` are always exact. A wildcard
+// rule and an exact rule that disagree both match, and two matching rules with
+// different actions are a `conflict` — automation is disabled, no specificity
+// order is invented.
+const matchesField = (ruleValue, value) => ruleValue === "*" || ruleValue === value;
+
 function matchRules(item, rules) {
   const sources = item.contributions.map((c) => c.source).sort().join("|");
   const matches = rules.filter((rule) => rule.enabled !== false
     && rule.match?.kind === item.kind
-    && rule.match?.conceptType === item.conceptType
-    && rule.match?.key === item.key
+    && matchesField(rule.match?.conceptType, item.conceptType)
+    && matchesField(rule.match?.key, item.key)
     // A broken_link rule is pinned to the exact target it was evidenced
     // against — matching by section alone would auto-acknowledge any other
     // dangling link that happens to share a concept type and section.

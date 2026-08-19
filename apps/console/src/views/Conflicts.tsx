@@ -8,7 +8,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Conflict } from '../data'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import { useDetailSurface } from '../components/useDetailSurface'
-import { actionableByKind, buildHaystack, groupConflicts, summarizeConflicts, type GroupBy } from '../discrepancy-summary'
+import { actionableByKind, buildHaystack, groupConflicts, isBrokenLink, partitionBatchResults, summarizeConflicts, type GroupBy } from '../discrepancy-summary'
 import { OverviewHeader } from './conflicts/OverviewHeader'
 import { GroupedList } from './conflicts/GroupedList'
 import { BulkBar, type BulkOutcome } from './conflicts/BulkBar'
@@ -45,8 +45,13 @@ function ConflictsInner() {
   // old predicate re-stringified every contribution per row per keystroke.
   const haystacks = useMemo(() => new Map(conflicts.map((item) => [item.id, buildHaystack(item)])), [conflicts])
   const normalizedQuery = (query ?? '').trim().toLowerCase()
-  const visible = useMemo(() => conflicts.filter((item) => matchesFilters(item, filters)
-    && (!normalizedQuery || (haystacks.get(item.id) ?? '').includes(normalizedQuery))), [conflicts, filters, normalizedQuery, haystacks])
+  // Two steps on purpose: the selection lives inside `filtered` (tab and
+  // filters), not `visible` (also the search), so typing to find one more
+  // row does not drop the forty already selected.
+  const filtered = useMemo(() => conflicts.filter((item) => matchesFilters(item, filters)), [conflicts, filters])
+  const visible = useMemo(() => (normalizedQuery
+    ? filtered.filter((item) => (haystacks.get(item.id) ?? '').includes(normalizedQuery))
+    : filtered), [filtered, normalizedQuery, haystacks])
   const groups = useMemo(() => groupConflicts(visible, groupBy), [visible, groupBy])
   const collapsedByDefault = groups.length > OPEN_BY_DEFAULT_MAX
   const isCollapsed = useCallback((key: string) => collapseOverrides.get(key) ?? collapsedByDefault, [collapseOverrides, collapsedByDefault])
@@ -64,23 +69,29 @@ function ConflictsInner() {
     if (selected && selected.detailLoaded === false) void loadDiscrepancyDetail(selected.id)
   }, [selected, loadDiscrepancyDetail])
 
-  // Selection ⊆ visible: a filter or a refetch that hides a row also drops
-  // it from the selection, so a bulk action never reaches something the
-  // user cannot see.
+  // Selection ⊆ filtered: a tab or filter change, or a refetch that drops a
+  // row, also drops it from the selection, so a bulk action never reaches
+  // something outside the view the user chose. A search narrows what is
+  // shown, not what is selected — the bar says how many it is hiding.
   useEffect(() => {
     setSelection((prev) => {
       if (prev.size === 0) return prev
-      const keep = new Set(visible.filter((item) => prev.has(item.id)).map((item) => item.id))
+      const keep = new Set(filtered.filter((item) => prev.has(item.id)).map((item) => item.id))
       return keep.size === prev.size ? prev : keep
     })
-  }, [visible])
-  const selectedItems = useMemo(() => visible.filter((item) => selection.has(item.id)), [visible, selection])
+  }, [filtered])
+  const selectedItems = useMemo(() => filtered.filter((item) => selection.has(item.id)), [filtered, selection])
+  const hiddenBySearch = useMemo(() => (normalizedQuery ? selectedItems.filter((item) => !(haystacks.get(item.id) ?? '').includes(normalizedQuery)).length : 0), [selectedItems, normalizedQuery, haystacks])
   const clearSelection = useCallback(() => setSelection(new Set()), [])
   const onSelectionChange = useCallback((next: Set<string>) => setSelection(next), [])
 
+  // Focus goes back to the list's own tab stop (the row GroupedList calls
+  // active), never straight to the current row: focusing a row the list does
+  // not consider active would leave DOM focus and the roving tabindex on two
+  // different rows, and the next arrow key would move from the wrong one.
   const restoreListFocus = () => requestAnimationFrame(() => {
-    const target = listRef.current?.querySelector<HTMLElement>('[role="option"][aria-current="true"]')
-      ?? listRef.current?.querySelector<HTMLElement>('[role="option"][tabindex="0"]')
+    const target = listRef.current?.querySelector<HTMLElement>('[role="option"][tabindex="0"]')
+      ?? listRef.current?.querySelector<HTMLElement>('[role="option"][aria-current="true"]')
     target?.focus({ preventScroll: true })
   })
 
@@ -91,20 +102,24 @@ function ConflictsInner() {
   }
 
   const onBulkOutcome = ({ label, response }: BulkOutcome) => {
-    const failedIds = response.results.filter((result) => !result.ok).map((result) => result.discrepancyId)
-    // Failures stay selected — that is the retry set; successes leave it.
-    setSelection(new Set(failedIds))
+    const { failed, notAttempted } = partitionBatchResults(response.results)
+    const failedIds = failed.map((result) => result.discrepancyId).filter((id): id is string => typeof id === 'string')
+    const notAttemptedIds = notAttempted.map((result) => result.discrepancyId).filter((id): id is string => typeof id === 'string')
+    // Failures AND the not-attempted tail stay selected — that is the retry /
+    // resubmit set; successes leave it.
+    setSelection(new Set([...failedIds, ...notAttemptedIds]))
     const suggestion = response.suggestions?.[0]
     // The first failure's own words: "3 need attention" alone would leave
     // the user guessing whether it was a stale revision or a read-only layer.
-    const firstError = response.results.find((result) => !result.ok && (result.error || result.code))
+    const firstError = failed.find((result) => result.error || result.code)
     const why = firstError ? ` — ${firstError.error ?? firstError.code}` : ''
     setNotice({
       kind: 'batch',
       applied: response.applied,
-      failed: response.failed,
+      failed: failed.length,
+      notAttempted: notAttempted.length,
       failedIds,
-      message: `${label}.${response.failed ? ` The ones that need attention stay selected${why}.` : ''}${response.git?.queued ? ' The team push is queued until the remote is reachable.' : ''}`,
+      message: `${label}.${failed.length ? ` The ones that need attention stay selected${why}.` : ''}${notAttempted.length ? ` ${plural(notAttempted.length, 'decision was', 'decisions were')} not attempted — the batch ran out of time; they stay selected, resubmit them.` : ''}${response.git?.queued ? ' The team push is queued until the remote is reachable.' : ''}`,
       ...(suggestion ? {
         suggestionId: suggestion.id,
         suggestionLabel: suggestion.action.type === 'rewrite_link' ? `Rewrite → ${suggestion.action.newTarget}` : suggestion.action.type === 'prefer_source' ? `Prefer ${suggestion.action.source}` : `Acknowledge as ${suggestion.action.reasonCode.replace(/_/g, ' ')}`,
@@ -149,7 +164,7 @@ function ConflictsInner() {
       />
       <div ref={detail.containerRef} className="cc-conflict-layout cc-navigator-detail">
         <div ref={listRef} className="cc-conflict-column">
-          {selectedItems.length > 0 && <BulkBar items={selectedItems} onClear={clearSelection} onOutcome={onBulkOutcome} />}
+          {selectedItems.length > 0 && <BulkBar items={selectedItems} hiddenBySearch={hiddenBySearch} onClear={clearSelection} onOutcome={onBulkOutcome} />}
           <GroupedList
             groups={groups}
             isCollapsed={isCollapsed}
@@ -167,7 +182,7 @@ function ConflictsInner() {
       <Rules />
       {notice && (
         <div className="cc-decision-receipt" role="status" aria-live="polite" aria-atomic="true">
-          <span><strong>{notice.kind === 'batch' ? `${notice.applied} done${notice.failed ? ` · ${notice.failed} need attention` : ''}.` : 'Done.'}</strong> {notice.message}</span>
+          <span><strong>{notice.kind === 'batch' ? `${notice.applied} done${notice.failed ? ` · ${notice.failed} need attention` : ''}${notice.notAttempted ? ` · ${notice.notAttempted} not attempted` : ''}.` : 'Done.'}</strong> {notice.message}</span>
           <div>
             {notice.kind === 'single' && (
               <button type="button" onClick={() => {
@@ -208,10 +223,10 @@ function Detail({ conflict, panelRef, panelProps, open, onClose, onApplied, mode
         <div><span className="cc-kind-pill">{KIND_LABEL[conflict.kind ?? 'section_content']}</span><h2>Why this needs attention</h2></div>
         <span className="cc-status-large">{STATUS_LABEL[conflict.discrepancyStatus ?? 'needs_review']}</span>
       </div>
-      <p className="cc-discrepancy-explanation">{conflict.kind === 'broken_link' ? `The effective content links to ${conflict.target}, but no settled source currently provides that concept.` : conflict.kind === 'frontmatter_value' ? `Multiple contributors author different values for “${conflict.section}”.` : conflict.kind === 'changed_after_decision' ? 'A contributor changed after the previous decision, so the discrepancy reopened automatically.' : `Multiple contributors give materially different answers for “${conflict.section}”.`}</p>
+      <p className="cc-discrepancy-explanation">{conflict.kind === 'changed_after_decision' && isBrokenLink(conflict) ? `The link to ${conflict.target} changed after the previous decision, so it reopened automatically.` : conflict.kind === 'broken_link' ? `The effective content links to ${conflict.target}, but no settled source currently provides that concept.` : conflict.kind === 'frontmatter_value' ? `Multiple contributors author different values for “${conflict.section}”.` : conflict.kind === 'changed_after_decision' ? 'A contributor changed after the previous decision, so the discrepancy reopened automatically.' : `Multiple contributors give materially different answers for “${conflict.section}”.`}</p>
       {conflict.ruleConflict && <div className="cc-conflict-error" role="alert"><strong>Rule conflict.</strong> Matching rules disagree, so no automatic action will run.</div>}
       {conflict.matchingRules?.map((rule) => <div className="cc-rule-match" key={rule.id}>Matched {rule.scope} {rule.mode} rule <code>{rule.id}</code> from {rule.evidenceDecisionIds.length} decisions.</div>)}
-      {conflict.kind === 'broken_link' ? (
+      {isBrokenLink(conflict) ? (
         <>
           {!decided && <DecisionPanel conflict={conflict} onApplied={onApplied} />}
           <details className="cc-review-details">

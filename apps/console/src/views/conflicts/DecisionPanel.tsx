@@ -16,12 +16,13 @@ import type { AcknowledgementReason, DiscrepancyDecisionRequest } from '../../ty
 import { Markdown } from '../../components/Markdown'
 import { useStoreData } from '../../store'
 import { reasonOptionsFor } from '../../conflict-reasons'
+import { isBrokenLink } from '../../discrepancy-summary'
 import { candidateReason } from './labels'
 import { Skeleton } from './Evidence'
 
 export type AppliedDecision =
   | { kind: 'single'; discrepancyId: string; status: 'acknowledged' | 'resolved'; message: string }
-  | { kind: 'batch'; applied: number; failed: number; failedIds: string[]; message: string; suggestionId?: string; suggestionLabel?: string }
+  | { kind: 'batch'; applied: number; failed: number; notAttempted: number; failedIds: string[]; message: string; suggestionId?: string; suggestionLabel?: string }
 
 /** Layers a `create_stub` may write into: folder-backed sources the engine can open. */
 export function writableLayerNames(sources: { name: string; sourceKind?: string; quarantined?: boolean }[] | undefined): string[] {
@@ -30,7 +31,7 @@ export function writableLayerNames(sources: { name: string; sourceKind?: string;
 
 export function DecisionPanel({ conflict, onApplied }: { conflict: Conflict; onApplied: (notice: AppliedDecision) => void }) {
   const { mode, sources, decideDiscrepancy, setDiscrepancyPriority, resolvingConflict, resolutionError, openFilesScope, openConcept } = useStoreData()
-  const brokenLink = conflict.kind === 'broken_link'
+  const brokenLink = isBrokenLink(conflict)
   const [action, setAction] = useState<'choose_contribution' | 'compose' | 'acknowledge'>(brokenLink ? 'acknowledge' : 'choose_contribution')
   const [selectedSource, setSelectedSource] = useState(conflict.effectiveSource ?? conflict.contributions[0]?.sourceLayer ?? '')
   // Starts EMPTY, never pre-filled with an existing contributor's value. A
@@ -46,7 +47,10 @@ export function DecisionPanel({ conflict, onApplied }: { conflict: Conflict; onA
   const writableLayers = writableLayerNames(sources)
   const linkSource = conflict.effectiveSource ?? conflict.contributions[0]?.sourceLayer ?? null
   const [stubLayer, setStubLayer] = useState(() => (linkSource && writableLayers.includes(linkSource) ? linkSource : writableLayers[0] ?? ''))
-  const busy = resolvingConflict === conflict.id
+  // ANY decision in flight (this row, another row, a batch) parks the panel: the
+  // store refuses a second decision, and a click that resolved to nothing
+  // used to fire a receipt for a decision that never happened.
+  const busy = resolvingConflict !== null
   // The engine 400s a compose against an array-typed frontmatter value (a
   // list field) — service.mjs rejects it outright. Disable the disposition
   // here instead of round-tripping into that error.
@@ -58,10 +62,10 @@ export function DecisionPanel({ conflict, onApplied }: { conflict: Conflict; onA
   const demo = mode === 'demo'
 
   useEffect(() => {
-    setAction(conflict.kind === 'broken_link' ? 'acknowledge' : 'choose_contribution')
+    setAction(isBrokenLink(conflict) ? 'acknowledge' : 'choose_contribution')
     setSelectedSource(conflict.effectiveSource ?? conflict.contributions[0]?.sourceLayer ?? '')
     setContent('')
-    setReasonCode(conflict.kind === 'broken_link' ? 'target_missing' : '')
+    setReasonCode(isBrokenLink(conflict) ? 'target_missing' : '')
     setNote('')
     setPreview(false)
     setAttempted(false)

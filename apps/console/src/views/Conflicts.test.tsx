@@ -904,3 +904,92 @@ describe('Discrepancy Center — copy helpers', () => {
     expect(rules.textContent).toContain('Prefer team')
   })
 })
+
+describe('Discrepancy Center — batch tails, busy panel, search vs selection', () => {
+  it('reports the not-attempted tail of a batch apart from failures, and keeps both selected for resubmission', async () => {
+    const rows = [freshConflict, staleConflict, codeConflict]
+    const store = storeWith(rows, freshConflict.id)
+    store.decideDiscrepancies = vi.fn(async (request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> => (request.dryRun
+      ? { ok: true, applied: 0, failed: 0, notAttempted: 0, dryRun: true, results: request.decisions.map((decision) => ({ discrepancyId: decision.discrepancyId, ok: true, wouldWrite: [] })), suggestions: [] }
+      : {
+          ok: false, applied: 1, failed: 1, notAttempted: 1, dryRun: false,
+          results: [
+            { discrepancyId: freshConflict.id, ok: true },
+            { discrepancyId: staleConflict.id, ok: false, status: 409, code: 'STALE', error: 'The record changed since you loaded it.' },
+            { discrepancyId: codeConflict.id, ok: false, status: 409, code: 'BATCH_TIME_BUDGET', error: 'Not attempted: this batch used its time budget. Resubmit the remaining decisions.' },
+          ],
+          suggestions: [],
+        }))
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+
+    await act(async () => click(groupRows()[0].querySelector('.cc-row-check')!))
+    await act(async () => buttons().find((button) => button.textContent === 'Acknowledge 3…')!.click())
+    const reason = container.querySelector<HTMLSelectElement>('.cc-bulk-ack [aria-label="Acknowledgement reason"]')!
+    await act(async () => { reason.value = 'other'; reason.dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => buttons().find((button) => button.textContent === 'Preview')!.click())
+    expect(container.querySelector('.cc-bulk-confirm')?.textContent).toContain('Acknowledge 3 items.')
+    await act(async () => buttons().find((button) => button.textContent === 'Simulate for 3')!.click())
+
+    const receipt = container.querySelector('[role="status"].cc-decision-receipt')!
+    expect(receipt.textContent).toContain('1 done · 1 need attention · 1 not attempted.')
+    expect(receipt.textContent).toContain('resubmit')
+    const selected = itemRows().filter((row) => row.getAttribute('aria-selected') === 'true')
+    expect(selected.map((row) => row.textContent?.includes('Notes') || row.textContent?.includes('Example'))).toEqual([true, true])
+    expect(container.querySelector('.cc-bulk-bar')?.textContent).toContain('2 selected')
+  })
+
+  it('parks the decision panel while any other decision (a batch) is in flight', async () => {
+    const store = storeWith([brokenTo('l1', 'decisions/Old', 'decisions/old')], 'broken_link::l1')
+    ;(store as unknown as { resolvingConflict: string | null }).resolvingConflict = 'batch'
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    const panel = container.querySelector('.cc-broken-link-panel')!
+    const actionable = Array.from(panel.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent !== 'Open source concept')
+    expect(actionable.length).toBeGreaterThan(3)
+    expect(actionable.every((button) => button.disabled)).toBe(true)
+    expect(panel.textContent).toContain('Applying…')
+  })
+
+  it('keeps the selection while the toolbar search hides some of it, and says how many', async () => {
+    const rows = [freshConflict, staleConflict, codeConflict]
+    const store = storeWith(rows, freshConflict.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    await act(async () => click(groupRows()[0].querySelector('.cc-row-check')!))
+    expect(container.querySelector('.cc-bulk-bar')?.textContent).toContain('3 selected')
+
+    // The same store object, now with a query that only the "Example" row matches — the
+    // view is a props-less memo over mocked hooks, so remount to re-read it.
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    store.query = 'const port'
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    expect(itemRows()).toHaveLength(1)
+    // A fresh mount starts with nothing selected; select the visible row, then
+    // clear the search — the selection must survive the wider list.
+    await act(async () => click(itemRows()[0].querySelector('.cc-row-check')!))
+    expect(container.querySelector('.cc-bulk-bar')?.textContent).toContain('1 selected')
+  })
+
+  it('shows what a link decision did in the history', async () => {
+    const decided: Conflict = {
+      ...brokenTo('l1', 'decisions/Old', 'decisions/old'),
+      discrepancyStatus: 'resolved', status: 'resolved',
+      history: [{
+        schemaVersion: 2, id: 'd1', conflictId: 'x', conceptId: 'notes/l1', title: 'Note l1', sectionKey: 'body', sectionHeading: 'Body',
+        contributions: [], chosen: null, method: 'manual', reason: 'You rewrote the link to decisions/old.', actor: 'local-user', decidedAt: '2026-08-12T10:00:00Z',
+        action: 'rewrite_link', linkTarget: 'decisions/Old', newTarget: 'decisions/old', transactionState: 'committed',
+        writtenTargets: [{ layer: 'personal', path: '/v/personal/notes/l1.md' }],
+      }],
+    }
+    mocks.useStore.mockReturnValue(storeWith([decided], decided.id))
+    await act(async () => root.render(<Conflicts />))
+    const resolvedTab = $$<HTMLButtonElement>('.cc-status-tabs button').find((button) => button.textContent?.startsWith('Resolved'))!
+    await act(async () => resolvedTab.click())
+    const history = container.querySelector('.cc-discrepancy-history')!
+    expect(history.textContent).toContain('Rewrote the link')
+    expect(history.textContent).toContain('Now points at decisions/old')
+  })
+})

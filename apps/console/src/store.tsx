@@ -755,9 +755,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // finish between them; use the later answer so a stale graph never
       // leaves the banner running after the work has landed.
       applyIndexing(indexing ? (resolvingSources ?? g.indexingSources ?? []) : [])
-      const derivedConflicts = discrepancyPayload
+      const rawConflicts = discrepancyPayload
         ? adaptDiscrepancies(discrepancyPayload.discrepancies, discrepancyPayload.coverageComplete, buckets)
         : adaptConflicts(legacyAll?.concepts ?? [], resolutionHistory, buckets)
+      // A loaded detail survives a refetch when the compact row says nothing
+      // about it moved (same revision, status, history length, owner and
+      // priority): the open decision panel — a compose field mid-sentence —
+      // must not drop to a skeleton because content moved somewhere else in
+      // the corpus. Anything that did move takes the compact row and reloads.
+      const previousById = new Map(conflictsRef.current.map((c) => [c.id, c]))
+      const carried: string[] = []
+      const derivedConflicts = rawConflicts.map((c) => {
+        if (c.detailLoaded !== false) return c
+        const prev = previousById.get(c.id)
+        if (!prev || prev.detailLoaded === false) return c
+        const unchanged = prev.revision === c.revision && prev.discrepancyStatus === c.discrepancyStatus
+          && prev.history.length === (c.historyCount ?? 0) && prev.priority === c.priority && prev.owner === c.owner
+        if (!unchanged) return c
+        carried.push(c.id)
+        return { ...prev, coverageComplete: c.coverageComplete }
+      })
       // The engine's summary rides in the compact envelope. An engine that
       // ignored `?fields=compact` (full records, no `summary`), the legacy
       // path and the demo bundle all get the local mirror — same shape, same
@@ -769,9 +786,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         : g.concepts.map((row) => attachConflictStubs(adaptGraphConcept(row, levelBySource, buckets), derivedConflicts))
       compactRef.current = new Map(compact.map((c) => [c.id, c]))
       loadedDetailsRef.current = []
-      // Only rows born compact are detail-loadable; full rows never enter the map.
-      compactConflictRef.current = new Map(derivedConflicts.filter((c) => c.detailLoaded === false).map((c) => [c.id, c]))
-      loadedConflictDetailsRef.current = []
+      // Only rows born compact are detail-loadable; full rows never enter the
+      // map — and a carried row keeps its COMPACT form here, so an eviction
+      // still has something honest to regress to.
+      compactConflictRef.current = new Map(rawConflicts.filter((c) => c.detailLoaded === false).map((c) => [c.id, c]))
+      loadedConflictDetailsRef.current = carried
       coverageRef.current = discrepancyPayload?.coverageComplete ?? true
       setConcepts(compact)
       setConflicts(derivedConflicts)
@@ -1247,7 +1266,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [applyResolution])
 
   const decideDiscrepancy = useCallback(async (request: DiscrepancyDecisionRequest) => {
-    if (resolvingConflictRef.current) return
+    // Refused, not ignored: a caller that awaited `undefined` here used to go
+    // on to show a "Done" receipt for a decision that never happened.
+    if (resolvingConflictRef.current) {
+      const error = new Error('Another decision is still being applied.')
+      setResolutionError({ message: error.message, partial: false })
+      throw error
+    }
     resolvingConflictRef.current = request.discrepancyId
     setResolvingConflict(request.discrepancyId)
     setResolutionError(null)
@@ -1280,9 +1305,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const response = source.decideDiscrepancies
         ? await source.decideDiscrepancies(request)
         : await runSequentially(request, (decision) => source.decideDiscrepancy(decision))
-      if (!request.dryRun) {
+      if (!request.dryRun && response.results.length > 0) {
         const byId = new Map(request.decisions.map((decision) => [decision.discrepancyId, decision]))
-        const landed = new Map(response.results.filter((result) => result.ok).map((result) => [result.discrepancyId, result]))
+        const landed = new Map(response.results.filter((result) => result.ok && result.discrepancyId).map((result) => [result.discrepancyId as string, result]))
         if (landed.size > 0) {
           setConflicts((previous) => previous.map((item) => {
             const result = landed.get(item.id)
@@ -1296,9 +1321,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               history: result.decision ? [...item.history, result.decision] : item.history,
             }
           }))
-          // ONE refetch for the whole batch — not one per result.
-          window.setTimeout(() => setReloadKey((key) => key + 1), 300)
         }
+        // ONE refetch for the whole batch — not one per result — and even
+        // when nothing landed: a batch that came back all STALE / NOT_OPEN
+        // (rows decided by another client or by the engine's automatic
+        // rules, neither of which moves `generation`) is holding revisions
+        // the engine no longer has, and "failures stay selected" would retry
+        // them forever without this.
+        window.setTimeout(() => setReloadKey((key) => key + 1), 300)
       }
       return response
     } catch (error) {

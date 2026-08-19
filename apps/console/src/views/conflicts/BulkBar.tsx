@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Conflict } from '../../data'
 import type { AcknowledgementReason, DiscrepancyBatchRequest, DiscrepancyBatchResponse, DiscrepancyDecisionRequest } from '../../types'
-import { describeItems, isActionable } from '../../discrepancy-summary'
+import { describeItems, isActionable, partitionBatchResults } from '../../discrepancy-summary'
 import { reasonOptionsFor } from '../../conflict-reasons'
 import { useStoreData } from '../../store'
 import { writableLayerNames } from './DecisionPanel'
@@ -23,6 +23,8 @@ export interface BulkOutcome {
 export interface BulkBarProps {
   /** The selected rows, in list order. */
   items: Conflict[]
+  /** Selected rows the toolbar search is currently hiding — still acted on, so say so. */
+  hiddenBySearch?: number
   onClear: () => void
   onOutcome: (outcome: BulkOutcome) => void
 }
@@ -37,11 +39,17 @@ interface Pending {
 export function previewSentence(preview: DiscrepancyBatchResponse, { acknowledging = false, demo = false } = {}): string {
   const files = new Set<string>()
   const layers = new Set<string>()
+  let created = 0
   for (const result of preview.results) {
-    for (const write of result.wouldWrite ?? []) { files.add(`${write.layer}/${write.path}`); layers.add(write.layer) }
+    for (const write of result.wouldWrite ?? []) {
+      // Paths come back absolute, so the path alone identifies a file.
+      if (!files.has(write.path) && write.created) created += 1
+      files.add(write.path)
+      layers.add(write.layer)
+    }
   }
   const okCount = preview.results.filter((result) => result.ok).length
-  const refused = preview.results.filter((result) => !result.ok)
+  const { failed: refused, notAttempted } = partitionBatchResults(preview.results)
   const parts: string[] = []
   if (demo) {
     parts.push(`Simulation — nothing changes on disk; ${plural(okCount, 'decision')} will be recorded until reload.`)
@@ -50,16 +58,17 @@ export function previewSentence(preview: DiscrepancyBatchResponse, { acknowledgi
   } else if (files.size === 0) {
     parts.push(acknowledging ? `No files change. ${plural(okCount, 'item')} move to Acknowledged.` : `No files change for ${plural(okCount, 'item')}.`)
   } else {
-    parts.push(`${plural(files.size, 'file')} change across ${plural(layers.size, 'layer')} for ${plural(okCount, 'item')}.`)
+    parts.push(`${plural(files.size, 'file')} change across ${plural(layers.size, 'layer')} for ${plural(okCount, 'item')}${created ? ` (${plural(created, 'new file')})` : ''}.`)
   }
   if (refused.length > 0) {
     const first = refused[0]
     parts.push(`${refused.length} cannot be applied${first.error ? ` (${first.error})` : first.code ? ` (${first.code})` : ''}.`)
   }
+  if (notAttempted.length > 0) parts.push(`${notAttempted.length} not checked.`)
   return parts.join(' ')
 }
 
-export function BulkBar({ items, onClear, onOutcome }: BulkBarProps) {
+export function BulkBar({ items, hiddenBySearch = 0, onClear, onOutcome }: BulkBarProps) {
   const { mode, sources, decideDiscrepancies, resolvingConflict } = useStoreData()
   const demo = mode === 'demo'
   const busy = resolvingConflict === 'batch'
@@ -88,8 +97,11 @@ export function BulkBar({ items, onClear, onOutcome }: BulkBarProps) {
     const names = sharedSourcesKey ? sharedSourcesKey.split('|') : []
     setUseSource((current) => (current && names.includes(current) ? current : names[0] ?? ''))
   }, [sharedSourcesKey])
-  // A changed selection invalidates a preview: it was computed for other rows.
-  const selectionKey = decidable.map((item) => item.id).join('|')
+  // A changed selection invalidates a preview: it was computed for other
+  // rows — or for other REVISIONS of these rows, which is what a background
+  // refetch between Preview and Apply produces; applying the old request
+  // would send revisions the engine no longer has and STALE the whole batch.
+  const selectionKey = decidable.map((item) => `${item.id}@${item.revision}`).join('|')
   useEffect(() => { setPending(null); setError(null) }, [selectionKey])
 
   const canRewrite = description.allBrokenLinks && Boolean(description.sharedTarget) && description.candidates.length > 0
@@ -132,6 +144,7 @@ export function BulkBar({ items, onClear, onOutcome }: BulkBarProps) {
     <div className="cc-bulk-bar" role="region" aria-label="Bulk actions">
       <div className="cc-bulk-bar-head">
         <strong>{plural(items.length, 'selected', 'selected')}</strong>
+        {hiddenBySearch > 0 && <span className="cc-bulk-note">{hiddenBySearch} hidden by the search</span>}
         {n !== items.length && <span className="cc-bulk-note">{n} can still be decided</span>}
         <button type="button" className="cc-bulk-clear" onClick={onClear}>Clear</button>
       </div>

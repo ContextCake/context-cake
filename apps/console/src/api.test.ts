@@ -1015,15 +1015,39 @@ describe('LiveSource discrepancy routes', () => {
     expect(await createDataSource('live').discrepancyDetail('x::1')).toBeNull()
   })
 
-  it('posts a batch to the batch route and returns the engine answer as is', async () => {
+  it('posts a batch to the batch route and carries the engine answer through', async () => {
     const { createDataSource } = await import('./api')
-    const answer = { ok: true, applied: 2, failed: 0, results: [{ discrepancyId: 'a', ok: true }, { discrepancyId: 'b', ok: true }], suggestions: [{ id: 's1' }] }
+    const answer = { ok: true, applied: 2, failed: 0, notAttempted: 0, dryRun: true, results: [{ discrepancyId: 'a', ok: true }, { discrepancyId: 'b', ok: true }], suggestions: [{ id: 's1' }] }
     vi.mocked(fetch).mockResolvedValue(okJson(answer))
     const request = { decisions: [{ discrepancyId: 'a', revision: '1', action: 'acknowledge' as const }, { discrepancyId: 'b', revision: '1', action: 'unlink' as const }], dryRun: true }
     const out = await createDataSource('live').decideDiscrepancies(request)
     expect(url(vi.mocked(fetch).mock.calls[0])).toBe('/api/discrepancy-decisions/batch')
     expect(bodyOf(vi.mocked(fetch).mock.calls[0])).toEqual(request)
-    expect(out).toEqual(answer)
+    expect(out).toMatchObject(answer)
+  })
+
+  it('sends a selection past the 500-decision ceiling as consecutive batches and merges the answers in order', async () => {
+    const { createDataSource, BATCH_LIMIT } = await import('./api')
+    expect(BATCH_LIMIT).toBe(500)
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { decisions: { discrepancyId: string }[] }
+      return okJson({
+        ok: true, applied: body.decisions.length, failed: 0, notAttempted: 0, dryRun: false,
+        results: body.decisions.map((decision) => ({ discrepancyId: decision.discrepancyId, ok: true })),
+        suggestions: [{ id: `after-${body.decisions[body.decisions.length - 1].discrepancyId}` }],
+      })
+    })
+    const decisions = Array.from({ length: 1201 }, (_, index) => ({ discrepancyId: `d${index}`, revision: '1', action: 'unlink' as const }))
+    const out = await createDataSource('live').decideDiscrepancies({ decisions })
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(fetch).mock.calls.map((call) => bodyOf(call).decisions.length)).toEqual([500, 500, 201])
+    expect(out.applied).toBe(1201)
+    expect(out.results).toHaveLength(1201)
+    expect(out.results[0].discrepancyId).toBe('d0')
+    expect(out.results[1200].discrepancyId).toBe('d1200')
+    expect(out.ok).toBe(true)
+    // The last batch's suggestions are the ones mined over the whole log.
+    expect(out.suggestions?.[0]?.id).toBe('after-d1200')
   })
 
   it('falls back to one decision at a time when the batch route is missing, and says so', async () => {
@@ -1070,12 +1094,15 @@ describe('LiveSource discrepancy routes', () => {
     expect(out.results[0].wouldWrite).toBeUndefined()
   })
 
-  it('stopOnError ends the sequential loop at the first failure', async () => {
+  it('stopOnError ends the sequential loop at the first failure and reports the tail as SKIPPED (not attempted)', async () => {
     const decide = vi.fn().mockRejectedValueOnce(new Error('nope')).mockResolvedValue({ id: 'ok' })
     const out = await runSequentially({ stopOnError: true, decisions: [{ discrepancyId: 'a', revision: '1', action: 'unlink' }, { discrepancyId: 'b', revision: '1', action: 'unlink' }] }, decide)
     expect(decide).toHaveBeenCalledTimes(1)
-    expect(out.results).toHaveLength(1)
+    expect(out.results).toHaveLength(2)
     expect(out.failed).toBe(1)
+    expect(out.notAttempted).toBe(1)
+    expect(out.results[1]).toMatchObject({ discrepancyId: 'b', ok: false, code: 'SKIPPED', status: 409 })
+    expect(out.ok).toBe(false)
   })
 })
 

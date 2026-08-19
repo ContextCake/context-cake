@@ -16,7 +16,7 @@
 // its own index — see useVirtualWindow).
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Conflict } from '../../data'
-import { displayStatus, type ConflictGroup } from '../../discrepancy-summary'
+import { displayStatus, isBrokenLink, type ConflictGroup } from '../../discrepancy-summary'
 import { useVirtualWindow } from '../../components/useVirtualWindow'
 import { KIND_LABEL, STATUS_LABEL, plural } from './labels'
 
@@ -116,7 +116,7 @@ interface ItemRowProps {
 const ItemRow = memo(function ItemRow({ item, top, active, current, checked, register, onOpen, onCheck, onFocusRow }: ItemRowProps) {
   const key = itemRowKey(item.id)
   const status = displayStatus(item)
-  const brokenLink = item.kind === 'broken_link'
+  const brokenLink = isBrokenLink(item)
   return (
     <div
       ref={(node) => register(key, node)}

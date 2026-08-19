@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ACTIONABLE_STATUSES, buildHaystack, groupConflicts, isActionable, NO_SUMMARY, summarizeConflicts,
+  ACTIONABLE_STATUSES, buildHaystack, groupConflicts, isActionable, NO_SUMMARY, partitionBatchResults, summarizeConflicts,
 } from './discrepancy-summary'
 import type { Conflict } from './data'
 
@@ -73,6 +73,20 @@ describe('summarizeConflicts', () => {
     expect(summary.topTargets[0].bestCandidate).toBeNull()
   })
 
+  it('agrees the shared best candidate over actionable rows only — a resolved row (no candidate) does not veto it', () => {
+    const summary = summarizeConflicts([
+      brokenLink('l1', 'x', 'y'),
+      brokenLink('l2', 'x', 'y'),
+      brokenLink('l3', 'x', null, { discrepancyStatus: 'resolved', status: 'resolved' }),
+    ])
+    expect(summary.topTargets[0]).toMatchObject({ target: 'x', count: 3, actionable: 2, bestCandidate: { id: 'y' } })
+    // And a reopened broken link (changed_after_decision) still counts as one.
+    const reopened = summarizeConflicts([brokenLink('l1', 'x', 'y', { kind: 'changed_after_decision', originalKind: 'broken_link', discrepancyStatus: 'reopened' })])
+    expect(reopened.topTargets[0]).toMatchObject({ target: 'x', bestCandidate: { id: 'y' } })
+    expect(reopened.byKind.changed_after_decision).toBe(1)
+    expect(reopened.quickWins.brokenLinksTotal).toBe(1)
+  })
+
   it('answers the empty shape for no rows, and NO_SUMMARY has the same keys', () => {
     const empty = summarizeConflicts([])
     expect(Object.keys(empty).sort()).toEqual(Object.keys(NO_SUMMARY).sort())
@@ -135,6 +149,21 @@ describe('groupConflicts', () => {
     expect(platform.sharedSources).toBeUndefined() // contains broken links → no source action
     const [pair] = groupConflicts(rows.filter((row) => row.kind !== 'broken_link'), 'owner')
     expect(pair.sharedSources).toEqual(['personal', 'team'])
+  })
+})
+
+describe('partitionBatchResults', () => {
+  it('splits ok / failed / not attempted by the engine codes', () => {
+    const { ok, failed, notAttempted } = partitionBatchResults([
+      { discrepancyId: 'a', ok: true },
+      { discrepancyId: 'b', ok: false, code: 'STALE' },
+      { discrepancyId: 'c', ok: false, code: 'SKIPPED' },
+      { discrepancyId: 'd', ok: false, code: 'BATCH_TIME_BUDGET' },
+      { discrepancyId: null, ok: false, code: 'DECISION_INVALID' },
+    ])
+    expect(ok.map((r) => r.discrepancyId)).toEqual(['a'])
+    expect(failed.map((r) => r.discrepancyId)).toEqual(['b', null])
+    expect(notAttempted.map((r) => r.discrepancyId)).toEqual(['c', 'd'])
   })
 })
 

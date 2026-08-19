@@ -15,6 +15,24 @@ export const ACTIONABLE_STATUSES: ReadonlySet<DiscrepancyStatus> = new Set<Discr
   'needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked',
 ])
 
+/**
+ * Per-item batch codes that mean NOT ATTEMPTED (stopOnError / a recovery
+ * stop, or the engine's ~10 s lock budget ran out) — those are resubmitted,
+ * they did not fail.
+ */
+export const NOT_ATTEMPTED_CODES: ReadonlySet<string> = new Set(['SKIPPED', 'BATCH_TIME_BUDGET'])
+
+/** Split a batch's results into what landed, what failed, and what the engine never reached. */
+export function partitionBatchResults<T extends { ok: boolean; code?: string; discrepancyId: string | null }>(results: T[]): { ok: T[]; failed: T[]; notAttempted: T[] } {
+  const out = { ok: [] as T[], failed: [] as T[], notAttempted: [] as T[] }
+  for (const result of results) {
+    if (result.ok) out.ok.push(result)
+    else if (result.code && NOT_ATTEMPTED_CODES.has(result.code)) out.notAttempted.push(result)
+    else out.failed.push(result)
+  }
+  return out
+}
+
 export const DISCREPANCY_KINDS: readonly DiscrepancyKind[] = ['section_content', 'frontmatter_value', 'broken_link', 'changed_after_decision']
 export const DISCREPANCY_STATUSES: readonly DiscrepancyStatus[] = ['needs_review', 'recommended', 'auto_ready', 'acknowledged', 'resolved', 'reopened', 'blocked']
 
@@ -33,6 +51,15 @@ export function displayStatus(conflict: Pick<Conflict, 'discrepancyStatus' | 'st
 
 export function displayKind(conflict: Pick<Conflict, 'kind'>): DiscrepancyKind {
   return conflict.kind ?? 'section_content'
+}
+
+/**
+ * A broken link stays one after it reopens as `changed_after_decision` —
+ * the engine gates the fix actions on `originalKind`, so every broken-link
+ * branch here asks this, never `kind === 'broken_link'`.
+ */
+export function isBrokenLink(conflict: Pick<Conflict, 'kind' | 'originalKind'>): boolean {
+  return (conflict.originalKind ?? conflict.kind) === 'broken_link'
 }
 
 /** Something a person (or an automatic rule) still has to do about it. */
@@ -90,10 +117,14 @@ export function summarizeConflicts(conflicts: Conflict[], { topN = 25 } = {}): D
     const conceptType = item.conceptType ?? 'concept'
     bump(conceptTypes, conceptType, active, { conceptType })
     bump(concepts, item.concept, active, { conceptId: item.concept, conceptTitle: item.conceptTitle ?? item.concept })
-    if (kind === 'broken_link' && typeof item.target === 'string') {
-      const row = bump(targets, item.target, active, { target: item.target, bestCandidate: item.bestCandidate ?? null, agree: true })
-      if (row.count > 1 && (row.bestCandidate?.id ?? null) !== (item.bestCandidate?.id ?? null)) row.agree = false
+    if (isBrokenLink(item) && typeof item.target === 'string') {
+      const row = bump(targets, item.target, active, { target: item.target, bestCandidate: null, agree: true })
+      // The shared candidate is agreed over the ACTIONABLE rows only (as the
+      // engine does): a resolved row — the audit trail of a link already
+      // fixed — carries none, and must not veto the group's default.
       if (active) {
+        if (row.actionable === 1) row.bestCandidate = item.bestCandidate ?? null
+        else if ((row.bestCandidate?.id ?? null) !== (item.bestCandidate?.id ?? null)) row.agree = false
         quickWins.brokenLinksTotal += 1
         if (item.bestCandidate) quickWins.brokenLinksWithBestCandidate += 1
       }
@@ -153,8 +184,8 @@ export interface ItemsDescription {
 }
 
 export function describeItems(items: Conflict[]): ItemsDescription {
-  const allBrokenLinks = items.length > 0 && items.every((item) => displayKind(item) === 'broken_link')
-  const anyBrokenLink = items.some((item) => displayKind(item) === 'broken_link')
+  const allBrokenLinks = items.length > 0 && items.every(isBrokenLink)
+  const anyBrokenLink = items.some(isBrokenLink)
   const out: ItemsDescription = { allBrokenLinks, anyBrokenLink, candidates: [] }
   if (allBrokenLinks) {
     const target = items[0].target
@@ -229,7 +260,7 @@ export function groupConflicts(conflicts: Conflict[], groupBy: GroupBy): Conflic
     switch (groupBy) {
       case 'kind':
       case 'target':
-        if (kind === 'broken_link') put(`target:${item.target ?? ''}`, `Broken link → ${item.target ?? '(no target)'}`, item)
+        if (isBrokenLink(item)) put(`target:${item.target ?? ''}`, `Broken link → ${item.target ?? '(no target)'}`, item)
         else put(`kind:${kind}`, KIND_LABEL[kind], item)
         break
       case 'concept':

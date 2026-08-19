@@ -108,6 +108,8 @@ export function History({ conflict }: { conflict: Conflict }) {
             <span>Result: {record.transactionState ?? 'committed'}</span>
             {record.ruleId && <span>Rule: {record.ruleId}</span>}
             {record.supersedes && <span>Superseded: {record.supersedes}</span>}
+            {record.newTarget && <span>Now points at <code>{record.newTarget}</code></span>}
+            {record.createdTargets?.map((created) => <span key={`${record.id}-${created.conceptId}`}>Created <code>{created.conceptId}</code> in {created.layer}</span>)}
           </div>
           {record.writtenTargets?.length ? (
             <details><summary>{record.writtenTargets.length} affected files</summary><ul>{record.writtenTargets.map((target) => <li key={`${record.id}-${target.path}`}><code>{target.path}</code></li>)}</ul></details>

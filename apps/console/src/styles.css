@@ -2461,7 +2461,7 @@ textarea:focus-visible,
    heights are fixed and mirrored in GroupedList.tsx — change both. */
 .cc-discrepancy-center .cc-conflict-list { position: relative; max-height: 760px; min-height: 240px; overflow-y: auto; overflow-x: hidden; padding: 0; border: 1px solid var(--cc-line); border-radius: 12px; background: var(--cc-surface); }
 .cc-conflict-virtual { position: relative; width: 100%; }
-.cc-discrepancy-center .cc-conflict-row { position: absolute; left: 0; right: 0; box-sizing: border-box; height: 128px; margin: 0; padding: 12px 13px 12px 12px; overflow: hidden; border-width: 0 0 1px; border-radius: 0; gap: 6px; }
+.cc-discrepancy-center .cc-conflict-row { position: absolute; left: 0; right: 0; box-sizing: border-box; height: 128px; margin: 0; padding: 12px 13px 12px 12px; overflow: hidden; border-width: 0 0 1px; border-radius: 0; gap: 6px; user-select: none; }
 .cc-discrepancy-center .cc-conflict-row[data-selected="true"] { background: var(--cc-raised); box-shadow: inset 0 0 0 1px var(--cc-line-strong); }
 .cc-discrepancy-center .cc-conflict-row[data-checked] { background: var(--cc-blue-fill); }
 .cc-discrepancy-center .cc-conflict-row[data-checked][data-selected="true"] { background: var(--cc-blue-fill2); }

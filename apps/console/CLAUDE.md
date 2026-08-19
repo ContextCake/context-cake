@@ -87,9 +87,14 @@ via their pre-hooks.
   = the multi-selection and `aria-current` = the open detail. Bulk actions
   go through `store.decideDiscrepancies` (POST `/api/discrepancy-decisions/batch`)
   twice: `dryRun` first, then the real one; a 404 on the batch route falls
-  back to sequential singles and says so (`fallback: 'sequential'`). Everything
-  pure — the actionable predicate, the summary mirror, grouping,
-  `describeItems` — lives in `src/discrepancy-summary.ts`.
+  back to sequential singles and says so (`fallback: 'sequential'`), a
+  selection past 500 goes over as consecutive batches, and per-item
+  `SKIPPED` / `BATCH_TIME_BUDGET` results are NOT ATTEMPTED (kept selected
+  for resubmission), never counted as failures. Group actions are the group
+  header's checkbox + the bulk bar — one action surface, deliberately; there
+  is no per-header menu. Everything pure — the actionable predicate, the
+  summary mirror, grouping, `describeItems`, `partitionBatchResults` — lives
+  in `src/discrepancy-summary.ts`.
 - **Files ⇄ Concepts** — the two ends of one thing, and walkable both ways. An
   open document names the concept it resolves to (`conceptForFile`: the file's
   `rel` minus its document extension, matched against a loaded concept id —

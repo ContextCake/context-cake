@@ -123,7 +123,7 @@ src/
     AccountPanel.tsx      desktop auth and settings-sync controls
     SetupWizard.tsx       first-run source configuration
     FileTree.tsx          windowed ARIA tree behind the Files navigator
-    useVirtualWindow.ts   the windowing math (prefix sums, spliced active row) FileTree and the Discrepancy Center share
+    useVirtualWindow.ts   the windowing math (prefix sums, spliced active row) behind the Discrepancy Center list, generalized from FileTree
     ConnectAgentDialog.tsx
     ChatPanel.tsx
   views/

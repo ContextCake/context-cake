@@ -71,6 +71,8 @@ export interface Conflict {
   safe: boolean
   history: ConflictResolutionRecord[]
   kind?: DiscrepancyKind
+  /** The kind before a reopen (`changed_after_decision` keeps it here); the engine gates fix actions on THIS. */
+  originalKind?: DiscrepancyKind
   discrepancyStatus?: DiscrepancyStatus
   revision?: string
   owner?: string

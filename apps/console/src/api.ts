@@ -156,6 +156,8 @@ export interface IndexingActivity {
 
 /** Default deadline for engine API calls — no request may spin forever. */
 export const API_TIMEOUT_MS = 60_000
+/** The engine's per-request ceiling for POST /api/discrepancy-decisions/batch (413 past it); larger selections go over as consecutive batches. */
+export const BATCH_LIMIT = 500
 
 /**
  * fetch for the same-origin engine API. Inside the desktop app the preload
@@ -491,17 +493,49 @@ class LiveSource implements DataSource {
     })).decision
   }
   async decideDiscrepancies(request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> {
-    try {
-      return await this.request<DiscrepancyBatchResponse>('/api/discrepancy-decisions/batch', {
-        method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(request),
-      })
-    } catch (error) {
-      // Only a MISSING route falls back to singles. A 405 (mutations off), a
-      // 409 (coverage incomplete — the whole batch is refused while sources
-      // index) or a 413 (over 500) is an answer, not an absence.
-      if (!(error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404)) throw error
-      return runSequentially(request, (decision) => this.decideDiscrepancy(decision))
+    // The route takes ≤500 decisions (413 BATCH_TOO_LARGE past that). A
+    // group of 600 links is one action to the user, so it goes over as
+    // consecutive batches whose answers are merged — results in input order,
+    // counts summed, the last batch's suggestions (mined over the whole log,
+    // so the freshest). Each batch is its own lock/projection; nothing spans
+    // them, and a `stopOnError` failure in one leaves the rest unsent and
+    // reported SKIPPED, exactly as the engine reports the tail of one batch.
+    const chunks: DiscrepancyDecisionRequest[][] = []
+    for (let i = 0; i < request.decisions.length; i += BATCH_LIMIT) chunks.push(request.decisions.slice(i, i + BATCH_LIMIT))
+    if (chunks.length === 0) chunks.push([])
+    const merged: DiscrepancyBatchResponse = { ok: true, applied: 0, failed: 0, notAttempted: 0, dryRun: request.dryRun === true, results: [], suggestions: [] }
+    let stopped = false
+    for (const [index, decisions] of chunks.entries()) {
+      if (stopped) {
+        for (const decision of decisions) merged.results.push({ discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'SKIPPED', error: 'Skipped: an earlier decision in this batch failed and stopOnError was set.' })
+        merged.notAttempted = (merged.notAttempted ?? 0) + decisions.length
+        continue
+      }
+      let answer: DiscrepancyBatchResponse
+      try {
+        answer = await this.request<DiscrepancyBatchResponse>('/api/discrepancy-decisions/batch', {
+          method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ ...request, decisions }),
+        })
+      } catch (error) {
+        // Only a MISSING route falls back to singles. A 405 (mutations off), a
+        // 409 (coverage incomplete — the whole batch is refused while sources
+        // index) or a 413 is an answer, not an absence.
+        if (!(error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404)) throw error
+        // The engine predates the batch route: the whole request goes one at
+        // a time (index 0 is the only chunk that can reach here).
+        if (index !== 0) throw error
+        return runSequentially(request, (decision) => this.decideDiscrepancy(decision))
+      }
+      merged.applied += answer.applied ?? 0
+      merged.failed += answer.failed ?? 0
+      merged.notAttempted = (merged.notAttempted ?? 0) + (answer.notAttempted ?? 0)
+      merged.results.push(...(answer.results ?? []))
+      merged.suggestions = answer.suggestions ?? merged.suggestions
+      if (answer.git) merged.git = answer.git
+      if (request.stopOnError && (answer.failed ?? 0) > 0) stopped = true
     }
+    merged.ok = merged.failed === 0 && (merged.notAttempted ?? 0) === 0
+    return merged
   }
   async discrepancyRules(): Promise<{ rules: DiscrepancyRule[]; suggestions: DiscrepancyRuleSuggestion[] }> {
     return this.get('/api/discrepancy-rules')
@@ -599,11 +633,18 @@ export async function runSequentially(
   const results: DiscrepancyBatchResult[] = []
   if (request.dryRun) {
     for (const decision of request.decisions) results.push({ discrepancyId: decision.discrepancyId, ok: true })
-    return { ok: true, applied: 0, failed: 0, results, suggestions: [], fallback: 'sequential' }
+    return { ok: true, applied: 0, failed: 0, notAttempted: 0, dryRun: true, results, suggestions: [], fallback: 'sequential' }
   }
   let applied = 0
   let failed = 0
+  let notAttempted = 0
+  let stopped = false
   for (const decision of request.decisions) {
+    if (stopped) {
+      results.push({ discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'SKIPPED', error: 'Skipped: an earlier decision in this batch failed and stopOnError was set.' })
+      notAttempted += 1
+      continue
+    }
     try {
       const record = await decide(decision)
       results.push({ discrepancyId: decision.discrepancyId, ok: true, decision: record, written: record.writtenTargets ?? [] })
@@ -616,10 +657,10 @@ export async function runSequentially(
         ...(error instanceof LiveDataError && error.status !== undefined ? { status: error.status } : {}),
         ...(error instanceof LiveDataError && error.code ? { code: error.code } : {}),
       })
-      if (request.stopOnError) break
+      if (request.stopOnError) stopped = true
     }
   }
-  return { ok: failed === 0, applied, failed, results, suggestions: [], fallback: 'sequential' }
+  return { ok: failed === 0 && notAttempted === 0, applied, failed, notAttempted, dryRun: false, results, suggestions: [], fallback: 'sequential' }
 }
 
 export function createDataSource(mode: Mode = selectMode()): DataSource {
@@ -1159,6 +1200,7 @@ export function adaptDiscrepancy(record: DiscrepancyRecord, coverageComplete = t
     matchingRules: record.matchingRules, ruleConflict: record.ruleConflict, target: record.target,
     affectedLinks: record.affectedLinks,
     conceptTitle: record.conceptTitle, conceptType: record.conceptType,
+    ...(record.originalKind && record.originalKind !== record.kind ? { originalKind: record.originalKind } : {}),
     ...(isList ? { isList: true } : {}),
     ...(record.candidates ? { candidates: record.candidates } : {}),
     ...(record.bestCandidate !== undefined ? { bestCandidate: record.bestCandidate } : {}),

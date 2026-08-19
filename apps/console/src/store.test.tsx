@@ -980,4 +980,54 @@ describe('discrepancies: compact rows, detail on selection, batch decisions', ()
     await act(async () => { await vi.advanceTimersByTimeAsync(400) })
     expect(mocks.graph.mock.calls.length).toBe(graphCalls + 1) // ONE refetch for the whole batch
   })
+
+  it('refetches after a batch even when nothing landed — all-STALE rows must pick up their new revisions', async () => {
+    mocks.flags.withDiscrepancies = true
+    mocks.graph.mockResolvedValue(graphWith([graphRow('a'), graphRow('b')]))
+    mocks.discrepancies.mockResolvedValue(compactPayload(['a', 'b']))
+    mocks.discrepancyDetail.mockImplementation(async (id: string) => fullRecord(id.split('::')[1]))
+    mocks.resolve.mockImplementation(async (id: string) => conceptPayload(id))
+    mocks.decideDiscrepancies.mockImplementation(async (request: { decisions: { discrepancyId: string }[] }) => ({
+      ok: false, applied: 0, failed: request.decisions.length, notAttempted: 0, dryRun: false,
+      results: request.decisions.map((decision) => ({ discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'STALE', error: 'stale' })),
+      suggestions: [],
+    }))
+    await act(async () => root.render(<StoreProvider><ConflictProbe /></StoreProvider>))
+    const graphCalls = mocks.graph.mock.calls.length
+    const [, batch] = Array.from(cprobe().querySelectorAll<HTMLButtonElement>('button'))
+    await act(async () => batch.click())
+    expect(cprobe().dataset.statuses).toBe('a:needs_review,b:needs_review')
+    await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+    expect(mocks.graph.mock.calls.length).toBe(graphCalls + 1)
+  })
+
+  it('carries a loaded detail across a refetch when its compact row is unchanged, and reloads it when the revision moved', async () => {
+    mocks.flags.withDiscrepancies = true
+    mocks.graph.mockResolvedValue(graphWith([graphRow('a')]))
+    mocks.discrepancies.mockResolvedValue(compactPayload(['a']))
+    mocks.discrepancyDetail.mockImplementation(async (id: string) => fullRecord(id.split('::')[1]))
+    mocks.resolve.mockImplementation(async (id: string) => conceptPayload(id))
+    mocks.status.mockResolvedValue(statusPayload({ generation: 1, indexing: false, conceptCount: 1 }))
+
+    await act(async () => root.render(<StoreProvider><ConflictProbe /></StoreProvider>))
+    expect(cprobe().dataset.selDetail).toBe('undefined')
+    expect(mocks.discrepancyDetail).toHaveBeenCalledTimes(1)
+
+    // The engine's generation moves (a file edit elsewhere); the compact row for
+    // 'a' comes back identical → the loaded record is kept, no skeleton, no reload.
+    mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: false, conceptCount: 1 }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(cprobe().dataset.selDetail).toBe('undefined')
+    expect(cprobe().dataset.selValue).toBe('mine, in full')
+    expect(mocks.discrepancyDetail).toHaveBeenCalledTimes(1)
+
+    // Now the row itself changed (new revision): the compact row wins and the detail reloads.
+    const moved = compactPayload(['a'])
+    moved.discrepancies[0] = { ...moved.discrepancies[0], revision: 'a:2' }
+    mocks.discrepancies.mockResolvedValue(moved)
+    mocks.status.mockResolvedValue(statusPayload({ generation: 3, indexing: false, conceptCount: 1 }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(mocks.discrepancyDetail).toHaveBeenCalledTimes(2)
+    expect(cprobe().dataset.selDetail).toBe('undefined')
+  })
 })

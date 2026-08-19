@@ -264,9 +264,15 @@ export interface ConflictResolutionRecord {
   ruleId?: string
   transactionId?: string
   transactionState?: 'committed' | 'rolled_back' | 'recovery_required' | 'not_required' | 'blocked'
-  writtenTargets?: { layer: string; path: string }[]
+  writtenTargets?: { layer: string; path: string; created?: boolean }[]
   contributorFingerprints?: { source: string; fingerprint: string }[]
   supersededDecisionId?: string
+  /** Broken-link decisions: the link that was broken, where it now points, and any concept a create_stub made. */
+  linkTarget?: string
+  newTarget?: string
+  createdTargets?: { layer: string; conceptId: string; path: string }[]
+  /** What a rule mined from this decision would do; null for decisions that must not be learned (unlink, create_stub). */
+  ruleAction?: { type: 'prefer_source'; source: string } | { type: 'acknowledge'; reasonCode: AcknowledgementReason } | { type: 'rewrite_link'; newTarget: string } | null
 }
 
 export type DiscrepancyKind = 'section_content' | 'frontmatter_value' | 'broken_link' | 'changed_after_decision'
@@ -440,21 +446,32 @@ export interface DiscrepancyBatchRequest {
 }
 
 export interface DiscrepancyBatchResult {
-  discrepancyId: string
+  /** Null when the item was too malformed to carry one. */
+  discrepancyId: string | null
   ok: boolean
   status?: number
+  /**
+   * The engine's stable code. `SKIPPED` (stopOnError / a recovery stop) and
+   * `BATCH_TIME_BUDGET` (the apply loop ran out of its ~10 s lock budget)
+   * mean NOT ATTEMPTED — resubmit those, they did not fail.
+   */
   code?: string
   error?: string
   decision?: ConflictResolutionRecord
-  written?: { layer: string; path: string }[]
-  /** Dry run only: the files a real run would change. */
-  wouldWrite?: { layer: string; path: string }[]
+  written?: { layer: string; path: string; created?: boolean }[]
+  git?: { layer: string; paths?: string[]; committed?: boolean; pushed?: boolean; queued?: boolean; error?: string }
+  /** Dry run only: the files a real run would change (absolute paths; `created` for a stub). */
+  wouldWrite?: { layer: string; path: string; created?: boolean }[]
 }
 
 export interface DiscrepancyBatchResponse {
+  /** `failed === 0 && notAttempted === 0`. */
   ok: boolean
   applied: number
   failed: number
+  /** Items the engine did not reach (stopOnError, recovery stop, time budget) — resubmit them. */
+  notAttempted?: number
+  dryRun?: boolean
   results: DiscrepancyBatchResult[]
   git?: { layer: string; commits?: number; pushed?: boolean; queued?: boolean; error?: string }
   suggestions?: DiscrepancyRuleSuggestion[]

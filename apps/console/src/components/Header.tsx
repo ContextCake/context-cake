@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef } from 'react'
 import { useStoreData, useStoreInput, useStoreNav, type ViewId } from '../store'
 import { destinationForView, SEARCHABLE_VIEWS } from '../shell-navigation'
+import { isActionable } from '../discrepancy-summary'
 import { AgentIcon, PlusIcon, SidebarIcon, SparkleIcon } from './icons'
 import { BackgroundActivity } from './BackgroundActivity'
 import { Button, IconButton, SearchField, SegmentedControl, StatusBadge } from './ui'
@@ -25,7 +26,7 @@ function HeaderInner({
   const destination = destinationForView(view)
   const searchable = SEARCHABLE_VIEWS.has(view)
   const queueCount = signals.filter((signal) => signal.route === 'review_required').length
-  const conflictCount = conflicts.filter((conflict) => ['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'].includes(conflict.discrepancyStatus ?? (conflict.status === 'open' ? 'needs_review' : 'resolved'))).length
+  const conflictCount = conflicts.filter(isActionable).length
 
   useEffect(() => {
     const focus = () => search.current?.focus()

@@ -264,14 +264,27 @@ export interface ConflictResolutionRecord {
   ruleId?: string
   transactionId?: string
   transactionState?: 'committed' | 'rolled_back' | 'recovery_required' | 'not_required' | 'blocked'
-  writtenTargets?: { layer: string; path: string }[]
+  writtenTargets?: { layer: string; path: string; created?: boolean }[]
   contributorFingerprints?: { source: string; fingerprint: string }[]
   supersededDecisionId?: string
+  /** Broken-link decisions: the link that was broken, where it now points, and any concept a create_stub made. */
+  linkTarget?: string
+  newTarget?: string
+  createdTargets?: { layer: string; conceptId: string; path: string }[]
+  /** What a rule mined from this decision would do; null for decisions that must not be learned (unlink, create_stub). */
+  ruleAction?: { type: 'prefer_source'; source: string } | { type: 'acknowledge'; reasonCode: AcknowledgementReason } | { type: 'rewrite_link'; newTarget: string } | null
 }
 
 export type DiscrepancyKind = 'section_content' | 'frontmatter_value' | 'broken_link' | 'changed_after_decision'
 export type DiscrepancyStatus = 'needs_review' | 'recommended' | 'auto_ready' | 'acknowledged' | 'resolved' | 'reopened' | 'blocked'
-export type DiscrepancyAction = 'choose_contribution' | 'compose' | 'acknowledge'
+/**
+ * `choose_contribution` / `compose` / `acknowledge` are the original three.
+ * `rewrite_link` / `unlink` / `create_stub` are the broken-link fix actions
+ * (POST /api/discrepancy-decisions on the same route): the engine 409s
+ * choose/compose against a broken link and 400s the link actions against
+ * every other kind, so the UI offers each set only where it applies.
+ */
+export type DiscrepancyAction = 'choose_contribution' | 'compose' | 'acknowledge' | 'rewrite_link' | 'unlink' | 'create_stub'
 export type AcknowledgementReason = 'different_scopes' | 'temporary_migration' | 'source_specific_authority' | 'target_missing' | 'other'
 
 export interface DiscrepancyContribution {
@@ -281,6 +294,27 @@ export interface DiscrepancyContribution {
   value: unknown
   fingerprint: string
   effective: boolean
+  /**
+   * Compact rows (`?fields=compact`) preview `value` to ≤240 chars and say so
+   * here. Absent on a full record — which is how an engine too old to serve
+   * compact rows is told apart from one that does (`compactDiscrepancy` in
+   * packages/core/src/discrepancies.mjs).
+   */
+  truncated?: boolean
+  valueBytes?: number
+  valueKind?: 'string' | 'list' | 'map'
+}
+
+/**
+ * How the engine matched a broken link's target to an existing concept id —
+ * structural rules only (see Appendix B of the plan), never model-inferred.
+ */
+export type LinkCandidateReason = 'relative' | 'case' | 'extension' | 'slug' | 'moved' | 'title' | 'slug_moved' | 'typo'
+
+export interface LinkCandidate {
+  id: string
+  reason: LinkCandidateReason | string
+  confidence: number
 }
 
 export interface DiscrepancyRule {
@@ -288,8 +322,9 @@ export interface DiscrepancyRule {
   scope: 'local' | 'team'
   mode: 'recommend' | 'automatic'
   enabled: boolean
+  /** `conceptType` and `key` may be the literal `"*"` (any); `target` is always exact. */
   match: { kind: DiscrepancyKind; conceptType: string; key: string; sources: string[]; target?: string }
-  action: { type: 'prefer_source'; source: string } | { type: 'acknowledge'; reasonCode: AcknowledgementReason }
+  action: { type: 'prefer_source'; source: string } | { type: 'acknowledge'; reasonCode: AcknowledgementReason } | { type: 'rewrite_link'; newTarget: string }
   evidenceDecisionIds: string[]
 }
 
@@ -299,6 +334,17 @@ export interface DiscrepancyRuleSuggestion {
   action: DiscrepancyRule['action']
   evidenceDecisionIds: string[]
   evidenceCount: number
+  /** A `*` suggestion mined from evidence spanning several (conceptType, key) pairs. */
+  generalized?: boolean
+}
+
+/** The compact row's stand-in for `history[]`: how many, and the latest. */
+export interface DiscrepancyLatestDecision {
+  id: string
+  action: DiscrepancyAction | null
+  decidedAt: string | null
+  transactionState: ConflictResolutionRecord['transactionState'] | null
+  reasonCode?: AcknowledgementReason
 }
 
 export interface DiscrepancyRecord {
@@ -324,9 +370,33 @@ export interface DiscrepancyRecord {
   freshness: { effectiveUpdated: string | null; newestUpdated: string | null; hasNewerDissent: boolean }
   affectedLinks: string[]
   sourceHealth: ({ source: string; status: string; error: string | null } | null)[]
-  history: ConflictResolutionRecord[]
+  /** Absent on a compact row — `historyCount` + `latestDecision` stand in until `?id=` fetches the full record. */
+  history?: ConflictResolutionRecord[]
   matchingRules: Pick<DiscrepancyRule, 'id' | 'scope' | 'mode' | 'action' | 'evidenceDecisionIds'>[]
   ruleConflict?: boolean
+  /** Broken links only: ≤5 structural near-matches for `target`, best first. */
+  candidates?: LinkCandidate[]
+  /** The candidate confident enough (≥0.85, unambiguous) to be a one-click fix, else null. */
+  bestCandidate?: LinkCandidate | null
+  historyCount?: number
+  latestDecision?: DiscrepancyLatestDecision | null
+  /** Set by the engine on every `?fields=compact` row. */
+  compact?: boolean
+}
+
+/** Counts and groupings over the whole projection — GET /api/discrepancies?fields=compact and /api/discrepancies/summary. */
+export interface DiscrepancySummary {
+  total: number
+  actionable: number
+  byKind: Record<DiscrepancyKind, number>
+  byStatus: Record<DiscrepancyStatus, number>
+  bySourcePair: { key: string; sources: string[]; count: number; actionable: number }[]
+  byOwner: { owner: string; count: number; actionable: number }[]
+  byConceptType: { conceptType: string; count: number; actionable: number }[]
+  /** `bestCandidate` is the one every record for that target agrees on, else null. */
+  topTargets: { target: string; count: number; actionable: number; bestCandidate: LinkCandidate | null }[]
+  topConcepts: { conceptId: string; conceptTitle: string; count: number; actionable: number }[]
+  quickWins: { autoReady: number; recommended: number; brokenLinksWithBestCandidate: number; brokenLinksTotal: number }
 }
 
 export interface DiscrepanciesResponse {
@@ -336,6 +406,20 @@ export interface DiscrepanciesResponse {
   indexingSources: string[]
   errors: { concept: string; error: string }[]
   generation: number
+  /** Present only in the extended envelope (any of `fields`/filter/paging params); a bare GET stays the old shape. */
+  summary?: DiscrepancySummary
+  total?: number
+  filtered?: number
+  offset?: number
+  limit?: number | null
+  projectionRevision?: string
+}
+
+/** GET /api/discrepancies?id=<id> — one full record, or null when it is not open. */
+export interface DiscrepancyDetailResponse {
+  discrepancy: DiscrepancyRecord | null
+  generation: number
+  projectionRevision?: string
 }
 
 export interface DiscrepancyDecisionRequest {
@@ -346,6 +430,64 @@ export interface DiscrepancyDecisionRequest {
   content?: string
   reasonCode?: AcknowledgementReason
   note?: string
+  /** `rewrite_link`: the concept id the link should point at instead. */
+  newTarget?: string
+  /** `create_stub`: the writable layer that receives the new concept file. */
+  layer?: string
+  title?: string
+  type?: string
+}
+
+/** POST /api/discrepancy-decisions/batch. ≤500 decisions; `dryRun` runs every pre-check and writes nothing. */
+export interface DiscrepancyBatchRequest {
+  decisions: DiscrepancyDecisionRequest[]
+  stopOnError?: boolean
+  dryRun?: boolean
+}
+
+export interface DiscrepancyBatchResult {
+  /** Null when the item was too malformed to carry one. */
+  discrepancyId: string | null
+  ok: boolean
+  status?: number
+  /**
+   * The engine's stable code. `SKIPPED` (stopOnError / a recovery stop) and
+   * `BATCH_TIME_BUDGET` (the apply loop ran out of its ~10 s lock budget)
+   * mean NOT ATTEMPTED — resubmit those, they did not fail.
+   */
+  code?: string
+  error?: string
+  decision?: ConflictResolutionRecord
+  written?: { layer: string; path: string; created?: boolean }[]
+  git?: { layer: string; paths?: string[]; committed?: boolean; pushed?: boolean; queued?: boolean; error?: string }
+  /** Dry run only: the files a real run would change (absolute paths; `created` for a stub). */
+  wouldWrite?: { layer: string; path: string; created?: boolean }[]
+}
+
+export interface DiscrepancyBatchResponse {
+  /** `failed === 0 && notAttempted === 0`. */
+  ok: boolean
+  applied: number
+  failed: number
+  /** Items the engine did not reach (stopOnError, recovery stop, time budget) — resubmit them. */
+  notAttempted?: number
+  dryRun?: boolean
+  results: DiscrepancyBatchResult[]
+  git?: { layer: string; commits?: number; pushed?: boolean; queued?: boolean; error?: string }
+  suggestions?: DiscrepancyRuleSuggestion[]
+  /**
+   * Console-side only: the engine had no batch route (404) and the adapter
+   * ran the decisions one at a time. A dry run against such an engine could
+   * check nothing, so `results` then carry no `wouldWrite`.
+   */
+  fallback?: 'sequential'
+  /**
+   * Console-side only: a selection past 500 goes over as consecutive batches,
+   * and one AFTER the first was refused outright. What the earlier batches
+   * applied is in `results`; the refused batch and everything after it are
+   * reported `SKIPPED` (not attempted); this says which batch and why.
+   */
+  error?: { message: string; chunk: number; status?: number; code?: string }
 }
 
 export interface ResolveConflictRequest {

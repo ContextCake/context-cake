@@ -200,7 +200,8 @@ const SEARCH_CASES: { view: ViewId; Component: ComponentType; rows: string; prob
   // Signal cards; the decision panel beside them uses h2.
   { view: 'triage', Component: Triage, rows: 'h3', probe: 'Triage' },
   { view: 'concepts', Component: Concepts, rows: '.cc-navigator-detail > div > button.cc-h-bd-strong', probe: 'Concepts' },
-  { view: 'conflicts', Component: Conflicts, rows: '.cc-conflict-list > button[role="option"]', probe: 'Conflicts' },
+  // Descendant, not child: the list is windowed, so rows sit inside a positioned inner element.
+  { view: 'conflicts', Component: Conflicts, rows: '.cc-conflict-list [role="option"]', probe: 'Conflicts' },
   { view: 'sources', Component: Sources, rows: 'button[role="option"]', probe: 'Sources' },
   { view: 'files', Component: Files, rows: '[role="treeitem"]', probe: 'Files' },
 ]

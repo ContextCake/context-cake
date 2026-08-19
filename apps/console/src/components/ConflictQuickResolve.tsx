@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Conflict } from '../data'
 import type { AcknowledgementReason } from '../types'
 import { reasonOptionsFor } from '../conflict-reasons'
+import { isBrokenLink } from '../discrepancy-summary'
 import { useStoreData } from '../store'
 
 const POPOVER_W = 320
@@ -29,10 +30,12 @@ export function ConflictQuickResolve({
   const [note, setNote] = useState('')
   const [attempted, setAttempted] = useState(false)
   const busy = resolvingConflict === conflict.id
-  // Broken links require a source edit — the same disqualifier DecisionPanel
-  // uses for "use this answer everywhere" / "write a reconciled answer".
-  const cannotWrite = conflict.kind === 'broken_link'
-  const reasonOptions = reasonOptionsFor(conflict.kind)
+  // A broken link (also after it reopens as changed_after_decision — the
+  // engine gates on originalKind) has no answer to "use everywhere": the
+  // popover offers the engine's suggested fix, if any, and the acknowledge.
+  const cannotWrite = isBrokenLink(conflict)
+  const reasonOptions = reasonOptionsFor(cannotWrite ? 'broken_link' : conflict.kind)
+  const suggestedFix = cannotWrite ? conflict.bestCandidate ?? null : null
 
   useLayoutEffect(() => {
     const place = () => {
@@ -100,6 +103,15 @@ export function ConflictQuickResolve({
     } catch { /* resolutionError renders below; stay open */ }
   }
 
+  const rewriteToSuggested = async () => {
+    if (!conflict.revision || !suggestedFix || busy) return
+    setAttempted(true)
+    try {
+      await decideDiscrepancy({ discrepancyId: conflict.id, revision: conflict.revision, action: 'rewrite_link', newTarget: suggestedFix.id })
+      onClose()
+    } catch { /* resolutionError renders below; stay open */ }
+  }
+
   const acknowledgeMissingTarget = async () => {
     if (!conflict.revision || busy) return
     setAttempted(true)
@@ -133,6 +145,12 @@ export function ConflictQuickResolve({
       {attempted && resolutionError && <p className="cc-conflict-popover-error" role="alert">{resolutionError.message}</p>}
       {cannotWrite ? (
         <div className="cc-conflict-popover-broken-link">
+          {suggestedFix && (
+            <>
+              <p className="cc-conflict-popover-note">Suggested fix: rewrite the link to <code>{suggestedFix.id}</code>.</p>
+              <button type="button" disabled={busy} onClick={() => void rewriteToSuggested()}>{busy ? 'Applying…' : `Rewrite to ${suggestedFix.id}`}</button>
+            </>
+          )}
           <p className="cc-conflict-popover-note">Keep the link without changing files. ContextCake will record <strong>Target not created yet</strong> and recheck when sources change.</p>
           <button type="button" disabled={busy} onClick={() => void acknowledgeMissingTarget()}>{busy ? 'Applying…' : 'Acknowledge for now'}</button>
         </div>

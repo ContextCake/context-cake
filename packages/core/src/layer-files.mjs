@@ -14,13 +14,16 @@
 //
 // Every path is resolved against its layer root and checked with
 // assertInsideRoot, so "<layer>/../../etc/passwd" and symlinks that point out
-// of the root are both refused. Writes only ever overwrite files that already
-// exist — this API never creates or deletes.
+// of the root are both refused. The HTTP write routes only ever overwrite
+// files that already exist — they never create or delete. The one creating
+// writer, stageFileCreationTransaction, is a staged transaction (exclusive
+// create, journaled, rolled back by unlink) that only a control operation
+// drives — a broken link's "create the missing concept" — never a route.
 
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { assertInsideRoot, httpError, json, parseJson, MIME } from "./http-util.mjs";
+import { assertInsideRoot, httpError, json, parseJson, realpathLenient, MIME } from "./http-util.mjs";
 import { defaultWalkLimits, MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 
@@ -59,6 +62,18 @@ export function layerRootMap(manifest, manifestDir) {
     }
   }
   return map;
+}
+
+/**
+ * The path a resolved absolute file has inside its layer root, POSIX-style —
+ * both sides taken through realpathLenient, so a root behind a symlink
+ * compares to its own files. This is what a creating writer compares against
+ * the path it ASKED for: on a case-insensitive filesystem realpath folds
+ * `Guides/Deploy.md` onto an existing `guides/`, and the file that would land
+ * names a different concept than the link that wanted it.
+ */
+export function relativeWithinRoot(abs, root) {
+  return path.relative(realpathLenient(root), realpathLenient(abs)).split(path.sep).join("/");
 }
 
 /**
@@ -319,16 +334,78 @@ export async function writeSectionApi(rawBody, roots) {
 }
 
 /**
+ * Read one section's current body straight from a layer's file — the live
+ * read a decision needs when it must see what an earlier write in the same
+ * request just changed (the projection it was decided against is a snapshot).
+ * Same file lookup, sandbox, and size cap as the section writers; null when
+ * the layer has no document for the concept, `content: null` when the
+ * document has no such section.
+ */
+export async function readLayerSection(roots, { layer, conceptId, sectionKey }) {
+  const root = roots.get(layer);
+  if (!root || typeof conceptId !== "string" || typeof sectionKey !== "string") return null;
+  for (const ext of root.kind === "files" ? FILES_EXTENSIONS : [".md"]) {
+    const candidate = resolveLayerFile(`${layer}/${conceptId}${ext}`, roots);
+    let stat;
+    try { stat = await fsp.stat(candidate.abs); } catch { continue; }
+    if (!stat.isFile()) continue;
+    if (stat.size > MAX_EDITABLE_BYTES) throw httpError(413, `File is too large to edit: ${layer}/${conceptId}${ext}`);
+    const text = await fsp.readFile(candidate.abs, "utf8");
+    return {
+      layer, abs: candidate.abs, ext: candidate.ext, text, mtime: stat.mtime.toISOString(),
+      content: readSectionBody(text, sectionKey, { plainText: candidate.ext === ".txt" }),
+    };
+  }
+  return null;
+}
+
+/**
  * Stage a recoverable multi-file section transaction. New and original bytes
  * live beside each target so rename/copy never crosses filesystems. The caller
- * journals `targets` before commit and owns final cleanup.
+ * journals `targets` before commit and owns final cleanup. `options.probe`
+ * runs every check and answers the targets without staging a byte (a dry
+ * run); the returned handle then has no commit.
  */
 export async function stageSectionTransaction(rawBody, roots, transactionId, options = {}) {
   const { writes, skipped } = await prepareSectionWrites(rawBody, roots);
   return stagePreparedWrites(writes, skipped, transactionId, options);
 }
 
-export async function stageFrontmatterTransaction(rawBody, roots, transactionId) {
+/**
+ * Stage the creation of one new text file inside a layer — the transaction
+ * behind "create the missing concept" for a broken link. Same sandbox as every
+ * other writer (resolveLayerFile), same size cap, and exclusive: a file that
+ * already exists is refused here and again at commit (`COPYFILE_EXCL`), so a
+ * concept that appears in between is never overwritten. The parent folder is
+ * created if it is missing (a stub for `guides/deploy` needs `guides/`); it is
+ * deliberately not removed on rollback — an empty folder is not a change to a
+ * layer's content, and removing one could race a sibling being added.
+ * Journal target shape: `{ path, staged, backup: null, created: true }` —
+ * rollback and recovery unlink the target instead of restoring a backup.
+ */
+export async function stageFileCreationTransaction({ layer, rel, text } = {}, roots, transactionId, options = {}) {
+  if (typeof layer !== "string" || typeof rel !== "string" || typeof text !== "string") {
+    throw httpError(400, "Provide layer, rel, and text (strings)");
+  }
+  const { abs, ext } = resolveLayerFile(`${layer}/${rel}`, roots);
+  if (!TEXT_EXT.has(ext)) throw httpError(415, `Not a text file: ${ext || "(no ext)"}`);
+  if (Buffer.byteLength(text) > MAX_EDITABLE_BYTES) throw httpError(413, "File is too large to create");
+  // lstat, not stat: a dangling symlink at the path is still "something is
+  // there", and writing through it would land bytes wherever it points.
+  let exists = true;
+  try { await fsp.lstat(abs); } catch (error) { if (error.code === "ENOENT") exists = false; else throw error; }
+  if (exists) throw httpError(409, `Refusing to overwrite: ${layer}/${rel} already exists`);
+  if (options.probe !== true) {
+    try { await fsp.mkdir(path.dirname(abs), { recursive: true }); } catch (error) {
+      // A file where a folder has to be (`guides.md` in the way of `guides/x.md`).
+      if (error.code === "ENOTDIR" || error.code === "EEXIST") throw httpError(409, `Cannot create ${layer}/${rel}: a file is in the way of its folder`);
+      throw error;
+    }
+  }
+  return stagePreparedWrites([{ layer, abs, text, mode: 0o644, create: true }], [], transactionId, options);
+}
+
+export async function stageFrontmatterTransaction(rawBody, roots, transactionId, options = {}) {
   const body = parseJson(rawBody);
   const { conceptId, key, layers, value } = body;
   if (typeof conceptId !== "string" || typeof key !== "string" || !Array.isArray(layers) || !layers.length) {
@@ -358,17 +435,39 @@ export async function stageFrontmatterTransaction(rawBody, roots, transactionId)
     writes.push({ layer, abs: target.abs, text, mode: stat.mode });
   }
   if (skipped.length) throw httpError(409, `Nothing was changed. ${skipped.map((item) => `${item.layer}: ${item.reason}`).join("; ")}`);
-  return stagePreparedWrites(writes, skipped, transactionId);
+  return stagePreparedWrites(writes, skipped, transactionId, options);
 }
 
+// Two kinds of write share one staging protocol. A REPLACE stages the new
+// bytes beside the target and keeps an exclusive backup of the original;
+// commit is a rename, rollback copies the backup back. A CREATE (`write.create
+// === true`) stages the new bytes and has no backup — there is nothing to
+// back up; commit is an exclusive copy into place (a file that appeared since
+// staging is never overwritten), rollback is an unlink of what this
+// transaction itself placed, never of a file it did not.
+//
+// `options.probe` answers the would-be targets without touching the disk — the
+// dry run a batch offers before it applies. `options.beforeReplace(index,
+// target)` is a test seam for injecting a failure mid-commit.
 async function stagePreparedWrites(writes, skipped, transactionId, options = {}) {
+  if (options.probe === true) {
+    const targets = writes.map((write) => ({
+      layer: write.layer, path: write.abs, staged: null, backup: null, ...(write.create === true ? { created: true } : {}),
+    }));
+    const refuse = async () => { throw new Error("a probed transaction cannot be committed"); };
+    return { targets, skipped, probe: true, commit: refuse, rollback: async () => {}, cleanup: async () => {} };
+  }
   const targets = [];
   try {
     for (const [index, write] of writes.entries()) {
       const suffix = `.contextcake-${transactionId}-${index}`;
       const staged = `${write.abs}${suffix}.new`;
-      const backup = `${write.abs}${suffix}.bak`;
       await fsp.writeFile(staged, write.text, { encoding: "utf8", flag: "wx", mode: write.mode & 0o777 });
+      if (write.create === true) {
+        targets.push({ layer: write.layer, path: write.abs, staged, backup: null, created: true });
+        continue;
+      }
+      const backup = `${write.abs}${suffix}.bak`;
       await fsp.copyFile(write.abs, backup, fs.constants.COPYFILE_EXCL);
       targets.push({ layer: write.layer, path: write.abs, staged, backup });
     }
@@ -377,18 +476,40 @@ async function stagePreparedWrites(writes, skipped, transactionId, options = {})
     throw error;
   }
 
+  // Created targets this transaction has actually placed. `rollback()` unlinks
+  // exactly these — a created target whose commit failed on EEXIST (someone
+  // else's file got there first) is not ours to remove.
+  const placed = new Set();
+  const place = async (target) => {
+    if (target.created) {
+      await fsp.copyFile(target.staged, target.path, fs.constants.COPYFILE_EXCL);
+      placed.add(target);
+    } else {
+      await fsp.rename(target.staged, target.path);
+    }
+  };
+  const restore = async (target) => {
+    if (target.created) {
+      if (!placed.has(target)) return;
+      await fsp.unlink(target.path).catch((error) => { if (error.code !== "ENOENT") throw error; });
+      placed.delete(target);
+    } else {
+      await fsp.copyFile(target.backup, target.path);
+    }
+  };
+
   async function commit() {
     const changed = [];
     try {
       for (const [index, target] of targets.entries()) {
         await options.beforeReplace?.(index, target);
-        await fsp.rename(target.staged, target.path);
+        await place(target);
         changed.push(target);
       }
       return changed.map((target) => target.layer);
     } catch (error) {
       try {
-        for (const target of changed.reverse()) await fsp.copyFile(target.backup, target.path);
+        for (const target of changed.reverse()) await restore(target);
       } catch (rollbackError) {
         const combined = new Error(`${error.message}; rollback failed: ${rollbackError.message}`);
         combined.code = "RecoveryRequired";
@@ -399,7 +520,7 @@ async function stagePreparedWrites(writes, skipped, transactionId, options = {})
   }
 
   async function rollback() {
-    for (const target of targets) await fsp.copyFile(target.backup, target.path);
+    for (const target of targets) await restore(target);
   }
 
   async function cleanup() { await cleanupTargets(targets); }
@@ -407,7 +528,9 @@ async function stagePreparedWrites(writes, skipped, transactionId, options = {})
 }
 
 async function cleanupTargets(targets) {
-  await Promise.all(targets.flatMap((target) => [target.staged, target.backup].map((file) => fsp.unlink(file).catch(() => {}))));
+  await Promise.all(targets.flatMap((target) => [target.staged, target.backup]
+    .filter((file) => typeof file === "string")
+    .map((file) => fsp.unlink(file).catch(() => {}))));
 }
 
 function readFrontmatterValue(text, key) {

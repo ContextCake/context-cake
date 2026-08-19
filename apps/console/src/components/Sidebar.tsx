@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useStoreData, useStoreNav } from '../store'
 import { destinationForView, readBrowserGroupedViews, viewForDestination, type ShellDestination } from '../shell-navigation'
+import { isActionable } from '../discrepancy-summary'
 import { CascadeIcon, HomeIcon, KnowledgeIcon, ReviewIcon, SettingsIcon, SourcesIcon } from './icons'
 
 const contextCakeLogo = `${import.meta.env.BASE_URL}favicon.svg`
@@ -51,7 +52,7 @@ function SidebarInner({ onOpenSettings, onNavigate }: { onOpenSettings?: () => v
   if (view === 'triage' || view === 'conflicts') reviewView.current = view
 
   const reviewCount = signals.filter((signal) => signal.route === 'review_required').length
-    + conflicts.filter((conflict) => ['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'].includes(conflict.discrepancyStatus ?? (conflict.status === 'open' ? 'needs_review' : 'resolved'))).length
+    + conflicts.filter(isActionable).length
   const sourceErrors = sources.filter((source) => source.status === 'degraded' || source.status === 'error').length
 
   const go = (destination: ShellDestination) => {

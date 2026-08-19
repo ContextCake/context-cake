@@ -156,12 +156,23 @@ export async function commitPaths(root, paths, message, { author = null, lockRet
 }
 
 // Acquires the repo lock before a caller mutates the working tree, then commits
-// only the named paths. If add/commit fails, rollback runs while the same lock
-// is still held so the operation can remain safely retryable.
+// only the named paths. If the mutation OR add/commit fails, rollback runs
+// while the same lock is still held so the operation can remain safely
+// retryable — a mutation that threw halfway (one of several files renamed) is
+// restored under the lock, never by a compensating step that runs after the
+// lock is gone. Callers write `rollback` to be safe against a mutation that
+// did nothing yet (no-op when nothing was staged or placed).
+//
+// `skipIfClean`: when the mutation left every named path byte-identical to
+// the index (a decision that writes a layer's own winning value back to it,
+// a recovery that restored files git never saw change), answer
+// `{ committed: false, clean: true }` instead of letting `git commit` refuse
+// with "nothing to commit" — which would otherwise roll a correct write back.
 export async function commitPathsWithMutation(root, paths, message, {
   mutate,
   rollback,
   author = null,
+  skipIfClean = false,
   lockRetryMs,
   lockRetries,
 } = {}) {
@@ -170,8 +181,9 @@ export async function commitPathsWithMutation(root, paths, message, {
     throw new Error("commitPathsWithMutation requires mutate and rollback callbacks");
   }
   return withRepoLock(root, "commit", async () => {
-    await mutate();
     try {
+      await mutate();
+      if (skipIfClean && await pathsClean(root, paths)) return { committed: false, clean: true };
       return await commitPathsUnlocked(root, paths, message, author);
     } catch (error) {
       try {
@@ -186,12 +198,26 @@ export async function commitPathsWithMutation(root, paths, message, {
   }, { lockRetryMs, lockRetries });
 }
 
+// The named paths are file names, not patterns: a concept id with `*`, `?`,
+// or `[` in it (`db[1].md`) would otherwise be a glob that sweeps a dirty
+// sibling (`db1.md`) into the pathspec commit. Every pathspec-taking call
+// below carries this so callers never have to escape.
+const LITERAL = "--literal-pathspecs";
+
+// True when none of the named paths differs from HEAD/index — modified,
+// staged, or untracked all count as dirty. Untracked files are listed
+// individually so a new file inside a listed directory is seen.
+async function pathsClean(root, paths) {
+  const status = await runGit(root, [LITERAL, "status", "--porcelain", "--untracked-files=all", "--", ...paths]);
+  return status.stdout === "";
+}
+
 async function commitPathsUnlocked(root, paths, message, author) {
-  await runGit(root, ["add", "--", ...paths]);
+  await runGit(root, [LITERAL, "add", "--", ...paths]);
   const ident = (await hasIdentity(root)) ? [] : identityArgs(author);
   // Pathspec commit: commit ONLY these paths, so a pre-existing staged change
   // (e.g. a prior failed op) can't be swept into this commit's message.
-  await runGit(root, [...ident, "commit", "-m", message, "--", ...paths]);
+  await runGit(root, [LITERAL, ...ident, "commit", "-m", message, "--", ...paths]);
   return { committed: true };
 }
 

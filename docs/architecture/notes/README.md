@@ -18,3 +18,4 @@ change one and the reasoning here goes stale, update the note in the same PR.
 | [status-polling.md](status-polling.md) | Why clients poll `/api/status` and never `/api/graph` |
 | [index-queue-and-memory.md](index-queue-and-memory.md) | Concurrency limits, the memory-pressure watermark, and the abort gap in remote adapters |
 | [manifest-validation.md](manifest-validation.md) | Tolerant reads, strict writes, and the one repair door between them |
+| [discrepancy-projection.md](discrepancy-projection.md) | One memoized discrepancy projection, what keys it, why candidates stay out of `revision`, and why live-layer decision writes go through git-core |

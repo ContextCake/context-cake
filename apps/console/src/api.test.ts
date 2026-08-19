@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, apiFetch, computeLevelBuckets, computeSourceBuckets, LiveDataError,
-  mergeSourceStatus, selectMode, trivialConflictReason,
+  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, apiFetch, computeLevelBuckets, computeSourceBuckets, isCompactRecord,
+  LiveDataError, mergeSourceStatus, runSequentially, selectMode, trivialConflictReason,
 } from './api'
 import type { DiscrepancyRecord, GraphSummary, ResolvedConcept } from './types'
 
@@ -972,5 +972,260 @@ describe('fresherDissent (C-b)', () => {
       conflicts: [{ layer: 'team', updated: 'not-a-date', content: 'Undated dissent.' }],
     })
     expect(adaptConflicts([garbled], [], STANDARD_BUCKETS)[0].contributions[1].fresherDissent).toBeUndefined()
+  })
+})
+
+// ---- Discrepancy Center wire: compact rows, detail, batch -------------------
+
+describe('adaptDiscrepancy: compact vs full records', () => {
+  const full: DiscrepancyRecord = {
+    id: 'broken_link::notes/a::body::decisions/Old', kind: 'broken_link', originalKind: 'broken_link',
+    conceptId: 'notes/a', conceptTitle: 'Note A', conceptType: 'note', key: 'body', label: 'Body', target: 'decisions/Old',
+    revision: 'rev-1', status: 'needs_review',
+    contributions: [{ source: 'personal', level: 3, updated: '2026-01-01', value: 'decisions/Old', fingerprint: 'fp', effective: true }],
+    effectiveSource: 'personal', effectiveValue: 'decisions/Old', winnerReason: 'personal wins.', owner: 'Unassigned', priority: 'unassigned',
+    fresherDissent: false, freshness: { effectiveUpdated: null, newestUpdated: null, hasNewerDissent: false },
+    affectedLinks: [], sourceHealth: [], history: [], matchingRules: [],
+    candidates: [{ id: 'decisions/old', reason: 'case', confidence: 0.95 }],
+    bestCandidate: { id: 'decisions/old', reason: 'case', confidence: 0.95 },
+  }
+  const compact: DiscrepancyRecord = {
+    ...full, history: undefined,
+    contributions: [{ ...full.contributions[0], truncated: false, valueBytes: 13, valueKind: 'string' }],
+    historyCount: 2, latestDecision: { id: 'd2', action: 'acknowledge', decidedAt: '2026-02-02', transactionState: 'not_required' }, compact: true,
+  }
+
+  it('marks a compact row detailLoaded:false with its history stand-ins, and a full record not at all', () => {
+    expect(isCompactRecord(compact)).toBe(true)
+    expect(isCompactRecord(full)).toBe(false)
+    const [row] = adaptDiscrepancies([compact], true, STANDARD_BUCKETS)
+    expect(row.detailLoaded).toBe(false)
+    expect(row.historyCount).toBe(2)
+    expect(row.latestDecision?.action).toBe('acknowledge')
+    expect(row.history).toEqual([])
+    const [fullRow] = adaptDiscrepancies([full], true, STANDARD_BUCKETS)
+    expect(fullRow.detailLoaded).toBeUndefined()
+    expect(fullRow.historyCount).toBeUndefined()
+  })
+
+  it('carries the broken-link candidates, the concept title/type, and a truncated preview flag', () => {
+    const [row] = adaptDiscrepancies([{ ...compact, contributions: [{ ...compact.contributions[0], value: 'decisions/Ol…', truncated: true, valueBytes: 400 }] }], true, STANDARD_BUCKETS)
+    expect(row.candidates).toEqual([{ id: 'decisions/old', reason: 'case', confidence: 0.95 }])
+    expect(row.bestCandidate?.id).toBe('decisions/old')
+    expect(row.conceptTitle).toBe('Note A')
+    expect(row.conceptType).toBe('note')
+    expect(row.contributions[0].truncated).toBe(true)
+    // A compact list-valued field is already text; `valueKind` is what still says it was a list.
+    const [listRow] = adaptDiscrepancies([{ ...compact, kind: 'frontmatter_value', contributions: [{ ...compact.contributions[0], value: '["a","b"]', valueKind: 'list' }] }], true, STANDARD_BUCKETS)
+    expect(listRow.isList).toBe(true)
+  })
+
+  it('a compact record with a truncated flag alone is still recognized (the `compact` marker is belt and braces)', () => {
+    const { compact: _flag, ...withoutMarker } = compact
+    expect(isCompactRecord(withoutMarker as DiscrepancyRecord)).toBe(true)
+  })
+})
+
+describe('LiveSource discrepancy routes', () => {
+  beforeEach(() => { vi.stubGlobal('fetch', vi.fn()) })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const okJson = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+  const status = (code: number, body: unknown = {}) => ({ ok: code < 400, status: code, json: async () => body, clone() { return this } }) as unknown as Response
+  const url = (call: unknown[]) => String(call[0])
+  const bodyOf = (call: unknown[]) => JSON.parse(String((call[1] as RequestInit).body))
+
+  it('asks for compact rows, and reads the summary envelope', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockResolvedValue(okJson({ discrepancies: [], summary: { total: 0 }, coverageComplete: true, indexing: false, indexingSources: [], errors: [], generation: 4, projectionRevision: 'p1' }))
+    const out = await createDataSource('live').discrepancies()
+    expect(url(vi.mocked(fetch).mock.calls[0])).toBe('/api/discrepancies?fields=compact')
+    expect(out?.summary).toEqual({ total: 0 })
+    expect(out?.projectionRevision).toBe('p1')
+  })
+
+  it('answers null for an engine without the discrepancies route at all', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockResolvedValue(status(404))
+    expect(await createDataSource('live').discrepancies()).toBeNull()
+  })
+
+  it('reads one full record through ?id=, and picks it out of the list an older engine answers instead', async () => {
+    const { createDataSource } = await import('./api')
+    const record = { id: 'x::1', history: [{ id: 'd1' }] }
+    vi.mocked(fetch).mockResolvedValueOnce(okJson({ discrepancy: record, generation: 1 }))
+    expect(await createDataSource('live').discrepancyDetail('x::1')).toEqual(record)
+    expect(url(vi.mocked(fetch).mock.calls[0])).toBe('/api/discrepancies?id=x%3A%3A1')
+
+    vi.mocked(fetch).mockResolvedValueOnce(okJson({ discrepancies: [{ id: 'other' }, record], coverageComplete: true }))
+    expect(await createDataSource('live').discrepancyDetail('x::1')).toEqual(record)
+
+    vi.mocked(fetch).mockResolvedValueOnce(okJson({ discrepancy: null, generation: 2 }))
+    expect(await createDataSource('live').discrepancyDetail('gone')).toBeNull()
+
+    vi.mocked(fetch).mockResolvedValueOnce(status(404))
+    expect(await createDataSource('live').discrepancyDetail('x::1')).toBeNull()
+  })
+
+  it('posts a batch to the batch route and carries the engine answer through', async () => {
+    const { createDataSource } = await import('./api')
+    const answer = { ok: true, applied: 2, failed: 0, notAttempted: 0, dryRun: true, results: [{ discrepancyId: 'a', ok: true }, { discrepancyId: 'b', ok: true }], suggestions: [{ id: 's1' }] }
+    vi.mocked(fetch).mockResolvedValue(okJson(answer))
+    const request = { decisions: [{ discrepancyId: 'a', revision: '1', action: 'acknowledge' as const }, { discrepancyId: 'b', revision: '1', action: 'unlink' as const }], dryRun: true }
+    const out = await createDataSource('live').decideDiscrepancies(request)
+    expect(url(vi.mocked(fetch).mock.calls[0])).toBe('/api/discrepancy-decisions/batch')
+    expect(bodyOf(vi.mocked(fetch).mock.calls[0])).toEqual(request)
+    expect(out).toMatchObject(answer)
+  })
+
+  it('sends a selection past the 500-decision ceiling as consecutive batches and merges the answers in order', async () => {
+    const { createDataSource, BATCH_LIMIT } = await import('./api')
+    expect(BATCH_LIMIT).toBe(500)
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { decisions: { discrepancyId: string }[] }
+      return okJson({
+        ok: true, applied: body.decisions.length, failed: 0, notAttempted: 0, dryRun: false,
+        results: body.decisions.map((decision) => ({ discrepancyId: decision.discrepancyId, ok: true })),
+        suggestions: [{ id: `after-${body.decisions[body.decisions.length - 1].discrepancyId}` }],
+      })
+    })
+    const decisions = Array.from({ length: 1201 }, (_, index) => ({ discrepancyId: `d${index}`, revision: '1', action: 'unlink' as const }))
+    const out = await createDataSource('live').decideDiscrepancies({ decisions })
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(fetch).mock.calls.map((call) => bodyOf(call).decisions.length)).toEqual([500, 500, 201])
+    expect(out.applied).toBe(1201)
+    expect(out.results).toHaveLength(1201)
+    expect(out.results[0].discrepancyId).toBe('d0')
+    expect(out.results[1200].discrepancyId).toBe('d1200')
+    expect(out.ok).toBe(true)
+    // Suggestions merge across batches by id (each batch mines the whole log).
+    expect(out.suggestions?.map((suggestion) => suggestion.id)).toEqual(['after-d499', 'after-d999', 'after-d1200'])
+  })
+
+  it('falls back to one decision at a time when the batch route is missing, and says so', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/discrepancy-decisions/batch') return status(404, { error: 'Not found' })
+      const body = JSON.parse(String(init?.body))
+      if (body.discrepancyId === 'b') return status(409, { error: 'The record changed since you loaded it.', code: 'STALE' })
+      return okJson({ decision: { id: `dec-${body.discrepancyId}`, writtenTargets: [{ layer: 'personal', path: 'x.md' }] } })
+    })
+    const out = await createDataSource('live').decideDiscrepancies({
+      decisions: [
+        { discrepancyId: 'a', revision: '1', action: 'acknowledge', reasonCode: 'other' },
+        { discrepancyId: 'b', revision: '1', action: 'acknowledge', reasonCode: 'other' },
+        { discrepancyId: 'c', revision: '1', action: 'acknowledge', reasonCode: 'other' },
+      ],
+    })
+    expect(out.fallback).toBe('sequential')
+    expect(out.applied).toBe(2)
+    expect(out.failed).toBe(1)
+    expect(out.ok).toBe(false)
+    expect(out.results.map((result) => [result.discrepancyId, result.ok])).toEqual([['a', true], ['b', false], ['c', true]])
+    expect(out.results[0].decision?.id).toBe('dec-a')
+    expect(out.results[0].written).toEqual([{ layer: 'personal', path: 'x.md' }])
+    expect(out.results[1]).toMatchObject({ status: 409, code: 'STALE', error: 'The record changed since you loaded it.' })
+    // One batch attempt, then one single per decision.
+    expect(vi.mocked(fetch).mock.calls.map(url)).toEqual(['/api/discrepancy-decisions/batch', '/api/discrepancy-decisions', '/api/discrepancy-decisions', '/api/discrepancy-decisions'])
+  })
+
+  it('keeps what earlier batches applied when a later batch is refused, and reports the rest not attempted', async () => {
+    const { createDataSource } = await import('./api')
+    let calls = 0
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      const body = JSON.parse(String(init?.body)) as { decisions: { discrepancyId: string }[] }
+      if (calls === 2) return status(409, { error: 'Coverage is incomplete while sources index.', code: 'COVERAGE_INCOMPLETE' })
+      return okJson({
+        ok: true, applied: body.decisions.length, failed: 0, notAttempted: 0, dryRun: false,
+        results: body.decisions.map((decision) => ({ discrepancyId: decision.discrepancyId, ok: true })),
+        suggestions: [{ id: 's-shared' }, { id: `s-${calls}` }],
+      })
+    })
+    const decisions = Array.from({ length: 600 }, (_, index) => ({ discrepancyId: `d${index}`, revision: '1', action: 'unlink' as const }))
+    const out = await createDataSource('live').decideDiscrepancies({ decisions })
+    expect(calls).toBe(2)
+    expect(out.applied).toBe(500)
+    expect(out.notAttempted).toBe(100)
+    expect(out.failed).toBe(0)
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatchObject({ chunk: 2, status: 409, code: 'COVERAGE_INCOMPLETE' })
+    expect(out.results).toHaveLength(600)
+    expect(out.results[499]).toMatchObject({ discrepancyId: 'd499', ok: true })
+    expect(out.results[500]).toMatchObject({ discrepancyId: 'd500', ok: false, code: 'SKIPPED' })
+    expect(out.results[500].error).toContain('batch 2 of 2 was refused')
+    // Suggestions merge by id across batches rather than the last one winning.
+    expect(out.suggestions?.map((suggestion) => suggestion.id)).toEqual(['s-shared', 's-1'])
+  })
+
+  it('stops sending further batches once one reports RECOVERY_REQUIRED, regardless of stopOnError', async () => {
+    const { createDataSource } = await import('./api')
+    let calls = 0
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      const body = JSON.parse(String(init?.body)) as { decisions: { discrepancyId: string }[] }
+      return okJson({
+        ok: false, applied: 1, failed: 1, notAttempted: body.decisions.length - 2, dryRun: false,
+        results: body.decisions.map((decision, index) => (index === 0
+          ? { discrepancyId: decision.discrepancyId, ok: true }
+          : index === 1
+            ? { discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'RECOVERY_REQUIRED', error: 'A previous write needs recovery.' }
+            : { discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'SKIPPED', error: 'Skipped: an earlier write in this batch requires recovery.' })),
+        suggestions: [],
+      })
+    })
+    const decisions = Array.from({ length: 600 }, (_, index) => ({ discrepancyId: `d${index}`, revision: '1', action: 'unlink' as const }))
+    const out = await createDataSource('live').decideDiscrepancies({ decisions })
+    expect(calls).toBe(1)
+    expect(out.applied).toBe(1)
+    expect(out.notAttempted).toBe(598)
+    expect(out.results[599]).toMatchObject({ discrepancyId: 'd599', ok: false, code: 'SKIPPED' })
+    expect(out.results[599].error).toContain('requires recovery')
+  })
+
+  it('does not fall back on a real refusal — a 409 from the batch route is an answer, with its code', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockResolvedValue(status(409, { error: 'Coverage is incomplete while sources index.', code: 'COVERAGE_INCOMPLETE' }))
+    await expect(createDataSource('live').decideDiscrepancies({ decisions: [{ discrepancyId: 'a', revision: '1', action: 'unlink' }] }))
+      .rejects.toMatchObject({ status: 409, code: 'COVERAGE_INCOMPLETE' })
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('a sequential dry run makes no request and carries no wouldWrite', async () => {
+    const decide = vi.fn()
+    const out = await runSequentially({ dryRun: true, decisions: [{ discrepancyId: 'a', revision: '1', action: 'unlink' }] }, decide)
+    expect(decide).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ ok: true, applied: 0, failed: 0, fallback: 'sequential', results: [{ discrepancyId: 'a', ok: true }] })
+    expect(out.results[0].wouldWrite).toBeUndefined()
+  })
+
+  it('stopOnError ends the sequential loop at the first failure and reports the tail as SKIPPED (not attempted)', async () => {
+    const decide = vi.fn().mockRejectedValueOnce(new Error('nope')).mockResolvedValue({ id: 'ok' })
+    const out = await runSequentially({ stopOnError: true, decisions: [{ discrepancyId: 'a', revision: '1', action: 'unlink' }, { discrepancyId: 'b', revision: '1', action: 'unlink' }] }, decide)
+    expect(decide).toHaveBeenCalledTimes(1)
+    expect(out.results).toHaveLength(2)
+    expect(out.failed).toBe(1)
+    expect(out.notAttempted).toBe(1)
+    expect(out.results[1]).toMatchObject({ discrepancyId: 'b', ok: false, code: 'SKIPPED', status: 409 })
+    expect(out.ok).toBe(false)
+  })
+})
+
+describe('DemoSource discrepancy simulation', () => {
+  it('runs a batch through the single-decision simulation and moves acknowledged rows to Acknowledged on the next read', async () => {
+    const { createDataSource } = await import('./api')
+    const source = createDataSource('demo')
+    const before = await source.discrepancies()
+    const first = before!.discrepancies[0]
+    expect(first.status).toBe('needs_review')
+    const out = await source.decideDiscrepancies({ decisions: [{ discrepancyId: first.id, revision: first.revision, action: 'acknowledge', reasonCode: 'other' }] })
+    expect(out.applied).toBe(1)
+    expect(out.results[0].decision?.action).toBe('acknowledge')
+    const after = await source.discrepancies()
+    expect(after!.discrepancies.find((item) => item.id === first.id)?.status).toBe('acknowledged')
+    // The detail route is the same record.
+    expect((await source.discrepancyDetail(first.id))?.id).toBe(first.id)
+    expect(await source.discrepancyDetail('nope')).toBeNull()
   })
 })

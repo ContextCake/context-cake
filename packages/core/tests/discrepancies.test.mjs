@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDiscrepancies, discrepancyRevision, fingerprint } from "../src/discrepancies.mjs";
+import {
+  ACTIONABLE_STATUSES, bestCandidateOf, buildDiscrepancies, buildLinkIndex, candidatesFor, compactDiscrepancy,
+  discrepancyRevision, filterDiscrepancies, fingerprint, removeLink, rewriteLinkTarget, summarizeDiscrepancies,
+} from "../src/discrepancies.mjs";
 import { parseRuleDocument, serializeRuleDocument, suggestDiscrepancyRules } from "../src/discrepancy-rules.mjs";
 import { mergeConcepts } from "../src/resolver.mjs";
 
@@ -268,6 +271,126 @@ test("a broken_link rule pinned to one target does not swallow a different dangl
   assert.equal(unrelated.matchingRules.length, 0);
 });
 
+test("a rule may wildcard conceptType and key, never the target; a rewrite_link rule round-trips and is broken-link only", () => {
+  const wildcard = {
+    id: "w1", scope: "team", mode: "automatic", enabled: true,
+    match: { kind: "broken_link", conceptType: "*", key: "*", sources: ["team"], target: "runbooks/missing" },
+    action: { type: "rewrite_link", newTarget: "runbooks/found" }, evidenceDecisionIds: ["d1", "d2", "d3"],
+  };
+  const [parsed] = parseRuleDocument(serializeRuleDocument([wildcard]));
+  assert.deepEqual(parsed.match, wildcard.match);
+  assert.deepEqual(parsed.action, { type: "rewrite_link", newTarget: "runbooks/found" });
+  // The destination is normalized (`.md`, `./`) and must differ from the target.
+  assert.deepEqual(parseRuleDocument(serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link", newTarget: "./runbooks/found.md" } }]))[0].action.newTarget, "runbooks/found");
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link", newTarget: "runbooks/missing" } }]), /somewhere other than the missing target/);
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link", newTarget: "*" } }]), /must name the concept/);
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link", newTarget: "../escape" } }]), /Invalid rewrite_link destination/);
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "rewrite_link" } }]), /must name the concept/);
+  // The target is never a wildcard.
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, match: { ...wildcard.match, target: "*" } }]), /never a wildcard/);
+  // rewrite_link is a broken-link action only; prefer_source is still refused for broken links.
+  assert.throws(() => serializeRuleDocument([{
+    id: "w2", scope: "team", mode: "recommend", enabled: true,
+    match: { kind: "section_content", conceptType: "decision", key: "choice", sources: ["company", "team"] },
+    action: { type: "rewrite_link", newTarget: "x" },
+  }]), /Only a broken-link rule may rewrite a link/);
+  assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "prefer_source", source: "team" } }]), /has no source to prefer/);
+  // The wildcard is broken-link only: a content-conflict rule with `*` would be
+  // pinned by kind and sources alone, and one flip to automatic would overwrite
+  // every disagreement between two layers.
+  for (const match of [
+    { kind: "section_content", conceptType: "*", key: "*", sources: ["company", "team"] },
+    { kind: "section_content", conceptType: "decision", key: "*", sources: ["company", "team"] },
+    { kind: "frontmatter_value", conceptType: "*", key: "owner", sources: ["company", "team"] },
+  ]) {
+    assert.throws(() => serializeRuleDocument([{ id: "w3", scope: "team", mode: "recommend", enabled: true, match, action: { type: "prefer_source", source: "team" } }]),
+      /Only a broken-link rule may use the wildcard/, JSON.stringify(match));
+  }
+  // …and an exact content-conflict rule still round-trips.
+  const [content] = parseRuleDocument(serializeRuleDocument([{
+    id: "w4", scope: "team", mode: "recommend", enabled: true,
+    match: { kind: "section_content", conceptType: "decision", key: "choice", sources: ["company", "team"] },
+    action: { type: "prefer_source", source: "team" },
+  }]));
+  assert.deepEqual(content.match, { kind: "section_content", conceptType: "decision", key: "choice", sources: ["company", "team"] });
+});
+
+test("a wildcard rule matches across sections; a wildcard and an exact rule that disagree are a conflict", () => {
+  const otherConcept = {
+    ...concept, id: "notes/other", frontmatter: { title: "Other", type: "note", owner: "Me" }, frontmatterConflicts: [],
+    sections: [{ key: "body", heading: "## Body {#body}", content: "See [[runbooks/missing]].", sourceLayer: "team", sourceUpdated: "2026-08-01", conflicts: [] }],
+  };
+  const wildcard = {
+    id: "w1", scope: "local", mode: "automatic", enabled: true,
+    match: { kind: "broken_link", conceptType: "*", key: "*", sources: ["team"], target: "runbooks/missing" },
+    action: { type: "acknowledge", reasonCode: "target_missing" },
+  };
+  const links = buildDiscrepancies([concept, otherConcept], { rules: [wildcard], coverageComplete: true })
+    .discrepancies.filter((item) => item.kind === "broken_link");
+  assert.equal(links.length, 2);
+  for (const link of links) {
+    assert.equal(link.status, "auto_ready", `${link.id} should match the wildcard rule`);
+    assert.deepEqual(link.matchingRules.map((rule) => rule.id), ["w1"]);
+  }
+  // A different target is not matched — the target stays exact.
+  const typo = { ...otherConcept, id: "notes/typo", sections: [{ ...otherConcept.sections[0], content: "See [[runbooks/typo]]." }] };
+  const unrelated = buildDiscrepancies([typo], { rules: [wildcard], coverageComplete: true }).discrepancies.find((item) => item.kind === "broken_link");
+  assert.equal(unrelated.status, "needs_review");
+  // A source mismatch is not matched either.
+  const personal = { ...otherConcept, id: "notes/personal", contributors: [{ layer: "personal", level: 3 }], sections: [{ ...otherConcept.sections[0], sourceLayer: "personal" }] };
+  assert.equal(buildDiscrepancies([personal], { rules: [wildcard], coverageComplete: true }).discrepancies.find((item) => item.kind === "broken_link").status, "needs_review");
+  // Wildcard + exact disagreement: both match, automation is disabled.
+  const exact = {
+    id: "e1", scope: "local", mode: "automatic", enabled: true,
+    match: { kind: "broken_link", conceptType: "decision", key: "choice", sources: ["team"], target: "runbooks/missing" },
+    action: { type: "rewrite_link", newTarget: "runbooks/found" },
+  };
+  const contested = buildDiscrepancies([concept], { rules: [wildcard, exact], coverageComplete: true }).discrepancies.find((item) => item.kind === "broken_link");
+  assert.equal(contested.ruleConflict, true);
+  assert.equal(contested.status, "needs_review");
+  assert.deepEqual(contested.matchingRules.map((rule) => rule.id).sort(), ["e1", "w1"]);
+  // Agreeing wildcard + exact rules are not a conflict.
+  const agreeing = { ...exact, action: wildcard.action };
+  assert.equal(buildDiscrepancies([concept], { rules: [wildcard, agreeing], coverageComplete: true }).discrepancies.find((item) => item.kind === "broken_link").status, "auto_ready");
+});
+
+test("a generalized broken-link suggestion needs three consistent decisions across two (conceptType, key) pairs", () => {
+  const decision = (id, conceptType, key, action) => ({
+    schemaVersion: 2, id: `d-${id}`, discrepancyId: `broken_link::${id}::${key}::old/decisions`, method: "manual",
+    learningPattern: { kind: "broken_link", conceptType, key, sources: ["team"], target: "old/decisions" },
+    ruleAction: action,
+  });
+  const ack = { type: "acknowledge", reasonCode: "target_missing" };
+  const rewrite = { type: "rewrite_link", newTarget: "decisions/index" };
+  // Same section three times: an exact suggestion, no generalized one.
+  const oneSection = [decision("a", "decision", "choice", ack), decision("b", "decision", "choice", ack), decision("c", "decision", "choice", ack)];
+  const exactOnly = suggestDiscrepancyRules(oneSection);
+  assert.equal(exactOnly.length, 1);
+  assert.equal(exactOnly[0].generalized, undefined);
+  assert.deepEqual(exactOnly[0].match, { kind: "broken_link", conceptType: "decision", key: "choice", sources: ["team"], target: "old/decisions" });
+  // Two sections: the exact patterns are too thin, the generalized one is offered.
+  const spread = [decision("a", "decision", "choice", rewrite), decision("b", "decision", "choice", rewrite), decision("c", "note", "body", rewrite)];
+  const generalized = suggestDiscrepancyRules(spread);
+  assert.equal(generalized.length, 1);
+  assert.equal(generalized[0].generalized, true);
+  assert.deepEqual(generalized[0].match, { kind: "broken_link", conceptType: "*", key: "*", sources: ["team"], target: "old/decisions" });
+  assert.deepEqual(generalized[0].action, rewrite);
+  assert.equal(generalized[0].evidenceCount, 3);
+  assert.deepEqual(generalized[0].evidenceDecisionIds, ["d-a", "d-b", "d-c"]);
+  // Inconsistent actions across the group → nothing.
+  assert.equal(suggestDiscrepancyRules([decision("a", "decision", "choice", rewrite), decision("b", "decision", "choice", ack), decision("c", "note", "body", rewrite)]).length, 0);
+  // Two distinct targets never merge into one suggestion.
+  const otherTarget = { ...decision("z", "note", "body", rewrite), learningPattern: { kind: "broken_link", conceptType: "note", key: "body", sources: ["team"], target: "old/other" } };
+  assert.equal(suggestDiscrepancyRules([spread[0], spread[1], otherTarget]).length, 0);
+  // Skipped when an equivalent (wildcard) rule already exists.
+  const existing = [{ id: "r", match: { kind: "broken_link", conceptType: "*", key: "*", sources: ["team"], target: "old/decisions" }, action: rewrite }];
+  assert.equal(suggestDiscrepancyRules(spread, existing).length, 0);
+  // Unlink and create_stub decisions carry no ruleAction and are never evidence.
+  assert.equal(suggestDiscrepancyRules(spread.map((row) => ({ ...row, ruleAction: null }))).length, 0);
+  // Approving the generalized suggestion yields a rule the store accepts.
+  assert.deepEqual(parseRuleDocument(serializeRuleDocument([{ id: "g", scope: "local", mode: "recommend", ...generalized[0] }]))[0].match, generalized[0].match);
+});
+
 test("serialized shared rules contain structural metadata only", () => {
   const text = serializeRuleDocument([{
     id: "r1", scope: "local", mode: "automatic", enabled: true,
@@ -277,4 +400,261 @@ test("serialized shared rules contain structural metadata only", () => {
   }]);
   assert.equal(text.includes("secret"), false);
   assert.match(text, /"mode": "recommend"/);
+});
+
+// ---- wire shapes: summarize / compact / filter ----------------------------------
+
+function projectionFixture() {
+  const long = "x".repeat(600);
+  const concepts = [
+    concept,
+    { ...concept, id: "decisions/cache", frontmatter: { title: "Cache", type: "decision", owner: "Platform" }, frontmatterConflicts: [],
+      sections: [{ key: "choice", heading: "## Choice {#choice}", content: `${long} See [[runbooks/missing]] and [[Runbooks/Postgres]].`, sourceLayer: "team", sourceUpdated: "2026-08-01",
+        conflicts: [{ layer: "company", updated: "2026-07-01", content: "Use Redis." }] }] },
+    { id: "runbooks/postgres", contributors: [{ layer: "team", level: 2 }], frontmatter: { title: "Postgres", type: "runbook", owner: "Data" }, frontmatterConflicts: [], sections: [] },
+    { id: "notes/quiet", contributors: [{ layer: "personal", level: 3 }], frontmatter: { title: "Quiet", type: "note", owner: "Me" }, frontmatterConflicts: [],
+      sections: [{ key: "body", heading: "## Body {#body}", content: "Links [[runbooks/missing]].", sourceLayer: "personal", sourceUpdated: "2026-08-02", conflicts: [] }] },
+  ];
+  const decisions = [{
+    schemaVersion: 2, id: "ack-1", discrepancyId: "section_content::decisions/db::choice", action: "acknowledge", reasonCode: "different_scopes",
+    decidedAt: "2026-08-03T00:00:00.000Z", transactionState: "not_required",
+    contributorFingerprints: [{ source: "team", fingerprint: fingerprint("Use Postgres. See [[runbooks/missing]].") }, { source: "company", fingerprint: fingerprint("Use MySQL.") }],
+  }];
+  return buildDiscrepancies(concepts, { decisions, coverageComplete: true }).discrepancies;
+}
+
+test("summarizeDiscrepancies counts kinds, statuses, groupings, targets, and quick wins", () => {
+  const list = projectionFixture();
+  const summary = summarizeDiscrepancies(list);
+  assert.equal(summary.total, list.length);
+  assert.equal(summary.actionable, list.filter((item) => ACTIONABLE_STATUSES.has(item.status)).length);
+  assert.equal(summary.byKind.broken_link, 4);
+  assert.equal(summary.byKind.section_content, 2);
+  assert.equal(summary.byKind.frontmatter_value, 1);
+  assert.equal(summary.byStatus.acknowledged, 1);
+  assert.equal(summary.byStatus.needs_review, summary.total - 1);
+  // Three records share the missing target; the case-slip has a clear best candidate.
+  const missing = summary.topTargets.find((row) => row.target === "runbooks/missing");
+  assert.equal(missing.count, 3);
+  assert.equal(summary.topTargets[0].target, "runbooks/missing");
+  assert.equal(missing.bestCandidate, null);
+  const cased = summary.topTargets.find((row) => row.target === "Runbooks/Postgres");
+  assert.equal(cased.bestCandidate.id, "runbooks/postgres");
+  assert.equal(summary.quickWins.brokenLinksTotal, 4);
+  assert.equal(summary.quickWins.brokenLinksWithBestCandidate, 1);
+  assert.equal(summary.quickWins.autoReady, 0);
+  assert.deepEqual(summary.bySourcePair.map((row) => row.key).sort(), ["company|team", "personal", "team"]);
+  assert.equal(summary.byOwner.find((row) => row.owner === "Platform").count, 6);
+  assert.equal(summary.byConceptType.find((row) => row.conceptType === "decision").count, 6);
+  assert.equal(summary.topConcepts[0].count >= summary.topConcepts.at(-1).count, true);
+  // topN bounds every list, and the choice of ties is deterministic.
+  assert.equal(summarizeDiscrepancies(list, { topN: 1 }).topConcepts.length, 1);
+  assert.deepEqual(summarizeDiscrepancies(list), summarizeDiscrepancies([...list].reverse()));
+});
+
+test("a target group's shared bestCandidate is agreed over the open rows; a resolved row (no candidate) counts but does not veto it", () => {
+  const linker = (id, extra = "") => ({
+    ...concept, id, frontmatterConflicts: [],
+    sections: [{ key: "choice", heading: "## Choice {#choice}", content: `See [[Runbooks/Missing-Thing]].${extra}`, sourceLayer: "team", sourceUpdated: "2026-08-01", conflicts: [] }],
+  });
+  const target = { id: "runbooks/missing-thing", contributors: [{ layer: "team", level: 2 }], frontmatter: { title: "Missing Thing", type: "runbook" }, frontmatterConflicts: [], sections: [] };
+  // A third concept already had its link rewritten: only the decision remains, so
+  // it is rebuilt as a resolved row carrying the target and no candidates.
+  const decisions = [{
+    schemaVersion: 2, id: "d1", discrepancyId: "broken_link::decisions/done::choice::Runbooks/Missing-Thing", action: "rewrite_link",
+    discrepancyKind: "broken_link", transactionState: "committed", conceptId: "decisions/done", title: "Done", conceptType: "decision", sectionKey: "choice",
+    linkTarget: "Runbooks/Missing-Thing", newTarget: "runbooks/missing-thing",
+    contributions: [{ layer: "team", level: 2, content: "Runbooks/Missing-Thing", updated: "2026-08-01" }],
+  }];
+  const list = buildDiscrepancies([linker("decisions/a"), linker("decisions/b"), target], { decisions, coverageComplete: true }).discrepancies;
+  const resolved = list.find((item) => item.status === "resolved");
+  assert.equal(resolved.target, "Runbooks/Missing-Thing");
+  assert.equal(resolved.effectiveValue, "runbooks/missing-thing");
+  const row = summarizeDiscrepancies(list).topTargets.find((item) => item.target === "Runbooks/Missing-Thing");
+  assert.equal(row.count, 3, "resolved rows count toward the group");
+  assert.equal(row.actionable, 2);
+  assert.equal(row.bestCandidate?.id, "runbooks/missing-thing", "the open rows still agree on the candidate");
+  // Two open rows that disagree still yield no shared candidate: the same bare
+  // target resolves relative to each linker's own folder.
+  const bare = (id) => ({ ...linker(id), sections: [{ ...linker(id).sections[0], content: "See [[missing-thing]]." }] });
+  const both = buildDiscrepancies([bare("runbooks/a"), bare("other/b"), target, { ...target, id: "other/missing-thing" }], { coverageComplete: true }).discrepancies;
+  const opens = both.filter((item) => item.kind === "broken_link");
+  assert.deepEqual(opens.map((item) => item.bestCandidate.id).sort(), ["other/missing-thing", "runbooks/missing-thing"]);
+  assert.equal(summarizeDiscrepancies(both).topTargets.find((item) => item.target === "missing-thing").bestCandidate, null, "open rows disagree → no shared candidate");
+  // A group whose only rows are resolved has no candidate to offer.
+  assert.equal(summarizeDiscrepancies([resolved]).topTargets[0].bestCandidate, null);
+});
+
+test("compactDiscrepancy previews long bodies and folds history into a count plus the latest decision", () => {
+  const list = projectionFixture();
+  const compact = list.map((item) => compactDiscrepancy(item));
+  for (const item of compact) {
+    assert.equal(item.compact, true);
+    assert.equal("history" in item, false);
+    for (const contribution of item.contributions) {
+      assert.equal(typeof contribution.truncated, "boolean");
+      assert.equal(typeof contribution.valueBytes, "number");
+      assert.equal(contribution.value.length <= 240, true, `preview over 240 chars for ${item.id}`);
+    }
+    if (typeof item.effectiveValue === "string") assert.equal(item.effectiveValue.length <= 240, true);
+  }
+  const long = compact.find((item) => item.conceptId === "decisions/cache" && item.originalKind === "section_content");
+  assert.equal(long.contributions[0].truncated, true);
+  assert.equal(long.contributions[0].valueBytes > 600, true);
+  assert.equal(long.contributions[0].valueKind, "string");
+  assert.equal(long.contributions[1].truncated, false);
+  const acked = compact.find((item) => item.status === "acknowledged");
+  assert.equal(acked.historyCount, 1);
+  assert.deepEqual(acked.latestDecision, { id: "ack-1", action: "acknowledge", decidedAt: "2026-08-03T00:00:00.000Z", transactionState: "not_required", reasonCode: "different_scopes" });
+  const fresh = compact.find((item) => item.originalKind === "frontmatter_value");
+  assert.equal(fresh.historyCount, 0);
+  assert.equal(fresh.latestDecision, null);
+  // Structured values keep their kind and are previewed as JSON.
+  const listValued = compactDiscrepancy({ ...list[0], contributions: [{ source: "a", value: ["x", "y"] }, { source: "b", value: { k: 1 } }] });
+  assert.equal(listValued.contributions[0].valueKind, "list");
+  assert.equal(listValued.contributions[0].value, '["x","y"]');
+  assert.equal(listValued.contributions[1].valueKind, "map");
+  // Never mutates the record it compacts.
+  assert.equal(Array.isArray(list[0].history), true);
+  assert.equal(typeof list[0].contributions[0].truncated, "undefined");
+});
+
+test("filterDiscrepancies narrows by status (with the actionable alias), kind, concept, target, source, owner, and type", () => {
+  const list = projectionFixture();
+  assert.equal(filterDiscrepancies(list, { status: "actionable" }).every((item) => ACTIONABLE_STATUSES.has(item.status)), true);
+  assert.equal(filterDiscrepancies(list, { status: "acknowledged" }).length, 1);
+  assert.equal(filterDiscrepancies(list, { status: "all" }).length, list.length);
+  assert.equal(filterDiscrepancies(list, { kind: "broken_link" }).length, 4);
+  assert.equal(filterDiscrepancies(list, { kind: "broken_link", target: "runbooks/missing" }).length, 3);
+  assert.equal(filterDiscrepancies(list, { conceptId: "notes/quiet" }).length, 1);
+  assert.equal(filterDiscrepancies(list, { source: "personal" }).length, 1);
+  assert.equal(filterDiscrepancies(list, { source: "company" }).length, 3);
+  assert.equal(filterDiscrepancies(list, { owner: "Me" }).length, 1);
+  assert.equal(filterDiscrepancies(list, { conceptType: "note" }).length, 1);
+  assert.deepEqual(filterDiscrepancies(list, {}), list);
+});
+
+// ---- broken-link candidates -------------------------------------------------------
+
+function candidateCorpus() {
+  return [
+    { id: "runbooks/missing-thing", frontmatter: { title: "Missing Thing", type: "runbook" } },
+    { id: "decisions/db", frontmatter: { type: "decision" } },
+    { id: "decisions/db-two", frontmatter: { type: "decision" } },
+    { id: "archive/README", frontmatter: {} },
+    { id: "docs/README", frontmatter: {} },
+    { id: "guides/Setup Guide", frontmatter: { title: "Setup Guide", type: "guide" } },
+  ];
+}
+
+test("candidatesFor names one structural reason per rule with the documented confidence", () => {
+  const index = buildLinkIndex(candidateCorpus());
+  const from = { linkingConceptId: "decisions/db", linkingConceptType: "decision" };
+  const only = (target) => { const c = candidatesFor(target, from, index); assert.equal(c.length, 1, `${target}: ${JSON.stringify(c)}`); return c[0]; };
+  assert.deepEqual(only("../runbooks/missing-thing"), { id: "runbooks/missing-thing", reason: "relative", confidence: 0.95 });
+  assert.deepEqual(only("Runbooks/Missing-Thing"), { id: "runbooks/missing-thing", reason: "case", confidence: 0.95 });
+  assert.deepEqual(only("runbooks/missing-thing.mdx"), { id: "runbooks/missing-thing", reason: "extension", confidence: 0.95 });
+  assert.deepEqual(only("runbooks/missing_thing"), { id: "runbooks/missing-thing", reason: "slug", confidence: 0.9 });
+  assert.deepEqual(only("old/missing-thing"), { id: "runbooks/missing-thing", reason: "moved", confidence: 0.85 });
+  assert.deepEqual(only("Missing Thing"), { id: "runbooks/missing-thing", reason: "title", confidence: 0.85 });
+  assert.deepEqual(only("old/Missing_Thing"), { id: "runbooks/missing-thing", reason: "slug_moved", confidence: 0.7 });
+  // A sibling reference resolves relative to the linking file's folder.
+  assert.deepEqual(only("db-two"), { id: "decisions/db-two", reason: "relative", confidence: 0.95 });
+  // Typos only when nothing structural matched: one edit, same type → 0.65.
+  assert.deepEqual(only("decisions/db-tow"), { id: "decisions/db-two", reason: "typo", confidence: 0.65 });
+  // Short basenames tolerate one edit, not two.
+  assert.deepEqual(candidatesFor("decisions/xx", from, index), []);
+  // Nothing close at all → empty, never a guess.
+  assert.deepEqual(candidatesFor("zzz/completely-unrelated", from, index), []);
+});
+
+test("bestCandidate needs a confident, unambiguous top; ambiguity yields null and candidates stay ≤5", () => {
+  const index = buildLinkIndex(candidateCorpus());
+  const from = { linkingConceptId: "decisions/db", linkingConceptType: "decision" };
+  const readme = candidatesFor("README", from, index);
+  assert.deepEqual(readme.map((c) => [c.id, c.reason, c.confidence]), [["archive/README", "moved", 0.6], ["docs/README", "moved", 0.6]]);
+  assert.equal(bestCandidateOf(readme), null);
+  assert.equal(bestCandidateOf(candidatesFor("Runbooks/Missing-Thing", from, index)).id, "runbooks/missing-thing");
+  assert.equal(bestCandidateOf(candidatesFor("decisions/db-tow", from, index)), null, "a typo is never a best candidate");
+  assert.equal(bestCandidateOf([{ id: "a", confidence: 0.95 }, { id: "b", confidence: 0.85 }]), null, "gap under 0.15");
+  assert.equal(bestCandidateOf([{ id: "a", confidence: 0.95 }, { id: "b", confidence: 0.6 }]).id, "a");
+  assert.equal(bestCandidateOf([]), null);
+  const crowded = buildLinkIndex(Array.from({ length: 12 }, (_, i) => ({ id: `dir${i}/shared`, frontmatter: {} })));
+  const many = candidatesFor("shared", from, crowded);
+  assert.equal(many.length, 5);
+  assert.deepEqual(many.map((c) => c.id), [...many.map((c) => c.id)].sort());
+});
+
+test("candidate search is memoized per (target, linking folder, linking type) and deterministic across builds", () => {
+  const corpus = candidateCorpus();
+  const index = buildLinkIndex(corpus);
+  const memo = new Map();
+  const a = candidatesFor("old/missing-thing", { linkingConceptId: "decisions/db", linkingConceptType: "decision" }, index, memo);
+  const b = candidatesFor("old/missing-thing", { linkingConceptId: "decisions/other", linkingConceptType: "decision" }, index, memo);
+  const c = candidatesFor("old/missing-thing", { linkingConceptId: "notes/other", linkingConceptType: "decision" }, index, memo);
+  assert.equal(a, b, "same folder shares one search");
+  assert.notEqual(a, c, "another folder is another key (relative and typo rules read it)");
+  assert.deepEqual(a, c);
+  assert.equal(memo.size, 2);
+  const again = candidatesFor("old/missing-thing", { linkingConceptId: "decisions/db", linkingConceptType: "decision" }, buildLinkIndex([...corpus].reverse()));
+  assert.deepEqual(again, a);
+});
+
+test("buildDiscrepancies attaches candidates and bestCandidate to broken links without touching revision", () => {
+  const linker = {
+    ...concept, id: "decisions/linker", frontmatterConflicts: [],
+    sections: [{ key: "choice", heading: "## Choice {#choice}", content: "See [[Runbooks/Missing-Thing]] and [[nowhere/at-all]].", sourceLayer: "team", sourceUpdated: "2026-08-01", conflicts: [] }],
+  };
+  const target = { id: "runbooks/missing-thing", contributors: [{ layer: "team", level: 2 }], frontmatter: { title: "Missing Thing", type: "runbook" }, frontmatterConflicts: [], sections: [] };
+  const links = buildDiscrepancies([linker, target], { coverageComplete: true }).discrepancies.filter((item) => item.kind === "broken_link");
+  const cased = links.find((item) => item.target === "Runbooks/Missing-Thing");
+  assert.deepEqual(cased.candidates, [{ id: "runbooks/missing-thing", reason: "case", confidence: 0.95 }]);
+  assert.equal(cased.bestCandidate.id, "runbooks/missing-thing");
+  const nowhere = links.find((item) => item.target === "nowhere/at-all");
+  assert.deepEqual(nowhere.candidates, []);
+  assert.equal(nowhere.bestCandidate, null);
+  // Adding a concept that changes the suggestion must not change the revision.
+  const withoutTarget = buildDiscrepancies([linker], { coverageComplete: true }).discrepancies.find((item) => item.target === "Runbooks/Missing-Thing");
+  assert.deepEqual(withoutTarget.candidates, []);
+  assert.equal(withoutTarget.revision, cased.revision);
+});
+
+test("candidate search stays bounded: 1,500 dangling links over 3,000 ids, deterministic", () => {
+  const ids = Array.from({ length: 3000 }, (_, i) => ({ id: `area-${i % 30}/note-${i}`, contributors: [{ layer: "team", level: 2 }], frontmatter: { type: "note", title: `Note ${i}` }, frontmatterConflicts: [], sections: [] }));
+  const linkers = Array.from({ length: 1500 }, (_, i) => ({
+    id: `linkers/l-${i}`, contributors: [{ layer: "team", level: 2 }], frontmatter: { type: "note" }, frontmatterConflicts: [],
+    sections: [{ key: "body", heading: "## Body {#body}", sourceLayer: "team", sourceUpdated: null, conflicts: [],
+      // A mix of shapes: renamed folder, case slip, typo, and hopeless.
+      content: i % 4 === 0 ? `[[old/note-${i}]]` : i % 4 === 1 ? `[[Area-${i % 30}/Note-${i}]]` : i % 4 === 2 ? `[[area-${i % 30}/note-${i}x]]` : `[[gone/${i}-nothing-like-it]]` }],
+  }));
+  const started = process.hrtime.bigint();
+  const first = buildDiscrepancies([...ids, ...linkers], { coverageComplete: true }).discrepancies.filter((item) => item.kind === "broken_link");
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.equal(first.length, 1500);
+  // ~300ms on a laptop; the bound exists to catch a quadratic blowup (the
+  // unbanded first cut took 9s here), not to pin the constant, so it leaves
+  // room for a loaded CI runner.
+  assert.equal(elapsedMs < 3000, true, `candidate search took ${elapsedMs.toFixed(0)}ms`);
+  const second = buildDiscrepancies([...ids, ...linkers], { coverageComplete: true }).discrepancies.filter((item) => item.kind === "broken_link");
+  assert.deepEqual(second.map((item) => [item.id, item.candidates, item.bestCandidate]), first.map((item) => [item.id, item.candidates, item.bestCandidate]));
+  assert.equal(first.filter((item) => item.bestCandidate).length >= 750, true, "renames and case slips resolve to a best candidate");
+});
+
+// ---- link text helpers -------------------------------------------------------------
+
+test("rewriteLinkTarget preserves ./, .md, #anchor, whitespace, and wikilink aliases; skips images and other targets", () => {
+  const text = "See [x](./runbooks/missing.md#setup), [[runbooks/missing|Alias]], [[runbooks/missing#sec]], [y]( runbooks/missing ), ![img](runbooks/missing), [z](runbooks/other), [w](https://example.com/runbooks/missing).";
+  const { text: out, replaced } = rewriteLinkTarget(text, "runbooks/missing", "runbooks/found");
+  assert.equal(replaced, 4);
+  assert.equal(out, "See [x](./runbooks/found.md#setup), [[runbooks/found|Alias]], [[runbooks/found#sec]], [y]( runbooks/found ), ![img](runbooks/missing), [z](runbooks/other), [w](https://example.com/runbooks/missing).");
+  assert.deepEqual(rewriteLinkTarget("no links here", "a", "b"), { text: "no links here", replaced: 0 });
+  assert.deepEqual(rewriteLinkTarget("[x](a)", "b", "c"), { text: "[x](a)", replaced: 0 });
+});
+
+test("removeLink turns links into their label, alias, or basename; images and other targets survive", () => {
+  const text = "See [the runbook](./runbooks/missing.md#setup), [[runbooks/missing|Alias]], [[runbooks/missing]], ![img](runbooks/missing), [z](runbooks/other).";
+  const { text: out, replaced } = removeLink(text, "runbooks/missing");
+  assert.equal(replaced, 3);
+  assert.equal(out, "See the runbook, Alias, missing, ![img](runbooks/missing), [z](runbooks/other).");
+  assert.deepEqual(removeLink("[[Missing Runbook]]", "Missing Runbook"), { text: "Missing Runbook", replaced: 1 });
 });

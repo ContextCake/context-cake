@@ -39,6 +39,7 @@ const SUITES = [
   // Pure units. Fast, no network, no temp dirs.
   { group: "unit", name: "tokens", ...node("tokens.test.mjs") },
   { group: "unit", name: "git-auth", ...node("git-auth.test.mjs") },
+  { group: "unit", name: "git-core", ...node("git-core.test.mjs") },
   { group: "unit", name: "manifest", ...node("manifest.test.mjs") },
   { group: "unit", name: "control-sources", ...node("control-sources.test.mjs") },
   { group: "unit", name: "write-target", ...node("write-target.test.mjs") },
@@ -55,11 +56,15 @@ const SUITES = [
   { group: "unit", name: "sidecar-state", ...node("sidecar-state.test.mjs") },
   { group: "unit", name: "discrepancies", ...node("discrepancies.test.mjs") },
   { group: "unit", name: "discrepancy-transactions", ...node("discrepancy-transactions.test.mjs") },
+  { group: "unit", name: "discrepancy-projection", ...node("discrepancy-projection.test.mjs") },
+  { group: "unit", name: "discrepancy-link-actions", ...node("discrepancy-link-actions.test.mjs") },
+  { group: "unit", name: "discrepancy-batch", ...node("discrepancy-batch.test.mjs") },
 
   // Write path, sync, and the servers. These bind ports and shell out to git.
   { group: "integration", name: "profile-runtime", ...sh("profile-runtime-test.sh") },
   { group: "integration", name: "pack", ...sh("pack-test.sh") },
   { group: "integration", name: "git-sync", ...sh("git-sync-test.sh") },
+  { group: "integration", name: "discrepancy-live-layer", ...sh("discrepancy-live-layer-test.sh") },
   { group: "integration", name: "capture", ...sh("capture-test.sh") },
   { group: "integration", name: "team-sync-mcp", ...sh("team-sync-mcp-test.sh") },
   { group: "integration", name: "playground", ...sh("playground-test.sh") },

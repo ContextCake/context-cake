@@ -53,14 +53,23 @@ playground/service command documented in the repository instructions.
   over. Recent activity is demo-only until the engine exposes an activity API.
 - **Queue** demonstrates review, stored, and discarded signal routing in demo
   mode; live/Desktop mode has no signal API yet and is read-only.
-- **Resolve** clears formatting-only conflicts automatically and presents
-  meaning-changing conflicts as direct answer choices. In live/Desktop mode,
-  choosing an answer preflights every contributing writable local layer,
-  updates them together, and appends the original answers and decision to
-  `.contextcake/profiles/<profile-id>/conflict-resolutions.ndjson` beside the
-  manifest. History can
-  be reopened to choose a different saved answer later. The service refuses
-  the whole change if a source is remote, missing, or changed since review.
+- **Resolve** (the Discrepancy Center) opens on what needs attention: an
+  actionable count, per-kind tiles and quick wins (each a filter), status
+  tabs with counts, and a grouped, windowed list — by kind (broken links
+  sub-grouped by target), concept, source pair or owner — that costs the same
+  at 1,500 rows as at 15. Rows carry a checkbox; the bulk bar acts on the
+  selection (acknowledge with a reason, rewrite N links to a candidate, remove
+  N links, create the missing concept in a writable layer, use one source for
+  N) and previews every action through a dry run first, then applies it as
+  one batch with per-item results — failures stay selected. A broken link's
+  detail leads with the engine's suggested fix (a structural near-match: case,
+  extension, slug, moved file, typo) beside remove / create / acknowledge. In
+  live/Desktop mode, choosing an answer preflights every contributing writable
+  local layer, updates them together, and appends the original answers and
+  decision to `.contextcake/profiles/<profile-id>/conflict-resolutions.ndjson`
+  beside the manifest. History can be reopened to choose a different saved
+  answer later. The service refuses the whole change if a source is remote,
+  missing, or changed since review.
 - **Concepts** shows the effective concept with per-section provenance, and each
   contributor links to the file it came from.
 - **Files** is the source navigator: a keyboard tree per source, scoping to one
@@ -133,13 +142,15 @@ src/
     AccountPanel.tsx      desktop auth and settings-sync controls
     SetupWizard.tsx       first-run source configuration
     FileTree.tsx          windowed ARIA tree behind the Files navigator
+    useVirtualWindow.ts   the windowing math (prefix sums, spliced active row) behind the Discrepancy Center list, generalized from FileTree
     ConnectAgentDialog.tsx
     ChatPanel.tsx
   views/
     Canvas.tsx
     Overview.tsx
     Triage.tsx
-    Conflicts.tsx
+    Conflicts.tsx         the Discrepancy Center root; its pieces live in views/conflicts/
+    conflicts/            OverviewHeader, GroupedList, BulkBar, DecisionPanel, Evidence, Rules, filters
     Concepts.tsx
     Files.tsx
     Sources.tsx

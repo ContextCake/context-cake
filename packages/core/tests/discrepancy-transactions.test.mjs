@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { stageSectionTransaction, stageFrontmatterTransaction } from "../src/layer-files.mjs";
+import { stageSectionTransaction, stageFrontmatterTransaction, stageFileCreationTransaction, relativeWithinRoot, resolveLayerFile } from "../src/layer-files.mjs";
 import { createDiscrepancyTransactionJournal } from "../src/conflict-resolutions.mjs";
 import { createEngineService } from "../src/service.mjs";
 
@@ -189,6 +190,157 @@ test("applyDiscrepancyDecision refuses compose on an array-typed frontmatter fie
     server?.close();
     await fsp.rm(dir, { recursive: true, force: true });
   }
+});
+
+// ---- create-mode staging: the transaction behind "create the missing concept" ----
+
+test("stageFileCreationTransaction creates exclusively, into a new subfolder, and rolls back by unlink", async () => {
+  const { dir, roots } = await fixture();
+  try {
+    const teamRoot = roots.get("team").root;
+    // Targets come back realpath'd (assertInsideRoot); the temp root itself
+    // sits behind a symlink on macOS, so compare against its real path.
+    const realTeamRoot = await fsp.realpath(teamRoot);
+    const text = "---\ntype: note\ntitle: Deploy\n---\n\n# Deploy\n\nstub.\n";
+    // A probe answers the would-be target and stages nothing.
+    const probed = await stageFileCreationTransaction({ layer: "team", rel: "guides/deploy.md", text }, roots, "tx-probe", { probe: true });
+    assert.equal(probed.probe, true);
+    assert.deepEqual(probed.targets.map((t) => [t.layer, path.relative(realTeamRoot, t.path), t.staged, t.backup, t.created]), [["team", "guides/deploy.md", null, null, true]]);
+    await assert.rejects(fsp.stat(path.join(teamRoot, "guides")), { code: "ENOENT" }, "a probe creates no folder");
+    await assert.rejects(probed.commit(), /probed transaction/);
+
+    // Staged: the parent folder exists, the staged file exists, the target does not, no backup.
+    const staged = await stageFileCreationTransaction({ layer: "team", rel: "guides/deploy.md", text }, roots, "tx-create");
+    const [target] = staged.targets;
+    assert.equal(target.created, true);
+    assert.equal(target.backup, null);
+    assert.equal(path.relative(realTeamRoot, target.path), "guides/deploy.md");
+    assert.equal(await fsp.readFile(target.staged, "utf8"), text);
+    await assert.rejects(fsp.stat(target.path), { code: "ENOENT" }, "not placed until commit");
+    // Rolling back an uncommitted create is a no-op on the target and never throws.
+    await staged.rollback();
+    await assert.rejects(fsp.stat(target.path), { code: "ENOENT" });
+    // Commit places it; cleanup drops the staged copy; the bytes are exact.
+    assert.deepEqual(await staged.commit(), ["team"]);
+    await staged.cleanup();
+    assert.equal(await fsp.readFile(target.path, "utf8"), text);
+    await assert.rejects(fsp.stat(target.staged), { code: "ENOENT" });
+    // Rollback AFTER commit unlinks what this transaction placed.
+    await staged.rollback();
+    await assert.rejects(fsp.stat(target.path), { code: "ENOENT" }, "rollback removed the created file");
+
+    // Existing files are refused at stage time; so is a path that escapes the root.
+    await fsp.writeFile(path.join(teamRoot, "existing.md"), "# Existing\n");
+    await assert.rejects(stageFileCreationTransaction({ layer: "team", rel: "existing.md", text }, roots, "tx-exists"), { status: 409 });
+    await assert.rejects(stageFileCreationTransaction({ layer: "team", rel: "../escape.md", text }, roots, "tx-escape"), { status: 403 });
+    await assert.rejects(stageFileCreationTransaction({ layer: "nope", rel: "x.md", text }, roots, "tx-layer"), { status: 404 });
+    await assert.rejects(stageFileCreationTransaction({ layer: "team", rel: "bin.png", text }, roots, "tx-ext"), { status: 415 });
+    await assert.rejects(fsp.stat(path.join(dir, "escape.md")), { code: "ENOENT" });
+  } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+});
+
+test("a created target that appears before commit is never overwritten, and a mixed write set restores as one", async () => {
+  const { dir, roots } = await fixture();
+  try {
+    const teamRoot = roots.get("team").root;
+    const stubText = "# Stub\n";
+    const staged = await stageFileCreationTransaction({ layer: "team", rel: "stub.md", text: stubText }, roots, "tx-race");
+    // Someone else creates the file between staging and commit.
+    await fsp.writeFile(path.join(teamRoot, "stub.md"), "# Theirs\n");
+    await assert.rejects(staged.commit(), { code: "EEXIST" });
+    await staged.rollback();
+    assert.equal(await fsp.readFile(path.join(teamRoot, "stub.md"), "utf8"), "# Theirs\n", "rollback did not remove a file the transaction never placed");
+    await staged.cleanup();
+    await assert.rejects(fsp.stat(staged.targets[0].staged), { code: "ENOENT" });
+  } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+});
+
+test("startup recovery removes a created target left by a crash and skips its null backup", async () => {
+  const { dir, roots } = await fixture();
+  try {
+    const journal = createDiscrepancyTransactionJournal(path.join(dir, "manifest.json"));
+    const teamRoot = roots.get("team").root;
+    await fsp.mkdir(path.join(teamRoot, "guides"));
+    const target = path.join(teamRoot, "guides", "deploy.md");
+    const staged = `${target}.contextcake-tx-crash-0.new`;
+    await fsp.writeFile(staged, "# Deploy\n");
+    await fsp.writeFile(target, "# Deploy\n"); // placed, then the process died before the decision append
+    await journal.append({ id: "tx-crash-create", state: "prepared", targets: [{ path: target, staged, backup: null, created: true }] });
+    assert.deepEqual(await journal.recover([...roots.values()].map((entry) => entry.root)), ["tx-crash-create"]);
+    await assert.rejects(fsp.stat(target), { code: "ENOENT" }, "the created file was removed");
+    await assert.rejects(fsp.stat(staged), { code: "ENOENT" }, "the staged copy was removed");
+    assert.equal((await journal.list()).at(-1).state, "rolled_back");
+    // A created target the decision log confirms is kept; only the staged copy goes.
+    await fsp.writeFile(staged, "# Deploy\n");
+    await fsp.writeFile(target, "# Deploy\n");
+    await journal.append({ id: "tx-confirmed-create", state: "prepared", targets: [{ path: target, staged, backup: null, created: true }] });
+    assert.deepEqual(await journal.recover([...roots.values()].map((entry) => entry.root), ["tx-confirmed-create"]), []);
+    assert.equal(await fsp.readFile(target, "utf8"), "# Deploy\n");
+    await assert.rejects(fsp.stat(staged), { code: "ENOENT" });
+    assert.equal((await journal.list()).at(-1).state, "committed");
+    // A created target whose file is already gone recovers cleanly too.
+    await journal.append({ id: "tx-crash-gone", state: "prepared", targets: [{ path: path.join(teamRoot, "guides", "never.md"), staged: path.join(teamRoot, "guides", "never.md.new"), backup: null, created: true }] });
+    assert.deepEqual(await journal.recover([...roots.values()].map((entry) => entry.root)), ["tx-crash-gone"]);
+    // Containment still applies to created targets: a path outside every root is refused.
+    await journal.append({ id: "tx-crash-outside", state: "prepared", targets: [{ path: path.join(dir, "outside.md"), staged: path.join(dir, "outside.md.new"), backup: null, created: true }] });
+    await assert.rejects(journal.recover([...roots.values()].map((entry) => entry.root)), /Recovery is required for tx-crash-outside/);
+  } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+});
+
+test("a restore hook is handed the targets BEFORE any byte is restored and restores them itself; the journal finalizes only after it returns", async () => {
+  const { dir, roots } = await fixture();
+  try {
+    const journal = createDiscrepancyTransactionJournal(path.join(dir, "manifest.json"));
+    const target = path.join(dir, "team", "database.md");
+    const backup = `${target}.bak`;
+    const staged = `${target}.new`;
+    const original = await fsp.readFile(target, "utf8");
+    await fsp.writeFile(backup, original);
+    await fsp.writeFile(staged, document("new"));
+    await fsp.writeFile(target, document("crashed"));
+    await journal.append({ id: "tx-hooked", state: "prepared", targets: [{ path: target, backup, staged }] });
+    const seen = [];
+    const recovered = await journal.recover([...roots.values()].map((entry) => entry.root), [], {
+      restore: async (tx, targets, applyRestore) => {
+        seen.push(["before", tx.id, targets.length, await fsp.readFile(target, "utf8")]);
+        await applyRestore(targets); // where a host would hold its lock
+        seen.push(["after", await fsp.readFile(target, "utf8")]);
+        assert.ok(await fsp.stat(backup), "the backup is still there while the hook runs");
+      },
+    });
+    assert.deepEqual(recovered, ["tx-hooked"]);
+    assert.deepEqual(seen, [["before", "tx-hooked", 1, document("crashed")], ["after", original]]);
+    assert.equal(await fsp.readFile(target, "utf8"), original);
+    await assert.rejects(fsp.stat(backup), { code: "ENOENT" }, "backups are dropped after the hook returned");
+    assert.equal((await journal.list()).at(-1).state, "rolled_back");
+    // A hook that throws leaves the transaction pending and the file untouched.
+    await fsp.writeFile(backup, original);
+    await fsp.writeFile(target, document("crashed again"));
+    await journal.append({ id: "tx-hook-fails", state: "prepared", targets: [{ path: target, backup, staged }] });
+    await assert.rejects(journal.recover([...roots.values()].map((entry) => entry.root), [], { restore: async () => { throw new Error("lock busy"); } }), /Recovery is required for tx-hook-fails/);
+    assert.equal(await fsp.readFile(target, "utf8"), document("crashed again"), "nothing restored outside the hook");
+    assert.ok(await fsp.stat(backup), "the backup survives a failed hook");
+    assert.equal((await journal.list()).at(-1).state, "recovery_required");
+  } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+});
+
+test("relativeWithinRoot names the file that would land, so a case-folded resolution is visible", async () => {
+  // Pure comparison over paths that need not exist: a root behind no symlink.
+  assert.equal(relativeWithinRoot("/x/team/guides/Deploy.md", "/x/team"), "guides/Deploy.md");
+  assert.equal(relativeWithinRoot("/x/team/Guides/Deploy.md", "/x/team"), "Guides/Deploy.md");
+  // Against a real (possibly symlinked, possibly case-insensitive) root: the
+  // requested path comes back byte-for-byte when nothing folds it, and the
+  // folded casing when the filesystem does.
+  const { dir, roots } = await fixture();
+  try {
+    const teamRoot = roots.get("team").root;
+    await fsp.mkdir(path.join(teamRoot, "guides"));
+    const exact = resolveLayerFile("team/guides/deploy.md", roots);
+    assert.equal(relativeWithinRoot(exact.abs, teamRoot), "guides/deploy.md");
+    const folded = resolveLayerFile("team/Guides/Deploy.md", roots);
+    const caseInsensitive = fs.existsSync(path.join(teamRoot, "GUIDES"));
+    assert.equal(relativeWithinRoot(folded.abs, teamRoot), caseInsensitive ? "guides/Deploy.md" : "Guides/Deploy.md");
+  } finally { await fsp.rm(dir, { recursive: true, force: true }); }
 });
 
 test("failed startup recovery records recovery_required and rejects", async () => {

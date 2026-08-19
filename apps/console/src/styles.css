@@ -941,6 +941,8 @@ button { font-family: inherit; }
 .cc-metric-strip button:hover { background: var(--cc-neutral-fill); }
 .cc-metric-strip strong { color: var(--cc-ink); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 22px; font-weight: 500; }
 .cc-metric-strip span { color: var(--cc-caption); font-size: 11.5px; }
+.cc-metric-strip button { flex-wrap: wrap; }
+.cc-metric-strip .cc-metric-detail { flex: 1 0 100%; margin-top: -2px; color: var(--cc-faint); font-size: 10.5px; line-height: 1.35; }
 /* Overview "Cascade order": one row per source, position 1 first. The rank
    pill is the only number on the row — the manifest level never shows here. */
 .cc-cascade-order { margin: 0; padding: 0; list-style: none; }
@@ -2260,20 +2262,106 @@ textarea:focus-visible,
 .cc-discrepancy-guide ol { display: flex; flex: 1; gap: 18px; margin: 0; padding: 0; list-style: none; }
 .cc-discrepancy-guide li { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--cc-caption); font-size: 11.5px; line-height: 1.35; }
 .cc-discrepancy-guide li span { width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 999px; background: var(--cc-neutral-fill); color: var(--cc-teal-text); font-size: 10px; font-weight: 750; }
+/* Overview tiles: what is open, by kind and by quick win — each one a filter. */
+.cc-dc-tiles { display: grid; grid-template-columns: minmax(150px, 1.3fr) repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--cc-line); border-radius: 12px; background: var(--cc-line); }
+.cc-dc-tile { min-height: 74px; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 12px 14px; border: 0; background: var(--cc-surface); color: var(--cc-body); font: inherit; text-align: left; cursor: pointer; transition: background 160ms var(--cc-ease-out); }
+.cc-dc-tile:hover { background: var(--cc-neutral-fill); }
+.cc-dc-tile[aria-pressed="true"] { background: var(--cc-raised); box-shadow: inset 0 -2px 0 var(--cc-teal-stroke-e); }
+.cc-dc-tile strong { color: var(--cc-ink); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 22px; font-weight: 500; line-height: 1.1; }
+.cc-dc-tile--total strong { font-size: 28px; }
+.cc-dc-tile span { color: var(--cc-caption); font-size: 11.5px; }
+.cc-dc-tile small { color: var(--cc-faint); font-size: 10.5px; }
+.cc-dc-quick { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 9px 14px; background: var(--cc-surface); }
+.cc-dc-quick-label { margin-right: 4px; color: var(--cc-caption); font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.cc-dc-quick button { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--cc-line); border-radius: 999px; background: var(--cc-raised); color: var(--cc-body); font: inherit; font-size: 11.5px; cursor: pointer; }
+.cc-dc-quick button:hover:not(:disabled) { border-color: var(--cc-line-strong); background: var(--cc-neutral-fill); }
+.cc-dc-quick button:disabled { color: var(--cc-faint); cursor: default; }
+.cc-dc-quick button[aria-pressed="true"] { border-color: var(--cc-teal-stroke-e); background: var(--cc-teal-fill); color: var(--cc-teal-text); }
+.cc-dc-quick button strong { color: inherit; font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 600; }
 .cc-status-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 4px; border: 1px solid var(--cc-line); border-radius: 11px; background: var(--cc-neutral-fill); }
-.cc-status-tabs button { min-height: 44px; flex: 1 0 auto; padding: 0 13px; border: 0; border-radius: 8px; background: transparent; color: var(--cc-caption); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.cc-status-tabs button { min-height: 44px; flex: 1 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; border: 0; border-radius: 8px; background: transparent; color: var(--cc-caption); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
 .cc-status-tabs button[data-active="true"] { background: var(--cc-raised); color: var(--cc-ink); box-shadow: 0 1px 4px var(--cc-shadow); }
-.cc-discrepancy-filters { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)) auto; gap: 8px; }
+.cc-status-tab-count { min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--cc-line-soft); color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10.5px; font-weight: 500; }
+.cc-status-tabs button[data-active="true"] .cc-status-tab-count { background: var(--cc-amber-fill); color: var(--cc-amber-text); }
+.cc-discrepancy-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cc-discrepancy-filters .cc-ui-segmented { flex: 0 0 auto; }
 .cc-discrepancy-filters select, .cc-filter-check { min-height: 44px; border: 1px solid var(--cc-line); border-radius: 9px; background: var(--cc-surface); color: var(--cc-body); font: inherit; font-size: 12px; }
-.cc-discrepancy-filters select { padding: 0 30px 0 11px; }
-.cc-filter-check { display: flex; align-items: center; gap: 7px; padding: 0 12px; white-space: nowrap; }
+.cc-discrepancy-filters select { flex: 1 1 130px; min-width: 0; padding: 0 30px 0 11px; }
+.cc-filter-check { display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; white-space: nowrap; }
 .cc-filter-check input { width: 16px; height: 16px; accent-color: var(--cc-teal-stroke-e); }
-.cc-discrepancy-center .cc-conflict-layout { min-height: 560px; grid-template-columns: minmax(250px, .72fr) minmax(0, 1.7fr); }
-.cc-discrepancy-center .cc-conflict-list { max-height: 760px; overflow-y: auto; padding-right: 3px; }
-.cc-discrepancy-center .cc-conflict-row { min-height: 126px; }
+.cc-discrepancy-center .cc-conflict-layout { min-height: 560px; grid-template-columns: minmax(280px, .78fr) minmax(0, 1.7fr); }
+.cc-conflict-column { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* The list is a WINDOW: a scrolling box whose inner element is as tall as
+   every row would be, with only the rows in view (plus overscan and the
+   focused one) actually mounted, absolutely positioned at their offset. Row
+   heights are fixed and mirrored in GroupedList.tsx — change both. */
+.cc-discrepancy-center .cc-conflict-list { position: relative; max-height: 760px; min-height: 240px; overflow-y: auto; overflow-x: hidden; padding: 0; border: 1px solid var(--cc-line); border-radius: 12px; background: var(--cc-surface); }
+.cc-conflict-virtual { position: relative; width: 100%; }
+.cc-discrepancy-center .cc-conflict-row { position: absolute; left: 0; right: 0; box-sizing: border-box; height: 128px; margin: 0; padding: 12px 13px 12px 12px; overflow: hidden; border-width: 0 0 1px; border-radius: 0; gap: 6px; user-select: none; }
+.cc-discrepancy-center .cc-conflict-row[data-selected="true"] { background: var(--cc-raised); box-shadow: inset 0 0 0 1px var(--cc-line-strong); }
+.cc-discrepancy-center .cc-conflict-row[data-checked] { background: var(--cc-blue-fill); }
+.cc-discrepancy-center .cc-conflict-row[data-checked][data-selected="true"] { background: var(--cc-blue-fill2); }
 .cc-kind-pill { display: inline-flex; width: max-content; align-items: center; min-height: 23px; padding: 0 8px; border-radius: 999px; background: var(--cc-neutral-fill); color: var(--cc-caption); font-size: 9.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
-.cc-discrepancy-center .cc-conflict-row > code { color: var(--cc-caption); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }
+.cc-fix-pill { display: inline-flex; align-items: center; min-height: 23px; padding: 0 8px; border-radius: 999px; background: var(--cc-teal-fill); color: var(--cc-teal-text); font-size: 9.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
+.cc-discrepancy-center .cc-conflict-row-top { justify-content: flex-start; }
+.cc-discrepancy-center .cc-conflict-row-top .cc-conflict-row-status { margin-left: auto; }
+.cc-discrepancy-center .cc-conflict-row > code { color: var(--cc-caption); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-discrepancy-center .cc-conflict-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-discrepancy-center .cc-conflict-row-foot { color: var(--cc-caption); font-size: 10.5px; }
+.cc-conflict-row-target { min-width: 0; overflow: hidden; font-family: 'JetBrains Mono', ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+/* Selection checkbox drawn on the row — a real control lives in the row's ARIA state; this is the click target. */
+.cc-row-check { flex: 0 0 auto; width: 16px; height: 16px; display: inline-grid; place-items: center; border: 1.5px solid var(--cc-line-strong); border-radius: 4px; background: var(--cc-raised); color: var(--cc-on-teal); cursor: pointer; transition: background 120ms var(--cc-ease-out), border-color 120ms var(--cc-ease-out); }
+.cc-row-check:hover { border-color: var(--cc-teal-stroke-e); }
+.cc-row-check[data-checked] { border-color: var(--cc-teal-stroke-e); background: var(--cc-teal-stroke-e); }
+.cc-row-check-mixed { width: 8px; height: 2px; border-radius: 1px; background: currentColor; }
+/* Group headers: same option semantics, one line, sticky feel without stickiness (windowing forbids it). */
+.cc-group-row { position: absolute; left: 0; right: 0; box-sizing: border-box; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 13px 0 12px; border-bottom: 1px solid var(--cc-line); background: var(--cc-neutral-fill); color: var(--cc-ink); cursor: pointer; user-select: none; }
+.cc-group-row:hover { background: var(--cc-line-soft); }
+.cc-group-twisty { flex: 0 0 auto; color: var(--cc-caption); transform: rotate(90deg); transition: transform 150ms var(--cc-ease-out); }
+.cc-group-row[data-collapsed] .cc-group-twisty { transform: none; }
+.cc-group-label { min-width: 0; flex: 1 1 auto; overflow: hidden; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.cc-group-fix { flex: 0 1 auto; min-width: 0; overflow: hidden; padding: 2px 7px; border-radius: 999px; background: var(--cc-teal-fill); color: var(--cc-teal-text); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.cc-group-count { flex: 0 0 auto; color: var(--cc-caption); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; }
+.cc-group-row:focus-visible, .cc-discrepancy-center .cc-conflict-row:focus-visible { outline: 3px solid var(--cc-blue-soft); outline-offset: -3px; }
+/* Bulk bar: appears over the list once anything is selected. */
+.cc-bulk-bar { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--cc-teal-stroke); border-radius: 12px; background: var(--cc-teal-fill); color: var(--cc-body); font-size: 12px; }
+.cc-bulk-bar-head { display: flex; align-items: center; gap: 10px; }
+.cc-bulk-bar-head strong { color: var(--cc-ink); font-size: 12.5px; }
+.cc-bulk-clear { margin-left: auto; min-height: 30px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: var(--cc-teal-text); font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer; }
+.cc-bulk-clear:hover { background: var(--cc-teal-fill2); }
+.cc-bulk-note { color: var(--cc-caption); font-size: 11px; }
+.cc-bulk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cc-bulk-actions button, .cc-bulk-actions select, .cc-bulk-actions input { min-height: 36px; border: 1px solid var(--cc-line-strong); border-radius: 8px; background: var(--cc-raised); color: var(--cc-body); font: inherit; font-size: 11.5px; }
+.cc-bulk-actions button { padding: 0 11px; font-weight: 650; cursor: pointer; }
+.cc-bulk-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.cc-bulk-actions button code { font-size: 11px; font-weight: 650; }
+.cc-bulk-actions select { max-width: 260px; padding: 0 26px 0 9px; }
+.cc-bulk-actions input { min-width: 160px; padding: 0 9px; }
+.cc-bulk-actions .cc-button-primary { border-color: var(--cc-teal-stroke-e); background: var(--cc-teal-text); color: var(--cc-raised); }
+.cc-bulk-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cc-bulk-confirm { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--cc-line-strong); border-radius: 9px; background: var(--cc-raised); }
+.cc-bulk-confirm p { margin: 0; color: var(--cc-body); font-size: 12px; line-height: 1.5; }
+.cc-bulk-confirm strong { color: var(--cc-ink); }
+/* Broken-link fixes inside the decision panel. */
+.cc-link-fixes { display: grid; gap: 10px; padding: 14px 2px 4px; }
+.cc-link-fixes > strong { color: var(--cc-ink); font-size: 12px; }
+.cc-link-candidates { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cc-link-candidates li, .cc-link-fix-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 10px; border: 1px solid var(--cc-line); border-radius: 9px; background: var(--cc-surface); }
+.cc-link-candidates li > span, .cc-link-fix-row > span:first-child { min-width: 0; display: grid; gap: 2px; }
+.cc-link-candidates code, .cc-link-fix-row code { color: var(--cc-ink); font-size: 11.5px; overflow-wrap: anywhere; }
+.cc-link-candidates small, .cc-link-fix-row small { color: var(--cc-caption); font-size: 10.5px; line-height: 1.4; }
+.cc-link-fix-row > span:first-child > strong { color: var(--cc-body); font-size: 12px; }
+.cc-link-fix-controls { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.cc-link-fix-controls select { min-height: 36px; width: auto; max-width: 180px; }
+.cc-link-candidates button, .cc-link-fix-row button { flex: 0 0 auto; min-height: 36px; padding: 0 11px; border: 1px solid var(--cc-line-strong); border-radius: 8px; background: var(--cc-raised); color: var(--cc-body); font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer; }
+.cc-link-candidates button:disabled, .cc-link-fix-row button:disabled { opacity: .5; cursor: not-allowed; }
+/* Skeleton: reserves the space a loading record will take; no spinner over content. */
+.cc-skeleton { display: grid; gap: 9px; padding: 4px 0; }
+.cc-skeleton-line { display: block; height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--cc-line-soft) 0%, var(--cc-neutral-fill) 45%, var(--cc-line-soft) 90%); background-size: 220% 100%; animation: cc-skeleton-sweep 1.4s var(--cc-ease-out) infinite; }
+.cc-skeleton-line:nth-child(2n) { width: 82%; }
+.cc-skeleton-line:nth-child(3n) { width: 64%; }
+@keyframes cc-skeleton-sweep { from { background-position: 120% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .cc-skeleton-line { animation: none; } .cc-group-twisty { transition: none; } }
 .cc-discrepancy-center .cc-conflict-detail { max-height: 760px; overflow-y: auto; padding: 24px; }
 .cc-discrepancy-center .cc-detail-close { min-width: 44px; min-height: 44px; }
 .cc-discrepancy-path { display: flex; gap: 8px; align-items: center; color: var(--cc-caption); font-size: 11px; }
@@ -2417,15 +2505,20 @@ textarea:focus-visible,
 @media (max-width: 980px) {
   .cc-discrepancy-guide { align-items: flex-start; flex-direction: column; gap: 9px; }
   .cc-discrepancy-guide ol { width: 100%; }
-  .cc-discrepancy-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Two columns: the four kind tiles fill two rows with no empty cell showing through. */
+  .cc-dc-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cc-dc-tile--total { grid-column: 1 / -1; }
   .cc-discrepancy-center .cc-conflict-layout { grid-template-columns: 1fr; }
-  .cc-discrepancy-center .cc-conflict-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: none; }
+  /* The window stays a window at every width — never a wrapping grid of cards. */
+  .cc-discrepancy-center .cc-conflict-list { max-height: 70vh; }
 }
 @media (max-width: 700px) {
   .cc-discrepancy-guide ol { flex-direction: column; gap: 8px; }
-  .cc-discrepancy-filters, .cc-evidence-grid { grid-template-columns: 1fr; }
-  .cc-discrepancy-center .cc-conflict-list { display: flex; }
+  .cc-evidence-grid { grid-template-columns: 1fr; }
+  .cc-discrepancy-filters select { flex-basis: 100%; }
   .cc-discrepancy-center .cc-conflict-detail { padding: 17px; }
+  .cc-link-candidates li, .cc-link-fix-row { align-items: flex-start; flex-direction: column; }
+  .cc-link-fix-controls { flex-wrap: wrap; }
   .cc-discrepancy-title, .cc-rules > div:first-child { flex-direction: column; }
   .cc-decision-actions { flex-direction: column; }
   .cc-decision-actions button, .cc-smart-resolution button, .cc-broken-link-fix button { width: 100%; }
@@ -2612,14 +2705,14 @@ textarea:focus-visible,
   gap: 16px;
   align-items: start;
 }
-.cc-conflict-list { display: flex; flex-direction: column; gap: 7px; }
+/* The list itself is the windowed container declared in the Discrepancy Center block above. */
 .cc-conflict-row {
   width: 100%;
   display: flex;
   flex-direction: column;
   gap: 7px;
   padding: 12px 13px;
-  border: 1px solid transparent;
+  border: 1px solid var(--cc-line);
   border-radius: 11px;
   background: transparent;
   color: var(--cc-ink);
@@ -2729,7 +2822,6 @@ textarea:focus-visible,
 
 @media (max-width: 960px) {
   .cc-conflict-layout { grid-template-columns: 1fr; }
-  .cc-conflict-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 }
 
 @media (min-width: 961px) and (max-height: 780px) {
@@ -2752,7 +2844,6 @@ textarea:focus-visible,
 
 @media (max-width: 620px) {
   .cc-conflict-summary { align-items: stretch; flex-direction: column; gap: 12px; }
-  .cc-conflict-list { display: flex; }
   .cc-conflict-detail { padding: 17px; }
   .cc-conflict-choice-head { align-items: flex-start; }
   .cc-conflict-actions { align-items: stretch; flex-direction: column; }

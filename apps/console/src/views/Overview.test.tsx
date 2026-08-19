@@ -156,3 +156,37 @@ it('renders real cascade rows in demo mode too, and does not promise a reorder',
   expect(rows[1]).toContain('team')
   expect(container.textContent).not.toContain('runbooks, decisions, system docs')
 })
+
+// The Discrepancies tile reads the engine's summary (actionable count) and
+// says what kinds are behind it, largest first, zeros dropped.
+it('counts actionable discrepancies on the tile with a per-kind subtitle', async () => {
+  const conflicts = [
+    { id: 'a', status: 'open', kind: 'broken_link', discrepancyStatus: 'needs_review', contributions: [] },
+    { id: 'b', status: 'open', kind: 'broken_link', discrepancyStatus: 'reopened', contributions: [] },
+    { id: 'c', status: 'open', kind: 'section_content', discrepancyStatus: 'recommended', contributions: [] },
+    { id: 'd', status: 'open', kind: 'frontmatter_value', discrepancyStatus: 'acknowledged', contributions: [] },
+  ]
+  mocks.useStore.mockReturnValue({
+    mode: 'live', setView: mocks.setView, signals: [], conflicts,
+    conflictSummary: { total: 4, actionable: 3, byKind: { section_content: 1, frontmatter_value: 1, broken_link: 2, changed_after_decision: 0 }, byStatus: {}, bySourcePair: [], byOwner: [], byConceptType: [], topTargets: [], topConcepts: [], quickWins: { autoReady: 0, recommended: 1, brokenLinksWithBestCandidate: 0, brokenLinksTotal: 2 } },
+    sources: [], concepts: [], activity: [], loadErrors: [],
+  })
+  await act(async () => root.render(<Overview />))
+  const tile = Array.from(container.querySelectorAll('.cc-metric-strip button')).find((button) => button.textContent?.includes('Discrepancies'))!
+  expect(tile.querySelector('strong')?.textContent).toBe('3')
+  // Actionable per kind from the rows: the acknowledged frontmatter value is not counted.
+  expect(tile.querySelector('.cc-metric-detail')?.textContent).toBe('2 broken links · 1 section')
+  expect(container.textContent).toContain('3 actionable discrepancies')
+})
+
+it('falls back to a local summary when the store carries none (an older engine, or a partial store)', async () => {
+  mocks.useStore.mockReturnValue({
+    mode: 'live', setView: mocks.setView, signals: [],
+    conflicts: [{ id: 'a', status: 'open', kind: 'broken_link', discrepancyStatus: 'needs_review', contributions: [] }],
+    sources: [], concepts: [], activity: [], loadErrors: [],
+  })
+  await act(async () => root.render(<Overview />))
+  const tile = Array.from(container.querySelectorAll('.cc-metric-strip button')).find((button) => button.textContent?.includes('Discrepancies'))!
+  expect(tile.querySelector('strong')?.textContent).toBe('1')
+  expect(tile.querySelector('.cc-metric-detail')?.textContent).toBe('1 broken link')
+})

@@ -96,21 +96,38 @@ export function guardMutatingRequest(req, res) {
  * files (the layer file APIs, the /console/ static mount). Two checks: lexical
  * prefix on the resolved path, then symlink defense — the lexical check trusts
  * the path text, but a symlink inside the root could still point outside it,
- * so compare realpaths (of the existing target, or of the parent dir for a
- * not-yet-existing file). Returns the realpath'd target.
+ * so compare realpaths (of the existing target, or of its deepest existing
+ * ancestor for a not-yet-existing file). Returns the realpath'd target.
  */
 export function assertInsideRoot(abs, root, message) {
   if (abs !== root && !abs.startsWith(root + path.sep)) throw httpError(403, message);
-  const realRoot = safeRealpath(root);
-  const realAbs = fs.existsSync(abs)
-    ? safeRealpath(abs)
-    : path.join(safeRealpath(path.dirname(abs)), path.basename(abs));
+  const realRoot = realpathLenient(root);
+  const realAbs = realpathLenient(abs);
   if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) throw httpError(403, message);
   return realAbs;
 }
 
-function safeRealpath(p) {
-  try { return fs.realpathSync.native(p); } catch { return path.resolve(p); }
+/**
+ * realpath for a path that may not exist yet: the deepest existing ancestor
+ * is resolved and the rest is re-joined verbatim. Resolving only the immediate
+ * parent (the previous rule) refused a perfectly contained file two folders
+ * deep whenever the root itself sits behind a symlink — every macOS temp dir,
+ * `/var` → `/private/var` — because the unresolved remainder no longer shared
+ * the resolved root's prefix. Creating a concept in a new subfolder is exactly
+ * that shape.
+ */
+export function realpathLenient(p) {
+  let current = path.resolve(p);
+  const rest = []; // basenames peeled off, deepest first
+  for (;;) {
+    let real = null;
+    try { real = fs.realpathSync.native(current); } catch { /* keep walking up */ }
+    if (real !== null) return path.join(real, ...rest.slice().reverse());
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(p);
+    rest.push(path.basename(current));
+    current = parent;
+  }
 }
 
 export function parseJson(raw) {

@@ -78,6 +78,30 @@ via their pre-hooks.
   never something the user types (Sources sends orders, not levels; only the
   first-run wizard still sends the conventional 3/2/0) and shows in exactly
   one place, the Sources detail's "Manifest level" row.
+- **Discrepancy Center** — `views/Conflicts.tsx` is the root; the pieces are in
+  `views/conflicts/` (OverviewHeader tiles/tabs/group-by, GroupedList,
+  BulkBar, DecisionPanel, Evidence, Rules, `filters.ts`). It is built for
+  1,500 rows: the store fetches `/api/discrepancies?fields=compact` (every
+  row's identity, status, revision, candidates and ≤240-char previews plus
+  the engine's `summary` in one envelope) and loads a row's full record
+  (`?id=`) on selection through the same bounded LRU as concepts
+  (`store.loadDiscrepancyDetail`; a row born compact is `detailLoaded:
+  false` and the detail renders a skeleton until it lands). The list is
+  windowed by `components/useVirtualWindow.ts` — FileTree's technique with a
+  prefix sum for variable heights (group rows 44px, item rows 128px, mirrored
+  in `styles.css`) — as one `listbox` whose options include the group headers
+  (a flat DOM is what windowing allows), one roving tab stop, `aria-selected`
+  = the multi-selection and `aria-current` = the open detail. Bulk actions
+  go through `store.decideDiscrepancies` (POST `/api/discrepancy-decisions/batch`)
+  twice: `dryRun` first, then the real one; a 404 on the batch route falls
+  back to sequential singles and says so (`fallback: 'sequential'`), a
+  selection past 500 goes over as consecutive batches, and per-item
+  `SKIPPED` / `BATCH_TIME_BUDGET` results are NOT ATTEMPTED (kept selected
+  for resubmission), never counted as failures. Group actions are the group
+  header's checkbox + the bulk bar — one action surface, deliberately; there
+  is no per-header menu. Everything pure — the actionable predicate, the
+  summary mirror, grouping, `describeItems`, `partitionBatchResults` — lives
+  in `src/discrepancy-summary.ts`.
 - **Files ⇄ Concepts** — the two ends of one thing, and walkable both ways. An
   open document names the concept it resolves to (`conceptForFile`: the file's
   `rel` minus its document extension, matched against a loaded concept id —
@@ -284,6 +308,23 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   a renamed 3,000-file source rendering "None on this machine".
 - **`warnings` is the true count; `warningMessages` is capped at 10.** Render
   the count from `warnings`.
+- **One actionable predicate.** `isActionable` in `discrepancy-summary.ts` is
+  what Overview, Sidebar, Header and the Discrepancy Center all count with —
+  it used to be copied into each, and they drifted. Never inline the status
+  list again; extend `ACTIONABLE_STATUSES`.
+- **Compact rows are previews.** A `Conflict` with `detailLoaded: false` has
+  `history: []` and contribution values cut at 240 chars (`truncated`). Never
+  seed a compose field, diff two answers, or show a decision history from one
+  — that is what the skeleton gate in `DecisionPanel`/`Detail` is for. An
+  engine that ignores `?fields=compact` answers full records with no
+  `summary`; `isCompactRecord` (the `compact` marker or a `truncated` flag) is
+  how the adapter tells them apart, and the store computes the summary
+  locally in that case.
+- **The list's row heights live in two places.** `GROUP_ROW_HEIGHT` /
+  `ITEM_ROW_HEIGHT` in `GroupedList.tsx` drive the windowing math and
+  `.cc-group-row` / `.cc-conflict-row` in `styles.css` draw them; change both
+  or rows overlap. Rows are absolutely positioned inside `.cc-conflict-virtual`
+  — a selector like `.cc-conflict-list > [role="option"]` finds nothing.
 - **`src/markdown.ts` parses to typed data and has no dependencies.** It never
   emits HTML; `components/Markdown.tsx` renders document strings as React text
   nodes, so source content cannot become markup. Link/image URLs still go

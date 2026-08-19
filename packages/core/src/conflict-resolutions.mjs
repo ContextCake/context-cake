@@ -5,9 +5,9 @@
 // contributing files were made to agree. It lives beside the manifest so the
 // history follows this ContextCake setup without entering any source layer.
 
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { realpathLenient } from "./http-util.mjs";
 import { ensureSidecarMigrated, sidecarDir } from "./sidecar-state.mjs";
 
 const SCHEMA_VERSION = 1;
@@ -117,6 +117,12 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
   // the restore elsewhere (the live team layer commits it, so git and this log
   // agree) gets to do so while a failure still leaves the transaction pending
   // and retryable — the backups are only dropped once the hook has returned.
+  //
+  // A target with `created: true` was being CREATED by the transaction (it had
+  // no backup — `backup: null`); restoring it means removing whatever sits at
+  // `path`. That is bounded to the journal's `prepared` window, and it can in
+  // principle remove bytes someone wrote there between the crash and this
+  // restart — accepted, and called out in the discrepancy spec.
   async function recover(allowedRoots = [], committedTransactionIds = [], { onRestored = null } = {}) {
     const records = await list();
     const final = new Set(records.filter((r) => r.state === "committed" || r.state === "rolled_back").map((r) => r.id));
@@ -124,6 +130,16 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
     const pending = records.filter((r) => r.state === "prepared" && !final.has(r.id));
     const recovered = [];
     const failures = [];
+    // Every journaled file of a target must sit inside a selected root before
+    // it is read, copied, or unlinked. `null` (a created target's backup) is
+    // simply absent — never resolved as a path.
+    const assertContained = (target, fields) => {
+      for (const field of fields) {
+        const file = target[field];
+        if (file === null || file === undefined) continue;
+        if (!insideAnyRoot(file, allowedRoots)) throw new Error("journal target is outside the selected source roots");
+      }
+    };
     for (const tx of pending) {
       try {
         // A decision is appended only after every replacement succeeds. If the
@@ -131,27 +147,25 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
         // proves the write committed; rolling it back would make history lie.
         if (committedDecisions.has(tx.id)) {
           for (const target of tx.targets ?? []) {
-            if (!insideAnyRoot(target.path, allowedRoots)
-              || !insideAnyRoot(target.staged, allowedRoots)
-              || !insideAnyRoot(target.backup, allowedRoots)) {
-              throw new Error("journal target is outside the selected source roots");
-            }
-            await fsp.unlink(target.staged).catch(() => {});
-            await fsp.unlink(target.backup).catch(() => {});
+            assertContained(target, ["path", "staged", "backup"]);
+            await unlinkIfPresent(target.staged);
+            await unlinkIfPresent(target.backup);
           }
           await append({ id: tx.id, state: "committed", recoveredAt: new Date().toISOString(), reason: "decision log confirmed commit" });
           continue;
         }
         for (const target of tx.targets ?? []) {
-          if (!insideAnyRoot(target.path, allowedRoots) || !insideAnyRoot(target.backup, allowedRoots)) {
-            throw new Error("journal target is outside the selected source roots");
+          assertContained(target, ["path", "backup", "staged"]);
+          if (target.created === true) {
+            await fsp.unlink(target.path).catch((error) => { if (error.code !== "ENOENT") throw error; });
+          } else {
+            await fsp.copyFile(target.backup, target.path);
           }
-          await fsp.copyFile(target.backup, target.path);
         }
         if (onRestored) await onRestored(tx, (tx.targets ?? []).map((target) => target.path));
         for (const target of tx.targets ?? []) {
-          await fsp.unlink(target.staged).catch(() => {});
-          await fsp.unlink(target.backup).catch(() => {});
+          await unlinkIfPresent(target.staged);
+          await unlinkIfPresent(target.backup);
         }
         await append({ id: tx.id, state: "rolled_back", recoveredAt: new Date().toISOString(), reason: "startup recovery" });
         recovered.push(tx.id);
@@ -167,24 +181,26 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
   return { file, append, list, recover };
 }
 
+async function unlinkIfPresent(file) {
+  if (typeof file !== "string") return;
+  await fsp.unlink(file).catch(() => {});
+}
+
 // Containment for journal targets. Both sides are compared as real paths:
 // the writers record realpaths (assertInsideRoot resolves symlinks before a
 // target is ever staged) while a manifest's layer path may reach the same
 // folder through a symlink — every macOS temp dir, /var → /private/var — and
 // a string compare would then refuse to recover a perfectly contained file.
-// A path that no longer exists (a staged file already cleaned up) resolves
-// through its parent, the same rule assertInsideRoot uses.
+// A path that no longer exists (a staged file already cleaned up, a created
+// target whose folder went with it) resolves through its deepest existing
+// ancestor, the same rule assertInsideRoot uses. Anything that is not a path
+// string is not inside any root.
 function insideAnyRoot(target, roots) {
-  const resolved = realpathLenient(String(target));
+  if (typeof target !== "string" || !target) return false;
+  const resolved = realpathLenient(target);
   return roots.some((root) => {
     const base = realpathLenient(root);
     const rel = path.relative(base, resolved);
     return rel && !rel.startsWith("..") && !path.isAbsolute(rel);
   });
-}
-
-function realpathLenient(p) {
-  const abs = path.resolve(p);
-  try { return fs.realpathSync.native(abs); } catch { /* fall through */ }
-  try { return path.join(fs.realpathSync.native(path.dirname(abs)), path.basename(abs)); } catch { return abs; }
 }

@@ -1029,8 +1029,11 @@ export function createDiscrepancyOperations({
       if (item.skipped) continue; // an automatic item its guard declined: silently, as before
       // The budget never stops a batch before its first attempt: a run whose
       // projection alone outlasted it must still make progress, or a queue of
-      // automatic work could never converge.
-      if (!stopped && !dryRun && attempted > 0 && Date.now() - startedAt > batchTimeBudgetMs) {
+      // automatic work could never converge. `>=`, not `>`: "the budget is
+      // used up" includes landing exactly on it, and a zero budget must stop
+      // after the first attempt even when that attempt finished inside the
+      // same millisecond (a fast CI runner did).
+      if (!stopped && !dryRun && attempted > 0 && Date.now() - startedAt >= batchTimeBudgetMs) {
         stopped = { code: "BATCH_TIME_BUDGET", reason: "Not attempted: this batch used its time budget. Resubmit the remaining decisions." };
       }
       if (stopped) {

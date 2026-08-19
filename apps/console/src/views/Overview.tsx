@@ -5,11 +5,27 @@ import { useStoreData } from '../store'
 import { LayerChip } from '../components/LayerChip'
 import { EmptyState, StatusBadge, Button } from '../components/ui'
 import { AgentIcon } from '../components/icons'
+import { isActionable, summarizeConflicts } from '../discrepancy-summary'
+
+/** "12 broken links · 3 sections · 1 value" — the kinds behind the actionable count, largest first, zeros dropped. */
+function kindSubtitle(byKind: Record<string, number>): string {
+  const parts: [string, string, number][] = [
+    ['broken link', 'broken links', byKind.broken_link ?? 0],
+    ['section', 'sections', byKind.section_content ?? 0],
+    ['value', 'values', byKind.frontmatter_value ?? 0],
+    ['changed', 'changed', byKind.changed_after_decision ?? 0],
+  ]
+  return parts.filter(([, , count]) => count > 0).sort((a, b) => b[2] - a[2])
+    .map(([one, many, count]) => `${count} ${count === 1 ? one : many}`).join(' · ')
+}
 
 function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
-  const { mode, setView, signals, conflicts, sources, concepts, activity, loadErrors } = useStoreData()
+  const { mode, setView, signals, conflicts, conflictSummary, sources, concepts, activity, loadErrors } = useStoreData()
   const queue = signals.filter((signal) => signal.route === 'review_required')
-  const openConflicts = conflicts.filter((conflict) => ['needs_review', 'reopened', 'recommended', 'auto_ready', 'blocked'].includes(conflict.discrepancyStatus ?? (conflict.status === 'open' ? 'needs_review' : 'resolved')))
+  const openConflicts = conflicts.filter(isActionable)
+  // The engine's summary when the store has one; the local mirror otherwise
+  // (demo bundle, an engine without the compact route, or a test store).
+  const summary = conflictSummary ?? summarizeConflicts(conflicts)
   const failedSources = sources.filter((source) => source.status === 'error' || source.status === 'degraded')
   const attention = [
     ...(queue.length ? [{ key: 'queue', label: `${queue.length} item${queue.length === 1 ? '' : 's'} waiting in Queue`, detail: 'Review captured knowledge before it is stored.', view: 'triage' as const, tone: 'attention' as const }] : []),
@@ -20,7 +36,7 @@ function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
   const metrics = [
     { label: 'Sources', value: sources.length, view: 'sources' as const },
     { label: 'Concepts', value: concepts.length, view: 'concepts' as const },
-    { label: 'Discrepancies', value: openConflicts.length, view: 'conflicts' as const },
+    { label: 'Discrepancies', value: summary.actionable, view: 'conflicts' as const, detail: kindSubtitle(summary.byKind) },
     { label: 'Queue', value: queue.length, view: 'triage' as const },
   ]
 
@@ -47,7 +63,7 @@ function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
       </section>
 
       <nav className="cc-metric-strip" aria-label="Workspace totals">
-        {metrics.map((metric) => <button key={metric.label} type="button" onClick={() => setView(metric.view)}><strong>{metric.value}</strong><span>{metric.label}</span></button>)}
+        {metrics.map((metric) => <button key={metric.label} type="button" onClick={() => setView(metric.view)}><strong>{metric.value}</strong><span>{metric.label}</span>{'detail' in metric && metric.detail ? <small className="cc-metric-detail">{metric.detail}</small> : null}</button>)}
       </nav>
 
       <section className="cc-workspace-section" aria-labelledby="cc-cascade-summary">

@@ -1,4 +1,6 @@
-import type { ConflictResolutionRecord, DiscrepancyKind, DiscrepancyStatus, DiscrepancyRule } from './types'
+import type {
+  ConflictResolutionRecord, DiscrepancyKind, DiscrepancyLatestDecision, DiscrepancyStatus, DiscrepancyRule, LinkCandidate,
+} from './types'
 import type { LayerId, RouteId } from './theme'
 
 export interface Layer {
@@ -60,6 +62,8 @@ export interface Contribution {
   layer: LayerId; sourceLayer: string; value: string; updated: string; note?: string
   /** This dissent is strictly newer than the effective value (day granularity, C-b). */
   fresherDissent?: boolean
+  /** `value` is a ≤240-char preview from a compact row; the full text arrives with the detail. */
+  truncated?: boolean
 }
 export interface Conflict {
   id: string; concept: string; sectionKey: string; section: string; title: string
@@ -86,6 +90,23 @@ export interface Conflict {
    * than letting the request round-trip into an error.
    */
   isList?: boolean
+  /** The concept's own title and OKF type — the record carries both; the view groups by them. */
+  conceptTitle?: string
+  conceptType?: string
+  /**
+   * `false` marks a row built from a compact record: identity, status,
+   * revision, candidates and ≤240-char previews are real, but `history` is
+   * empty and contribution values may be `truncated`. The full record arrives
+   * on selection (store.loadDiscrepancyDetail), which replaces the row and
+   * drops this flag. Absent/true means the row carries its full record.
+   */
+  detailLoaded?: boolean
+  /** Broken links only: structural near-matches for `target`, best first. */
+  candidates?: LinkCandidate[]
+  bestCandidate?: LinkCandidate | null
+  /** Compact-row stand-ins for `history` until the detail loads. */
+  historyCount?: number
+  latestDecision?: DiscrepancyLatestDecision | null
 }
 
 /** `sourceLayer` is the source's real name; `layer` is the lane it renders in. */

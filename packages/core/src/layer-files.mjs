@@ -383,7 +383,13 @@ export async function stageFileCreationTransaction({ layer, rel, text } = {}, ro
   let exists = true;
   try { await fsp.lstat(abs); } catch (error) { if (error.code === "ENOENT") exists = false; else throw error; }
   if (exists) throw httpError(409, `Refusing to overwrite: ${layer}/${rel} already exists`);
-  if (options.probe !== true) await fsp.mkdir(path.dirname(abs), { recursive: true });
+  if (options.probe !== true) {
+    try { await fsp.mkdir(path.dirname(abs), { recursive: true }); } catch (error) {
+      // A file where a folder has to be (`guides.md` in the way of `guides/x.md`).
+      if (error.code === "ENOTDIR" || error.code === "EEXIST") throw httpError(409, `Cannot create ${layer}/${rel}: a file is in the way of its folder`);
+      throw error;
+    }
+  }
   return stagePreparedWrites([{ layer, abs, text, mode: 0o644, create: true }], [], transactionId, options);
 }
 

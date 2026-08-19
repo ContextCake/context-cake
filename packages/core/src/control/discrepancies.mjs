@@ -696,7 +696,11 @@ export function createDiscrepancyOperations({
   // title, updated), the H1, and a one-line note saying why it exists.
   function renderStub({ title, type, conceptId }) {
     const today = new Date().toISOString().slice(0, 10);
-    return `---\ntype: ${type}\ntitle: ${title}\nupdated: ${today}\n---\n\n# ${title}\n\nCreated from ContextCake to satisfy a link from ${conceptId}.\n`;
+    // The engine's frontmatter parser reads `[…]` as a list and strips one
+    // pair of surrounding quotes; a title that starts with `[` or a quote is
+    // quoted so it comes back as the string it is.
+    const yamlTitle = /^[[\]"']|["']$/.test(title) ? `"${title}"` : title;
+    return `---\ntype: ${type}\ntitle: ${yamlTitle}\nupdated: ${today}\n---\n\n# ${title}\n\nCreated from ContextCake to satisfy a link from ${conceptId}.\n`;
   }
 
   /**

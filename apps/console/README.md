@@ -19,8 +19,11 @@ Run commands below from `apps/console/`.
 - Vitest for component and layout behavior
 - Token-driven CSS in `src/styles.css` plus the existing `css()` helpers in
   `src/theme.ts`
-- Dark/light themes persisted in localStorage; the desktop bridge also syncs
-  the theme when an account is signed in
+- Two appearance axes persisted in localStorage — Appearance (system / light /
+  dark) and Theme (a palette family: ContextCake, Solarized, Catppuccin,
+  Gruvbox, Tokyo Night, Rosé Pine, One, GitHub; see `src/themes/` and
+  `THIRD_PARTY_THEMES.md`); the desktop bridge also syncs both when an
+  account is signed in
 
 ## Commands
 
@@ -85,7 +88,9 @@ playground/service command documented in the repository instructions.
   without a bridge it points the user to the agent connection flow instead.
   Electron does not currently provide that completion bridge.
 - **Settings** opens from the sidebar or Cmd/Ctrl-comma. General → Appearance
-  holds theme and the Cascade view preference persisted on this Mac (or in
+  holds Appearance (System / Light / Dark), Theme (the palette family — a grid
+  of tiles, each previewing its own light and dark halves), density, and the
+  Cascade view preference persisted on this Mac (or in
   this browser): Grouped (the default), Compact, or Cards. General also holds update preferences; Account
   holds optional desktop GitHub sign-in, sync state, sign-out, and self-service
   deletion.
@@ -118,11 +123,22 @@ src/
   layer-files.ts          the same seam for /api/files and /api/file
   store.tsx               application state and live reload/actions
   theme.ts                CSS-variable references and style helpers
-  theme-mode.tsx          local theme plus optional desktop sync
+  theme-mode.tsx          appearance + palette state, local persistence, optional desktop sync
+  themes/
+    registry.ts           the palette families (ids, labels, variant names, attribution)
+    _derived.css          every non-primitive token, computed from a family's primitives
+    <id>.css              one file per family: 13 primitives per mode + color-scheme
+    index.css             import order (imported from main.tsx after styles.css)
+    contrast.ts           WCAG contrast + var()/color-mix() token resolver
+    css-blocks.ts         tiny stylesheet reader behind the theme gates
+    gates.ts              shared gate constants (PALETTES, PRIMITIVES, …)
+    tokens.test.ts        token-set / dark-block / family / derived / registry gates
+    contrast.test.ts      readability floors per family and mode
   App.tsx                 shell, modal coordination, and keyboard ownership
   components/
     Sidebar.tsx           navigation, resize/collapse, mobile drawer
     SettingsView.tsx      full-window General and Account settings
+    ThemePicker.tsx       the Theme grid: one aria-pressed tile per family, self-previewing swatches
     AccountPanel.tsx      desktop auth and settings-sync controls
     SetupWizard.tsx       first-run source configuration
     FileTree.tsx          windowed ARIA tree behind the Files navigator

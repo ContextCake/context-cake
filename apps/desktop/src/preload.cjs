@@ -52,6 +52,8 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   preferences: {
     initial: {
       theme: ['system', 'light', 'dark'].includes(arg('cc-theme')) ? arg('cc-theme') : 'system',
+      // Same slug shape as PALETTE_ID in main/preferences.mjs (this file is CJS and cannot import it).
+      palette: /^[a-z][a-z0-9-]{0,31}$/.test(arg('cc-palette')) ? arg('cc-palette') : 'contextcake',
       density: ['comfortable', 'compact'].includes(arg('cc-density')) ? arg('cc-density') : 'comfortable',
       updateCheck: arg('cc-update-check') !== '0',
       anonymousMetrics: arg('cc-anonymous-metrics') === '' ? null : arg('cc-anonymous-metrics') === '1',

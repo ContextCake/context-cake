@@ -1,0 +1,63 @@
+/* GitHub — Primer primitives, GitHub, https://github.com/primer/primitives
+   License: MIT (@primer/primitives package.json; LICENSE in the repository).
+   Values: @primer/primitives 11.10.0, dist/css/functional/themes/light.css and
+   dark.css (functional token names below).
+
+   Primer → console primitive           Light                          | Dark
+     page                               bgColor-default      #ffffff  | bgColor-default      #0d1117
+     surface                            bgColor-muted        #f6f8fa  | bgColor-muted        #151b23
+     raised                             bgColor-default      #ffffff  | bgColor-muted        #151b23
+     header-bg                          bgColor-muted        #f6f8fa  | bgColor-inset        #010409
+     canvas-bg                          bgColor-default               | bgColor-inset
+     ink, body                          fgColor-default      #1f2328  | fgColor-default      #f0f6fc
+     caption                            fgColor-muted        #59636e  | fgColor-muted        #9198a1
+     faint                              fgColor-disabled     #818b98  | fgColor-disabled     #656c76
+     layer-company                      fgColor-accent       #0969da  | fgColor-accent       #4493f8
+     layer-team                         fgColor-success      #1a7f37  | fgColor-success      #3fb950
+     layer-personal                     fgColor-attention    #9a6700  | fgColor-attention    #d29922
+     conflict                           fgColor-severe       #bc4c00  | fgColor-severe       #db6d28
+   Primer has two reading tones (default / muted) plus disabled, so ink and
+   body share fgColor-default.
+   Derived overrides — Primer's own border tones instead of ink tints:
+     line = borderColor-muted     #d1d9e0b3 | #3d444db3
+     line-strong = borderColor-default  #d1d9e0 | #3d444d */
+
+:root[data-palette="github"][data-theme="light"],
+.cc-theme-swatch[data-palette="github"][data-theme="light"] {
+  --cc-page: #ffffff;
+  --cc-surface: #f6f8fa;
+  --cc-raised: #ffffff;
+  --cc-header-bg: #f6f8fa;
+  --cc-canvas-bg: #ffffff;
+  --cc-ink: #1f2328;
+  --cc-body: #1f2328;
+  --cc-caption: #59636e;
+  --cc-faint: #818b98;
+  --cc-layer-company: #0969da;
+  --cc-layer-team: #1a7f37;
+  --cc-layer-personal: #9a6700;
+  --cc-conflict: #bc4c00;
+  --cc-line: #d1d9e0b3;
+  --cc-line-strong: #d1d9e0;
+  color-scheme: light;
+}
+
+:root[data-palette="github"][data-theme="dark"],
+.cc-theme-swatch[data-palette="github"][data-theme="dark"] {
+  --cc-page: #0d1117;
+  --cc-surface: #151b23;
+  --cc-raised: #151b23;
+  --cc-header-bg: #010409;
+  --cc-canvas-bg: #010409;
+  --cc-ink: #f0f6fc;
+  --cc-body: #f0f6fc;
+  --cc-caption: #9198a1;
+  --cc-faint: #656c76;
+  --cc-layer-company: #4493f8;
+  --cc-layer-team: #3fb950;
+  --cc-layer-personal: #d29922;
+  --cc-conflict: #db6d28;
+  --cc-line: #3d444db3;
+  --cc-line-strong: #3d444d;
+  color-scheme: dark;
+}

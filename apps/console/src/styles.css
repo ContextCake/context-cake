@@ -1,5 +1,9 @@
-:root {
-  /* ---------- soft control plane theme ---------- */
+:root,
+.cc-theme-swatch[data-palette="contextcake"][data-theme="light"] {
+  /* ---------- soft control plane theme ----------
+     Also the ContextCake light swatch in the theme picker (a `.cc-theme-swatch`
+     paints a mini shell from the same tokens, on itself); families live in
+     src/themes/. */
   --cc-page: #F4F3EA;
   --cc-surface: rgba(255,253,246,0.72);
   --cc-raised: #FFFDF6;
@@ -14,7 +18,10 @@
   --cc-faint: #8A918B;
   --cc-scrollbar: rgba(61,76,68,0.20);
 
-  /* Provenance trio — layer identity, must match site/playground exactly.
+  /* Provenance trio — layer identity, must match site/playground exactly in
+     the ContextCake palette (other families re-derive it from their own
+     accents, hue roles preserved: blue = company, green/teal = team,
+     yellow/amber = personal, orange-red = conflict — see src/themes/).
      Named directly here for swatches/borders/large elements; the fill/stroke/
      text ramps below stay tinted per-theme so small text/badges keep 4.5:1. */
   --cc-layer-company: #8bbad1;
@@ -32,6 +39,13 @@
 
   --cc-amber-fill: #F6EADA; --cc-amber-fill2: #EFD9BC; --cc-amber-stroke: #C39A4A;
   --cc-amber-stroke-e: #C95F3F; --cc-amber-text: #6A3A24; --cc-amber-text2: #8D6640; --cc-amber-soft: #E2C994;
+
+  /* Semantic roles. Components use these — never a per-theme component
+     override — so a palette only has to redeclare tokens, not selectors
+     (themes/tokens.test.ts refuses a dark-only component selector). */
+  --cc-solid-bg: #17241f; --cc-solid-fg: #fffdf6; /* inverted "solid" chip — the light-mode source of the cta pair */
+  --cc-cta-bg: var(--cc-solid-bg); --cc-cta-fg: var(--cc-solid-fg); /* the one big call-to-action */
+  --cc-code-bg: #17201c; --cc-code-fg: #e9eee9;   /* terminal-style code block, dark in every mode */
 
   --cc-scrim: rgba(21,25,23,0.24);
   --cc-header-bg: rgba(255,253,246,0.74);
@@ -68,8 +82,16 @@
   --cc-panel-padding: 12px;
 }
 
-:root[data-theme="dark"] {
-  /* ---------- dark soft control plane theme ---------- */
+:root:where([data-palette="contextcake"], :not([data-palette]))[data-theme="dark"],
+.cc-theme-swatch[data-palette="contextcake"][data-theme="dark"] {
+  /* ---------- dark soft control plane theme ----------
+     Scoped to ContextCake's own palette (and to a root that carries no
+     `data-palette` at all — the pre-paint instant, or a host page that never
+     sets one) so it never competes with a theme family's tokens: families
+     declare their own primitives (src/themes/<id>.css) and derive the rest
+     (src/themes/_derived.css) without this block in the way. `:where()` keeps
+     the specificity at (0,2,0), the same as the plain
+     `:root[data-theme="dark"]` it replaces. */
   --cc-page: #10110F;
   --cc-surface: rgba(30,31,28,0.78);
   --cc-raised: #23241F;
@@ -99,6 +121,10 @@
 
   --cc-amber-fill: rgba(201,95,63,0.17); --cc-amber-fill2: rgba(201,95,63,0.24); --cc-amber-stroke: #D9AB53;
   --cc-amber-stroke-e: #E07A56; --cc-amber-text: #F0C08B; --cc-amber-text2: #D7A76F; --cc-amber-soft: rgba(217,171,83,0.34);
+
+  --cc-solid-bg: #E8E0D0; --cc-solid-fg: #11130F;
+  --cc-cta-bg: var(--cc-teal-stroke-e); --cc-cta-fg: var(--cc-on-teal);
+  --cc-code-bg: #0a0d0b; --cc-code-fg: #e8eee9;
 
   --cc-scrim: rgba(0,0,0,0.62);
   --cc-header-bg: rgba(28,29,26,0.86);
@@ -159,24 +185,8 @@ body {
 
 button { font-family: inherit; }
 
-.cc-app-shell {
-  min-height: 100vh;
-  padding: 18px 20px 24px;
-  color: var(--cc-ink);
-  background:
-    radial-gradient(circle at 16% 12%, rgba(53,111,145,0.10), transparent 28%),
-    radial-gradient(circle at 72% 22%, rgba(201,95,63,0.09), transparent 24%),
-    linear-gradient(180deg, rgba(255,253,246,0.30), rgba(244,243,234,0.86)),
-    var(--cc-page);
-}
-
-:root[data-theme="dark"] .cc-app-shell {
-  background:
-    radial-gradient(circle at 16% 12%, rgba(111,160,184,0.10), transparent 28%),
-    radial-gradient(circle at 72% 22%, rgba(224,122,86,0.10), transparent 24%),
-    linear-gradient(180deg, rgba(28,29,26,0.20), rgba(16,17,15,0.94)),
-    var(--cc-page);
-}
+/* .cc-app-shell geometry and background live in the Mac-first section near
+   the end of this file. */
 
 .cc-shell-inner {
   max-width: 1600px;
@@ -266,12 +276,7 @@ button { font-family: inherit; }
 
 .cc-nav-label { flex: 1 1 auto; min-width: 0; }
 
-.cc-nav-button:hover { background: rgba(21,25,23,0.05); color: var(--cc-ink); }
-
-:root[data-theme="dark"] .cc-nav-button:hover {
-  background: rgba(243,239,230,0.06);
-  color: var(--cc-ink);
-}
+.cc-nav-button:hover { background: var(--cc-neutral-fill); color: var(--cc-ink); }
 
 .cc-nav-badge {
   min-width: 21px;
@@ -281,7 +286,9 @@ button { font-family: inherit; }
   border-radius: 999px;
   padding: 0 6px;
   color: var(--cc-amber-text);
-  background: rgba(201,95,63,0.12);
+  /* A translucent tint of the conflict stroke, not the opaque amber fill: the
+     sidebar is glass over macOS vibrancy and the badge must stay see-through. */
+  background: color-mix(in srgb, var(--cc-amber-stroke-e) 12%, transparent);
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 10px;
   flex: 0 0 auto;
@@ -470,8 +477,6 @@ button { font-family: inherit; }
   background: var(--cc-teal-fill);
   border-color: var(--cc-teal-stroke);
 }
-
-:root[data-theme="dark"] .cc-connect-cta { background: rgba(243,239,230,0.05); }
 
 @media (min-width: 900px) {
   .cc-sidebar-toggle {
@@ -1880,7 +1885,7 @@ textarea:focus-visible,
   border-radius: 22px;
   background: var(--cc-raised);
   color: var(--cc-ink);
-  box-shadow: 0 30px 90px rgba(21,25,23,0.28);
+  box-shadow: 0 30px 90px var(--cc-scrim);
   animation: ccConnectIn 260ms var(--cc-ease-out);
 }
 
@@ -2066,14 +2071,12 @@ textarea:focus-visible,
 .cc-code-copy:hover { background: var(--cc-neutral-fill); border-color: var(--cc-teal-stroke); color: var(--cc-ink); }
 .cc-copy-button--primary,
 .cc-connect-primary {
-  border-color: #17241f;
-  background: #17241f;
-  color: #fffdf6;
+  border-color: var(--cc-cta-bg);
+  background: var(--cc-cta-bg);
+  color: var(--cc-cta-fg);
 }
 .cc-copy-button--primary:hover,
 .cc-connect-primary:hover { background: var(--cc-teal-btn-hover); color: var(--cc-on-teal); }
-:root[data-theme="dark"] .cc-copy-button--primary,
-:root[data-theme="dark"] .cc-connect-primary { border-color: var(--cc-teal-stroke-e); background: var(--cc-teal-stroke-e); color: var(--cc-on-teal); }
 
 .cc-connect-steps {
   display: flex;
@@ -2138,10 +2141,9 @@ textarea:focus-visible,
   overflow: hidden;
   border: 1px solid var(--cc-line);
   border-radius: 11px;
-  background: #17201c;
-  color: #e9eee9;
+  background: var(--cc-code-bg);
+  color: var(--cc-code-fg);
 }
-:root[data-theme="dark"] .cc-code-block { background: #0a0d0b; color: #e8eee9; }
 .cc-code-block pre {
   flex: 1 1 auto;
   min-width: 0;
@@ -2153,16 +2155,19 @@ textarea:focus-visible,
   overflow-wrap: anywhere;
 }
 .cc-code-block code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; font-variant-ligatures: none; }
+/* The copy affordance is carved out of the code surface's own foreground, so
+   it follows --cc-code-* wherever a palette takes them. 92% of the foreground
+   over the block reproduces the ported resting tint (d6ded8 on the light block). */
 .cc-code-copy {
   min-width: 82px;
   align-self: stretch;
   border: 0;
-  border-left: 1px solid rgba(255,255,255,0.12);
+  border-left: 1px solid color-mix(in srgb, var(--cc-code-fg) 12%, transparent);
   border-radius: 0;
-  background: rgba(255,255,255,0.06);
-  color: #d6ded8;
+  background: color-mix(in srgb, var(--cc-code-fg) 6%, transparent);
+  color: color-mix(in srgb, var(--cc-code-fg) 92%, transparent);
 }
-.cc-code-copy:hover { border-color: rgba(255,255,255,0.18); background: rgba(255,255,255,0.1); color: #fffdf6; }
+.cc-code-copy:hover { border-color: color-mix(in srgb, var(--cc-code-fg) 18%, transparent); background: color-mix(in srgb, var(--cc-code-fg) 10%, transparent); color: var(--cc-code-fg); }
 .cc-code-block--compact pre { padding-block: 11px; }
 
 .cc-first-prompt {
@@ -2226,7 +2231,7 @@ textarea:focus-visible,
   .cc-connect-body { font-size: 15px; }
   .cc-connect-steps > li { grid-template-columns: 26px minmax(0, 1fr); gap: 9px; }
   .cc-code-block { flex-direction: column; }
-  .cc-code-copy { min-height: 44px; align-self: auto; border-left: 0; border-top: 1px solid rgba(255,255,255,0.12); }
+  .cc-code-copy { min-height: 44px; align-self: auto; border-left: 0; border-top: 1px solid color-mix(in srgb, var(--cc-code-fg) 12%, transparent); }
   .cc-first-prompt { align-items: stretch; flex-direction: column; }
   .cc-first-prompt .cc-copy-button { width: 100%; }
   .cc-cli-status { align-items: flex-start; flex-wrap: wrap; }
@@ -2854,8 +2859,7 @@ textarea:focus-visible,
 
 /* ---- Mac-first application shell ---------------------------------------- */
 html, body, #root { width: 100%; height: 100%; overflow: hidden; }
-.cc-app-shell { width: 100%; height: 100vh; min-height: 560px; padding: 0; overflow: hidden; background: var(--cc-page); }
-:root[data-theme="dark"] .cc-app-shell { background: var(--cc-page); }
+.cc-app-shell { width: 100%; height: 100vh; min-height: 560px; padding: 0; overflow: hidden; color: var(--cc-ink); background: var(--cc-page); }
 .cc-shell-inner { width: 100%; max-width: none; height: 100vh; margin: 0; gap: 0; }
 .cc-sidebar, .cc-toolbar { border-radius: 0; box-shadow: none; backdrop-filter: none; }
 .cc-sidebar { padding: 40px 10px 10px; gap: 8px; border-right: 1px solid var(--cc-line); background: var(--cc-header-bg); overflow: hidden; }
@@ -2880,7 +2884,6 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .cc-nav { gap: 2px; padding-top: 5px; }
 .cc-nav-button { min-height: var(--cc-row-height); gap: 10px; padding: 0 10px; border-radius: var(--cc-radius-md); font-size: 13px; font-weight: 500; }
 .cc-nav-button[aria-current="page"] { border: 1px solid var(--cc-teal-badge-bd); background: var(--cc-teal-fill); color: var(--cc-teal-text); }
-:root[data-theme="dark"] .cc-nav-button[aria-current="page"] { border-color: var(--cc-teal-badge-bd); background: var(--cc-teal-fill); color: var(--cc-teal-text); }
 .cc-nav-badge.is-error { color: var(--cc-amber-text); background: var(--cc-amber-fill); }
 .cc-sidebar-foot { gap: 4px; padding-top: 8px; }
 .cc-settings-cta { min-height: var(--cc-row-height); justify-content: flex-start; padding: 0 10px; border: 0; border-radius: var(--cc-radius-md); background: transparent; color: var(--cc-caption); box-shadow: none; font-size: 13px; font-weight: 500; }
@@ -3011,7 +3014,65 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .cc-settings-subhead { margin: 0 0 6px; color: var(--cc-faint); font-size: 11px; font-weight: 600; }
 .cc-shortcut-group + .cc-shortcut-group { margin-top: 14px; }
 .cc-settings-row--compact { min-height: 0; padding: 8px 15px; }
+.cc-settings-row--stacked { align-items: stretch; flex-direction: column; gap: 12px; }
 .cc-settings-doc-link { display: inline-flex; margin-top: 12px; color: var(--cc-teal-text); font-size: 12px; font-weight: 500; }
+
+/* ---- Theme picker (Settings → Appearance → Theme) ------------------------
+   One tile per family; each tile is two `.cc-theme-swatch` halves that paint a
+   miniature shell — toolbar strip, page, a raised card with an ink line and the
+   three layer dots — from that family's OWN tokens. A swatch carries
+   `data-palette` + `data-theme`, and the family blocks in src/themes/ (and the
+   ContextCake blocks at the top of this file) declare their tokens on
+   `.cc-theme-swatch[…]` as well as on `:root`, so the preview is the real
+   palette, not a hand-picked sample, and never touches <html>. */
+.cc-theme-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; width: 100%; }
+.cc-theme-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 6px 9px;
+  border: 1px solid var(--cc-line);
+  border-radius: var(--cc-radius-lg);
+  background: var(--cc-raised);
+  color: var(--cc-body);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color 150ms var(--cc-ease-out), box-shadow 150ms var(--cc-ease-out), background 150ms var(--cc-ease-out);
+}
+.cc-theme-tile:hover { border-color: var(--cc-line-strong); color: var(--cc-ink); }
+.cc-theme-tile[aria-pressed="true"] { border-color: var(--cc-teal-stroke-e); color: var(--cc-ink); box-shadow: 0 0 0 1px var(--cc-teal-stroke-e); }
+.cc-theme-tile-preview { position: relative; display: grid; grid-template-columns: 1fr 1fr; height: 74px; overflow: hidden; border: 1px solid var(--cc-line); border-radius: 6px; }
+.cc-theme-tile-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--cc-cta-bg);
+  color: var(--cc-cta-fg);
+  box-shadow: 0 1px 3px var(--cc-shadow);
+}
+.cc-theme-tile-check svg { width: 10px; height: 10px; }
+.cc-theme-tile-label { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: 0 2px; font-size: 12px; font-weight: 500; line-height: 1.3; }
+.cc-theme-tile[aria-pressed="true"] .cc-theme-tile-label { font-weight: 600; }
+.cc-theme-tile-variants { overflow: hidden; color: var(--cc-caption); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.cc-theme-swatch { position: relative; display: block; min-width: 0; overflow: hidden; background: var(--cc-page); color: var(--cc-ink); }
+.cc-theme-swatch + .cc-theme-swatch { border-left: 1px solid var(--cc-line); }
+.cc-theme-swatch-bar { display: block; height: 11px; border-bottom: 1px solid var(--cc-line); background: var(--cc-header-bg); }
+.cc-theme-swatch-card { display: block; margin: 8px 8px 0; padding: 6px 6px 7px; border: 1px solid var(--cc-line); border-radius: 4px; background: var(--cc-raised); }
+.cc-theme-swatch-ink { display: block; width: 64%; height: 4px; border-radius: 2px; background: var(--cc-ink); }
+.cc-theme-swatch-body { display: block; width: 42%; height: 3px; margin-top: 4px; border-radius: 2px; background: var(--cc-caption); }
+.cc-theme-swatch-dots { display: flex; gap: 3px; margin-top: 7px; }
+.cc-theme-swatch-dots > span { display: block; width: 6px; height: 6px; border-radius: 50%; }
+.cc-theme-swatch-dots > span:nth-child(1) { background: var(--cc-layer-company); }
+.cc-theme-swatch-dots > span:nth-child(2) { background: var(--cc-layer-team); }
+.cc-theme-swatch-dots > span:nth-child(3) { background: var(--cc-layer-personal); }
+.cc-theme-picker-note { display: block; margin: 0; color: var(--cc-caption); font-size: 12px; line-height: 1.45; }
 
 .cc-account h2, .cc-account h3, .cc-account p { margin-top: 0; }
 .cc-account h2 { margin-bottom: 3px; font-size: 15px; font-weight: 600; }

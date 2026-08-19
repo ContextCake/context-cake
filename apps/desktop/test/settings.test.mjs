@@ -139,6 +139,7 @@ test('resetSettings replaces the file with defaults instead of merging over it',
   // Readable immediately, like any queued write.
   const now = settings.readSettings()
   assert.equal(now.theme, 'system')
+  assert.equal(now.palette, 'contextcake')
   assert.equal(now.density, 'comfortable')
   assert.deepEqual(await written, { ok: true })
 
@@ -150,7 +151,7 @@ test('resetSettings replaces the file with defaults instead of merging over it',
   // account would learn about the reset rather than restoring the old values.
   assert.equal(after._sync.revision, before._sync.revision + 1)
   assert.equal(after._sync.dirty, true)
-  for (const field of ['theme', 'density', 'updateCheck']) {
+  for (const field of ['theme', 'palette', 'density', 'updateCheck']) {
     assert.ok(after._sync.dirtyFields.includes(field), `${field} must be marked dirty`)
   }
 })

@@ -13,6 +13,21 @@ test('preference patches accept only fixed-purpose writable values', () => {
   assert.throws(() => validatePreferencePatch({ anonymousMetrics: null }), /Invalid metrics/)
 })
 
+test('the theme family is a slug, not an enum, so a family this build never heard of still saves', () => {
+  // The console falls back to ContextCake for an id it does not ship; the Mac
+  // app must not reject the write (or an older client's sync pull) just
+  // because a newer console added a family. Shape only: lowercase slug, at
+  // most 32 characters, no path or case tricks.
+  assert.deepEqual(validatePreferencePatch({ palette: 'solarized' }), { palette: 'solarized' })
+  assert.deepEqual(validatePreferencePatch({ palette: 'a-family-added-later' }), { palette: 'a-family-added-later' })
+  assert.deepEqual(validatePreferencePatch({ palette: 'x'.repeat(32) }), { palette: 'x'.repeat(32) })
+  for (const bad of ['Solarized', '../x', 'x'.repeat(33), '', '-leading', 'with space', 42, null, {}]) {
+    assert.throws(() => validatePreferencePatch({ palette: bad }), /Invalid palette/, `palette ${JSON.stringify(bad)} must be rejected`)
+  }
+  assert.deepEqual(changedPreferencePatch({ palette: 'contextcake' }, { palette: 'contextcake' }), {})
+  assert.deepEqual(changedPreferencePatch({ palette: 'contextcake' }, { palette: 'gruvbox' }), { palette: 'gruvbox' })
+})
+
 test('reduce transparency accepts null as the way back to this Mac\'s setting', () => {
   // null is not "no value" here — it is the default and the only route back to
   // following Accessibility once the user has overridden it, so a validator that

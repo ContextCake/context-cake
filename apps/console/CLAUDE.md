@@ -123,11 +123,56 @@ via their pre-hooks.
   is frozen at mount (`isAdding`) because the shell's `addingSource` prop
   flips live when the first add lands — don't "simplify" that back to the
   prop or the step machine changes length under a mounted step index.
-- **Theming** — every color is a CSS variable in `src/styles.css` (light
-  soft-control-plane default, dark primary surface under
-  `:root[data-theme="dark"]`). `C` in `src/theme.ts` holds the variable references; `css()` parses inline
-  `"prop:val; …"` strings into style objects **and** remaps literal hex
-  colors to their variables via `HEX_VARS`.
+- **Theming** — two axes, and their names differ between code and UI on
+  purpose: code `theme` (`theme-mode.tsx`, `data-theme` / `data-theme-preference`
+  on `<html>`, `cc-theme` in localStorage) is the UI's **"Appearance"** —
+  system / light / dark; code `palette` (`data-palette`, `cc-palette`, the
+  desktop `palette` preference) is the UI's **"Theme"** — which family
+  (`contextcake` default, then `solarized`, `catppuccin`, `gruvbox`,
+  `tokyo-night`, `rose-pine`, `one`, `github`; `src/themes/registry.ts` is the
+  list, `THIRD_PARTY_THEMES.md` the notices). Every color is a CSS variable.
+  ContextCake's own values live in `src/styles.css`: `:root` (light) and the
+  palette-scoped dark block, and beyond the primitives (page/surface/raised,
+  the ink ramp, lines, the layer trio and its blue/teal/amber ramps) the two
+  blocks declare **semantic role tokens** — `--cc-cta-bg/fg` (the one primary
+  action: connect + copy), `--cc-solid-bg/fg` (the inverted chip that is the
+  light-mode source of the cta pair), `--cc-code-bg/fg` (terminal-style code
+  block) — and components consume those; a role token with no consumer left
+  is removed from both blocks and from `_derived.css`, not kept. **A theme family
+  is a file `src/themes/<id>.css` with two blocks that declare the 13
+  `PRIMITIVES` (+ `color-scheme`) per mode — `tokens.test.ts` enforces "every
+  primitive, and only canonical token names" — and `src/themes/_derived.css`
+  computes every other canonical color from them with `color-mix()`, so a
+  family cannot drift from the console's structure; a family may override a
+  derived token where its palette defines that role itself.** Each block
+  carries two selectors:
+  `:root[data-palette="x"][data-theme="y"]` for the app and
+  `.cc-theme-swatch[data-palette="x"][data-theme="y"]` for the picker's
+  self-previewing tiles (ContextCake's blocks list the swatch selector too),
+  so a preview is the real palette painted on a `<span>`, never a hand-picked
+  sample. ContextCake's dark block is scoped to its own palette
+  (`:root:where([data-palette="contextcake"], :not([data-palette]))[data-theme="dark"]`,
+  still (0,2,0)) so a family never competes with it; the derived block sits
+  at (0,2,0), above `:root`, below every family block, and a family may
+  override a derived token (Rosé Pine and GitHub bring their own border
+  tones). Non-default families are opaque, and
+  `_derived.css` turns the sidebar blur off for them. **A
+  `:root[data-theme="dark"] .cc-*` component override fails
+  `src/themes/tokens.test.ts` — extend a semantic token in both blocks (or add
+  one, named by role, not by color) instead.** The same suite refuses any
+  literal color (`#hex`, `rgb()`/`hsl()`/…, named colors) in a component
+  rule; a translucent tint is written as
+  `color-mix(in srgb, var(--cc-…) N%, transparent)`. `src/themes/contrast.ts`
+  (pure WCAG math + `var()`/`color-mix()` resolver) backs
+  `src/themes/contrast.test.ts`, which holds ink/body/caption and every
+  ramp/solid/code/cta/ask pair to a floor **in every family and both modes,
+  with no per-family exception list** — a family that cannot pass changes its
+  mapping (within its official palette) or is not shipped. The constants a
+  family extends — `PALETTES`, `PRIMITIVES`, `TOKEN_BLOCK_SELECTOR_RE`,
+  `INHERITS_FROM_LIGHT`, `LITERAL_ALLOWLIST` — live in `src/themes/gates.ts`,
+  not in a test file. `C` in `src/theme.ts` holds the variable references;
+  `css()` parses inline `"prop:val; …"` strings into style objects **and**
+  remaps literal hex colors to their variables via `HEX_VARS`.
 - **Data** — `src/api.ts` is the single seam: demo mode imports a bundle
   generated at build time by shelling out to the real `packages/core/src/resolver.mjs`
   (`scripts/build-demo-data.mjs`), live mode fetches the same-origin playground
@@ -166,7 +211,10 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
   literals and only theme correctly if the hex is in `HEX_VARS` in
   `src/theme.ts`. An unregistered hex renders fine in light mode and silently
   fails to adapt in dark mode. Prefer the `C.*` variable refs for new code;
-  if you must write a hex, add it to `HEX_VARS`.
+  if you must write a hex, add it to `HEX_VARS`. `src/theme.test.ts` walks
+  every string literal under `src/` and fails on an unregistered six-digit
+  hex, on any 3-, 4- or 8-digit hex (`css()` cannot remap those), and on a
+  `HEX_VARS` value that names no `--cc-*` token.
 - **Subscribing to the wrong store context fails silently.** Every view root is
   `React.memo`'d with no props, so the only thing that re-renders it is a context
   it actually subscribes to. A component that reads query-derived data without
@@ -216,7 +264,16 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
 - **Strict unused checks** — an unused import/local/param fails `build`. The
   build won't ship until typecheck is clean.
 - **Dark-first** — default theme is dark, persisted in `localStorage` under
-  `cc-theme`. Don't assume light.
+  `cc-theme` (and the family under `cc-palette`). Don't assume light, and
+  don't assume ContextCake's colors: a family swaps every primitive.
+- **An unknown palette id is normalized, never written back.** The desktop
+  validates `palette` by slug shape (so a newer app or a hand-edited
+  settings.json may name a family this build lacks), and a browser's
+  `cc-palette` may have been written by a newer deploy; `theme-mode.tsx`
+  renders such an id as ContextCake and leaves the stored value alone —
+  `cc-palette` is written only from `setPalette`, unlike `cc-theme` /
+  `cc-density`, which the appearance effect keeps in sync. Don't "fix" the
+  file or the key from a fallback.
 - **Never block the shell on data.** `store.load.shell` is true only until the
   graph responds (milliseconds); concepts resolve after the UI is up. The
   full-page "Resolving the cascade…" gate was the first-run hang — don't add

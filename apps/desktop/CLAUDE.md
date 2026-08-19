@@ -11,7 +11,7 @@ architecture, packaging, or update behavior.
 cd apps/desktop
 npm ci
 npm run dev     # build console renderer + launch
-npm test        # auth storage + settings-sync tests
+npm test        # auth storage + settings-sync + preferences tests
 npm run test:navigation
 npm run test:cli-status
 npm run smoke   # headless boot check: service up, token enforced, exits
@@ -160,6 +160,16 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   `unhandledRejection`, which is `handleFatal`. Never restore a `finally` that
   clears `unflushed` regardless of outcome — that is what made a failed write
   silently revert to the stale file while telling the console it was saved.
+- **`palette` (the theme family) is validated by slug shape, not by an enum
+  of shipped families.** `preferences.mjs` (`PALETTE_ID`), `settings-sync.mjs`,
+  `main.mjs`'s snapshot and `preload.cjs` (which duplicates the literal — CJS)
+  all accept `/^[a-z][a-z0-9-]{0,31}$/`; only the console knows which ids
+  exist and renders an unknown one as ContextCake without writing it back. An
+  enum here would make a console-only "add a family" change break
+  `preferences:set` in an older app, and make an older client's settings-sync
+  pull throw the day a newer client pushes a new id. `nativeTheme.themeSource`
+  stays mode-only (`theme`); a family never touches native chrome — the
+  non-default families are opaque and the console disables the sidebar blur.
 - **The renderer is sandboxed** (`contextIsolation`, `sandbox: true`). The only
   bridge is `src/preload.cjs`: `window.__CC_DESKTOP` exposes static launch metadata,
   while `window.__CC_AUTH` exposes the narrow auth/settings IPC surface. Keep both

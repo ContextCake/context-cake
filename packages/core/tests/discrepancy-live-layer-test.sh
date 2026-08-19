@@ -51,7 +51,13 @@ doc Database "team answer"   > "$live/decisions/db.md"
 doc Cache    "team cache"    > "$live/decisions/cache.md"
 doc Queue    "team queue"    > "$live/decisions/queue.md"
 doc Search   "team search"   > "$live/decisions/search.md"
+# Two dangling links in one section of a live-only concept: a case slip and a
+# moved basename, both with an unambiguous candidate — the batch fixture.
+doc Links    "See [[Decisions/Cache]] and [[old/queue]] for the rest." > "$live/decisions/links.md"
 ( cd "$live" && git add -A && git commit --quiet -m "seed" && git push --quiet -u origin main )
+# Reflog on the bare so pushes can be counted: one push that lands two commits
+# moves refs/heads/main once.
+git -C "$bare" config core.logAllRefUpdates true
 doc Database "personal answer" > "$personal/decisions/db.md"
 doc Cache    "personal cache"  > "$personal/decisions/cache.md"
 doc Queue    "personal queue"  > "$personal/decisions/queue.md"
@@ -152,6 +158,37 @@ grep -q 'team cache' "$personal/decisions/cache.md" || fail "the personal contri
 [ "$(cd "$live" && git log -1 --format=%s)" = "$MSG" ] || fail "HEAD did not move" "$(cd "$live" && git log -1 --format=%s)"
 [ -z "$(cd "$live" && git status --porcelain)" ] || fail "tree still clean" "$(cd "$live" && git status --porcelain)"
 pass "byte-identical live file: decision applied, no empty commit, tree clean"
+
+# ---- 2b. a batch of two link rewrites into the live layer: two commits, ONE push ---
+echo "live-layer batch: two rewrite_link decisions → two pathspec commits, one push"
+LSET=""
+for _ in $(seq 1 60); do
+  LSET="$(curl -s "$BASE/api/discrepancies?wait=15000")"
+  [ "$(JQ 'String(d.coverageComplete && d.discrepancies.filter((x) => x.kind === "broken_link" && x.conceptId === "decisions/links").length === 2)' <<<"$LSET")" = "true" ] && break
+  sleep 0.1
+done
+L1="$(JQ 'd.discrepancies.find((x) => x.kind === "broken_link" && x.conceptId === "decisions/links" && x.target === "Decisions/Cache")' <<<"$LSET")"
+L2="$(JQ 'd.discrepancies.find((x) => x.kind === "broken_link" && x.conceptId === "decisions/links" && x.target === "old/queue")' <<<"$LSET")"
+[ "$(JQ 'd.bestCandidate?.id' <<<"$L1")" = "decisions/cache" ] || fail "case slip has its best candidate" "$L1"
+[ "$(JQ 'd.bestCandidate?.id' <<<"$L2")" = "decisions/queue" ] || fail "moved basename has its best candidate" "$L2"
+HEAD_BEFORE="$(cd "$live" && git rev-list --count HEAD)"
+PUSHES_BEFORE="$(git -C "$bare" reflog show refs/heads/main | wc -l | tr -d ' ')"
+BATCH="$(curl -s -X POST -H 'content-type: application/json' \
+  -d "{\"decisions\":[{\"discrepancyId\":$(JQ 'JSON.stringify(d.id)' <<<"$L1"),\"revision\":$(JQ 'JSON.stringify(d.revision)' <<<"$L1"),\"action\":\"rewrite_link\",\"newTarget\":\"decisions/cache\"},{\"discrepancyId\":$(JQ 'JSON.stringify(d.id)' <<<"$L2"),\"revision\":$(JQ 'JSON.stringify(d.revision)' <<<"$L2"),\"action\":\"rewrite_link\",\"newTarget\":\"decisions/queue\"}]}" \
+  "$BASE/api/discrepancy-decisions/batch")"
+[ "$(JQ '`${d.ok}:${d.applied}:${d.failed}`' <<<"$BATCH")" = "true:2:0" ] || fail "batch of two rewrites applied" "$BATCH"
+[ "$(JQ '`${d.git?.layer}:${d.git?.commits}:${d.git?.pushed}:${d.git?.queued}`' <<<"$BATCH")" = "team-live:2:true:false" ] || fail "batch reports two commits and one push" "$BATCH"
+[ "$(JQ 'String(d.results.every((r) => r.ok && r.git?.committed === true && r.git?.pushed === false))' <<<"$BATCH")" = "true" ] || fail "each item committed, none pushed on its own" "$BATCH"
+grep -q 'See \[\[decisions/cache\]\] and \[\[decisions/queue\]\] for the rest\.' "$live/decisions/links.md" || fail "both rewrites landed in the live file" "$(cat "$live/decisions/links.md")"
+[ "$(cd "$live" && git rev-list --count HEAD)" = "$((HEAD_BEFORE + 2))" ] || fail "exactly two commits were added" "$(cd "$live" && git log --oneline)"
+[ "$(cd "$live" && git log -2 --format=%s | sort -u | wc -l | tr -d ' ')" = "1" ] || fail "both commits carry the rewrite_link message" "$(cd "$live" && git log -2 --format=%s)"
+[ "$(cd "$live" && git log -1 --format=%s)" = "chore(contextcake): resolve broken_link decisions/links#choice (rewrite_link)" ] || fail "commit message" "$(cd "$live" && git log -1 --format=%s)"
+[ "$(cd "$live" && git show --name-only --format= HEAD | sed '/^$/d')" = "decisions/links.md" ] || fail "each commit lists only the concept file"
+[ -z "$(cd "$live" && git status --porcelain)" ] || fail "tree clean after the batch" "$(cd "$live" && git status --porcelain)"
+[ "$(git -C "$bare" rev-parse HEAD)" = "$(cd "$live" && git rev-parse HEAD)" ] || fail "the batch reached the remote"
+[ "$(git -C "$bare" reflog show refs/heads/main | wc -l | tr -d ' ')" = "$((PUSHES_BEFORE + 1))" ] || fail "the two commits arrived in ONE push" "$(git -C "$bare" reflog show refs/heads/main)"
+MSG="$(cd "$live" && git log -1 --format=%s)"
+pass "batch: two locked commits, both links rewritten, one push, tree clean"
 
 # ---- 3. offline: the commit lands locally and the push is queued, not thrown ------
 echo "live-layer decision: offline remote queues the push"

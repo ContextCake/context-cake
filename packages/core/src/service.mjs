@@ -1793,6 +1793,15 @@ export function createEngineService({
         json(res, 200, await discrepancyOps.decide(parseJson(await readBody(req))));
         return true;
       }
+      if (p === "/api/discrepancy-decisions/batch" && req.method === "POST") {
+        // Several decisions, one lock, one projection, per-item results
+        // (control/discrepancies.mjs decideBatch). Same mutation gate as the
+        // single route; the batch itself answers 200 with per-item outcomes,
+        // and only a malformed or oversized request is a non-200.
+        if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
+        json(res, 200, await discrepancyOps.decideBatch(parseJson(await readBody(req))));
+        return true;
+      }
       if (p === "/api/discrepancy-rules") {
         if (req.method === "GET") { json(res, 200, await discrepancyOps.rulesView()); return true; }
         if (req.method === "POST") {

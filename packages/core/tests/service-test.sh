@@ -288,6 +288,46 @@ DDETAIL="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?id=$SID_ENC")"
 [ "$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?id=no-such" | JQ 'String(d.discrepancy === null)')" = "true" ] && pass "?id= for an unknown id answers null, not 404" || fail "?id= unknown id"
 code 400 "$(C "${AUTH[@]}" "$BASE/api/discrepancies?limit=-1")" "an invalid limit is refused"
 
+echo "broken-link fix actions through the batch route: rewrite + unlink + per-item failure, dry run, mutation gate"
+mkdir -p "$TMP/bundle/guides"
+printf -- '---\ntype: guide\ntitle: Deploy\n---\n\n# Deploy\n\n## Body {#body}\n\nDeploy it.\n' > "$TMP/bundle/guides/deploy.md"
+printf -- '---\ntype: guide\ntitle: Onboarding\n---\n\n# Onboarding\n\n## Body {#body}\n\nStart with [[Guides/Deploy]] and [[guides/retired|the retired guide]].\n' > "$TMP/bundle/guides/onboarding.md"
+LID=""
+for _ in $(seq 1 60); do
+  LSET="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?wait=15000")"
+  LID="$(JQ 'd.discrepancies.find((x) => x.kind === "broken_link" && x.conceptId === "guides/onboarding" && x.target === "Guides/Deploy")?.id ?? ""' <<<"$LSET")"
+  [ -n "$LID" ] && break
+  sleep 0.1
+done
+LREV="$(JQ 'd.discrepancies.find((x) => x.kind === "broken_link" && x.conceptId === "guides/onboarding" && x.target === "Guides/Deploy")?.revision ?? ""' <<<"$LSET")"
+LBEST="$(JQ 'd.discrepancies.find((x) => x.kind === "broken_link" && x.conceptId === "guides/onboarding" && x.target === "Guides/Deploy")?.bestCandidate?.id ?? ""' <<<"$LSET")"
+RID2="$(JQ 'd.discrepancies.find((x) => x.kind === "broken_link" && x.conceptId === "guides/onboarding" && x.target === "guides/retired")?.id ?? ""' <<<"$LSET")"
+RREV2="$(JQ 'd.discrepancies.find((x) => x.kind === "broken_link" && x.conceptId === "guides/onboarding" && x.target === "guides/retired")?.revision ?? ""' <<<"$LSET")"
+[ -n "$LID" ] && [ -n "$RID2" ] && pass "both dangling links are projected as broken_link records" || fail "broken links missing ($LSET)"
+[ "$LBEST" = "guides/deploy" ] && pass "the case-mismatched link carries its best candidate" || fail "bestCandidate ($LBEST)"
+code 405 "$(C -X POST -H 'content-type: application/json' -d '{"decisions":[]}' "$BASE2/api/discrepancy-decisions/batch")" "batch decisions respect the mutation gate"
+BIGBATCH="$(node -e 'console.log(JSON.stringify({ decisions: Array.from({ length: 501 }, () => ({ discrepancyId: "x", revision: "y", action: "acknowledge", reasonCode: "other" })) }))')"
+code 413 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "$BIGBATCH" "$BASE/api/discrepancy-decisions/batch")" "a batch over 500 decisions is refused as a whole"
+code 400 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"decisions":[]}' "$BASE/api/discrepancy-decisions/batch")" "an empty batch is refused"
+LOGN="$(curl -s "${AUTH[@]}" "$BASE/api/conflict-resolutions" | JQ 'String(d.resolutions.length)')"
+DRY="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"dryRun\":true,\"decisions\":[{\"discrepancyId\":\"$LID\",\"revision\":\"$LREV\",\"action\":\"rewrite_link\",\"newTarget\":\"guides/deploy\"},{\"discrepancyId\":\"$RID2\",\"revision\":\"$RREV2\",\"action\":\"acknowledge\",\"reasonCode\":\"target_missing\"}]}" "$BASE/api/discrepancy-decisions/batch")"
+[ "$(JQ '`${d.dryRun}:${d.applied}:${d.failed}:${d.results[0].wouldWrite.length}:${d.results[0].wouldWrite[0].layer}:${d.results[1].wouldWrite.length}`' <<<"$DRY")" = "true:2:0:1:t:0" ] && pass "dry run lists what a rewrite would write and that an acknowledgement writes nothing" || fail "dry run shape ($DRY)"
+grep -q '\[\[Guides/Deploy\]\]' "$TMP/bundle/guides/onboarding.md" && pass "dry run changed no bytes" || fail "dry run wrote the file"
+[ "$(curl -s "${AUTH[@]}" "$BASE/api/conflict-resolutions" | JQ 'String(d.resolutions.length)')" = "$LOGN" ] && pass "dry run appended no decision" || fail "dry run appended a decision"
+BATCH="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"decisions\":[{\"discrepancyId\":\"$LID\",\"revision\":\"$LREV\",\"action\":\"rewrite_link\",\"newTarget\":\"guides/deploy\"},{\"discrepancyId\":\"$RID2\",\"revision\":\"$RREV2\",\"action\":\"unlink\"},{\"discrepancyId\":\"broken_link::nope::body::x\",\"revision\":\"x\",\"action\":\"unlink\"}]}" "$BASE/api/discrepancy-decisions/batch")"
+[ "$(JQ '`${d.ok}:${d.applied}:${d.failed}:${d.results.length}`' <<<"$BATCH")" = "false:2:1:3" ] && pass "batch answers per-item results with applied/failed counts" || fail "batch envelope ($BATCH)"
+[ "$(JQ '`${d.results[0].ok}:${d.results[0].decision.action}:${d.results[0].decision.newTarget}:${d.results[1].decision.action}:${d.results[2].code}:${d.results[2].status}`' <<<"$BATCH")" = "true:rewrite_link:guides/deploy:unlink:NOT_OPEN:409" ] && pass "each result names its decision or its refusal code" || fail "batch results ($BATCH)"
+grep -q 'Start with \[\[guides/deploy\]\] and the retired guide\.' "$TMP/bundle/guides/onboarding.md" && pass "the batch rewrote the case-mismatched link and unlinked the retired one in the file" || fail "file after batch: $(cat "$TMP/bundle/guides/onboarding.md")"
+[ "$(JQ 'String(Array.isArray(d.suggestions))' <<<"$BATCH")" = "true" ] && pass "batch response carries rule suggestions" || fail "suggestions missing ($BATCH)"
+LAFTER=""
+for _ in $(seq 1 60); do
+  LAFTER="$(curl -s "${AUTH[@]}" "$BASE/api/discrepancies?wait=15000")"
+  [ "$(JQ 'String(d.coverageComplete && !d.discrepancies.some((x) => x.kind === "broken_link" && x.conceptId === "guides/onboarding" && x.status !== "resolved"))' <<<"$LAFTER")" = "true" ] && break
+  sleep 0.1
+done
+[ "$(JQ 'String(!d.discrepancies.some((x) => x.kind === "broken_link" && x.conceptId === "guides/onboarding" && x.status !== "resolved"))' <<<"$LAFTER")" = "true" ] && pass "both links resolve after the refresh" || fail "links still open ($LAFTER)"
+code 409 "$(C -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"discrepancyId\":\"$LID\",\"revision\":\"$LREV\",\"action\":\"choose_contribution\",\"selectedSource\":\"t\"}" "$BASE/api/discrepancy-decisions")" "a decided link is no longer open"
+
 printf -- '# Format only\n\n## Pick {#pick}\n\nUse **Postgres** for writes.\n' > "$TMP/bundle/format-only.md"
 printf -- '# Format only\n\n## Pick {#pick}\n\nUse postgres for writes\n' > "$TMP/m2/format-only.mdx"
 AUTO="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d '{"conceptId":"format-only","sectionKey":"pick","selectedLayer":"t","method":"automatic"}' "$BASE/api/conflict-resolutions")"

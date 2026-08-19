@@ -1,11 +1,15 @@
 ---
 import Base from '../../layouts/Base.astro';
 import CodeBlock from '../../components/CodeBlock.astro';
+import { COMMERCE_VISIBLE } from '../../config/flags';
 import { catalogPacks, creatorBriefs } from '../../data/commerce';
 
 const catalogEntries = [...catalogPacks, ...creatorBriefs];
 const publishedCount = catalogPacks.length;
 const briefCount = creatorBriefs.length;
+// While commerce is hidden (src/config/flags.json) the catalog shows each
+// entry's stage instead of a price, and the creator program page is not linked;
+// each open brief still carries its own application link.
 
 const structurePreview = `profession-pack/
 ├── START-HERE.md
@@ -31,12 +35,12 @@ const structurePreview = `profession-pack/
 				<p>Inspectable workflow kits—and open briefs for the people who should create the next ones.</p>
 				<div class="intro-actions">
 					<a href="#catalog-title">Browse the catalog</a>
-					<a href="/creators">Become a creator</a>
+					{COMMERCE_VISIBLE && <a href="/creators">Become a creator</a>}
 				</div>
 			</div>
 			<div class="intro-note">
 				<strong>{publishedCount} published · {briefCount} open briefs</strong>
-				<span>Published Packs are ready to inspect. Open briefs are unpublished opportunities for qualified creators—not preorders.</span>
+				<span>Published Packs are ready to inspect. Open briefs are unpublished opportunities for qualified creators{COMMERCE_VISIBLE ? '—not preorders' : ''}.</span>
 			</div>
 		</header>
 
@@ -75,7 +79,7 @@ const structurePreview = `profession-pack/
 				<div class="catalog-head" role="row">
 					<span role="columnheader">Pack</span>
 					<span role="columnheader">Best for</span>
-					<span role="columnheader">License / target</span>
+					<span role="columnheader">{COMMERCE_VISIBLE ? 'License / target' : 'Availability'}</span>
 					<span role="columnheader">Stage</span>
 					<span role="columnheader" class="sr-only">Open</span>
 				</div>
@@ -101,8 +105,17 @@ const structurePreview = `profession-pack/
 								<span>{pack.audience}</span>
 							</div>
 							<div class="pack-cell pack-license" role="cell">
-								<strong>{pack.price}</strong>
-								{pack.teamPrice !== pack.price && <span>{pack.teamPrice}</span>}
+								{COMMERCE_VISIBLE ? (
+									<>
+										<strong>{pack.price}</strong>
+										{pack.teamPrice !== pack.price && <span>{pack.teamPrice}</span>}
+									</>
+								) : (
+									<>
+										<strong>{pack.kind === 'published' ? pack.status : 'Not yet published'}</strong>
+										<span>{pack.kind === 'published' ? 'Read the complete Pack' : 'Open to a qualified creator'}</span>
+									</>
+								)}
 							</div>
 							<div class="pack-cell pack-reviewed" role="cell">
 								{pack.kind === 'published' ? <strong>Reviewed <time datetime={pack.reviewedSort}>{pack.reviewedAt}</time></strong> : <strong>Unpublished</strong>}
@@ -120,8 +133,12 @@ const structurePreview = `profession-pack/
 				<button type="button" data-empty-clear>Clear filters</button>
 			</div>
 			<footer class="catalog-footer">
-				<p>Open briefs are invitations to create, not products. Ratings appear only after verified purchases.</p>
-				<a href="/creators">Pitch your own Pack</a>
+				{COMMERCE_VISIBLE ? (
+					<p>Open briefs are invitations to create, not products. Ratings appear only after verified purchases.</p>
+				) : (
+					<p>Open briefs are invitations to create, not products. Each brief explains how to apply.</p>
+				)}
+				{COMMERCE_VISIBLE && <a href="/creators">Pitch your own Pack</a>}
 			</footer>
 		</section>
 

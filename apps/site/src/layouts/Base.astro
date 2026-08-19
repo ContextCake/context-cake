@@ -11,6 +11,7 @@ import '@fontsource/jetbrains-mono/700.css';
 import '../styles/tokens.css';
 import Icon from '../components/Icon.astro';
 import appIconUrl from '../../../../assets/brand/contextcake-app-icon.svg?url';
+import { COMMERCE_VISIBLE } from '../config/flags';
 
 interface Props {
 	title: string;
@@ -23,14 +24,21 @@ const { title, description } = Astro.props;
 // opt into light mode, and that explicit preference remains local to them.
 const initialTheme = 'dark';
 const isHome = Astro.url.pathname === '/';
-const mainNavLinks = [
+// /pricing and /creators only exist as destinations while commerce is visible
+// (src/config/flags.json). Filtering here keeps every marketing page's nav and
+// footer in step with the redirects those two routes turn into when hidden.
+const commerceRoutes = new Set(['/pricing', '/creators']);
+function visibleLinks<T extends { href: string }>(links: T[]): T[] {
+	return links.filter((link) => COMMERCE_VISIBLE || !commerceRoutes.has(link.href));
+}
+const mainNavLinks = visibleLinks([
 	{ label: 'Packs', href: '/packs' },
 	{ label: 'Pricing', href: '/pricing' },
 	{ label: 'Docs', href: '/docs' },
 	{ label: 'Demo', href: '/demo' },
 	{ label: 'Install', href: '/install' },
 	{ label: 'GitHub', href: 'https://github.com/ContextCake/context-cake' },
-];
+]);
 const isCurrentRoute = (href: string) =>
 	!href.startsWith('http') &&
 	(Astro.url.pathname === href || Astro.url.pathname.startsWith(`${href}/`));
@@ -46,14 +54,14 @@ const year = new Date().getFullYear();
 const footerColumns = [
 	{
 		heading: 'Product',
-		links: [
+		links: visibleLinks([
 			{ label: 'Demo', href: '/demo' },
 			{ label: 'Packs', href: '/packs' },
 			{ label: 'Pricing', href: '/pricing' },
 			{ label: 'Create a Pack', href: '/creators' },
 			{ label: 'Install', href: '/install' },
 			{ label: 'Changelog', href: '/changelog' },
-		],
+		]),
 	},
 	{
 		heading: 'Documentation',
@@ -609,9 +617,12 @@ const footerColumns = [
 			width: 2.75rem;
 			height: 2.75rem;
 		}
-		.theme-paper .nav nav a:nth-child(4),
-		.theme-paper .nav nav a:nth-child(5),
-		.theme-paper .nav nav a:nth-child(6) {
+		/* Narrow light-theme nav: keep Packs, Docs, and Install (and Pricing while
+		   commerce is visible); Demo and GitHub are reachable from the page and
+		   footer. Named, not positional, so hiding a nav item never shifts which
+		   others disappear. */
+		.theme-paper .nav nav a[href='/demo'],
+		.theme-paper .nav nav a[href^='https://github.com/'] {
 			display: none;
 		}
 	}

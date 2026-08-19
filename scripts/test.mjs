@@ -91,7 +91,7 @@ const SUITES = [
     group: "release",
     name: "release-surfaces",
     command: process.execPath,
-    args: ["--test", "scripts/tests/app-release-sync.test.mjs", "scripts/tests/release-workflow.test.mjs", "scripts/tests/verify-release-surfaces.test.mjs"],
+    args: ["--test", "scripts/tests/app-release-sync.test.mjs", "scripts/tests/release-workflow.test.mjs", "scripts/tests/verify-release-surfaces.test.mjs", "scripts/tests/verify-commerce-hidden.test.mjs"],
   },
 
   // Indexing behaviour over time. Slowest in the suite by design — these wait

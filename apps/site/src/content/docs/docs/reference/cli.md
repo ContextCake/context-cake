@@ -118,8 +118,8 @@ The output feeds [write.mjs](#writemjs) and the control-surface dashboard. See
 ## pack.mjs
 
 Inspects, installs, updates, rolls back, and detaches content-only ContextCake Packs.
-This is a local Free-tier workflow: no account or subscription is required. Installed
-versions are immutable, and `remove` detaches the Pack layer without deleting the files.
+This is a local workflow: no account is required. Installed versions are immutable, and
+`remove` detaches the Pack layer without deleting the files.
 
 ```bash
 node pack.mjs inspect <directory> [--checksum sha256:...]

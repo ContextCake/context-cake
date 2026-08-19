@@ -95,12 +95,16 @@ function ConflictsInner() {
     // Failures stay selected — that is the retry set; successes leave it.
     setSelection(new Set(failedIds))
     const suggestion = response.suggestions?.[0]
+    // The first failure's own words: "3 need attention" alone would leave
+    // the user guessing whether it was a stale revision or a read-only layer.
+    const firstError = response.results.find((result) => !result.ok && (result.error || result.code))
+    const why = firstError ? ` — ${firstError.error ?? firstError.code}` : ''
     setNotice({
       kind: 'batch',
       applied: response.applied,
       failed: response.failed,
       failedIds,
-      message: `${label}.${response.failed ? ' The ones that need attention stay selected.' : ''}${response.git?.queued ? ' The team push is queued until the remote is reachable.' : ''}`,
+      message: `${label}.${response.failed ? ` The ones that need attention stay selected${why}.` : ''}${response.git?.queued ? ' The team push is queued until the remote is reachable.' : ''}`,
       ...(suggestion ? {
         suggestionId: suggestion.id,
         suggestionLabel: suggestion.action.type === 'rewrite_link' ? `Rewrite → ${suggestion.action.newTarget}` : suggestion.action.type === 'prefer_source' ? `Prefer ${suggestion.action.source}` : `Acknowledge as ${suggestion.action.reasonCode.replace(/_/g, ' ')}`,

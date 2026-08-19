@@ -112,7 +112,7 @@ const structurePreview = `profession-pack/
 									</>
 								) : (
 									<>
-										<strong>{pack.kind === 'published' ? 'Free' : 'Not yet published'}</strong>
+										<strong>{pack.kind === 'published' ? pack.status : 'Not yet published'}</strong>
 										<span>{pack.kind === 'published' ? 'Read the complete Pack' : 'Open to a qualified creator'}</span>
 									</>
 								)}

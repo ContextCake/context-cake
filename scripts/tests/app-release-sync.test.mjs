@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
+import { pathToFileURL } from 'node:url'
 import {
   buildAppReleaseRecord,
   compareAppReleaseTags,
@@ -7,8 +11,12 @@ import {
   parseChecksums,
   renderDownloadRedirect,
   renderRedirects,
+  renderRedirectsFile,
   selectStableAppRelease,
 } from '../../apps/site/scripts/sync-app-release.mjs'
+import { HIDDEN_REDIRECT_LINES } from '../../apps/site/scripts/site-flags.mjs'
+
+const HIDDEN_BLOCK = HIDDEN_REDIRECT_LINES.map((line) => `${line}\n`).join('')
 
 function release(version, overrides = {}) {
   const tag = `app-v${version}`
@@ -61,15 +69,52 @@ test('renders the commerce redirects only while commerce is hidden', () => {
   const record = buildAppReleaseRecord(release('1.2.3'), checksumText)
   const download = renderDownloadRedirect(record)
 
-  assert.equal(
-    renderRedirects(record, { commerceVisible: false, paymentsLive: false }),
-    `${download}/pricing / 302\n/creators /packs 302\n`,
-  )
+  // Both slash forms of each hidden route, so the 302 answers however the
+  // path arrives.
+  assert.deepEqual(HIDDEN_REDIRECT_LINES, [
+    '/pricing / 302',
+    '/pricing/ / 302',
+    '/creators /packs 302',
+    '/creators/ /packs 302',
+  ])
+  assert.equal(renderRedirects(record, { commerceVisible: false, paymentsLive: false }), `${download}${HIDDEN_BLOCK}`)
   // A missing or malformed flags object is treated as hidden, never as visible.
-  assert.equal(renderRedirects(record), `${download}/pricing / 302\n/creators /packs 302\n`)
+  assert.equal(renderRedirects(record), `${download}${HIDDEN_BLOCK}`)
+  assert.equal(renderRedirects(record, null), `${download}${HIDDEN_BLOCK}`)
   assert.equal(renderRedirects(record, { commerceVisible: true, paymentsLive: false }), download)
   // Live payments imply visible commerce even if the visibility flag lags.
   assert.equal(renderRedirects(record, { commerceVisible: false, paymentsLive: true }), download)
+})
+
+test('renders _redirects offline from the committed record and flags', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-redirects-'))
+  try {
+    const checksumText = `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg\n${'b'.repeat(64)}  ContextCake-1.2.3-arm64-mac.zip\n`
+    const record = buildAppReleaseRecord(release('1.2.3'), checksumText)
+    const recordUrl = pathToFileURL(join(dir, 'app-release.json'))
+    const flagsUrl = pathToFileURL(join(dir, 'flags.json'))
+    const redirectsUrl = pathToFileURL(join(dir, '_redirects'))
+    await writeFile(recordUrl, JSON.stringify(record))
+
+    await writeFile(flagsUrl, JSON.stringify({ commerceVisible: false, paymentsLive: false }))
+    const hidden = await renderRedirectsFile({ recordUrl, flagsUrl, redirectsUrl })
+    assert.equal(hidden, `${renderDownloadRedirect(record)}${HIDDEN_BLOCK}`)
+    assert.equal(await readFile(redirectsUrl, 'utf8'), hidden)
+
+    // Flipping the flag and re-rendering removes the lines — no network involved.
+    await writeFile(flagsUrl, JSON.stringify({ commerceVisible: true, paymentsLive: false }))
+    const visible = await renderRedirectsFile({ recordUrl, flagsUrl, redirectsUrl })
+    assert.equal(visible, renderDownloadRedirect(record))
+    assert.equal(await readFile(redirectsUrl, 'utf8'), visible)
+
+    // A malformed flags file is a loud error naming the file, never a guess.
+    await writeFile(flagsUrl, JSON.stringify({ commerceVisible: 'false', paymentsLive: false }))
+    await assert.rejects(renderRedirectsFile({ recordUrl, flagsUrl, redirectsUrl }), /commerceVisible must be true or false/)
+    await writeFile(flagsUrl, JSON.stringify({ commerceVisible: false }))
+    await assert.rejects(renderRedirectsFile({ recordUrl, flagsUrl, redirectsUrl }), /missing key\(s\) paymentsLive/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 test('adds the MCPB route only when its released bytes are checksum-pinned', () => {

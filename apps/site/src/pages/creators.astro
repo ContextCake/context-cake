@@ -5,8 +5,9 @@ import { creatorBriefs, foundingCreator, packPriceBands } from '../data/commerce
 
 // While commerce is hidden the creator program page (revenue share, payout terms)
 // bounces to the Pack catalog; each open brief page there keeps its own
-// application link, so the creator funnel survives without this page.
-if (!COMMERCE_VISIBLE) return Astro.redirect('/packs');
+// application link, so the creator funnel survives without this page. The 301
+// only decides the stub's refresh delay (0 s for anything but 302).
+if (!COMMERCE_VISIBLE) return Astro.redirect('/packs', 301);
 
 const applicationHref = 'mailto:creators@contextcake.com?subject=ContextCake%20founding%20creator%20application&body=Name%3A%0AProfessional%20field%3A%0AWorkflow%20I%20want%20to%20package%3A%0AMaterials%20I%20own%20or%20can%20license%3A%0A';
 const reviewSteps = [

@@ -5,8 +5,10 @@ import { applicationPlans, packPriceBands, planComparison } from '../data/commer
 import { appDownloadUrl } from '../data/app-release';
 
 // While commerce is hidden this route renders as a redirect stub (a meta refresh
-// on the prerendered page) and public/_redirects answers a real 302 first.
-if (!COMMERCE_VISIBLE) return Astro.redirect('/');
+// on the prerendered page) and public/_redirects answers a real 302 first. The
+// 301 only decides the stub's refresh delay: Astro emits a 0-second refresh for
+// anything but 302.
+if (!COMMERCE_VISIBLE) return Astro.redirect('/', 301);
 
 const faqs = [
 	['Does Free expire or limit my local context?', 'No. Local sources, layers, profiles, resolution, MCP access, and Pack authoring remain available without an account or subscription.'],

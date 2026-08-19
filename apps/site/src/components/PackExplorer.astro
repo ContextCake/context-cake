@@ -83,7 +83,10 @@ const renderedFiles = await Promise.all(
 		<p class="tree-empty" data-tree-empty role="status" hidden>No matching files</p>
 	</div>
 
-	<div class="explorer-preview">
+	{/* The Pack's own files are inlined below. scripts/verify-commerce-hidden.mjs
+	    skips exactly this element (its content is the Pack, not site copy) — keep
+	    the attribute on the container that holds every rendered file pane. */}
+	<div class="explorer-preview" data-verify-exempt="pack-files">
 		{renderedFiles.map((file) => (
 			<article
 				class={`preview-pane${file.path === selectedFile ? ' active' : ''}`}

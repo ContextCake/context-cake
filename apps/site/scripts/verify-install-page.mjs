@@ -1,10 +1,9 @@
 import { readFile } from 'node:fs/promises'
-import { isCommerceVisible, readSiteFlags } from './site-flags.mjs'
+import { HIDDEN_COMMERCE_ROUTES, HIDDEN_REDIRECT_LINES, isCommerceVisible, readSiteFlags } from './site-flags.mjs'
 
 const html = await readFile(new URL('../dist/install/index.html', import.meta.url), 'utf8')
 const homeHtml = await readFile(new URL('../dist/index.html', import.meta.url), 'utf8')
 const pricingHtml = await readFile(new URL('../dist/pricing/index.html', import.meta.url), 'utf8')
-const creatorsHtml = await readFile(new URL('../dist/creators/index.html', import.meta.url), 'utf8')
 const demoHtml = await readFile(new URL('../dist/demo/index.html', import.meta.url), 'utf8')
 const appRelease = JSON.parse(await readFile(new URL('../src/data/app-release.json', import.meta.url), 'utf8'))
 const sourceRelease = JSON.parse(await readFile(new URL('../src/data/source-release.json', import.meta.url), 'utf8'))
@@ -66,27 +65,27 @@ if (!redirects.includes(`/download/mac ${appRelease.artifacts.dmg.url} 302`)) {
 }
 
 if (!commerceVisible) {
-  // Astro prerenders an `Astro.redirect()` route as a meta-refresh stub; the
-  // _redirects lines make Cloudflare answer 302 before that stub is served.
-  const stubs = [
-    ['pricing', pricingHtml, 'url=/"'],
-    ['creators', creatorsHtml, 'url=/packs"'],
-  ]
-  for (const [label, page, target] of stubs) {
-    if (!page.includes('http-equiv="refresh"')) {
-      throw new Error(`/${label} must build as a redirect stub while commerce is hidden`)
+  // Astro prerenders an `Astro.redirect()` route as a meta-refresh stub (a
+  // 0-second refresh — the pages pass 301 for exactly that); the _redirects
+  // lines make Cloudflare answer 302 before that stub is served.
+  for (const { path, to } of HIDDEN_COMMERCE_ROUTES) {
+    const stub = await readFile(new URL(`../dist${path}/index.html`, import.meta.url), 'utf8')
+    if (!stub.includes('http-equiv="refresh"')) {
+      throw new Error(`${path} must build as a redirect stub while commerce is hidden`)
     }
-    if (!page.includes(target)) throw new Error(`/${label} stub must redirect to ${target}`)
+    if (!stub.includes(`content="0;url=${to}"`)) {
+      throw new Error(`${path} stub must refresh immediately to ${to} (Astro.redirect('${to}', 301))`)
+    }
   }
-  for (const line of ['/pricing / 302', '/creators /packs 302']) {
+  for (const line of HIDDEN_REDIRECT_LINES) {
     if (!redirects.includes(line)) {
-      throw new Error(`_redirects must contain "${line}" while commerce is hidden (regenerate public/_redirects with scripts/sync-app-release.mjs)`)
+      throw new Error(`_redirects must contain "${line}" while commerce is hidden — it is rendered from the flags by prebuild; run \`npm run build\` (or \`npm run render-redirects\`)`)
     }
   }
 } else {
-  for (const line of ['/pricing / 302', '/creators /packs 302']) {
+  for (const line of HIDDEN_REDIRECT_LINES) {
     if (redirects.includes(line)) {
-      throw new Error(`_redirects must not contain "${line}" while commerce is visible (regenerate public/_redirects with scripts/sync-app-release.mjs)`)
+      throw new Error(`_redirects must not contain "${line}" while commerce is visible — it is rendered from the flags by prebuild; run \`npm run build\` (or \`npm run render-redirects\`)`)
     }
   }
 }

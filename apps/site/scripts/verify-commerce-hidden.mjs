@@ -1,31 +1,28 @@
+#!/usr/bin/env node
 // Postbuild gate: while commerce is hidden (src/config/flags.json), no built page
-// may carry a price, plan, or creator-program string. Runs after
-// verify-install-page.mjs and exits 0 immediately when commerce is visible.
+// may carry a price, plan, or creator-program string, and no sitemap may list
+// /pricing or /creators. Runs after verify-install-page.mjs and does nothing
+// when commerce is visible.
 //
-// Two regions are excluded on purpose:
-// - The pack explorer inlines a Pack's own files into its page, and that content
-//   legitimately contains dollar amounts and words like "subscription ledger".
-//   The region from `<section id="explorer"` (PackProductPage.astro) up to the
-//   availability section that follows it (`<section id="availability"`, the
-//   `availability.id` each Pack page passes in) is stripped before the scan. If
-//   either marker moves, move this strip with it.
-// - /changelog renders GitHub release notes fetched at build time, so its body is
-//   not something a source edit can fix; only the site's own link/nav patterns
-//   are checked there.
+// Exemptions, each deliberate:
+// - Any element carrying `data-verify-exempt="<name>"` is removed before the
+//   scan, up to its own closing tag (fail-closed: an unclosed one throws). Today
+//   that is the pack explorer's file container in PackExplorer.astro — a Pack's
+//   own files are inlined there and legitimately contain dollar amounts and
+//   words like "subscription ledger". Everything around it (section headings,
+//   the explorer's own copy) stays in scope.
+// - /changelog renders GitHub release notes fetched at build time, so its body
+//   is not something a source edit can fix; only the site's own link/nav
+//   patterns are checked there.
+//
+// The pure pieces are exported for scripts/tests/verify-commerce-hidden.test.mjs.
 import { readdir, readFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
-import { join, relative } from 'node:path'
-import { isCommerceVisible, readSiteFlags } from './site-flags.mjs'
-
-const distRoot = fileURLToPath(new URL('../dist/', import.meta.url))
-
-if (isCommerceVisible(await readSiteFlags())) {
-  console.log('commerce is visible; hidden-commerce verification skipped')
-  process.exit(0)
-}
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { join, relative, sep } from 'node:path'
+import { isCommerceVisible, isHiddenCommercePath, readSiteFlags } from './site-flags.mjs'
 
 // Site chrome and links: checked on every page, release notes included.
-const linkPatterns = [
+export const LINK_PATTERNS = [
   /href="\/pricing/,
   /href="\/creators/,
   />Pricing</,
@@ -35,7 +32,15 @@ const linkPatterns = [
 // a commerce surface has leaked in the past or could. Deliberately NOT matched:
 // bare `subscription|billing|payment|checkout|license|paid` — `git checkout`,
 // the `billing-api` demo data, and the MIT license are all fine.
-const copyPatterns = [
+//
+// Two patterns are wider than their intent and worth knowing about:
+// - `/\$\d/` also matches a shell sample such as `echo $1` in the docs. None
+//   exists today; if one is added, wrap it in an element with
+//   `data-verify-exempt` rather than loosening the pattern.
+// - `/Coming soon/` also matches a catalog entry whose `status` (data/commerce.ts)
+//   is literally "Coming soon". That is on purpose: a "coming soon" Pack while
+//   commerce is hidden is the vaporware read this gate exists to prevent.
+export const COPY_PATTERNS = [
   /\$\d/,
   /Pro is never required/,
   /ContextCake Pro\b/,
@@ -57,18 +62,112 @@ const copyPatterns = [
   /Do I need ContextCake Pro/,
 ]
 
-const RELEASE_NOTES_PAGES = new Set(['changelog/index.html'])
-const EXPLORER_START = '<section id="explorer"'
-const EXPLORER_END = '<section id="availability"'
+export const RELEASE_NOTES_PAGES = new Set(['changelog/index.html'])
 
-function stripExplorer(html, file) {
-  const start = html.indexOf(EXPLORER_START)
-  if (start === -1) return html
-  const end = html.indexOf(EXPLORER_END, start)
-  if (end === -1) {
-    throw new Error(`${file}: has an explorer section but no availability section after it; update verify-commerce-hidden.mjs`)
+const EXEMPT_ATTR = 'data-verify-exempt="'
+
+// Remove every `data-verify-exempt` element, opening tag through its own closing
+// tag, tracking nesting of the same tag name so a container full of nested
+// <div>s is cut exactly once. Throws when the element never closes.
+export function stripExempt(html, file = '<html>') {
+  let out = html
+  let searchFrom = 0
+  for (;;) {
+    const attrAt = out.indexOf(EXEMPT_ATTR, searchFrom)
+    if (attrAt === -1) return out
+    const nameEnd = out.indexOf('"', attrAt + EXEMPT_ATTR.length)
+    const name = nameEnd === -1 ? '?' : out.slice(attrAt + EXEMPT_ATTR.length, nameEnd)
+    const open = out.lastIndexOf('<', attrAt)
+    const tagMatch = open === -1 ? null : /^<([a-zA-Z][\w-]*)/.exec(out.slice(open, attrAt))
+    if (!tagMatch) throw new Error(`${file}: data-verify-exempt="${name}" is not inside an opening tag`)
+    const tag = tagMatch[1]
+    const openEnd = out.indexOf('>', attrAt)
+    if (openEnd === -1) throw new Error(`${file}: data-verify-exempt="${name}" opening tag never ends`)
+    const openRe = new RegExp(`<${tag}(?=[\\s>/])`, 'gi')
+    const closeRe = new RegExp(`</${tag}\\s*>`, 'gi')
+    let depth = 1
+    let cursor = openEnd + 1
+    while (depth > 0) {
+      openRe.lastIndex = cursor
+      closeRe.lastIndex = cursor
+      const nextOpen = openRe.exec(out)
+      const nextClose = closeRe.exec(out)
+      if (!nextClose) {
+        throw new Error(`${file}: data-verify-exempt="${name}" <${tag}> never closes; the exempt region must be a complete element`)
+      }
+      if (nextOpen && nextOpen.index < nextClose.index) {
+        depth += 1
+        cursor = nextOpen.index + nextOpen[0].length
+      } else {
+        depth -= 1
+        cursor = nextClose.index + nextClose[0].length
+      }
+    }
+    out = out.slice(0, open) + out.slice(cursor)
+    searchFrom = open
   }
-  return html.slice(0, start) + html.slice(end)
+}
+
+// A second view of the page with the common ways a string hides from a literal
+// match undone: `$` as an entity, `<`/`>`/`"` as entities, percent-encoded
+// hrefs and mailto subjects. `&amp;` is decoded last so it cannot manufacture an
+// entity that then decodes again — the browser would not have either.
+export function normalizeEncodings(html) {
+  return html
+    .replace(/&#0*36;|&#x0*24;|&dollar;/gi, () => '$')
+    .replace(/&gt;|&#0*62;|&#x0*3e;/gi, () => '>')
+    .replace(/&lt;|&#0*60;|&#x0*3c;/gi, () => '<')
+    .replace(/&quot;|&#0*34;|&#x0*22;/gi, () => '"')
+    .replace(/&nbsp;|&#160;|&#xa0;/gi, () => ' ')
+    .replace(/%[0-9a-f]{2}/gi, (sequence) => {
+      try {
+        return decodeURIComponent(sequence)
+      } catch {
+        return sequence
+      }
+    })
+    .replace(/&amp;/g, () => '&')
+}
+
+function describe(rel, pattern, text, match, note) {
+  const at = match.index
+  const context = text.slice(Math.max(0, at - 40), at + match[0].length + 40).replace(/\s+/g, ' ')
+  return `${rel}: ${pattern}${note ? ` ${note}` : ''} near "${context}"`
+}
+
+// Scan one built page. `rel` is the dist-relative path with forward slashes.
+export function scanHtml(html, rel) {
+  const stripped = stripExempt(html, rel)
+  const patterns = RELEASE_NOTES_PAGES.has(rel) ? LINK_PATTERNS : [...LINK_PATTERNS, ...COPY_PATTERNS]
+  const views = [
+    ['', stripped],
+    ['(after decoding entities/percent-escapes)', normalizeEncodings(stripped)],
+  ]
+  const failures = []
+  for (const pattern of patterns) {
+    for (const [note, text] of views) {
+      const match = pattern.exec(text)
+      if (!match) continue
+      failures.push(describe(rel, pattern, text, match, note))
+      break
+    }
+  }
+  return failures
+}
+
+// Scan one sitemap file: no <loc> may point at a hidden commerce route.
+export function scanSitemap(xml, rel) {
+  const failures = []
+  for (const match of xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)) {
+    let pathname
+    try {
+      pathname = new URL(match[1]).pathname
+    } catch {
+      continue
+    }
+    if (isHiddenCommercePath(pathname)) failures.push(`${rel}: lists ${match[1]} while commerce is hidden`)
+  }
+  return failures
 }
 
 async function walkHtml(dir, out = []) {
@@ -80,27 +179,40 @@ async function walkHtml(dir, out = []) {
   return out
 }
 
-const files = await walkHtml(distRoot)
-if (files.length === 0) throw new Error('dist/ has no HTML files; run the build first')
-
-const failures = []
-for (const file of files) {
-  const rel = relative(distRoot, file)
-  const html = stripExplorer(await readFile(file, 'utf8'), rel)
-  const patterns = RELEASE_NOTES_PAGES.has(rel) ? linkPatterns : [...linkPatterns, ...copyPatterns]
-  for (const pattern of patterns) {
-    const match = pattern.exec(html)
-    if (!match) continue
-    const at = match.index
-    const context = html.slice(Math.max(0, at - 40), at + match[0].length + 40).replace(/\s+/g, ' ')
-    failures.push(`${rel}: ${pattern} near "${context}"`)
+export async function verifyDist(distRoot) {
+  const files = await walkHtml(distRoot)
+  if (files.length === 0) throw new Error('dist/ has no HTML files; run the build first')
+  const failures = []
+  for (const file of files) {
+    const rel = relative(distRoot, file).split(sep).join('/')
+    failures.push(...scanHtml(await readFile(file, 'utf8'), rel))
   }
+  const sitemaps = (await readdir(distRoot)).filter((name) => /^sitemap.*\.xml$/.test(name))
+  for (const name of sitemaps) {
+    failures.push(...scanSitemap(await readFile(join(distRoot, name), 'utf8'), name))
+  }
+  return { pages: files.length, sitemaps: sitemaps.length, failures }
 }
 
-if (failures.length > 0) {
-  console.error(`commerce is hidden but ${failures.length} built page/pattern combination(s) still leak it:`)
-  for (const failure of failures) console.error(`  - ${failure}`)
-  process.exit(1)
+async function main() {
+  if (isCommerceVisible(await readSiteFlags())) {
+    console.log('commerce is visible; hidden-commerce verification skipped')
+    return
+  }
+  const distRoot = fileURLToPath(new URL('../dist/', import.meta.url))
+  const { pages, sitemaps, failures } = await verifyDist(distRoot)
+  if (failures.length > 0) {
+    console.error(`commerce is hidden but ${failures.length} built page/pattern combination(s) still leak it:`)
+    for (const failure of failures) console.error(`  - ${failure}`)
+    process.exitCode = 1
+    return
+  }
+  console.log(`hidden-commerce verification passed (${pages} pages, ${sitemaps} sitemap file(s), ${LINK_PATTERNS.length + COPY_PATTERNS.length} patterns)`)
 }
 
-console.log(`hidden-commerce verification passed (${files.length} pages, ${linkPatterns.length + copyPatterns.length} patterns)`)
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error?.message ?? error)
+    process.exitCode = 1
+  })
+}

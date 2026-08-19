@@ -10,10 +10,12 @@ local product without turning local resolution, authoring, or agent access into 
 behind `apps/site/src/config/flags.json` (`commerceVisible: false`, `paymentsLive: false`).
 Nav and footer drop Pricing / Create a Pack, `/pricing` and `/creators` redirect, Pack pages
 show availability without prices, and a postbuild verifier fails the site build if a price
-or plan string leaks. The acceptance criteria that depend on a visible price are
-**suspended, not withdrawn** — both "Marketing comprehension" criteria (the pricing page)
-and the "target price band" clause of the creator-brief criterion under "Catalog and
-creators" — and apply again the day the flag flips.
+or plan string leaks. The requirements that depend on a visible price are
+**suspended, not withdrawn** — both "Marketing comprehension" criteria (the pricing page),
+the "target price band" clause of the creator-brief criterion under "Catalog and creators",
+and the matching "target personal/team price band" sentence under "Demo Catalog and
+Creator Briefs" (a brief's primary action still leads to the creator application, now the
+brief page's own mail link rather than `/creators`) — and apply again the day the flag flips.
 **Status:** Approved commercial foundation; billing remains disabled until the matching
 product behavior is live
 **Depends on:** `specs/contextcake-auth/spec.md`, `specs/contextcake-packs/spec.md`, and

@@ -1,0 +1,56 @@
+/* Tokyo Night — enkia, https://github.com/enkia/tokyo-night-vscode-theme
+   License: MIT (LICENSE.txt in that repository). This is the VS Code theme's
+   palette, deliberately — the popular tokyonight.nvim port is Apache-2.0.
+   Values: themes/tokyo-night-light-color-theme.json and
+   themes/tokyo-night-color-theme.json (workbench keys named below).
+
+   Tokyo Night → console primitive      Light                              | Night
+     page                               editor.background        #e6e7ed   | editor.background               #1a1b26
+     surface                            sideBar.background       #d6d8df   | editor.lineHighlightBackground  #1e202e
+     raised                             editor.background        #e6e7ed   | list.activeSelectionBackground  #202330
+     header-bg                          sideBar.background       #d6d8df   | sideBar.background              #16161e
+     canvas-bg                          editor.background                  | sideBar.background
+     ink                                editor.foreground        #343b59   | variable / cursor foreground    #c0caf5
+     body                               "HTML text" token        #40434f   | editor.foreground               #a9b1d6
+     caption                            descriptionForeground    #707280   | foreground                      #787c99
+     faint                              comment token            #888b94   | comment token                   #51597d
+     layer-company                      terminal.ansiBlue        #2959aa   | terminal.ansiBlue               #7aa2f7
+     layer-team                         terminal.ansiGreen       #33635c   | terminal.ansiGreen              #73daca
+     layer-personal                     terminal.ansiYellow      #8f5e15   | terminal.ansiYellow             #e0af68
+     conflict                           CSS value / at-rule      #965027   | orange token                    #ff9e64 */
+
+:root[data-palette="tokyo-night"][data-theme="light"],
+.cc-theme-swatch[data-palette="tokyo-night"][data-theme="light"] {
+  --cc-page: #e6e7ed;
+  --cc-surface: #d6d8df;
+  --cc-raised: #e6e7ed;
+  --cc-header-bg: #d6d8df;
+  --cc-canvas-bg: #e6e7ed;
+  --cc-ink: #343b59;
+  --cc-body: #40434f;
+  --cc-caption: #707280;
+  --cc-faint: #888b94;
+  --cc-layer-company: #2959aa;
+  --cc-layer-team: #33635c;
+  --cc-layer-personal: #8f5e15;
+  --cc-conflict: #965027;
+  color-scheme: light;
+}
+
+:root[data-palette="tokyo-night"][data-theme="dark"],
+.cc-theme-swatch[data-palette="tokyo-night"][data-theme="dark"] {
+  --cc-page: #1a1b26;
+  --cc-surface: #1e202e;
+  --cc-raised: #202330;
+  --cc-header-bg: #16161e;
+  --cc-canvas-bg: #16161e;
+  --cc-ink: #c0caf5;
+  --cc-body: #a9b1d6;
+  --cc-caption: #787c99;
+  --cc-faint: #51597d;
+  --cc-layer-company: #7aa2f7;
+  --cc-layer-team: #73daca;
+  --cc-layer-personal: #e0af68;
+  --cc-conflict: #ff9e64;
+  color-scheme: dark;
+}

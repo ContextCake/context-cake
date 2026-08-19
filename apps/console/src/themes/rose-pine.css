@@ -1,0 +1,66 @@
+/* Rosé Pine — Dawn (light) / Main (dark), https://rosepinetheme.com/palette/
+   License: MIT (https://github.com/rose-pine/palette/blob/main/LICENSE)
+   Values: rosepinetheme.com/palette/ingredients (Dawn text is #464261 there;
+   older ports carry #575279).
+
+   Rosé Pine → console primitive        Dawn              | Main
+     page                               base    #faf4ed   | base    #191724
+     surface                            surface #fffaf3   | surface #1f1d2e
+     raised                             surface #fffaf3   | overlay #26233a
+     header-bg                          overlay #f2e9e1   | surface #1f1d2e
+     canvas-bg                          base              | base
+     ink, body                          text    #464261   | text    #e0def4
+     caption                            subtle  #797593   | subtle  #908caa
+     faint                              muted   #9893a5   | muted   #6e6a86
+     layer-company                      pine    #286983   | pine    #31748f
+     layer-team                         foam    #56949f   | foam    #9ccfd8
+     layer-personal                     gold    #ea9d34   | gold    #f6c177
+     conflict                           love    #b4637a   | love    #eb6f92
+   Rosé Pine has three text tones (text / subtle / muted) for the console's
+   four roles: ink and body share `text`, because muted (their "ignored
+   content") is 2.9:1 on the Main overlay and cannot carry captions.
+   Derived overrides — the palette's own border tones instead of ink tints:
+     line-soft / line / line-strong = highlight low / med / high
+       Dawn #f4ede8 / #dfdad9 / #cecacd,  Main #21202e / #403d52 / #524f67 */
+
+:root[data-palette="rose-pine"][data-theme="light"],
+.cc-theme-swatch[data-palette="rose-pine"][data-theme="light"] {
+  --cc-page: #faf4ed;
+  --cc-surface: #fffaf3;
+  --cc-raised: #fffaf3;
+  --cc-header-bg: #f2e9e1;
+  --cc-canvas-bg: #faf4ed;
+  --cc-ink: #464261;
+  --cc-body: #464261;
+  --cc-caption: #797593;
+  --cc-faint: #9893a5;
+  --cc-layer-company: #286983;
+  --cc-layer-team: #56949f;
+  --cc-layer-personal: #ea9d34;
+  --cc-conflict: #b4637a;
+  --cc-line-soft: #f4ede8;
+  --cc-line: #dfdad9;
+  --cc-line-strong: #cecacd;
+  color-scheme: light;
+}
+
+:root[data-palette="rose-pine"][data-theme="dark"],
+.cc-theme-swatch[data-palette="rose-pine"][data-theme="dark"] {
+  --cc-page: #191724;
+  --cc-surface: #1f1d2e;
+  --cc-raised: #26233a;
+  --cc-header-bg: #1f1d2e;
+  --cc-canvas-bg: #191724;
+  --cc-ink: #e0def4;
+  --cc-body: #e0def4;
+  --cc-caption: #908caa;
+  --cc-faint: #6e6a86;
+  --cc-layer-company: #31748f;
+  --cc-layer-team: #9ccfd8;
+  --cc-layer-personal: #f6c177;
+  --cc-conflict: #eb6f92;
+  --cc-line-soft: #21202e;
+  --cc-line: #403d52;
+  --cc-line-strong: #524f67;
+  color-scheme: dark;
+}

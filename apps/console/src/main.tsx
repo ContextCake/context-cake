@@ -4,6 +4,9 @@ import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/500.css'
 import '@fontsource/jetbrains-mono/700.css'
 import './styles.css'
+// Theme families after the base stylesheet: their derived block must follow
+// ContextCake's token blocks in the cascade (see themes/index.css).
+import './themes/index.css'
 import { App } from './App'
 import { StoreProvider } from './store'
 import { ThemeModeProvider, applyInitialAppearance } from './theme-mode'

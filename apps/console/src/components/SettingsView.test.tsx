@@ -11,6 +11,7 @@ let root: Root
 
 type TestPreferences = {
   theme: 'system' | 'light' | 'dark'
+  palette: string
   density: 'comfortable' | 'compact'
   updateCheck: boolean
   anonymousMetrics: boolean | null
@@ -22,7 +23,7 @@ type TestPreferences = {
 
 function preferences(overrides: Partial<TestPreferences> = {}) {
   let current: TestPreferences = {
-    theme: 'system', density: 'comfortable', updateCheck: true,
+    theme: 'system', palette: 'contextcake', density: 'comfortable', updateCheck: true,
     anonymousMetrics: true, reducedTransparency: false,
     reducedTransparencyPreference: null, systemReducedTransparency: false,
     highContrast: false,
@@ -66,7 +67,7 @@ function findButton(label: string): HTMLButtonElement | undefined {
   return Array.from(container.querySelectorAll('button')).find((item) => item.textContent?.trim() === label)
 }
 
-/** Scoped by the segmented group's accessible name — "System" is a Theme option too. */
+/** Scoped by the segmented group's accessible name — "System" is an Appearance option too. */
 function groupButton(group: string, label: string): HTMLButtonElement {
   const scope = container.querySelector<HTMLElement>(`[role="group"][aria-label="${group}"]`)
   if (!scope) throw new Error(`Segmented group not found: ${group}`)
@@ -134,6 +135,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   document.documentElement.removeAttribute('data-theme')
+  document.documentElement.removeAttribute('data-palette')
   delete window.__CC_AUTH
   delete window.__CC_INTEGRATIONS
 })
@@ -230,7 +232,7 @@ describe('SettingsView', () => {
     expect(container.textContent).toContain('keychain:github.com/octocat')
   })
 
-  it('applies theme changes immediately', async () => {
+  it('applies appearance changes immediately', async () => {
     await act(async () => root.render(
       <ThemeModeProvider>
         <SettingsView appMode="live" onClose={vi.fn()} />
@@ -238,10 +240,66 @@ describe('SettingsView', () => {
     ))
 
     expect(document.documentElement.dataset.themePreference).toBe('system')
-    await act(async () => button('Light').click())
+    await act(async () => groupButton('Appearance', 'Light').click())
     expect(document.documentElement.dataset.theme).toBe('light')
-    await act(async () => button('Dark').click())
+    await act(async () => groupButton('Appearance', 'Dark').click())
     expect(document.documentElement.dataset.theme).toBe('dark')
+  })
+
+  it('applies a theme family immediately and persists it through the desktop bridge', async () => {
+    const bridge = withDesktopPreferences()
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+    await act(async () => {})
+
+    const picker = container.querySelector<HTMLElement>('[role="group"][aria-label="Theme"]')
+    if (!picker) throw new Error('Theme picker not found')
+    const tiles = Array.from(picker.querySelectorAll<HTMLButtonElement>('button[aria-pressed]'))
+    expect(tiles.length).toBeGreaterThanOrEqual(8)
+    expect(tiles[0].textContent).toContain('ContextCake')
+    expect(tiles[0].getAttribute('aria-pressed')).toBe('true')
+    // Each tile previews itself from its own tokens: two swatches per family, one per mode.
+    expect(picker.querySelectorAll('.cc-theme-swatch[data-palette="solarized"][data-theme="light"]')).toHaveLength(1)
+    expect(picker.querySelectorAll('.cc-theme-swatch[data-palette="solarized"][data-theme="dark"]')).toHaveLength(1)
+    expect(document.documentElement.dataset.palette).toBe('contextcake')
+
+    const solarized = tiles.find((tile) => tile.textContent?.includes('Solarized'))
+    if (!solarized) throw new Error('Solarized tile not found')
+    await act(async () => solarized.click())
+    expect(document.documentElement.dataset.palette).toBe('solarized')
+    expect(solarized.getAttribute('aria-pressed')).toBe('true')
+    expect(tiles[0].getAttribute('aria-pressed')).toBe('false')
+    expect(bridge.set).toHaveBeenCalledWith({ palette: 'solarized' })
+    expect(container.textContent).toContain('Based on Solarized (MIT) by Ethan Schoonover')
+    // The mode axis is untouched by a family change.
+    expect(document.documentElement.dataset.themePreference).toBe('system')
+  })
+
+  it('remembers the theme family in the browser and reads it back on the next mount', async () => {
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+    const tile = Array.from(container.querySelectorAll<HTMLButtonElement>('[aria-label="Theme"] button[aria-pressed]')).find((item) => item.textContent?.includes('Catppuccin'))
+    if (!tile) throw new Error('Catppuccin tile not found')
+    await act(async () => tile.click())
+    expect(window.localStorage.getItem('cc-palette')).toBe('catppuccin')
+    expect(container.textContent).toContain('Latte / Mocha')
+
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <SettingsView appMode="live" onClose={vi.fn()} />
+      </ThemeModeProvider>,
+    ))
+    const again = Array.from(container.querySelectorAll<HTMLButtonElement>('[aria-label="Theme"] button[aria-pressed]')).find((item) => item.textContent?.includes('Catppuccin'))
+    expect(again?.getAttribute('aria-pressed')).toBe('true')
+    expect(document.documentElement.dataset.palette).toBe('catppuccin')
   })
 
   it('keeps Cascade view in General Settings with Grouped as the default', async () => {

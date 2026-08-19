@@ -32,6 +32,13 @@ type Density = 'comfortable' | 'compact'
 
 type DesktopPreferences = {
   theme: ThemePreference
+  /**
+   * Theme family id (UI "Theme"; `theme` above is UI "Appearance"). A slug,
+   * not a union: the main process validates shape only, so a newer app or a
+   * hand-edited settings.json may name a family this build does not ship —
+   * theme-mode.tsx renders such an id as ContextCake without writing it back.
+   */
+  palette: string
   density: Density
   updateCheck: boolean
   anonymousMetrics: boolean | null
@@ -114,7 +121,7 @@ declare global {
       preferences?: {
         initial: DesktopPreferences
         get(): Promise<DesktopPreferences>
-        set(patch: Partial<Pick<DesktopPreferences, 'theme' | 'density' | 'updateCheck' | 'anonymousMetrics'>>
+        set(patch: Partial<Pick<DesktopPreferences, 'theme' | 'palette' | 'density' | 'updateCheck' | 'anonymousMetrics'>>
           /** null is a real value: hand the choice back to this Mac's setting. */
           & { reducedTransparency?: boolean | null }): Promise<DesktopPreferences>
         onChanged(cb: (preferences: DesktopPreferences) => void): () => void

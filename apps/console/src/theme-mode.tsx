@@ -1,13 +1,22 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { DEFAULT_PALETTE, PALETTE_IDS, isPaletteId, type PaletteId } from './themes/registry'
 
 export type ThemePreference = 'system' | 'light' | 'dark'
 export type ResolvedTheme = 'light' | 'dark'
 export type Density = 'comfortable' | 'compact'
+export type { PaletteId } from './themes/registry'
 
+// Two appearance axes, and their names differ between code and UI on purpose
+// (the code names predate the second axis and are what the desktop settings
+// file and Supabase sync already carry):
+//   code `theme`   — UI "Appearance": system / light / dark
+//   code `palette` — UI "Theme": which family (ContextCake, Solarized, …)
 const THEME_KEY = 'cc-theme'
 const DENSITY_KEY = 'cc-density'
+const PALETTE_KEY = 'cc-palette'
 const THEME_VALUES = new Set<ThemePreference>(['system', 'light', 'dark'])
 const DENSITY_VALUES = new Set<Density>(['comfortable', 'compact'])
+const PALETTE_VALUES = new Set<PaletteId>(PALETTE_IDS)
 
 /**
  * Reduce transparency is three values, not one. `reducedTransparency` is what
@@ -18,6 +27,7 @@ const DENSITY_VALUES = new Set<Density>(['comfortable', 'compact'])
  */
 type Appearance = {
   preference: ThemePreference
+  palette: PaletteId
   density: Density
   reducedTransparency: boolean
   reducedTransparencyPreference: boolean | null
@@ -59,10 +69,27 @@ export function initialDensity(): Density {
     ?? storedValue(DENSITY_KEY, DENSITY_VALUES, 'comfortable')
 }
 
+/**
+ * The desktop hands over whatever slug settings.json holds — its validation is
+ * shape-only (a newer app or a hand edit may name a family this build lacks),
+ * so an unknown id renders as ContextCake here. It is NOT written back: the
+ * file keeps the user's choice until they pick something on this build.
+ */
+export function initialPalette(): PaletteId {
+  const desktop = window.__CC_DESKTOP?.preferences?.initial
+  if (desktop) return normalizePalette(desktop.palette)
+  return storedValue(PALETTE_KEY, PALETTE_VALUES, DEFAULT_PALETTE)
+}
+
+export function normalizePalette(value: unknown): PaletteId {
+  return isPaletteId(value) ? value : DEFAULT_PALETTE
+}
+
 function initialAppearance(): Appearance {
   const desktop = window.__CC_DESKTOP?.preferences?.initial
   return {
     preference: desktop?.theme ?? initialPreference(),
+    palette: initialPalette(),
     density: desktop?.density ?? initialDensity(),
     reducedTransparency: desktop?.reducedTransparency ?? false,
     reducedTransparencyPreference: desktop?.reducedTransparencyPreference ?? null,
@@ -80,6 +107,7 @@ type DesktopPreferenceSnapshot = NonNullable<NonNullable<Window['__CC_DESKTOP']>
 function appearanceFrom(next: DesktopPreferenceSnapshot): Appearance {
   return {
     preference: next.theme,
+    palette: normalizePalette(next.palette),
     density: next.density,
     reducedTransparency: next.reducedTransparency,
     reducedTransparencyPreference: next.reducedTransparencyPreference ?? null,
@@ -92,6 +120,7 @@ export function applyAppearance(appearance: Appearance) {
   const root = document.documentElement
   root.dataset.theme = resolveTheme(appearance.preference)
   root.dataset.themePreference = appearance.preference
+  root.dataset.palette = appearance.palette
   root.dataset.density = appearance.density
   root.dataset.reducedTransparency = String(appearance.reducedTransparency)
   root.dataset.highContrast = String(appearance.highContrast)
@@ -111,6 +140,7 @@ export function initialMode(): ResolvedTheme {
 export function applyMode(mode: ResolvedTheme) {
   applyAppearance({
     preference: mode,
+    palette: initialPalette(),
     density: initialDensity(),
     reducedTransparency: false,
     reducedTransparencyPreference: null,
@@ -122,6 +152,8 @@ export function applyMode(mode: ResolvedTheme) {
 interface ThemeCtx {
   mode: ResolvedTheme
   preference: ThemePreference
+  /** The theme family in effect (UI "Theme"); always a shipped id. */
+  palette: PaletteId
   density: Density
   /** What the renderer is doing right now. */
   reducedTransparency: boolean
@@ -130,6 +162,7 @@ interface ThemeCtx {
   /** What "System" currently resolves to, for the hint under the control. */
   systemReducedTransparency: boolean
   setPreference: (preference: ThemePreference) => void
+  setPalette: (palette: PaletteId) => void
   setDensity: (density: Density) => void
   setTransparency: (choice: TransparencyChoice) => void
   toggle: () => void
@@ -150,6 +183,10 @@ export function ThemeModeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     applyAppearance(appearance)
     if (!window.__CC_DESKTOP) {
+      // The palette key is deliberately absent here: `appearance.palette` is
+      // the NORMALIZED id, and an unknown stored id (a family this build lacks)
+      // must not be overwritten by the fallback — `setPalette` writes it on a
+      // user's pick, matching the desktop rule.
       try {
         localStorage.setItem(THEME_KEY, appearance.preference)
         localStorage.setItem(DENSITY_KEY, appearance.density)
@@ -168,10 +205,11 @@ export function ThemeModeProvider({ children }: { children: ReactNode }) {
     const media = matchMedia('(prefers-color-scheme: dark)')
     const updateSystemTheme = () => setAppearance((current) => ({ ...current }))
     const updateFromStorage = (event: StorageEvent) => {
-      if (event.key !== THEME_KEY && event.key !== DENSITY_KEY) return
+      if (event.key !== THEME_KEY && event.key !== DENSITY_KEY && event.key !== PALETTE_KEY) return
       setAppearance((current) => ({
         ...current,
         preference: initialPreference(),
+        palette: initialPalette(),
         density: initialDensity(),
       }))
     }
@@ -207,6 +245,13 @@ export function ThemeModeProvider({ children }: { children: ReactNode }) {
     persist({ theme: preference })
   }, [persist])
 
+  const setPalette = useCallback((palette: PaletteId) => {
+    if (!PALETTE_VALUES.has(palette)) return
+    setAppearance((current) => current.palette === palette ? current : { ...current, palette })
+    if (window.__CC_DESKTOP) persist({ palette })
+    else try { localStorage.setItem(PALETTE_KEY, palette) } catch { /* best-effort, as above */ }
+  }, [persist])
+
   const setDensity = useCallback((density: Density) => {
     if (!DENSITY_VALUES.has(density)) return
     setAppearance((current) => current.density === density ? current : { ...current, density })
@@ -231,19 +276,21 @@ export function ThemeModeProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     mode,
     preference: appearance.preference,
+    palette: appearance.palette,
     density: appearance.density,
     reducedTransparency: appearance.reducedTransparency,
     transparency: transparencyChoice(appearance.reducedTransparencyPreference),
     systemReducedTransparency: appearance.systemReducedTransparency,
     setPreference,
+    setPalette,
     setDensity,
     setTransparency,
     toggle,
     saveFailed,
   }), [
-    appearance.density, appearance.preference, appearance.reducedTransparency,
+    appearance.density, appearance.palette, appearance.preference, appearance.reducedTransparency,
     appearance.reducedTransparencyPreference, appearance.systemReducedTransparency,
-    mode, saveFailed, setDensity, setPreference, setTransparency, toggle,
+    mode, saveFailed, setDensity, setPalette, setPreference, setTransparency, toggle,
   ])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

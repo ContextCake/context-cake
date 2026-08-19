@@ -1,0 +1,177 @@
+/* Derived tokens for every theme family except ContextCake.
+
+   A family file (`./<id>.css`) declares only the PRIMITIVES named in
+   `gates.ts` — page / surface / raised / header / canvas, the four ink tones,
+   the layer trio and the conflict color — per mode. Everything else the
+   console reads (lines, fills, the blue/teal/amber ramps, scrim, shadows, the
+   semantic roles) is computed here from those primitives with `color-mix()`,
+   so a family cannot drift from the console's structure and cannot leave a
+   token to inherit from ContextCake's `:root`. `tokens.test.ts` (gate d)
+   holds this file to "covers every canonical color token that is not a
+   primitive"; `contrast.test.ts` scores the result per family and mode.
+
+   Selector shape and why. `:root[data-palette]:where(:not([data-palette="contextcake"]))`
+   has specificity (0,2,0):
+     - it BEATS ContextCake's dark block `:root[data-theme="dark"]` (0,2,0,
+       earlier in the cascade because styles.css is imported first) — which is
+       required: that block is not palette-scoped, so without this a family in
+       dark mode would render ContextCake's blue/teal/amber ramps;
+     - it LOSES to every family block `:root[data-palette="x"][data-theme="y"]`
+       (0,3,0), so a family may override any derived token (Rosé Pine and
+       GitHub bring their own border tones);
+     - `:where()` keeps the `:not()` from adding weight, and the same rules,
+       under `.cc-theme-swatch[data-palette]…`, let a picker swatch paint itself
+       from its own primitives without ever touching <html>.
+   Mode-scoped values (`[data-theme="dark"]` inside the `:where()`) stay at
+   (0,2,0) and win by order over the unscoped defaults above them.
+
+   Values reference only `var(--cc-…)`, `transparent`, `black` and `white`
+   (gate d refuses a literal color here): a shadow or scrim is the absence
+   of light in every palette, so black is not a palette choice. */
+
+:root[data-palette]:where(:not([data-palette="contextcake"])),
+.cc-theme-swatch[data-palette]:where(:not([data-palette="contextcake"])) {
+  /* neutrals — ink at a fraction, exactly how ContextCake's own values are built */
+  --cc-line: color-mix(in srgb, var(--cc-ink) 14%, transparent);
+  --cc-line-strong: color-mix(in srgb, var(--cc-ink) 24%, transparent);
+  --cc-line-soft: color-mix(in srgb, var(--cc-ink) 8%, transparent);
+  --cc-track: color-mix(in srgb, var(--cc-ink) 7%, transparent);
+  --cc-neutral-fill: color-mix(in srgb, var(--cc-ink) 6%, transparent);
+  --cc-neutral-fill-hover: color-mix(in srgb, var(--cc-ink) 10%, transparent);
+  --cc-scrollbar: color-mix(in srgb, var(--cc-ink) 22%, transparent);
+  --cc-canvas-dot: color-mix(in srgb, var(--cc-ink) 11%, transparent);
+  --cc-lane-line: color-mix(in srgb, var(--cc-ink) 8%, transparent);
+  --cc-edge-inherit: color-mix(in srgb, var(--cc-ink) 22%, transparent);
+
+  /* The three provenance ramps, one per layer accent. Fills are the accent at
+     a fraction; strokes pull the accent toward ink; the text tiers pull it
+     toward a DEEPENED ink (ink halfway to black) — a light ink such as
+     Catppuccin's slate cannot carry a yellow to 4.5:1 on a yellow tint on its
+     own, and the deepened ink keeps the family's tint where plain black
+     would not. Dark mode mirrors this below with an ink halfway to white. */
+
+  /* company → blue ramp */
+  --cc-blue-fill: color-mix(in srgb, var(--cc-layer-company) 16%, transparent);
+  --cc-blue-fill2: color-mix(in srgb, var(--cc-layer-company) 24%, transparent);
+  --cc-blue-fill3: color-mix(in srgb, var(--cc-layer-company) 32%, transparent);
+  --cc-blue-stroke: color-mix(in srgb, var(--cc-layer-company) 80%, var(--cc-ink));
+  --cc-blue-stroke-e: color-mix(in srgb, var(--cc-layer-company) 72%, var(--cc-ink));
+  --cc-blue-text: color-mix(in srgb, var(--cc-layer-company) 45%, color-mix(in srgb, var(--cc-ink) 50%, black));
+  --cc-blue-text2: color-mix(in srgb, var(--cc-layer-company) 62%, color-mix(in srgb, var(--cc-ink) 50%, black));
+  --cc-blue-soft: color-mix(in srgb, var(--cc-layer-company) 45%, transparent);
+
+  /* team → teal ramp (also the primary-action color) */
+  --cc-teal-fill: color-mix(in srgb, var(--cc-layer-team) 16%, transparent);
+  --cc-teal-fill2: color-mix(in srgb, var(--cc-layer-team) 24%, transparent);
+  --cc-teal-stroke: color-mix(in srgb, var(--cc-layer-team) 80%, var(--cc-ink));
+  --cc-teal-stroke-e: color-mix(in srgb, var(--cc-layer-team) 72%, var(--cc-ink));
+  --cc-teal-text: color-mix(in srgb, var(--cc-layer-team) 45%, color-mix(in srgb, var(--cc-ink) 50%, black));
+  --cc-teal-badge-bd: color-mix(in srgb, var(--cc-layer-team) 40%, transparent);
+  --cc-on-teal: var(--cc-page);
+  --cc-teal-btn-hover: var(--cc-teal-text);
+
+  /* personal → amber ramp; the emphasis stroke doubles as the conflict color, as in ContextCake */
+  --cc-amber-fill: color-mix(in srgb, var(--cc-layer-personal) 16%, transparent);
+  --cc-amber-fill2: color-mix(in srgb, var(--cc-layer-personal) 24%, transparent);
+  --cc-amber-stroke: color-mix(in srgb, var(--cc-layer-personal) 80%, var(--cc-ink));
+  --cc-amber-stroke-e: var(--cc-conflict);
+  --cc-amber-text: color-mix(in srgb, var(--cc-layer-personal) 45%, color-mix(in srgb, var(--cc-ink) 50%, black));
+  --cc-amber-text2: color-mix(in srgb, var(--cc-layer-personal) 62%, color-mix(in srgb, var(--cc-ink) 50%, black));
+  --cc-amber-soft: color-mix(in srgb, var(--cc-layer-personal) 45%, transparent);
+
+  /* semantic roles */
+  --cc-solid-bg: var(--cc-ink);
+  --cc-solid-fg: var(--cc-page);
+  --cc-cta-bg: var(--cc-solid-bg);
+  --cc-cta-fg: var(--cc-solid-fg);
+  --cc-ask-bg: var(--cc-solid-bg);
+  --cc-ask-fg: var(--cc-solid-fg);
+  --cc-ask-ring: transparent;
+  --cc-code-bg: var(--cc-ink);
+  --cc-code-fg: var(--cc-page);
+
+  /* depth */
+  --cc-scrim: color-mix(in srgb, var(--cc-ink) 28%, transparent);
+  --cc-shadow: color-mix(in srgb, var(--cc-ink) 10%, transparent);
+  --cc-lane-bg: color-mix(in srgb, var(--cc-raised) 62%, transparent);
+  --cc-edge-conflict: var(--cc-conflict);
+  --cc-node-glow: color-mix(in srgb, var(--cc-conflict) 18%, transparent);
+  --cc-panel-shadow: none;
+  --cc-soft-shadow: none;
+}
+
+/* Dark mode: strokes go raw (a dark page wants the accent as painted, not
+   darkened), the text tiers lift the accent toward a brightened ink (ink
+   halfway to white), the primary action becomes the team accent itself, the
+   code block darkens the canvas rather than inverting, and depth is real
+   shadow. */
+:root[data-palette]:where(:not([data-palette="contextcake"])[data-theme="dark"]),
+.cc-theme-swatch[data-palette]:where(:not([data-palette="contextcake"])[data-theme="dark"]) {
+  --cc-line: color-mix(in srgb, var(--cc-ink) 12%, transparent);
+  --cc-line-strong: color-mix(in srgb, var(--cc-ink) 20%, transparent);
+  --cc-neutral-fill: color-mix(in srgb, var(--cc-ink) 8%, transparent);
+  --cc-scrollbar: color-mix(in srgb, var(--cc-ink) 20%, transparent);
+  --cc-canvas-dot: color-mix(in srgb, var(--cc-ink) 7%, transparent);
+  --cc-edge-inherit: color-mix(in srgb, var(--cc-ink) 18%, transparent);
+
+  --cc-blue-fill: color-mix(in srgb, var(--cc-layer-company) 18%, transparent);
+  --cc-blue-fill2: color-mix(in srgb, var(--cc-layer-company) 26%, transparent);
+  --cc-blue-fill3: color-mix(in srgb, var(--cc-layer-company) 34%, transparent);
+  --cc-blue-stroke: color-mix(in srgb, var(--cc-layer-company) 85%, var(--cc-page));
+  --cc-blue-stroke-e: var(--cc-layer-company);
+  --cc-blue-text: color-mix(in srgb, var(--cc-layer-company) 55%, color-mix(in srgb, var(--cc-ink) 50%, white));
+  --cc-blue-text2: color-mix(in srgb, var(--cc-layer-company) 85%, color-mix(in srgb, var(--cc-ink) 50%, white));
+  --cc-blue-soft: color-mix(in srgb, var(--cc-layer-company) 32%, transparent);
+
+  --cc-teal-fill: color-mix(in srgb, var(--cc-layer-team) 18%, transparent);
+  --cc-teal-fill2: color-mix(in srgb, var(--cc-layer-team) 26%, transparent);
+  --cc-teal-stroke: color-mix(in srgb, var(--cc-layer-team) 85%, var(--cc-page));
+  --cc-teal-stroke-e: var(--cc-layer-team);
+  --cc-teal-text: color-mix(in srgb, var(--cc-layer-team) 55%, color-mix(in srgb, var(--cc-ink) 50%, white));
+  --cc-teal-badge-bd: color-mix(in srgb, var(--cc-layer-team) 32%, transparent);
+  --cc-teal-btn-hover: color-mix(in srgb, var(--cc-layer-team) 78%, var(--cc-ink));
+
+  --cc-amber-fill: color-mix(in srgb, var(--cc-layer-personal) 18%, transparent);
+  --cc-amber-fill2: color-mix(in srgb, var(--cc-layer-personal) 26%, transparent);
+  --cc-amber-stroke: color-mix(in srgb, var(--cc-layer-personal) 85%, var(--cc-page));
+  --cc-amber-text: color-mix(in srgb, var(--cc-layer-personal) 55%, color-mix(in srgb, var(--cc-ink) 50%, white));
+  --cc-amber-text2: color-mix(in srgb, var(--cc-layer-personal) 85%, color-mix(in srgb, var(--cc-ink) 50%, white));
+  --cc-amber-soft: color-mix(in srgb, var(--cc-layer-personal) 34%, transparent);
+
+  --cc-cta-bg: var(--cc-teal-stroke-e);
+  --cc-cta-fg: var(--cc-on-teal);
+  --cc-ask-bg: color-mix(in srgb, var(--cc-layer-team) 16%, transparent);
+  --cc-ask-fg: var(--cc-ink);
+  --cc-ask-ring: color-mix(in srgb, var(--cc-layer-team) 8%, transparent);
+  --cc-code-bg: color-mix(in srgb, var(--cc-canvas-bg) 75%, black);
+  --cc-code-fg: var(--cc-ink);
+
+  --cc-scrim: color-mix(in srgb, black 62%, transparent);
+  --cc-shadow: color-mix(in srgb, black 42%, transparent);
+  --cc-lane-bg: color-mix(in srgb, var(--cc-ink) 4%, transparent);
+  --cc-node-glow: color-mix(in srgb, var(--cc-conflict) 25%, transparent);
+  --cc-panel-shadow: 0 18px 55px color-mix(in srgb, black 34%, transparent);
+  --cc-soft-shadow: 0 12px 34px color-mix(in srgb, black 30%, transparent);
+}
+
+/* The two accessibility overrides in styles.css sit at (0,2,0) and would lose
+   to the derived block above by order (and to a family's own border tones on
+   specificity), so they are restated here at (0,4,0). Reduce transparency
+   only needs the lane: a family's `--cc-surface` and `--cc-header-bg` are
+   opaque primitives already. */
+:root[data-palette][data-theme][data-high-contrast="true"]:where(:not([data-palette="contextcake"])) {
+  --cc-line: var(--cc-line-strong);
+  --cc-line-soft: var(--cc-line-strong);
+}
+:root[data-palette][data-theme][data-reduced-transparency="true"]:where(:not([data-palette="contextcake"])) {
+  --cc-lane-bg: var(--cc-raised);
+}
+
+/* Every family but ContextCake paints an opaque sidebar (its `--cc-header-bg`
+   primitive is a solid color), so the blur behind it in styles.css would
+   composite nothing and only cost. Same (0,3,0) as the rule that enables the
+   blur; later in the cascade, so it wins. */
+:root[data-palette]:where(:not([data-palette="contextcake"])) .cc-sidebar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}

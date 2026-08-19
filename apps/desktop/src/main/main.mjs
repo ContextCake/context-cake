@@ -34,7 +34,7 @@ import { createTrustedWindowRegistry, trustedRolesForChannel } from './trusted-w
 import { getCliStatus, installCli } from './cli-install.mjs'
 import { reportFirstLaunch } from './install-metrics.mjs'
 import { manifestLayerCount, shouldDeferConsentPrompt } from './metrics-consent.mjs'
-import { changedPreferencePatch } from './preferences.mjs'
+import { PALETTE_ID, changedPreferencePatch } from './preferences.mjs'
 import { applyUiStatePatch, normalizeUiState } from './ui-state.mjs'
 import { restoreWindowState } from './window-state.mjs'
 
@@ -591,6 +591,7 @@ function reportEngineStopped(detail) {
 
 function desktopPreferencesSnapshot(settings = readSettings()) {
   const theme = ['system', 'light', 'dark'].includes(settings.theme) ? settings.theme : 'system'
+  const palette = typeof settings.palette === 'string' && PALETTE_ID.test(settings.palette) ? settings.palette : 'contextcake'
   const density = ['comfortable', 'compact'].includes(settings.density) ? settings.density : 'comfortable'
   // Reduce transparency follows this Mac's Accessibility setting until the user
   // says otherwise in ContextCake's own Settings; `reducedTransparencyPreference`
@@ -599,6 +600,7 @@ function desktopPreferencesSnapshot(settings = readSettings()) {
   const chosenTransparency = typeof settings.reducedTransparency === 'boolean' ? settings.reducedTransparency : null
   return {
     theme,
+    palette,
     density,
     updateCheck: settings.updateCheck !== false,
     anonymousMetrics: typeof settings.anonymousMetrics === 'boolean' ? settings.anonymousMetrics : null,
@@ -1263,6 +1265,7 @@ function rendererArguments(preferences, uiState, role) {
     `--cc-version=${app.getVersion()}`,
     `--cc-signed-in=${currentAuthState().signedIn ? '1' : '0'}`,
     `--cc-theme=${preferences.theme}`,
+    `--cc-palette=${preferences.palette}`,
     `--cc-density=${preferences.density}`,
     `--cc-update-check=${preferences.updateCheck ? '1' : '0'}`,
     `--cc-anonymous-metrics=${preferences.anonymousMetrics === null ? '' : preferences.anonymousMetrics ? '1' : '0'}`,

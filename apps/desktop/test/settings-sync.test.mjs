@@ -69,14 +69,24 @@ test('prepareSyncPayload allowlists metadata and rejects credentials or context'
   )
 })
 
-test('system theme and application density are sync-safe global preferences', () => {
+test('system theme, theme family and application density are sync-safe global preferences', () => {
   assert.deepEqual(
-    prepareSyncPayload({ theme: 'system', density: 'compact', updateCheck: false, anonymousMetrics: true }),
-    { theme: 'system', density: 'compact', updateCheck: false },
+    prepareSyncPayload({ theme: 'system', palette: 'solarized', density: 'compact', updateCheck: false, anonymousMetrics: true }),
+    { theme: 'system', palette: 'solarized', density: 'compact', updateCheck: false },
   )
   assert.deepEqual(prepareSyncPayload({ density: 'comfortable' }), { density: 'comfortable' })
   assert.throws(() => prepareSyncPayload({ theme: 'automatic' }), /invalid theme/)
   assert.throws(() => prepareSyncPayload({ density: 'dense' }), /invalid density/)
+  // The family is validated by shape, so an id only a newer client knows
+  // still round-trips; anything that is not a slug does not.
+  assert.deepEqual(prepareSyncPayload({ palette: 'a-family-added-later' }), { palette: 'a-family-added-later' })
+  for (const bad of ['Solarized', '../x', 'x'.repeat(33), 7]) {
+    assert.throws(() => prepareSyncPayload({ palette: bad }), /invalid palette/, `palette ${JSON.stringify(bad)}`)
+  }
+  assert.deepEqual(
+    prepareSyncPayload({ profiles: [{ id: 'work', preferences: { theme: 'dark', palette: 'gruvbox' } }] }),
+    { profiles: [{ id: 'work', preferences: { theme: 'dark', palette: 'gruvbox' } }] },
+  )
   assert.throws(
     () => prepareSyncPayload({ profiles: [{ id: 'work', preferences: { density: 'compact' } }] }),
     /unsupported profile preference field/,

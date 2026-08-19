@@ -57,7 +57,13 @@ npm run dist       # DMG + zip in dist/ (ad-hoc signed without Apple secrets; CI
 
 ## User data
 
-- Config: `~/Library/Application Support/ContextCake/` (`manifest.json`, `settings.json`)
+- Config: `~/Library/Application Support/ContextCake/` (`manifest.json`, `settings.json`).
+  `settings.json` holds the appearance preferences the console reads at
+  launch — `theme` (system / light / dark), `palette` (the theme family, a
+  lowercase slug such as `contextcake` or `solarized`; default `contextcake`;
+  validated by shape, so a family this build does not ship still saves and
+  renders as ContextCake), `density`, `reducedTransparency` — plus update and
+  UI state
 - Caches: `~/Library/Caches/ContextCake/`
 - Account session: persisted as encrypted `session.enc` only when Keychain-backed
   `safeStorage` is available; otherwise it remains memory-only for that run
@@ -136,7 +142,12 @@ editing a file. The native View menu exposes the same commands.
 Before release, verify the main window and the separate Settings window in a
 packaged Apple Silicon build. Confirm System appearance follows macOS while both
 windows are open, window/sidebar/route/density state survives relaunch, and no
-external navigation can replace either renderer. Exercise the responsive shell
+external navigation can replace either renderer. Pick a theme family other than
+ContextCake (Settings → Appearance → Theme → Solarized): both windows switch at
+once, the sidebar goes opaque (no vibrancy behind it), Appearance = System still
+follows macOS within that family, the choice survives a relaunch, Reset
+settings returns it to ContextCake, and a signed-in account's synced settings
+carry `palette`. Exercise the responsive shell
 at 760×560, 900×640, 1360×860, and 1600×1000, including drawer, split/detail,
 Ask, and keyboard-only paths.
 

@@ -2,10 +2,11 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { PALETTE_ID } from './preferences.mjs'
 
 // activeProfile is deliberately local-only: remote activity must never select
 // a profile that can open machine-local paths or trusted executable sources.
-const SYNC_FIELDS = ['theme', 'density', 'updateCheck', 'profiles', 'sources']
+const SYNC_FIELDS = ['theme', 'palette', 'density', 'updateCheck', 'profiles', 'sources']
 const SCRUBBED = new Set(['execution', 'path', 'secret'])
 const SECRET_KEY = /(?:^|_)(?:password|passwd|secret|token|api_?key|authorization|cookie|credential)(?:$|_)/i
 const CONTEXT_KEY = /^(?:content|contents|body|document|documents|knowledge|markdown|payload|raw|resolved|sections|text)$/i
@@ -23,7 +24,10 @@ const SOURCE_KEYS = new Set([
 const CACHE_KEYS = new Set(['dir', 'ttlSeconds'])
 const PROFILE_KEYS = new Set(['active', 'id', 'label', 'name', 'preferences', 'sources'])
 const MANIFEST_PROFILE_KEYS = new Set(['label', 'layers', 'preferences'])
-const PROFILE_PREFERENCE_KEYS = new Set(['theme'])
+// `palette` (the theme family) is checked by shape (PALETTE_ID), not against
+// a list: an older client must accept a newer client's family id on pull
+// rather than throw — the console falls back to ContextCake for an id it lacks.
+const PROFILE_PREFERENCE_KEYS = new Set(['theme', 'palette'])
 
 function scrubMarker(kind) {
   return { __scrubbed: kind }
@@ -126,6 +130,9 @@ function assertOnlyKeys(value, allowed, label) {
 function assertSettingsShape(settings) {
   if (settings.theme !== undefined && !['system', 'light', 'dark'].includes(settings.theme)) {
     throw new Error('Settings sync rejected an invalid theme.')
+  }
+  if (settings.palette !== undefined && !(typeof settings.palette === 'string' && PALETTE_ID.test(settings.palette))) {
+    throw new Error('Settings sync rejected an invalid palette.')
   }
   if (settings.density !== undefined && !['comfortable', 'compact'].includes(settings.density)) {
     throw new Error('Settings sync rejected an invalid density.')

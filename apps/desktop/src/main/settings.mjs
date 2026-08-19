@@ -19,6 +19,9 @@ import { settingsPath } from './paths.mjs'
 
 const DEFAULTS = Object.freeze({
   theme: 'system',
+  // Theme family (UI "Theme"): a slug the console maps to a family; see
+  // preferences.mjs for why it is shape-validated rather than an enum.
+  palette: 'contextcake',
   density: 'comfortable',
   // Spec (distribution §5): the update check is disable-able.
   updateCheck: true,
@@ -186,7 +189,7 @@ export function resetSettings() {
       ...(current._sync ?? {}),
       revision: (current._sync?.revision ?? 0) + 1,
       dirty: true,
-      dirtyFields: [...new Set([...(current._sync?.dirtyFields ?? []), 'theme', 'density', 'updateCheck'])],
+      dirtyFields: [...new Set([...(current._sync?.dirtyFields ?? []), 'theme', 'palette', 'density', 'updateCheck'])],
       localUpdatedAt: new Date().toISOString(),
     },
   }

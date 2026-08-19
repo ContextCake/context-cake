@@ -163,7 +163,8 @@ describe('Discrepancy Center', () => {
     expect(guide?.textContent).toContain('Review the evidence')
     expect(guide?.textContent).toContain('Choose the safest next step')
     expect(guide?.textContent).toContain('Confirm what changes')
-    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('.cc-status-tabs button')).find((button) => button.textContent === 'Needs review')?.getAttribute('aria-pressed')).toBe('true')
+    // Tabs carry a count now ("Needs review 1"), so match on the label prefix.
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('.cc-status-tabs button')).find((button) => button.textContent?.startsWith('Needs review'))?.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('badges the flagged dissent card as newer than the effective value', async () => {
@@ -459,7 +460,7 @@ describe('Discrepancy Center', () => {
     mocks.useStore.mockReturnValue(storeWith([companyContributorConflict, resolvedViaEffectiveSource], resolvedViaEffectiveSource.id))
     await act(async () => root.render(<Conflicts />))
 
-    const resolvedTab = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Resolved')!
+    const resolvedTab = Array.from(container.querySelectorAll<HTMLButtonElement>('.cc-status-tabs button')).find((button) => button.textContent?.startsWith('Resolved'))!
     await act(async () => resolvedTab.click())
     expect(container.textContent).toContain('Resolved effective')
 

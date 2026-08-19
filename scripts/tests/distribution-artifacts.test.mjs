@@ -18,7 +18,7 @@ import {
   writeReleaseChannelArtifacts,
 } from '../distribution-artifacts.mjs'
 
-const version = '0.7.4'
+const version = '0.7.5'
 const digest = 'a'.repeat(64)
 
 test('Homebrew cask is pinned to the signed app release and exposes the bundled CLI', () => {
@@ -39,7 +39,7 @@ test('MCPB metadata requires an explicit manifest and leaves anonymous activatio
   assert.match(manifest.user_config.anonymous_metrics.description, /No files, paths, prompts, account data, device ID, or request body/)
   const registry = renderMcpRegistryRecord({ version, fileSha256: digest })
   assert.equal(registry.packages[0].registryType, 'mcpb')
-  assert.match(registry.packages[0].identifier, /ContextCake-0\.7\.4\.mcpb$/)
+  assert.match(registry.packages[0].identifier, /ContextCake-0\.7\.5\.mcpb$/)
   assert.equal(registry.packages[0].fileSha256, digest)
 })
 
@@ -71,7 +71,7 @@ test('MCPB bundle has a root manifest, engine code, and no node_modules payload'
       encoding: 'utf8',
     })
     assert.equal(handshake.status, 0, handshake.stderr)
-    assert.match(handshake.stdout, /"serverInfo":\{"name":"contextcake","version":"0\.7\.4"\}/)
+    assert.match(handshake.stdout, /"serverInfo":\{"name":"contextcake","version":"0\.7\.5"\}/)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

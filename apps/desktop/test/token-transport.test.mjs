@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { PALETTE_ID } from '../src/main/preferences.mjs'
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const mainSource = fs.readFileSync(path.join(appRoot, 'src/main/main.mjs'), 'utf8')
@@ -33,6 +34,12 @@ test('source credentials reach the engine over the message port, never argv or e
   assert.match(hostSource, /acks\.send\(\{ type: 'tokens', tokens/)
   assert.match(engineSource, /message\.type === 'tokens'/)
   assert.match(engineSource, /service\.setTokens\(/)
+})
+
+test('the preload parses --cc-palette with the exact PALETTE_ID shape', () => {
+  // preload.cjs is CommonJS and cannot import preferences.mjs, so it carries
+  // the regex as a literal; this is the drift check for that duplicate.
+  assert.match(preloadSource, new RegExp(`/${PALETTE_ID.source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.test\\(arg\\('cc-palette'\\)\\)`))
 })
 
 test('the renderer can never read a stored credential back out', () => {

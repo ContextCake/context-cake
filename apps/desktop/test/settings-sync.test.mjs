@@ -69,18 +69,31 @@ test('prepareSyncPayload allowlists metadata and rejects credentials or context'
   )
 })
 
-test('system theme and application density are sync-safe global preferences', () => {
+test('system theme, theme family and application density are sync-safe global preferences', () => {
   assert.deepEqual(
-    prepareSyncPayload({ theme: 'system', density: 'compact', updateCheck: false, anonymousMetrics: true }),
-    { theme: 'system', density: 'compact', updateCheck: false },
+    prepareSyncPayload({ theme: 'system', palette: 'solarized', density: 'compact', updateCheck: false, anonymousMetrics: true }),
+    { theme: 'system', palette: 'solarized', density: 'compact', updateCheck: false },
   )
   assert.deepEqual(prepareSyncPayload({ density: 'comfortable' }), { density: 'comfortable' })
   assert.throws(() => prepareSyncPayload({ theme: 'automatic' }), /invalid theme/)
   assert.throws(() => prepareSyncPayload({ density: 'dense' }), /invalid density/)
-  assert.throws(
-    () => prepareSyncPayload({ profiles: [{ id: 'work', preferences: { density: 'compact' } }] }),
-    /unsupported profile preference field/,
-  )
+  // The family is validated by shape, so an id only a newer client knows
+  // still round-trips; anything that is not a slug does not.
+  assert.deepEqual(prepareSyncPayload({ palette: 'a-family-added-later' }), { palette: 'a-family-added-later' })
+  for (const bad of ['Solarized', '../x', 'x'.repeat(33), 7]) {
+    assert.throws(() => prepareSyncPayload({ palette: bad }), /invalid palette/, `palette ${JSON.stringify(bad)}`)
+  }
+  // A per-profile palette is deliberately NOT accepted: profile preference
+  // keys are name-checked only, and an older client pulling a blob that
+  // carries one throws instead of dropping it (profiles is a field it syncs).
+  // Rejecting it on push keeps such a blob from ever existing.
+  for (const preferences of [{ palette: 'gruvbox' }, { density: 'compact' }]) {
+    assert.throws(
+      () => prepareSyncPayload({ profiles: [{ id: 'work', preferences }] }),
+      /unsupported profile preference field/,
+      `profile preferences ${JSON.stringify(preferences)} must be rejected`,
+    )
+  }
 })
 
 test('Pack files and local registry stay out of sync while identity metadata is safe', () => {

@@ -1,0 +1,13 @@
+/* Theme families. Imported from main.tsx after styles.css. Order is not
+   load-bearing: `_derived.css` outranks ContextCake's `:root` and never meets
+   its palette-scoped dark block, and the family files outrank `_derived.css`
+   on specificity (see its header). `registry.ts` lists the ids;
+   `tokens.test.ts` keeps this list, the files and the registry in step. */
+@import './_derived.css';
+@import './solarized.css';
+@import './catppuccin.css';
+@import './gruvbox.css';
+@import './tokyo-night.css';
+@import './rose-pine.css';
+@import './one.css';
+@import './github.css';

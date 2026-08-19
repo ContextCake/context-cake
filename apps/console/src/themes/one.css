@@ -1,0 +1,57 @@
+/* One — Atom's One Light / One Dark, GitHub (Atom).
+   https://github.com/atom/one-light-syntax  https://github.com/atom/one-dark-syntax
+   https://github.com/atom/one-light-ui      https://github.com/atom/one-dark-ui
+   License: MIT (LICENSE.md in each repository; the repositories are archived).
+   Values: styles/colors.less (syntax) and styles/ui-variables*.less (UI),
+   with Less hsl()/lighten()/darken() evaluated to hex.
+
+   One → console primitive              Light                        | Dark
+     page                               syntax-bg / ui-bg   #fafafa  | syntax-bg / ui-bg          #282c34
+     surface                            level-3             #eaeaeb  | background-color-highlight #2c313c
+     raised                             level-1             #ffffff  | level-1                    #353b45
+     header-bg                          level-3             #eaeaeb  | level-3                    #21252b
+     canvas-bg                          syntax-bg                    | level-3
+     ink                                mono-1              #383a42  | text-color-highlight       #d7dae0
+     body                               ui-fg               #424243  | mono-1                     #abb2bf
+     caption                            mono-2              #696c77  | mono-2                     #828997
+     faint                              mono-3              #a0a1a7  | mono-3                     #5c6370
+     layer-company                      hue-2 (blue)        #4078f2  | hue-2 (blue)               #61afef
+     layer-team                         hue-4 (green)       #50a14f  | hue-4 (green)              #98c379
+     layer-personal                     hue-6-2 (orange 2)  #c18401  | hue-6-2 (orange 2)         #e5c07b
+     conflict                           hue-5 (red 1)       #e45649  | hue-5 (red 1)              #e06c75 */
+
+:root[data-palette="one"][data-theme="light"],
+.cc-theme-swatch[data-palette="one"][data-theme="light"] {
+  --cc-page: #fafafa;
+  --cc-surface: #eaeaeb;
+  --cc-raised: #ffffff;
+  --cc-header-bg: #eaeaeb;
+  --cc-canvas-bg: #fafafa;
+  --cc-ink: #383a42;
+  --cc-body: #424243;
+  --cc-caption: #696c77;
+  --cc-faint: #a0a1a7;
+  --cc-layer-company: #4078f2;
+  --cc-layer-team: #50a14f;
+  --cc-layer-personal: #c18401;
+  --cc-conflict: #e45649;
+  color-scheme: light;
+}
+
+:root[data-palette="one"][data-theme="dark"],
+.cc-theme-swatch[data-palette="one"][data-theme="dark"] {
+  --cc-page: #282c34;
+  --cc-surface: #2c313c;
+  --cc-raised: #353b45;
+  --cc-header-bg: #21252b;
+  --cc-canvas-bg: #21252b;
+  --cc-ink: #d7dae0;
+  --cc-body: #abb2bf;
+  --cc-caption: #828997;
+  --cc-faint: #5c6370;
+  --cc-layer-company: #61afef;
+  --cc-layer-team: #98c379;
+  --cc-layer-personal: #e5c07b;
+  --cc-conflict: #e06c75;
+  color-scheme: dark;
+}

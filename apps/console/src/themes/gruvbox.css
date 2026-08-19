@@ -1,0 +1,54 @@
+/* Gruvbox — Pavel Pertsev (morhetz), https://github.com/morhetz/gruvbox
+   License: MIT/X11 (declared in the project README and package.json)
+   Values: colors/gruvbox.vim palette definitions.
+
+   Gruvbox → console primitive          light                 | dark
+     page                               bg0    #fbf1c7        | bg0    #282828
+     surface                            bg0_s  #f2e5bc        | bg0_s  #32302f
+     raised                             bg0_h  #f9f5d7        | bg1    #3c3836
+     header-bg                          bg0_s  #f2e5bc        | bg0_h  #1d2021
+     canvas-bg                          bg0                   | bg0_h
+     ink                                fg0    #282828        | fg0    #fbf1c7
+     body                               fg1    #3c3836        | fg1    #ebdbb2
+     caption                            fg3    #665c54        | fg3    #bdae93
+     faint                              fg4    #7c6f64        | fg4    #a89984
+     layer-company                      faded blue   #076678  | bright blue   #83a598
+     layer-team                         faded aqua   #427b58  | bright aqua   #8ec07c
+     layer-personal                     faded yellow #b57614  | bright yellow #fabd2f
+     conflict                           faded orange #af3a03  | bright orange #fe8019 */
+
+:root[data-palette="gruvbox"][data-theme="light"],
+.cc-theme-swatch[data-palette="gruvbox"][data-theme="light"] {
+  --cc-page: #fbf1c7;
+  --cc-surface: #f2e5bc;
+  --cc-raised: #f9f5d7;
+  --cc-header-bg: #f2e5bc;
+  --cc-canvas-bg: #fbf1c7;
+  --cc-ink: #282828;
+  --cc-body: #3c3836;
+  --cc-caption: #665c54;
+  --cc-faint: #7c6f64;
+  --cc-layer-company: #076678;
+  --cc-layer-team: #427b58;
+  --cc-layer-personal: #b57614;
+  --cc-conflict: #af3a03;
+  color-scheme: light;
+}
+
+:root[data-palette="gruvbox"][data-theme="dark"],
+.cc-theme-swatch[data-palette="gruvbox"][data-theme="dark"] {
+  --cc-page: #282828;
+  --cc-surface: #32302f;
+  --cc-raised: #3c3836;
+  --cc-header-bg: #1d2021;
+  --cc-canvas-bg: #1d2021;
+  --cc-ink: #fbf1c7;
+  --cc-body: #ebdbb2;
+  --cc-caption: #bdae93;
+  --cc-faint: #a89984;
+  --cc-layer-company: #83a598;
+  --cc-layer-team: #8ec07c;
+  --cc-layer-personal: #fabd2f;
+  --cc-conflict: #fe8019;
+  color-scheme: dark;
+}

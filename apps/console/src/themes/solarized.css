@@ -1,0 +1,58 @@
+/* Solarized — Ethan Schoonover, https://ethanschoonover.com/solarized/
+   License: MIT (https://github.com/altercation/solarized/blob/master/LICENSE)
+   Values: the official palette table in the project README.
+
+   Solarized → console primitive        light            | dark
+     page, surface, raised              base3  #fdf6e3   | base03 #002b36 (page) / base02 #073642
+     header-bg                          base2  #eee8d5   | base02 #073642
+     canvas-bg                          base3            | base03
+     ink                                base02 #073642   | base2  #eee8d5
+     body                               base01 #586e75   | base1  #93a1a1
+     caption                            base00 #657b83   | base0  #839496
+     faint                              base1  #93a1a1   | base01 #586e75
+     layer-company                      blue   #268bd2   (both modes, by design)
+     layer-team                         cyan   #2aa198
+     layer-personal                     yellow #b58900
+     conflict                           orange #cb4b16
+
+   Two mapping notes. Solarized's own light body tone, base00, is 4.1:1 on
+   base3 — under the console's 4.5 floor — so body is base01 (5.0:1) and
+   base00 is the caption tone. And base01 on base2 is 4.4:1, so light
+   content surfaces stay on base3; only the sidebar/toolbar (`--cc-header-bg`)
+   wears base2, which is how Solarized editors draw their chrome. */
+
+:root[data-palette="solarized"][data-theme="light"],
+.cc-theme-swatch[data-palette="solarized"][data-theme="light"] {
+  --cc-page: #fdf6e3;
+  --cc-surface: #fdf6e3;
+  --cc-raised: #fdf6e3;
+  --cc-header-bg: #eee8d5;
+  --cc-canvas-bg: #fdf6e3;
+  --cc-ink: #073642;
+  --cc-body: #586e75;
+  --cc-caption: #657b83;
+  --cc-faint: #93a1a1;
+  --cc-layer-company: #268bd2;
+  --cc-layer-team: #2aa198;
+  --cc-layer-personal: #b58900;
+  --cc-conflict: #cb4b16;
+  color-scheme: light;
+}
+
+:root[data-palette="solarized"][data-theme="dark"],
+.cc-theme-swatch[data-palette="solarized"][data-theme="dark"] {
+  --cc-page: #002b36;
+  --cc-surface: #073642;
+  --cc-raised: #073642;
+  --cc-header-bg: #073642;
+  --cc-canvas-bg: #002b36;
+  --cc-ink: #eee8d5;
+  --cc-body: #93a1a1;
+  --cc-caption: #839496;
+  --cc-faint: #586e75;
+  --cc-layer-company: #268bd2;
+  --cc-layer-team: #2aa198;
+  --cc-layer-personal: #b58900;
+  --cc-conflict: #cb4b16;
+  color-scheme: dark;
+}

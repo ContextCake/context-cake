@@ -57,7 +57,10 @@ export function conceptTypeStyle(t: string): React.CSSProperties {
 }
 
 // Literal hex → CSS variable. Lets the ported inline styles theme unchanged.
-const HEX_VARS: Record<string, string> = {
+// Exported for `theme.test.ts`, which walks every source file and refuses an
+// inline hex that is not a key here (it would render fine in light mode and
+// silently stop adapting in dark) or a value that names no `--cc-*` token.
+export const HEX_VARS: Record<string, string> = {
   '#F1F0EA': '--cc-page', '#FBFAF6': '--cc-surface', '#FFFFFF': '--cc-raised',
   '#D8D6CC': '--cc-line', '#C3C1B8': '--cc-line-strong',
   '#E4E1D6': '--cc-line-soft', '#EDEAE0': '--cc-line-soft', '#EAE7DD': '--cc-line-soft',

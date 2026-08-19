@@ -1,0 +1,54 @@
+/* Catppuccin — Latte (light) / Mocha (dark), https://catppuccin.com/palette/
+   License: MIT (https://github.com/catppuccin/palette/blob/main/LICENSE)
+   Values: palette.json in catppuccin/palette.
+
+   Catppuccin → console primitive       Latte             | Mocha
+     page                               base     #eff1f5  | base     #1e1e2e
+     surface                            mantle   #e6e9ef  | surface0 60% over base
+     raised                             base     #eff1f5  | surface0 #313244
+     header-bg                          mantle   #e6e9ef  | mantle   #181825
+     canvas-bg                          base              | crust    #11111b
+     ink                                text     #4c4f69  | text     #cdd6f4
+     body                               subtext1 #5c5f77  | subtext1 #bac2de
+     caption                            subtext0 #6c6f85  | subtext0 #a6adc8
+     faint                              overlay1 #8c8fa1  | overlay1 #7f849c
+     layer-company                      blue     #1e66f5  | blue     #89b4fa
+     layer-team                         teal     #179299  | teal     #94e2d5
+     layer-personal                     yellow   #df8e1d  | yellow   #f9e2af
+     conflict                           peach    #fe640b  | peach    #fab387 */
+
+:root[data-palette="catppuccin"][data-theme="light"],
+.cc-theme-swatch[data-palette="catppuccin"][data-theme="light"] {
+  --cc-page: #eff1f5;
+  --cc-surface: #e6e9ef;
+  --cc-raised: #eff1f5;
+  --cc-header-bg: #e6e9ef;
+  --cc-canvas-bg: #eff1f5;
+  --cc-ink: #4c4f69;
+  --cc-body: #5c5f77;
+  --cc-caption: #6c6f85;
+  --cc-faint: #8c8fa1;
+  --cc-layer-company: #1e66f5;
+  --cc-layer-team: #179299;
+  --cc-layer-personal: #df8e1d;
+  --cc-conflict: #fe640b;
+  color-scheme: light;
+}
+
+:root[data-palette="catppuccin"][data-theme="dark"],
+.cc-theme-swatch[data-palette="catppuccin"][data-theme="dark"] {
+  --cc-page: #1e1e2e;
+  --cc-surface: color-mix(in srgb, #313244 60%, #1e1e2e);
+  --cc-raised: #313244;
+  --cc-header-bg: #181825;
+  --cc-canvas-bg: #11111b;
+  --cc-ink: #cdd6f4;
+  --cc-body: #bac2de;
+  --cc-caption: #a6adc8;
+  --cc-faint: #7f849c;
+  --cc-layer-company: #89b4fa;
+  --cc-layer-team: #94e2d5;
+  --cc-layer-personal: #f9e2af;
+  --cc-conflict: #fab387;
+  color-scheme: dark;
+}

@@ -100,7 +100,7 @@ function ConflictsInner() {
       applied: response.applied,
       failed: response.failed,
       failedIds,
-      message: `${label}: ${response.applied} done${response.failed ? ` · ${response.failed} need attention` : ''}.${response.git?.queued ? ' The team push is queued until the remote is reachable.' : ''}`,
+      message: `${label}.${response.failed ? ' The ones that need attention stay selected.' : ''}${response.git?.queued ? ' The team push is queued until the remote is reachable.' : ''}`,
       ...(suggestion ? {
         suggestionId: suggestion.id,
         suggestionLabel: suggestion.action.type === 'rewrite_link' ? `Rewrite → ${suggestion.action.newTarget}` : suggestion.action.type === 'prefer_source' ? `Prefer ${suggestion.action.source}` : `Acknowledge as ${suggestion.action.reasonCode.replace(/_/g, ' ')}`,
@@ -162,7 +162,7 @@ function ConflictsInner() {
       <Rules />
       {notice && (
         <div className="cc-decision-receipt" role="status" aria-live="polite" aria-atomic="true">
-          <span><strong>Done.</strong> {notice.message}</span>
+          <span><strong>{notice.kind === 'batch' ? `${notice.applied} done${notice.failed ? ` · ${notice.failed} need attention` : ''}.` : 'Done.'}</strong> {notice.message}</span>
           <div>
             {notice.kind === 'single' && (
               <button type="button" onClick={() => {

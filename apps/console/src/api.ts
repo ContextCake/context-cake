@@ -1075,14 +1075,27 @@ export function adaptConflicts(concepts: ResolvedConcept[], resolutions: Conflic
 }
 
 function legacyConflictRecord(conflict: Conflict): DiscrepancyRecord {
+  // The simulation writes nothing, so the resolver keeps emitting the
+  // conflict after an acknowledgement or a composed answer. The latest
+  // recorded decision is what says where the row belongs; without this a
+  // "Simulate acknowledging" flipped back to Needs review on the refetch a
+  // moment later.
+  const latest = conflict.history[conflict.history.length - 1]
+  const status = conflict.status === 'resolved' ? 'resolved'
+    : latest?.action === 'acknowledge' ? 'acknowledged'
+      : latest?.action === 'compose' ? 'resolved'
+        : 'needs_review'
+  // `title` is "<section> — <concept title>"; the record wants the concept's own.
+  const prefix = `${conflict.section} — `
+  const conceptTitle = conflict.title.startsWith(prefix) ? conflict.title.slice(prefix.length) : conflict.title
   return {
     id: `section_content::${conflict.concept}::${conflict.sectionKey}`,
     legacyId: conflict.id,
     kind: 'section_content', originalKind: 'section_content',
-    conceptId: conflict.concept, conceptTitle: conflict.title, conceptType: 'concept',
+    conceptId: conflict.concept, conceptTitle, conceptType: 'concept',
     key: conflict.sectionKey, label: conflict.section,
     revision: `${conflict.id}:${conflict.history.length}`,
-    status: conflict.status === 'resolved' ? 'resolved' : 'needs_review',
+    status,
     contributions: conflict.contributions.map((item, index) => ({
       source: item.sourceLayer, level: item.layer === 'personal' ? 3 : item.layer === 'team' ? 2 : 0,
       updated: item.updated || null, value: item.value, fingerprint: `${conflict.id}:${index}`, effective: index === 0,

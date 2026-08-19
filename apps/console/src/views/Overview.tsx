@@ -5,7 +5,7 @@ import { useStoreData } from '../store'
 import { LayerChip } from '../components/LayerChip'
 import { EmptyState, StatusBadge, Button } from '../components/ui'
 import { AgentIcon } from '../components/icons'
-import { isActionable, summarizeConflicts } from '../discrepancy-summary'
+import { actionableByKind, isActionable, summarizeConflicts } from '../discrepancy-summary'
 
 /** "12 broken links · 3 sections · 1 value" — the kinds behind the actionable count, largest first, zeros dropped. */
 function kindSubtitle(byKind: Record<string, number>): string {
@@ -36,7 +36,8 @@ function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
   const metrics = [
     { label: 'Sources', value: sources.length, view: 'sources' as const },
     { label: 'Concepts', value: concepts.length, view: 'concepts' as const },
-    { label: 'Discrepancies', value: summary.actionable, view: 'conflicts' as const, detail: kindSubtitle(summary.byKind) },
+    // The subtitle counts actionable rows per kind (the summary's byKind counts decided rows too).
+    { label: 'Discrepancies', value: summary.actionable, view: 'conflicts' as const, detail: kindSubtitle(actionableByKind(conflicts)) },
     { label: 'Queue', value: queue.length, view: 'triage' as const },
   ]
 

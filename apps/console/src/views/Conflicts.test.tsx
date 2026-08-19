@@ -4,7 +4,10 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Conflicts } from './Conflicts'
+import { previewSentence } from './conflicts/BulkBar'
+import { actionLabel, matchLabel } from './conflicts/Rules'
 import type { Conflict } from '../data'
+import type { DiscrepancyBatchRequest, DiscrepancyBatchResponse } from '../types'
 
 const mocks = vi.hoisted(() => ({
   useStore: vi.fn(),
@@ -27,6 +30,14 @@ function storeWith(conflicts: Conflict[], selConflict: string) {
     resolutionError: null as { message: string; partial: boolean } | null,
     discrepancyRules: [], discrepancyRuleSuggestions: [],
     decideDiscrepancy: vi.fn(), setDiscrepancyPriority: vi.fn(),
+    // The batch answers "every item went through" unless a test says otherwise.
+    decideDiscrepancies: vi.fn(async (request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> => ({
+      ok: true, applied: request.dryRun ? 0 : request.decisions.length, failed: 0,
+      results: request.decisions.map((decision) => ({ discrepancyId: decision.discrepancyId, ok: true, ...(request.dryRun ? { wouldWrite: [] } : {}) })),
+      suggestions: [],
+    })),
+    loadDiscrepancyDetail: vi.fn(),
+    sources: [{ name: 'personal', sourceKind: 'okf-local' }, { name: 'team', sourceKind: 'files' }, { name: 'company', sourceKind: 'mcp' }],
     approveRuleSuggestion: vi.fn(), updateDiscrepancyRule: vi.fn(), promoteDiscrepancyRule: vi.fn(),
     openFilesScope: vi.fn(), openConcept: vi.fn(),
   }
@@ -468,5 +479,428 @@ describe('Discrepancy Center', () => {
     await act(async () => { sourceSelect.value = 'company'; sourceSelect.dispatchEvent(new Event('change', { bubbles: true })) })
 
     expect(container.textContent).toContain('Resolved effective')
+  })
+})
+
+// ---- The redesign: overview tiles, grouping, selection, bulk actions, fixes ----
+
+const $$ = <T extends Element = HTMLElement>(selector: string) => Array.from(container.querySelectorAll<T>(selector))
+const buttons = () => $$<HTMLButtonElement>('button')
+const itemRows = () => $$<HTMLElement>('.cc-conflict-list [role="option"][data-row="item"]')
+const groupRows = () => $$<HTMLElement>('.cc-conflict-list [role="option"][data-row="group"]')
+const press = (node: Element, key: string, init: KeyboardEventInit = {}) =>
+  node.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }))
+const click = (node: Element, init: MouseEventInit = {}) =>
+  node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init }))
+const active = () => document.activeElement as HTMLElement | null
+
+const brokenTo = (id: string, target: string, best: string | null, extra: Partial<Conflict> = {}): Conflict => ({
+  ...brokenLinkConflict,
+  id: `broken_link::${id}`,
+  concept: `notes/${id}`,
+  conceptTitle: `Note ${id}`,
+  target,
+  contributions: [{ layer: 'personal', sourceLayer: 'personal', value: target, updated: '2026-05-12' }],
+  candidates: best ? [{ id: best, reason: 'case', confidence: 0.95 }, { id: `${best}-alt`, reason: 'typo', confidence: 0.55 }] : [],
+  bestCandidate: best ? { id: best, reason: 'case', confidence: 0.95 } : null,
+  ...extra,
+})
+
+describe('Discrepancy Center — overview and grouping', () => {
+  it('shows counts on the tiles and the tabs, and a tile click applies its filter', async () => {
+    const rows = [freshConflict, staleConflict, brokenTo('l1', 'decisions/Old', 'decisions/old'), brokenTo('l2', 'decisions/Old', 'decisions/old')]
+    mocks.useStore.mockReturnValue(storeWith(rows, freshConflict.id))
+    await act(async () => root.render(<Conflicts />))
+
+    const tiles = $$<HTMLButtonElement>('.cc-dc-tile')
+    expect(tiles[0].textContent).toContain('4')
+    expect(tiles[0].textContent).toContain('actionable')
+    const brokenTile = tiles.find((tile) => tile.textContent?.includes('broken links'))!
+    expect(brokenTile.textContent).toContain('2')
+    expect($$('.cc-status-tabs button').map((tab) => tab.textContent)).toEqual(['Needs review4', 'Recommendations0', 'Automated0', 'Acknowledged0', 'Resolved0'])
+    // "2 of 2 broken links have a suggested fix" — the quick win reads off the summary.
+    expect(container.querySelector('.cc-dc-quick')?.textContent).toContain('2 of 2 broken links have a suggested fix')
+
+    await act(async () => brokenTile.click())
+    expect(container.querySelector<HTMLSelectElement>('[aria-label="Kind"]')?.value).toBe('broken_link')
+    expect(itemRows()).toHaveLength(2)
+    expect(brokenTile.getAttribute('aria-pressed')).toBe('true')
+
+    // The quick-win tile narrows further to links with a fix; the checkbox that appears clears it.
+    const quick = $$<HTMLButtonElement>('.cc-dc-quick button').find((button) => button.textContent?.includes('suggested fix'))!
+    await act(async () => quick.click())
+    expect(itemRows()).toHaveLength(2)
+    expect(container.textContent).toContain('Has a suggested fix')
+  })
+
+  it('groups by kind with broken links sub-grouped by target, collapsed by default past three groups', async () => {
+    const rows = [
+      freshConflict, listConflict,
+      brokenTo('l1', 'decisions/Old', 'decisions/old'), brokenTo('l2', 'decisions/Old', 'decisions/old'),
+      brokenTo('l3', 'decisions/gone', null),
+      { ...freshConflict, id: 'changed', kind: 'changed_after_decision' as const },
+    ]
+    mocks.useStore.mockReturnValue(storeWith(rows, freshConflict.id))
+    await act(async () => root.render(<Conflicts />))
+
+    // Five groups → all closed; only headers render, largest first.
+    expect(groupRows().map((row) => row.getAttribute('aria-label'))).toEqual([
+      'Broken link → decisions/Old, 2 items, 2 actionable, collapsed',
+      'Broken link → decisions/gone, 1 item, 1 actionable, collapsed',
+      'Changed after decision, 1 item, 1 actionable, collapsed',
+      'Frontmatter value, 1 item, 1 actionable, collapsed',
+      'Section content, 1 item, 1 actionable, collapsed',
+    ])
+    expect(itemRows()).toHaveLength(0)
+    expect(groupRows()[0].textContent).toContain('fix → decisions/old')
+
+    await act(async () => click(groupRows()[0]))
+    expect(itemRows()).toHaveLength(2)
+    expect(groupRows()[0].getAttribute('aria-label')).toContain('expanded')
+
+    // Switching the grouping resets the collapse state.
+    const concept = $$<HTMLButtonElement>('.cc-ui-segmented button').find((button) => button.textContent === 'Concept')!
+    await act(async () => concept.click())
+    expect(groupRows().length).toBeGreaterThan(3)
+    expect(itemRows()).toHaveLength(0)
+  })
+
+  it('opens every group when there are three or fewer', async () => {
+    mocks.useStore.mockReturnValue(storeWith([freshConflict, staleConflict, listConflict], freshConflict.id))
+    await act(async () => root.render(<Conflicts />))
+    expect(groupRows()).toHaveLength(2)
+    expect(itemRows()).toHaveLength(3)
+  })
+})
+
+describe('Discrepancy Center — selection and bulk actions', () => {
+  it('Shift+click selects the range between the anchor and the clicked row, and the group checkbox takes the whole group', async () => {
+    const rows = [freshConflict, staleConflict, codeConflict, listConflict]
+    const store = storeWith(rows, freshConflict.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    // Two groups (section content ×3, frontmatter ×1), both open.
+    const items = itemRows()
+    expect(items).toHaveLength(4)
+
+    await act(async () => click(items[0].querySelector('.cc-row-check')!))
+    expect(items[0].getAttribute('aria-selected')).toBe('true')
+    expect(container.querySelector('.cc-bulk-bar')?.textContent).toContain('1 selected')
+
+    await act(async () => click(items[2].querySelector('.cc-row-check')!, { shiftKey: true }))
+    expect(itemRows().filter((row) => row.getAttribute('aria-selected') === 'true')).toHaveLength(3)
+    expect(container.querySelector('.cc-bulk-bar')?.textContent).toContain('3 selected')
+    // The group header of a fully selected group reads selected; a partial one does not.
+    expect(groupRows()[0].getAttribute('aria-selected')).toBe('true')
+
+    // Clicking a group's checkbox again clears that group.
+    await act(async () => click(groupRows()[0].querySelector('.cc-row-check')!))
+    expect(itemRows().filter((row) => row.getAttribute('aria-selected') === 'true')).toHaveLength(0)
+    expect(container.querySelector('.cc-bulk-bar')).toBeNull()
+
+    // And Space on the focused row toggles it without opening the detail.
+    await act(async () => { itemRows()[1].focus(); press(itemRows()[1], ' ') })
+    expect(itemRows()[1].getAttribute('aria-selected')).toBe('true')
+    expect(store.setSelConflict).not.toHaveBeenCalledWith(staleConflict.id)
+  })
+
+  it('offers rewrite/create only when every selected row is a broken link to one target, unlink for any broken links, and "use source" only for non-links', async () => {
+    const rows = [
+      brokenTo('l1', 'decisions/Old', 'decisions/old'), brokenTo('l2', 'decisions/Old', 'decisions/old'),
+      brokenTo('l3', 'decisions/gone', null),
+      freshConflict, staleConflict,
+    ]
+    mocks.useStore.mockReturnValue(storeWith(rows, freshConflict.id))
+    await act(async () => root.render(<Conflicts />))
+    // Three groups → open. Order: Old(2), Section content(2), gone(1).
+    const oldGroup = groupRows().find((row) => row.getAttribute('aria-label')?.startsWith('Broken link → decisions/Old'))!
+    await act(async () => click(oldGroup.querySelector('.cc-row-check')!))
+    let bar = container.querySelector('.cc-bulk-bar')!
+    expect(bar.textContent).toContain('Rewrite 2 links')
+    expect(bar.textContent).toContain('Remove 2 links')
+    expect(bar.textContent).toContain('Create')
+    expect(bar.querySelector<HTMLSelectElement>('[aria-label="Rewrite links to"]')?.value).toBe('decisions/old')
+    expect(bar.querySelector<HTMLSelectElement>('[aria-label="Layer to create the concept in"]')?.value).toBe('personal')
+    // A writable layer only: the MCP source is not offered.
+    expect(Array.from(bar.querySelectorAll('[aria-label="Layer to create the concept in"] option')).map((option) => option.textContent)).toEqual(['personal', 'team'])
+    expect(bar.textContent).not.toContain('Use')
+
+    // Add a link to another target: rewrite and create go, remove stays.
+    const goneGroup = groupRows().find((row) => row.getAttribute('aria-label')?.startsWith('Broken link → decisions/gone'))!
+    await act(async () => click(goneGroup.querySelector('.cc-row-check')!))
+    bar = container.querySelector('.cc-bulk-bar')!
+    expect(bar.textContent).toContain('3 selected')
+    expect(bar.textContent).not.toContain('Rewrite')
+    expect(bar.textContent).not.toContain('Create')
+    expect(bar.textContent).toContain('Remove 3 links')
+
+    // Add a section conflict: only acknowledge remains.
+    const sectionGroup = groupRows().find((row) => row.getAttribute('aria-label')?.startsWith('Section content'))!
+    await act(async () => click(sectionGroup.querySelector('.cc-row-check')!))
+    bar = container.querySelector('.cc-bulk-bar')!
+    expect(bar.textContent).toContain('5 selected')
+    expect(bar.textContent).not.toContain('Remove')
+    expect(bar.textContent).toContain('Acknowledge 5…')
+
+    // Only the section conflicts: "Use <source> for N" over their shared sources.
+    await act(async () => click(oldGroup.querySelector('.cc-row-check')!))
+    await act(async () => click(goneGroup.querySelector('.cc-row-check')!))
+    bar = container.querySelector('.cc-bulk-bar')!
+    expect(bar.textContent).toContain('2 selected')
+    expect(Array.from(bar.querySelectorAll('[aria-label="Source to use everywhere"] option')).map((option) => option.textContent)).toEqual(['personal', 'team'])
+  })
+
+  it('previews every bulk action with a dry run before applying it, and sends newTarget for a rewrite', async () => {
+    const rows = [brokenTo('l1', 'decisions/Old', 'decisions/old'), brokenTo('l2', 'decisions/Old', 'decisions/old')]
+    const store = storeWith(rows, rows[0].id)
+    store.decideDiscrepancies = vi.fn(async (request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> => ({
+      ok: true, applied: request.dryRun ? 0 : 2, failed: 0,
+      results: request.decisions.map((decision, index) => ({
+        discrepancyId: decision.discrepancyId, ok: true,
+        ...(request.dryRun ? { wouldWrite: [{ layer: index === 0 ? 'personal' : 'team', path: `notes/${index}.md` }] } : {}),
+      })),
+      suggestions: [],
+    }))
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+
+    await act(async () => click(groupRows()[0].querySelector('.cc-row-check')!))
+    const rewrite = buttons().find((button) => button.textContent?.startsWith('Rewrite 2 links'))!
+    await act(async () => rewrite.click())
+
+    expect(store.decideDiscrepancies).toHaveBeenCalledTimes(1)
+    expect(store.decideDiscrepancies.mock.calls[0][0]).toMatchObject({
+      dryRun: true,
+      decisions: [
+        { discrepancyId: rows[0].id, revision: 'rev-1', action: 'rewrite_link', newTarget: 'decisions/old' },
+        { discrepancyId: rows[1].id, revision: 'rev-1', action: 'rewrite_link', newTarget: 'decisions/old' },
+      ],
+    })
+    // Demo mode says so honestly; the live sentence is pinned by the previewSentence tests below.
+    const confirm = container.querySelector('.cc-bulk-confirm')!
+    expect(confirm.textContent).toContain('Rewrite 2 links to decisions/old.')
+    expect(confirm.textContent).toContain('Simulation — nothing changes on disk; 2 decisions will be recorded until reload.')
+
+    const apply = buttons().find((button) => button.textContent === 'Simulate for 2')!
+    await act(async () => apply.click())
+    expect(store.decideDiscrepancies).toHaveBeenCalledTimes(2)
+    expect(store.decideDiscrepancies.mock.calls[1][0].dryRun).toBeUndefined()
+    expect(store.decideDiscrepancies.mock.calls[1][0].decisions).toHaveLength(2)
+    expect(container.querySelector('[role="status"].cc-decision-receipt')?.textContent).toContain('2 done.')
+    expect(container.querySelector('.cc-bulk-bar')).toBeNull()
+  })
+
+  it('reports a partial failure as "N done · M need attention" and keeps only the failures selected', async () => {
+    const rows = [freshConflict, staleConflict, codeConflict]
+    const store = storeWith(rows, freshConflict.id)
+    store.decideDiscrepancies = vi.fn(async (request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> => ({
+      ok: false, applied: request.dryRun ? 0 : 2, failed: request.dryRun ? 0 : 1,
+      results: request.decisions.map((decision) => (request.dryRun || decision.discrepancyId !== staleConflict.id
+        ? { discrepancyId: decision.discrepancyId, ok: true }
+        : { discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'STALE', error: 'The record changed since you loaded it.' })),
+      suggestions: [],
+    }))
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+
+    await act(async () => click(groupRows()[0].querySelector('.cc-row-check')!))
+    expect(container.querySelector('.cc-bulk-bar')?.textContent).toContain('3 selected')
+    await act(async () => buttons().find((button) => button.textContent === 'Acknowledge 3…')!.click())
+    const reason = container.querySelector<HTMLSelectElement>('.cc-bulk-ack [aria-label="Acknowledgement reason"]')!
+    await act(async () => { reason.value = 'different_scopes'; reason.dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => buttons().find((button) => button.textContent === 'Preview')!.click())
+    expect(container.querySelector('.cc-bulk-confirm')?.textContent).toContain('Acknowledge 3 items.')
+    await act(async () => buttons().find((button) => button.textContent === 'Simulate for 3')!.click())
+
+    expect(store.decideDiscrepancies.mock.calls[1][0].decisions.every((decision: { action: string; reasonCode?: string }) => decision.action === 'acknowledge' && decision.reasonCode === 'different_scopes')).toBe(true)
+    const receipt = container.querySelector('[role="status"].cc-decision-receipt')!
+    expect(receipt.textContent).toContain('2 done · 1 need attention.')
+    expect(receipt.textContent).toContain('stay selected')
+    const selected = itemRows().filter((row) => row.getAttribute('aria-selected') === 'true')
+    expect(selected).toHaveLength(1)
+    expect(selected[0].textContent).toContain('Notes')
+    expect(container.querySelector('.cc-bulk-bar')?.textContent).toContain('1 selected')
+  })
+})
+
+describe('Discrepancy Center — broken-link fixes and detail loading', () => {
+  it('leads with the suggested fix and sends rewrite_link with newTarget; the other candidates, remove and create follow', async () => {
+    const link = brokenTo('l1', 'decisions/Old', 'decisions/old')
+    const store = storeWith([link], link.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+
+    expect(container.querySelector('.cc-recommendation-label')?.textContent).toBe('Suggested fix')
+    expect(container.querySelector('.cc-smart-resolution h3')?.textContent).toBe('Rewrite to decisions/old')
+    expect(container.querySelector('.cc-smart-resolution p')?.textContent).toContain('differs only by case')
+    // The old recommendation is demoted to the list of other ways, not gone.
+    expect(container.querySelector('.cc-smart-resolution')?.textContent).not.toContain('Keep the link for now')
+    expect(container.querySelector('.cc-link-fixes')?.textContent).toContain('Keep the link for now')
+
+    const other = container.querySelector('.cc-link-candidates')!
+    expect(other.textContent).toContain('decisions/old-alt')
+    expect(other.textContent).toContain('one or two characters off')
+    expect(container.textContent).toContain('Remove the link')
+    expect(container.textContent).toContain('Create decisions/Old')
+    expect(container.querySelector<HTMLSelectElement>('.cc-link-fixes [aria-label="Layer to create the concept in"]')?.value).toBe('personal')
+
+    await act(async () => buttons().find((button) => button.textContent === 'Simulate rewrite')!.click())
+    expect(store.decideDiscrepancy).toHaveBeenCalledWith({ discrepancyId: link.id, revision: 'rev-1', action: 'rewrite_link', newTarget: 'decisions/old' })
+    expect(container.querySelector('[role="status"].cc-decision-receipt')?.textContent).toContain('Rewrote the link to “decisions/old” in personal.')
+  })
+
+  it('sends unlink and create_stub (with the chosen layer) from the panel', async () => {
+    const link = brokenTo('l1', 'decisions/Old', null)
+    const store = storeWith([link], link.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    // No confident candidate: the original recommendation leads, the fixes are below it.
+    expect(container.textContent).toContain('Keep the link for now')
+    expect(container.querySelector('.cc-link-fixes > strong')?.textContent).toBe('Fix it now')
+
+    await act(async () => buttons().find((button) => button.textContent === 'Simulate removal')!.click())
+    expect(store.decideDiscrepancy).toHaveBeenLastCalledWith({ discrepancyId: link.id, revision: 'rev-1', action: 'unlink' })
+
+    const layer = container.querySelector<HTMLSelectElement>('.cc-link-fixes [aria-label="Layer to create the concept in"]')!
+    await act(async () => { layer.value = 'team'; layer.dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => buttons().find((button) => button.textContent === 'Simulate creating')!.click())
+    expect(store.decideDiscrepancy).toHaveBeenLastCalledWith({ discrepancyId: link.id, revision: 'rev-1', action: 'create_stub', layer: 'team' })
+  })
+
+  it('shows a skeleton instead of a decision panel or answers until the full record has loaded, and asks for it', async () => {
+    const compact: Conflict = { ...freshConflict, detailLoaded: false, historyCount: 2, contributions: freshConflict.contributions.map((entry) => ({ ...entry, truncated: true })) }
+    const store = storeWith([compact], compact.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+
+    expect(store.loadDiscrepancyDetail).toHaveBeenCalledWith(compact.id)
+    expect(container.querySelectorAll('.cc-skeleton').length).toBeGreaterThanOrEqual(2)
+    expect(container.textContent).not.toContain('Choose a safe disposition')
+    expect(container.querySelector('.cc-word-diff')).toBeNull()
+    expect(container.textContent).toContain('Loading 2 decisions')
+    // The row itself renders from the compact record — nothing waits on the detail.
+    expect(itemRows()).toHaveLength(1)
+  })
+})
+
+describe('Discrepancy Center — keyboard and windowing', () => {
+  it('walks across a group boundary with the arrows, opens and closes groups with Right/Left, and Enter opens a row', async () => {
+    const rows = [
+      brokenTo('l1', 'decisions/Old', 'decisions/old'), brokenTo('l2', 'decisions/Old', 'decisions/old'),
+      brokenTo('l3', 'decisions/gone', null),
+      freshConflict, listConflict,
+    ]
+    const store = storeWith(rows, freshConflict.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    // Four groups → closed. One tab stop, on the header of the first group.
+    const stops = $$('.cc-conflict-list [role="option"][tabindex="0"]')
+    expect(stops).toHaveLength(1)
+    await act(async () => stops[0].focus())
+    expect(active()?.getAttribute('data-row')).toBe('group')
+
+    await act(async () => press(active()!, 'ArrowRight')) // opens
+    expect(active()?.getAttribute('aria-label')).toContain('expanded')
+    await act(async () => press(active()!, 'ArrowRight')) // into the first child
+    expect(active()?.getAttribute('data-row')).toBe('item')
+    await act(async () => press(active()!, 'ArrowDown'))
+    await act(async () => press(active()!, 'ArrowDown')) // past the last item of the group → next header
+    expect(active()?.getAttribute('data-row')).toBe('group')
+    expect(active()?.getAttribute('aria-label')).toContain('decisions/gone')
+    await act(async () => press(active()!, 'ArrowUp'))
+    expect(active()?.getAttribute('data-row')).toBe('item')
+    await act(async () => press(active()!, 'ArrowLeft')) // back to its group header
+    expect(active()?.getAttribute('aria-label')).toContain('decisions/Old')
+    await act(async () => press(active()!, 'ArrowLeft')) // closes it
+    expect(active()?.getAttribute('aria-label')).toContain('collapsed')
+    await act(async () => press(active()!, 'End'))
+    expect(active()?.getAttribute('aria-label')).toContain('Section content')
+    await act(async () => press(active()!, 'ArrowRight'))
+    await act(async () => press(active()!, 'ArrowRight'))
+    await act(async () => press(active()!, 'Enter'))
+    expect(store.setSelConflict).toHaveBeenCalledWith(freshConflict.id)
+    expect($$('.cc-conflict-list [role="option"][tabindex="0"]')).toHaveLength(1)
+  })
+
+  it('renders only a window of a long list, and keeps the focused row mounted when it walks out of it', async () => {
+    const many: Conflict[] = Array.from({ length: 2000 }, (_, index) => ({
+      ...freshConflict, id: `many-${index}`, sectionKey: `s${index}`, section: `Section ${index}`, title: `Section ${index} — Primary database`,
+    }))
+    mocks.useStore.mockReturnValue(storeWith(many, many[0].id))
+    await act(async () => root.render(<Conflicts />))
+
+    // One group of 2,000 items, open — the DOM holds a window of it, not all of it.
+    const mounted = itemRows().length
+    expect(mounted).toBeGreaterThan(0)
+    expect(mounted).toBeLessThan(40)
+    expect(container.querySelector<HTMLElement>('.cc-conflict-virtual')?.style.height).toBe(`${44 + 2000 * 128}px`)
+
+    const stop = $$('.cc-conflict-list [role="option"][tabindex="0"]')[0]
+    await act(async () => stop.focus())
+    for (let i = 0; i < 60; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- one keystroke at a time is the point
+      await act(async () => press(active()!, 'ArrowDown'))
+    }
+    // The tab stop starts on the current row (Section 0); sixty steps down is
+    // far outside the first window: it is focused, it is in the DOM, and the
+    // DOM is still small — the row is rendered BECAUSE it has focus.
+    expect(active()?.getAttribute('role')).toBe('option')
+    expect(active()?.textContent).toContain('Section 60')
+    expect(document.activeElement).not.toBe(document.body)
+    expect(itemRows().length).toBeLessThan(80)
+    expect($$('.cc-conflict-list [role="option"][tabindex="0"]')).toHaveLength(1)
+
+    // The wheel, not the keyboard: the window moves out from under the focused row.
+    const scroller = container.querySelector<HTMLElement>('.cc-conflict-list')!
+    Object.defineProperty(scroller, 'scrollTop', { value: 200_000, configurable: true, writable: true })
+    await act(async () => scroller.dispatchEvent(new Event('scroll')))
+    expect(itemRows().map((row) => row.textContent).some((text) => text?.includes('Section 60'))).toBe(true)
+    expect(document.activeElement?.textContent).toContain('Section 60')
+    expect(itemRows().filter((row) => /Section 15\d\d/.test(row.textContent ?? '')).length).toBeGreaterThan(3)
+  })
+})
+
+describe('Discrepancy Center — copy helpers', () => {
+  it('previewSentence says how many files change across how many layers, and what cannot be applied', () => {
+    const preview: DiscrepancyBatchResponse = {
+      ok: false, applied: 0, failed: 0, suggestions: [],
+      results: [
+        { discrepancyId: 'a', ok: true, wouldWrite: [{ layer: 'personal', path: 'notes/a.md' }] },
+        { discrepancyId: 'b', ok: true, wouldWrite: [{ layer: 'team', path: 'notes/b.md' }, { layer: 'personal', path: 'notes/a.md' }] },
+        { discrepancyId: 'c', ok: false, code: 'STALE', error: 'The record changed since you loaded it.' },
+      ],
+    }
+    expect(previewSentence(preview)).toBe('2 files change across 2 layers for 2 items. 1 cannot be applied (The record changed since you loaded it.).')
+    expect(previewSentence({ ...preview, results: preview.results.slice(0, 2).map((result) => ({ ...result, wouldWrite: [] })) }, { acknowledging: true })).toBe('No files change. 2 items move to Acknowledged.')
+    expect(previewSentence({ ...preview, fallback: 'sequential', results: [{ discrepancyId: 'a', ok: true }] })).toBe('This engine cannot preview changes; 1 decision will apply one at a time.')
+    expect(previewSentence({ ...preview, results: [{ discrepancyId: 'a', ok: true }] }, { demo: true })).toContain('Simulation — nothing changes on disk')
+  })
+
+  it('renders a * match as "any" and a rewrite action as "Rewrite → target" in the rules panel', () => {
+    expect(matchLabel({ kind: 'broken_link', conceptType: '*', key: '*', sources: ['personal'], target: 'decisions/old' })).toBe('Broken link · any type · any key · personal · → decisions/old')
+    expect(matchLabel({ kind: 'section_content', conceptType: 'decision', key: 'choice', sources: ['personal', 'team'] })).toBe('Section content · decision · choice · personal + team')
+    expect(actionLabel({ type: 'rewrite_link', newTarget: 'decisions/new' })).toBe('Rewrite → decisions/new')
+    expect(actionLabel({ type: 'prefer_source', source: 'team' })).toBe('Prefer team')
+    expect(actionLabel({ type: 'acknowledge', reasonCode: 'target_missing' })).toBe('Acknowledge as target missing')
+  })
+
+  it('shows a rule with wildcards and a generalized suggestion in the panel', async () => {
+    const store = storeWith([freshConflict], freshConflict.id)
+    ;(store as unknown as { discrepancyRules: unknown[] }).discrepancyRules = [{
+      id: 'rule-1', scope: 'local', mode: 'recommend', enabled: true,
+      match: { kind: 'broken_link', conceptType: '*', key: '*', sources: ['personal'], target: 'decisions/old' },
+      action: { type: 'rewrite_link', newTarget: 'decisions/new' }, evidenceDecisionIds: ['d1', 'd2', 'd3'],
+    }]
+    ;(store as unknown as { discrepancyRuleSuggestions: unknown[] }).discrepancyRuleSuggestions = [{
+      id: 'sug-1', match: { kind: 'section_content', conceptType: '*', key: '*', sources: ['personal', 'team'] },
+      action: { type: 'prefer_source', source: 'team' }, evidenceDecisionIds: ['d4', 'd5', 'd6'], evidenceCount: 3, generalized: true,
+    }]
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    const rules = container.querySelector('.cc-rules')!
+    expect(rules.textContent).toContain('Rewrite → decisions/new')
+    expect(rules.textContent).toContain('any type · any key')
+    expect(rules.textContent).toContain('Suggested from 3 decisions across several sections')
+    expect(rules.textContent).toContain('Prefer team')
   })
 })

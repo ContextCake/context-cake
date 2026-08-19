@@ -34,7 +34,7 @@ interface Pending {
 }
 
 /** "17 files change across 2 layers." — what a dry run says will happen. */
-export function previewSentence(preview: DiscrepancyBatchResponse, { acknowledging = false } = {}): string {
+export function previewSentence(preview: DiscrepancyBatchResponse, { acknowledging = false, demo = false } = {}): string {
   const files = new Set<string>()
   const layers = new Set<string>()
   for (const result of preview.results) {
@@ -43,7 +43,9 @@ export function previewSentence(preview: DiscrepancyBatchResponse, { acknowledgi
   const okCount = preview.results.filter((result) => result.ok).length
   const refused = preview.results.filter((result) => !result.ok)
   const parts: string[] = []
-  if (preview.fallback === 'sequential') {
+  if (demo) {
+    parts.push(`Simulation — nothing changes on disk; ${plural(okCount, 'decision')} will be recorded until reload.`)
+  } else if (preview.fallback === 'sequential') {
     parts.push(`This engine cannot preview changes; ${plural(okCount, 'decision')} will apply one at a time.`)
   } else if (files.size === 0) {
     parts.push(acknowledging ? `No files change. ${plural(okCount, 'item')} move to Acknowledged.` : `No files change for ${plural(okCount, 'item')}.`)
@@ -137,7 +139,7 @@ export function BulkBar({ items, onClear, onOutcome }: BulkBarProps) {
         <p className="cc-bulk-note">Nothing in this selection is open — acknowledged and resolved items are already decided.</p>
       ) : pending ? (
         <div className="cc-bulk-confirm" role="group" aria-label="Confirm bulk action">
-          <p><strong>{pending.label}.</strong> {previewSentence(pending.preview, { acknowledging: pending.request.decisions[0]?.action === 'acknowledge' })}</p>
+          <p><strong>{pending.label}.</strong> {previewSentence(pending.preview, { acknowledging: pending.request.decisions[0]?.action === 'acknowledge', demo })}</p>
           <div className="cc-bulk-actions">
             <button type="button" className="cc-button-primary" disabled={busy || pending.preview.results.every((result) => !result.ok)} onClick={() => void apply()}>
               {busy ? 'Applying…' : demo ? `Simulate for ${pending.preview.results.filter((result) => result.ok).length}` : `Apply to ${pending.preview.results.filter((result) => result.ok).length}`}

@@ -80,9 +80,13 @@ let root: Root
  * memoized child in the shell, so one render of this is one render of the tree
  * — and unlike App it drags in no routing, no wizard and no IPC.
  */
+const summaryIdentities = new Set<unknown>()
 function DataConsumerProbe() {
-  useStoreData()
+  const { conflictSummary } = useStoreData()
   renders.probe = (renders.probe ?? 0) + 1
+  // The summary is a dependency of the `data` memo; a fresh object per
+  // provider render here would be exactly the NO_ACTIVITY mistake again.
+  summaryIdentities.add(conflictSummary)
   return null
 }
 
@@ -100,6 +104,7 @@ function typeInto(field: HTMLInputElement | HTMLTextAreaElement, text: string) {
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   for (const key of Object.keys(renders)) delete renders[key]
+  summaryIdentities.clear()
   // This suite measures the connected live composer. Unconnected live mode
   // intentionally renders connection guidance instead of a fake input.
   window.claude = { complete: vi.fn().mockResolvedValue('answer') }
@@ -157,6 +162,12 @@ describe('the render budget holds in live mode too', () => {
     typeInto(search!, conceptId!)
     expect(renders.Concepts ?? 0).toBeGreaterThan(viewBeforeSearch)
     expect((renders.probe ?? 0) - probeBeforeSearch).toBe(0)
+    // And the summary the probe saw was one object the whole way through —
+    // the loaded one, since the bundle has discrepancies (NO_SUMMARY only
+    // stands in before the first payload).
+    expect(summaryIdentities.size).toBeLessThanOrEqual(2)
+    const [last] = [...summaryIdentities].slice(-1) as { total: number }[]
+    expect(last.total).toBeGreaterThan(0)
   })
 
   /**

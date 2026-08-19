@@ -291,17 +291,28 @@ test("a rule may wildcard conceptType and key, never the target; a rewrite_link 
   // rewrite_link is a broken-link action only; prefer_source is still refused for broken links.
   assert.throws(() => serializeRuleDocument([{
     id: "w2", scope: "team", mode: "recommend", enabled: true,
-    match: { kind: "section_content", conceptType: "*", key: "choice", sources: ["company", "team"] },
+    match: { kind: "section_content", conceptType: "decision", key: "choice", sources: ["company", "team"] },
     action: { type: "rewrite_link", newTarget: "x" },
   }]), /Only a broken-link rule may rewrite a link/);
   assert.throws(() => serializeRuleDocument([{ ...wildcard, action: { type: "prefer_source", source: "team" } }]), /has no source to prefer/);
-  // Wildcards are legal on content-conflict rules too.
+  // The wildcard is broken-link only: a content-conflict rule with `*` would be
+  // pinned by kind and sources alone, and one flip to automatic would overwrite
+  // every disagreement between two layers.
+  for (const match of [
+    { kind: "section_content", conceptType: "*", key: "*", sources: ["company", "team"] },
+    { kind: "section_content", conceptType: "decision", key: "*", sources: ["company", "team"] },
+    { kind: "frontmatter_value", conceptType: "*", key: "owner", sources: ["company", "team"] },
+  ]) {
+    assert.throws(() => serializeRuleDocument([{ id: "w3", scope: "team", mode: "recommend", enabled: true, match, action: { type: "prefer_source", source: "team" } }]),
+      /Only a broken-link rule may use the wildcard/, JSON.stringify(match));
+  }
+  // …and an exact content-conflict rule still round-trips.
   const [content] = parseRuleDocument(serializeRuleDocument([{
-    id: "w3", scope: "team", mode: "recommend", enabled: true,
-    match: { kind: "section_content", conceptType: "*", key: "*", sources: ["company", "team"] },
+    id: "w4", scope: "team", mode: "recommend", enabled: true,
+    match: { kind: "section_content", conceptType: "decision", key: "choice", sources: ["company", "team"] },
     action: { type: "prefer_source", source: "team" },
   }]));
-  assert.deepEqual(content.match, { kind: "section_content", conceptType: "*", key: "*", sources: ["company", "team"] });
+  assert.deepEqual(content.match, { kind: "section_content", conceptType: "decision", key: "choice", sources: ["company", "team"] });
 });
 
 test("a wildcard rule matches across sections; a wildcard and an exact rule that disagree are a conflict", () => {

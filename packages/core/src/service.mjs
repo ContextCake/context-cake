@@ -1830,7 +1830,10 @@ export function createEngineService({
         if (req.method === "POST") {
           if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
           const rawBody = await readBody(req);
-          json(res, 200, await withManifestLockAsync(MANIFEST, () => resolveConflictApi(rawBody)));
+          // The write runs under the manifest lock; a live-layer push runs
+          // after it is released (control/discrepancies.mjs pushAfterUnlock),
+          // same as every discrepancy decision.
+          json(res, 200, await discrepancyOps.pushAfterUnlock(await withManifestLockAsync(MANIFEST, () => resolveConflictApi(rawBody))));
           return true;
         }
       }
@@ -2434,7 +2437,9 @@ export function createEngineService({
       const result = await discrepancyOps.applyDecision(discrepancy, {
         discrepancyId, revision: discrepancy.revision, action: "choose_contribution", selectedSource: selectedLayer,
       }, { methodOverride: method, reasonOverride: method === "automatic" ? safeReason : undefined });
-      return { ok: true, resolution: result.decision, written: result.written };
+      // `git` (additive) carries the deferred-push marker the route consumes
+      // after the lock; the resolver envelope itself is unchanged.
+      return { ok: true, resolution: result.decision, written: result.written, ...(result.git ? { git: result.git } : {}) };
     }
 
     // Changing a past decision reuses the same staged, journaled, live-layer-
@@ -2463,14 +2468,14 @@ export function createEngineService({
       learningPattern: null, ruleAction: null,
       ...(supersedes ? { supersedes } : {}),
     };
-    const { saved, written } = await discrepancyOps.commitDecisionWrite({
+    const { saved, written, git } = await discrepancyOps.commitDecisionWrite({
       transactionId, conceptId, layers, decision: record,
       message: `chore(contextcake): resolve section_content ${conceptId}#${sectionKey} (choose_contribution)`,
       stage: (txId) => stageSectionTransaction(JSON.stringify({
         conceptId, sectionKey, layers, content: chosen.content, expectedContent, requireAll: true,
       }), fileRoots(), txId),
     });
-    return { ok: true, resolution: saved, written };
+    return { ok: true, resolution: saved, written, ...(git ? { git } : {}) };
   }
 
   // The one full-corpus resolve, shared by everything that needs it. Before

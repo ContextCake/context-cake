@@ -251,6 +251,24 @@ test("create_stub creates the missing concept exclusively (new subfolder too), r
     // Invalid title/type shapes are refused before anything is staged.
     const other = await link(f.get, "decisions/db", "choice", "../outside");
     assert.equal((await decide(f.post, { discrepancyId: other.id, revision: other.revision, action: "create_stub", layer: "team", type: "not valid!" })).status, 400);
+    // A stub whose path the filesystem folds onto existing, differently-cased
+    // folders would create a concept that is not the link's target: on a
+    // case-insensitive filesystem `Guides/Deploy` lands in `guides/` and is
+    // refused; on a case-sensitive one it is a distinct concept and is created.
+    const cased = await link(f.get, "guides/setup", "notes", "Guides/Deploy");
+    assert.ok(cased);
+    const caseInsensitive = await fsp.stat(path.join(f.team, "GUIDES")).then(() => true, () => false);
+    const stubbed = await decide(f.post, { discrepancyId: cased.id, revision: cased.revision, action: "create_stub", layer: "team" });
+    if (caseInsensitive) {
+      assert.equal(stubbed.status, 409, JSON.stringify(stubbed.body));
+      assert.equal(stubbed.body.code, "TARGET_CASE_CONFLICT");
+      assert.match(stubbed.body.error, /different casing/);
+      assert.equal(await fsp.readFile(path.join(f.team, "guides", "deploy.md"), "utf8"), doc("Deploy", "guide"), "the existing concept is untouched");
+      assert.deepEqual((await fsp.readdir(path.join(f.team, "guides"))).sort(), ["deploy.md", "setup.md"]);
+    } else {
+      assert.equal(stubbed.status, 200, JSON.stringify(stubbed.body));
+      assert.ok(await fsp.stat(path.join(f.team, "Guides", "Deploy.md")));
+    }
   } finally { await f.cleanup(); }
 });
 

@@ -156,8 +156,12 @@ export async function commitPaths(root, paths, message, { author = null, lockRet
 }
 
 // Acquires the repo lock before a caller mutates the working tree, then commits
-// only the named paths. If add/commit fails, rollback runs while the same lock
-// is still held so the operation can remain safely retryable.
+// only the named paths. If the mutation OR add/commit fails, rollback runs
+// while the same lock is still held so the operation can remain safely
+// retryable — a mutation that threw halfway (one of several files renamed) is
+// restored under the lock, never by a compensating step that runs after the
+// lock is gone. Callers write `rollback` to be safe against a mutation that
+// did nothing yet (no-op when nothing was staged or placed).
 //
 // `skipIfClean`: when the mutation left every named path byte-identical to
 // the index (a decision that writes a layer's own winning value back to it,
@@ -177,8 +181,8 @@ export async function commitPathsWithMutation(root, paths, message, {
     throw new Error("commitPathsWithMutation requires mutate and rollback callbacks");
   }
   return withRepoLock(root, "commit", async () => {
-    await mutate();
     try {
+      await mutate();
       if (skipIfClean && await pathsClean(root, paths)) return { committed: false, clean: true };
       return await commitPathsUnlocked(root, paths, message, author);
     } catch (error) {

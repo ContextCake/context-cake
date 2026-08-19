@@ -162,21 +162,48 @@ audit trail for the rest. It goes through the create-mode transaction in
 recovery of a `prepared` create removes the file (bounded to that window,
 called out in the spec).
 
-### Why `target` is never wildcarded
+### Why `target` is never wildcarded, and why only broken-link rules wildcard at all
 
-A rule may say `conceptType: "*"` and `key: "*"` — "every broken link to
-`old/decisions` from the team layer, whatever section it sits in" — and the
-miner only offers that generalization when the evidence spans at least two
-distinct (conceptType, key) pairs, because three acknowledgements of the same
-section are a pattern about that section, not about the target. The target
-itself is exact, always. A broken link's identity *is* the missing target;
-a rule that matched any target in a section would auto-acknowledge (or
-auto-rewrite) a future, unrelated dangling link — a typo nobody reviewed —
-which is precisely the failure the target pin exists to prevent.
-`validateRule` refuses `target: "*"`, and `ruleConflict` is unchanged: a
-wildcard rule and an exact rule that disagree both match and disable
-automation; no specificity order is invented, because "the more specific rule
-wins" is a policy the user never approved.
+A broken-link rule may say `conceptType: "*"` and `key: "*"` — "every broken
+link to `old/decisions` from the team layer, whatever section it sits in" —
+and the miner only offers that generalization when the evidence spans at
+least two distinct (conceptType, key) pairs, because three acknowledgements
+of the same section are a pattern about that section, not about the target.
+The target itself is exact, always. A broken link's identity *is* the missing
+target; a rule that matched any target in a section would auto-acknowledge
+(or auto-rewrite) a future, unrelated dangling link — a typo nobody reviewed
+— which is precisely the failure the target pin exists to prevent. And it is
+the target pin that makes a wildcard tolerable at all: a `section_content` or
+`frontmatter_value` rule with `*` on both fields would be pinned by kind and
+sources alone, and one `PATCH … mode: "automatic"` would overwrite every
+disagreement between two layers, sight unseen. `validateRule` refuses
+`target: "*"` and refuses the wildcard for any kind but `broken_link`;
+`ruleConflict` is unchanged: a wildcard rule and an exact rule that disagree
+both match and disable automation; no specificity order is invented, because
+"the more specific rule wins" is a policy the user never approved.
+
+### Why the push happens after the lock, and every restore inside git-core's
+
+The manifest lock serializes decisions with source and settings edits, and it
+has waiters that give up after 15 s — including synchronous ones (`POST
+/api/sources`, `PATCH /api/settings`) that spin the event loop while they
+wait. A push is up to three network calls of 90 s each. Pushing under that
+lock would time every concurrent writer out, freeze the process for those
+sync waiters, and past the 60 s stale threshold let another process
+legitimately steal the lock. So `commitDecisionWrite` never pushes: it
+returns a `git.pushRoot` marker once the decision is durable, and the caller
+— `decide`, `decideBatch`, `runAutomaticRules`, the legacy conflict route —
+pushes once through `pushAfterUnlock` after releasing the lock, exactly as
+`promoteRule` always did.
+
+The mirror rule for the repo lock: every byte a locked git mutation changes
+lands inside `commitPathsWithMutation`'s `mutate`, and its `rollback` runs
+under that same lock even when the mutation itself throws (the mutation is
+inside git-core's try, not before it), so a half-applied staged transaction
+is restored before another process can pull over it. Startup recovery follows
+it too: the journal hands its restore step to the operation (`restore(tx,
+targets, applyRestore)`), which restores live-layer targets *inside* the
+mutate that commits the restore, and everything else on the plain path.
 
 ## Why F30 is fixed in the operation and not in `layer-files.mjs`
 

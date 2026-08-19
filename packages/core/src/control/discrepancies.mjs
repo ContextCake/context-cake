@@ -23,7 +23,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  stageSectionTransaction, stageFrontmatterTransaction, stageFileCreationTransaction, resolveLayerFile,
+  stageSectionTransaction, stageFrontmatterTransaction, stageFileCreationTransaction, resolveLayerFile, relativeWithinRoot,
 } from "../layer-files.mjs";
 import {
   buildDiscrepancies, compactDiscrepancy, filterDiscrepancies, summarizeDiscrepancies,
@@ -57,6 +57,9 @@ const BATCH_LIMIT = 500;
 // just before the batch took the lock. Items past it come back
 // BATCH_TIME_BUDGET (not attempted) for the caller to resubmit.
 const BATCH_TIME_BUDGET_MS = 10_000;
+// Statuses only a log-rebuilt row carries (buildDiscrepancies' resolved-history
+// loop): no live finding stands behind them, so they are never decidable.
+const SYNTHETIC_STATUSES = new Set(["resolved", "blocked"]);
 const STUB_TYPE_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/i;
 const STUB_TITLE_MAX = 200;
 // The compact route's paging ceiling. A client wanting more than this pages;
@@ -312,13 +315,19 @@ export function createDiscrepancyOperations({
     const current = previous ? parseRuleDocument(previous.toString("utf8")) : [];
     const next = [...current.filter((item) => item.id !== preview.id), preview];
     const nextText = serializeRuleDocument(next);
+    // Temp + rename, never a truncate-and-write: every projection stats and
+    // parses this file, and a reader landing between truncate and write would
+    // see half a document and answer TEAM_RULES_UNREADABLE for nothing.
+    const writeAtomic = async (bytes) => {
+      await fsp.mkdir(path.dirname(live.file), { recursive: true });
+      const temp = `${live.file}.${randomUUID()}.tmp`;
+      await fsp.writeFile(temp, bytes, { mode: 0o600 });
+      await fsp.rename(temp, live.file);
+    };
     await git.commitPathsWithMutation(live.root, [live.relative], `chore: promote discrepancy rule ${rule.id}`, {
-      mutate: async () => {
-        await fsp.mkdir(path.dirname(live.file), { recursive: true });
-        await fsp.writeFile(live.file, nextText, { encoding: "utf8", mode: 0o600 });
-      },
+      mutate: () => writeAtomic(nextText),
       rollback: async () => {
-        if (previous) await fsp.writeFile(live.file, previous);
+        if (previous) await writeAtomic(previous);
         else await fsp.unlink(live.file).catch(() => {});
       },
       author: live.profileName,
@@ -347,7 +356,7 @@ export function createDiscrepancyOperations({
       recovery = resolutionLog.list().then((decisions) => transactionJournal.recover(
         roots,
         decisions.filter((row) => row.transactionState === "committed").map((row) => row.transactionId).filter(Boolean),
-        { onRestored: commitRestoredLivePaths },
+        { restore: restoreRecoveredTargets },
       )).catch((error) => {
         recovery = null;
         throw error;
@@ -371,13 +380,15 @@ export function createDiscrepancyOperations({
   }
 
   // Look one request up in a settled projection and check its revision. A
-  // `resolved` row is the audit trail of a past decision (rebuilt from the
-  // log, no live section behind it), not something to decide again — its
-  // revision is the one the decision recorded, so it would otherwise pass
-  // the STALE check and reach a write path with no effective source.
+  // `resolved` or `blocked` row rebuilt from the log alone (no live finding
+  // behind it — the audit trail of a past decision or of a failed automatic
+  // attempt) is not something to decide again: its revision is the one the
+  // decision recorded, so it would otherwise pass the STALE check and reach
+  // a write path with no effective source. A live finding never carries
+  // either status (a blocked attempt leaves it auto_ready with history).
   function locateInProjection(payload, body) {
     const discrepancy = payload.byId.get(body.discrepancyId);
-    if (!discrepancy || discrepancy.status === "resolved") {
+    if (!discrepancy || SYNTHETIC_STATUSES.has(discrepancy.status)) {
       throw new ControlError("NOT_OPEN", "This discrepancy is no longer open. Reload before deciding it.", { status: 409 });
     }
     if (body.revision !== discrepancy.revision) {
@@ -399,9 +410,10 @@ export function createDiscrepancyOperations({
   }
 
   // The locked entry point: parse-level validation, then re-project against a
-  // settled generation and check the caller's revision before applying.
-  function decide(body, { methodOverride = null, reasonOverride = null } = {}) {
-    return withManifestLock(() => decideUnlocked(body, { methodOverride, reasonOverride }));
+  // settled generation and check the caller's revision before applying. The
+  // live layer's push runs after the lock is released.
+  async function decide(body, { methodOverride = null, reasonOverride = null } = {}) {
+    return pushAfterUnlock(await withManifestLock(() => decideUnlocked(body, { methodOverride, reasonOverride })));
   }
 
   async function decideUnlocked(body, { methodOverride = null, reasonOverride = null } = {}) {
@@ -504,6 +516,14 @@ export function createDiscrepancyOperations({
       let file;
       try { file = resolveLayerFile(`${layer}/${rel}`, roots); }
       catch (error) { throw new ControlError("TARGET_INVALID", `"${target}" cannot name a concept file in ${layer}: ${error.message}`, { status: 400 }); }
+      // The file that would land must be the file that was asked for, byte
+      // for byte: on a case-insensitive filesystem the resolver folds
+      // `Guides/Deploy.md` onto an existing `guides/`, and the created concept
+      // (`guides/Deploy`) would not be the link's target (`Guides/Deploy`) —
+      // the decision would read resolved while the link stayed broken.
+      if (relativeWithinRoot(file.abs, roots.get(layer).root) !== rel) {
+        throw new ControlError("TARGET_CASE_CONFLICT", `Cannot create ${layer}/${rel}: a folder or file with different casing already exists on this path. Rewrite the link to the existing concept instead.`, { status: 409 });
+      }
       out.stub = { layer, stubId, rel, abs: file.abs, title: stubTitle(body.title, stubId), type: stubType(body.type) };
     }
     return out;
@@ -719,8 +739,15 @@ export function createDiscrepancyOperations({
    * deliberately: the read that backs a target up must not race another
    * process's pull of the same file.
    *
-   * `notify: false` and `pushNow: false` defer `onWritten()` and the push to
-   * a caller applying several decisions in one request.
+   * The push is NEVER performed here. This runs under the manifest lock, and a
+   * push against a slow or offline remote is up to three network calls of 90 s
+   * each — long enough that every concurrent control-plane write times out on
+   * the lock and, past the stale threshold, another process legitimately
+   * steals it. So the result carries a `git.pushRoot` marker when a commit
+   * landed and `pushNow` is set, and the caller pushes once after it has
+   * released the lock (`pushAfterUnlock`). `pushNow: false` and `notify:
+   * false` defer the push and `onWritten()` entirely to a caller applying
+   * several decisions in one request.
    */
   async function commitDecisionWrite({ transactionId, conceptId, layers, message, stage, decision, pushNow = true, notify = true }) {
     const now = new Date().toISOString();
@@ -749,7 +776,11 @@ export function createDiscrepancyOperations({
             await stageAndJournal();
             const actual = relativeToLive(live, staged.targets.filter((target) => target.layer === live.name).map((target) => target.path));
             if (actual.length !== 1 || actual[0] !== liveRel[0]) {
-              throw new Error(`live layer target resolved to ${JSON.stringify(actual)}, expected ${liveRel[0]}`);
+              // The staged file is not the file this commit names (a path the
+              // filesystem folded onto different casing, a target outside the
+              // clone): refuse before the rename, as a typed 409 the rollback
+              // path below preserves.
+              throw new ControlError("LIVE_TARGET_MISMATCH", `Nothing was changed. The staged file in ${live.name} resolved to ${JSON.stringify(actual)}, not ${liveRel[0]}.`, { status: 409 });
             }
             written = await staged.commit();
           },
@@ -807,6 +838,8 @@ export function createDiscrepancyOperations({
         await transactionJournal.append({ id: transactionId, state: "recovery_required", failedAt: new Date().toISOString(), error: `${error.message}; rollback failed: ${rollbackError.message}` });
         throw new ControlError("RECOVERY_REQUIRED", `A write could not be rolled back automatically. Recovery is required: ${rollbackError.message}`, { status: 500 });
       }
+      // A typed refusal raised inside the locked mutation keeps its own code.
+      if (error instanceof ControlError) throw error;
       throw new ControlError("ROLLED_BACK", `Nothing was changed. ${error.message}`, { status: 409 });
     }
     // From here the decision is durable and the files are what the log says
@@ -821,14 +854,30 @@ export function createDiscrepancyOperations({
       console.error(`contextcake: decision ${saved.id} committed but its journal could not be finalized (${error.message}); startup recovery will reconcile it`);
     }
     if (notify) onWritten();
-    let gitResult = null;
-    if (gitOutcome) {
-      // Push after the decision is durable, so a slow or offline remote can
-      // never leave the journal `prepared`. Never thrown: offline is a queued
-      // commit that POST /api/sources/sync lands later.
-      gitResult = { ...gitOutcome, ...(gitOutcome.committed && pushNow ? await pushLive(live.root) : { pushed: false, queued: false }) };
-    }
+    // The push happens after the caller releases the manifest lock
+    // (pushAfterUnlock strips `pushRoot` and fills pushed/queued): after the
+    // decision is durable, so a slow or offline remote can never leave the
+    // journal `prepared`, and outside the lock, so it can never hold every
+    // other writer off. Never thrown: offline is a queued commit that
+    // POST /api/sources/sync lands later.
+    const gitResult = gitOutcome
+      ? { ...gitOutcome, pushed: false, queued: false, ...(gitOutcome.committed && pushNow ? { pushRoot: live.root } : {}) }
+      : null;
     return { saved, written, git: gitResult };
+  }
+
+  /**
+   * Perform the push a locked write deferred. Takes the result of decide /
+   * decideBatch / applyDecision / commitDecisionWrite (anything whose `git`
+   * carries a `pushRoot` marker), pushes that root once, and returns the
+   * result with `git.pushed`/`git.queued` filled and the marker gone. Safe to
+   * call on any result: no marker, no push. Callers holding the manifest lock
+   * must call this AFTER releasing it.
+   */
+  async function pushAfterUnlock(result) {
+    if (!result || typeof result !== "object" || !result.git || typeof result.git.pushRoot !== "string") return result;
+    const { pushRoot, ...git } = result.git;
+    return { ...result, git: { ...git, ...(await pushLive(pushRoot)) } };
   }
 
   // Which of `absPaths` sit inside the live layer's root, as the relative
@@ -860,18 +909,20 @@ export function createDiscrepancyOperations({
 
   // The recovery edge of F30: a crash between the git commit and the decision
   // append leaves HEAD holding a write the log never recorded. Startup
-  // recovery restores the backups; this commits the restore from inside the
-  // journal's restore step so git and the log agree, and a failure here keeps
-  // the transaction pending (retried before the next decision) rather than
-  // half-recorded.
-  async function commitRestoredLivePaths(tx, paths) {
-    if (!git) return;
-    const live = liveLayer();
-    if (!live) return;
-    const rel = relativeToLive(live, paths);
-    if (rel.length === 0) return;
-    await git.commitPathsWithMutation(live.root, rel, `chore(contextcake): roll back uncommitted discrepancy transaction ${tx.id}`, {
-      mutate: async () => {}, rollback: async () => {}, author: live.profileName, skipIfClean: true,
+  // recovery restores the backups; for targets inside the live team layer the
+  // restore itself runs INSIDE git-core's repo lock — restore, then commit,
+  // as one locked mutation — so the bytes are never rewritten under another
+  // process's pull, and git and the log agree. Targets outside the live root
+  // restore on the plain path. A failure keeps the transaction pending
+  // (retried before the next decision) rather than half-recorded.
+  async function restoreRecoveredTargets(tx, targets, applyRestore) {
+    const live = git ? liveLayer() : null;
+    const inLive = live ? targets.filter((target) => relativeToLive(live, [target.path]).length === 1) : [];
+    const outside = targets.filter((target) => !inLive.includes(target));
+    if (outside.length) await applyRestore(outside);
+    if (inLive.length === 0) return;
+    await git.commitPathsWithMutation(live.root, relativeToLive(live, inLive.map((target) => target.path)), `chore(contextcake): roll back uncommitted discrepancy transaction ${tx.id}`, {
+      mutate: () => applyRestore(inLive), rollback: async () => {}, author: live.profileName, skipIfClean: true,
     });
   }
 
@@ -901,9 +952,9 @@ export function createDiscrepancyOperations({
     if (body.decisions.length > BATCH_LIMIT) {
       throw new ControlError("BATCH_TOO_LARGE", `A batch may carry at most ${BATCH_LIMIT} decisions (got ${body.decisions.length})`, { status: 413, detail: { limit: BATCH_LIMIT } });
     }
-    return withManifestLock(() => decideBatchUnlocked(body.decisions, {
+    return pushAfterUnlock(await withManifestLock(() => decideBatchUnlocked(body.decisions, {
       methodOverride, stopOnError: body.stopOnError === true, dryRun: body.dryRun === true,
-    }));
+    })));
   }
 
   // The batch body, for callers that already hold the lock (the automatic
@@ -927,6 +978,10 @@ export function createDiscrepancyOperations({
     const startedAt = Date.now();
     await ensureRecovery();
     const payload = await settledProjection();
+    // The live layer as of this batch, resolved once: a manifest edit landing
+    // mid-batch must not turn N successful commits into a failure to name
+    // the layer they went to.
+    const live = liveLayer();
     const failureOf = (discrepancyId, error) => ({
       discrepancyId, ok: false, status: error.status ?? 500,
       code: typeof error.code === "string" ? error.code : "ERROR", error: error.message,
@@ -1020,11 +1075,10 @@ export function createDiscrepancyOperations({
     }
 
     if (!dryRun && anyWritten) onWritten();
-    let gitSummary = null;
-    if (!dryRun && liveCommits > 0) {
-      const live = liveLayer();
-      gitSummary = { layer: live.name, commits: liveCommits, ...(await pushLive(live.root)) };
-    }
+    // One push for the whole batch, deferred to after the lock (pushAfterUnlock).
+    const gitSummary = !dryRun && liveCommits > 0 && live
+      ? { layer: live.name, commits: liveCommits, pushed: false, queued: false, pushRoot: live.root }
+      : null;
     const [decisions, rules] = await Promise.all([resolutionLog.list(), effectiveRules()]);
     return {
       ok: failed === 0 && notAttempted === 0, applied, failed, notAttempted, dryRun, results,
@@ -1074,8 +1128,8 @@ export function createDiscrepancyOperations({
     // The batch refuses an unsettled projection with COVERAGE_INCOMPLETE. For
     // this job that is a normal condition (a pass landed while it waited for
     // the lock), and the answer is the same as the old loop's silent return:
-    // the next pass re-runs it.
-    await withManifestLock(() => decideBatchUnlocked([...planned.values()].map((entry) => entry.request), {
+    // the next pass re-runs it. The live layer's push runs after the lock.
+    const outcome = await withManifestLock(() => decideBatchUnlocked([...planned.values()].map((entry) => entry.request), {
       methodOverride: "automatic",
       guard: (current, request) => {
         const { rule } = planned.get(request.discrepancyId);
@@ -1102,9 +1156,10 @@ export function createDiscrepancyOperations({
         noteWrite();
       },
     })).catch((error) => {
-      if (error.code === "COVERAGE_INCOMPLETE") return;
+      if (error.code === "COVERAGE_INCOMPLETE") return null;
       throw error;
     });
+    await pushAfterUnlock(outcome);
   }
 
   // The health and writability guards an automatic action needs, evaluated
@@ -1135,8 +1190,9 @@ export function createDiscrepancyOperations({
     project, list, query, detail, summary,
     // rules
     effectiveRules, rulesView, liveRuleFile,
-    // decisions
-    decide, decideBatch, applyDecision, commitDecisionWrite, ensureRecovery, runAutomaticRules,
+    // decisions — hosts driving applyDecision/commitDecisionWrite under their
+    // own lock call pushAfterUnlock on the result once the lock is released
+    decide, decideBatch, applyDecision, commitDecisionWrite, pushAfterUnlock, ensureRecovery, runAutomaticRules,
     // rules + priorities
     approveSuggestion, patchRule, promoteRule, setPriority,
     // hosts that append a decision outside these operations tell the memo

@@ -213,12 +213,13 @@ function sameFingerprints(recorded, current) {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-// `conceptType` and `key` may be the literal wildcard "*" (a rule generalized
-// from evidence spanning several sections — see suggestDiscrepancyRules);
-// `kind`, `sources`, and a broken link's `target` are always exact. A wildcard
-// rule and an exact rule that disagree both match, and two matching rules with
-// different actions are a `conflict` — automation is disabled, no specificity
-// order is invented.
+// `conceptType` and `key` may be the literal wildcard "*" (a broken-link rule
+// generalized from evidence spanning several sections — see
+// suggestDiscrepancyRules; validateRule refuses the wildcard for any other
+// kind); `kind`, `sources`, and a broken link's `target` are always exact. A
+// wildcard rule and an exact rule that disagree both match, and two matching
+// rules with different actions are a `conflict` — automation is disabled, no
+// specificity order is invented.
 const matchesField = (ruleValue, value) => ruleValue === "*" || ruleValue === value;
 
 function matchRules(item, rules) {

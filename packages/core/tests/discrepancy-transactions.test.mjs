@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { stageSectionTransaction, stageFrontmatterTransaction, stageFileCreationTransaction } from "../src/layer-files.mjs";
+import { stageSectionTransaction, stageFrontmatterTransaction, stageFileCreationTransaction, relativeWithinRoot, resolveLayerFile } from "../src/layer-files.mjs";
 import { createDiscrepancyTransactionJournal } from "../src/conflict-resolutions.mjs";
 import { createEngineService } from "../src/service.mjs";
 
@@ -283,6 +284,62 @@ test("startup recovery removes a created target left by a crash and skips its nu
     // Containment still applies to created targets: a path outside every root is refused.
     await journal.append({ id: "tx-crash-outside", state: "prepared", targets: [{ path: path.join(dir, "outside.md"), staged: path.join(dir, "outside.md.new"), backup: null, created: true }] });
     await assert.rejects(journal.recover([...roots.values()].map((entry) => entry.root)), /Recovery is required for tx-crash-outside/);
+  } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+});
+
+test("a restore hook is handed the targets BEFORE any byte is restored and restores them itself; the journal finalizes only after it returns", async () => {
+  const { dir, roots } = await fixture();
+  try {
+    const journal = createDiscrepancyTransactionJournal(path.join(dir, "manifest.json"));
+    const target = path.join(dir, "team", "database.md");
+    const backup = `${target}.bak`;
+    const staged = `${target}.new`;
+    const original = await fsp.readFile(target, "utf8");
+    await fsp.writeFile(backup, original);
+    await fsp.writeFile(staged, document("new"));
+    await fsp.writeFile(target, document("crashed"));
+    await journal.append({ id: "tx-hooked", state: "prepared", targets: [{ path: target, backup, staged }] });
+    const seen = [];
+    const recovered = await journal.recover([...roots.values()].map((entry) => entry.root), [], {
+      restore: async (tx, targets, applyRestore) => {
+        seen.push(["before", tx.id, targets.length, await fsp.readFile(target, "utf8")]);
+        await applyRestore(targets); // where a host would hold its lock
+        seen.push(["after", await fsp.readFile(target, "utf8")]);
+        assert.ok(await fsp.stat(backup), "the backup is still there while the hook runs");
+      },
+    });
+    assert.deepEqual(recovered, ["tx-hooked"]);
+    assert.deepEqual(seen, [["before", "tx-hooked", 1, document("crashed")], ["after", original]]);
+    assert.equal(await fsp.readFile(target, "utf8"), original);
+    await assert.rejects(fsp.stat(backup), { code: "ENOENT" }, "backups are dropped after the hook returned");
+    assert.equal((await journal.list()).at(-1).state, "rolled_back");
+    // A hook that throws leaves the transaction pending and the file untouched.
+    await fsp.writeFile(backup, original);
+    await fsp.writeFile(target, document("crashed again"));
+    await journal.append({ id: "tx-hook-fails", state: "prepared", targets: [{ path: target, backup, staged }] });
+    await assert.rejects(journal.recover([...roots.values()].map((entry) => entry.root), [], { restore: async () => { throw new Error("lock busy"); } }), /Recovery is required for tx-hook-fails/);
+    assert.equal(await fsp.readFile(target, "utf8"), document("crashed again"), "nothing restored outside the hook");
+    assert.ok(await fsp.stat(backup), "the backup survives a failed hook");
+    assert.equal((await journal.list()).at(-1).state, "recovery_required");
+  } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+});
+
+test("relativeWithinRoot names the file that would land, so a case-folded resolution is visible", async () => {
+  // Pure comparison over paths that need not exist: a root behind no symlink.
+  assert.equal(relativeWithinRoot("/x/team/guides/Deploy.md", "/x/team"), "guides/Deploy.md");
+  assert.equal(relativeWithinRoot("/x/team/Guides/Deploy.md", "/x/team"), "Guides/Deploy.md");
+  // Against a real (possibly symlinked, possibly case-insensitive) root: the
+  // requested path comes back byte-for-byte when nothing folds it, and the
+  // folded casing when the filesystem does.
+  const { dir, roots } = await fixture();
+  try {
+    const teamRoot = roots.get("team").root;
+    await fsp.mkdir(path.join(teamRoot, "guides"));
+    const exact = resolveLayerFile("team/guides/deploy.md", roots);
+    assert.equal(relativeWithinRoot(exact.abs, teamRoot), "guides/deploy.md");
+    const folded = resolveLayerFile("team/Guides/Deploy.md", roots);
+    const caseInsensitive = fs.existsSync(path.join(teamRoot, "GUIDES"));
+    assert.equal(relativeWithinRoot(folded.abs, teamRoot), caseInsensitive ? "guides/Deploy.md" : "Guides/Deploy.md");
   } finally { await fsp.rm(dir, { recursive: true, force: true }); }
 });
 

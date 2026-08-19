@@ -2,8 +2,9 @@
 // (three consistent manual decisions), stored per profile and optionally
 // promoted into the live team layer as recommendations. A rule matches on
 // `kind`, `conceptType`, `key`, `sources`, and — for a broken link — the exact
-// `target`; `conceptType` and `key` may be the literal wildcard "*" when the
-// evidence spanned several sections, `target` never is. Actions are
+// `target`; for a broken-link rule only, `conceptType` and `key` may be the
+// literal wildcard "*" when the evidence spanned several sections (the exact
+// target still pins it), `target` never is. Actions are
 // `prefer_source` (content conflicts), `acknowledge`, and `rewrite_link`
 // (broken links only). Rules hold structural metadata and decision ids —
 // never content, notes, or prompts.
@@ -196,6 +197,14 @@ function validateRule(rule) {
   if (isBrokenLink && (typeof target !== "string" || !target)) throw new Error("A broken-link rule must name the missing target");
   if (isBrokenLink && target === RULE_WILDCARD) throw new Error("A broken-link rule must name the missing target — the target is never a wildcard");
   if (!isBrokenLink && target !== undefined) throw new Error("Only a broken-link rule may name a target");
+  // A wildcard needs something else to pin the rule to. A broken-link rule
+  // still has its exact target; a section_content / frontmatter_value rule
+  // with `*` on both fields would be pinned by kind and sources alone — one
+  // switch to automatic and it overwrites every disagreement between those
+  // two layers, sight unseen.
+  if (!isBrokenLink && (conceptType === RULE_WILDCARD || key === RULE_WILDCARD)) {
+    throw new Error("Only a broken-link rule may use the wildcard * for conceptType or key");
+  }
   let action;
   if (rule.action.type === "prefer_source") {
     // service.mjs 409s a prefer_source (choose_contribution) decision against

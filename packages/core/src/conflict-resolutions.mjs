@@ -111,12 +111,17 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
     });
   }
 
-  // `onRestored(tx, paths)` runs after every backup of a rolled-back
-  // transaction has been copied into place and BEFORE the staged/backup files
-  // are removed or the journal marks `rolled_back`: a host that has to record
-  // the restore elsewhere (the live team layer commits it, so git and this log
-  // agree) gets to do so while a failure still leaves the transaction pending
-  // and retryable — the backups are only dropped once the hook has returned.
+  // `restore(tx, targets, applyRestore)` lets a host wrap the byte-restore of a
+  // rolled-back transaction: the journal hands it the targets and the function
+  // that restores them (containment check, backup copy or created-target
+  // unlink), and the host calls `applyRestore` where it must — the live team
+  // layer restores INSIDE git-core's repo lock and commits the restore in the
+  // same locked mutation, so the bytes are never rewritten under another
+  // process's pull and git and this log agree. Without a hook the journal
+  // restores directly. Either way it runs BEFORE the staged/backup files are
+  // removed or the journal marks `rolled_back`, so a failure leaves the
+  // transaction pending and retryable — the backups are only dropped once the
+  // restore has returned.
   //
   // A target with `created: true` was being CREATED by the transaction (it had
   // no backup — `backup: null`); restoring it means removing what the
@@ -127,7 +132,7 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
   // journal's `prepared` window and can in principle remove bytes someone
   // wrote there between the crash and this restart — accepted, and called
   // out in the discrepancy spec.
-  async function recover(allowedRoots = [], committedTransactionIds = [], { onRestored = null } = {}) {
+  async function recover(allowedRoots = [], committedTransactionIds = [], { restore = null } = {}) {
     const records = await list();
     const final = new Set(records.filter((r) => r.state === "committed" || r.state === "rolled_back").map((r) => r.id));
     const committedDecisions = new Set(committedTransactionIds);
@@ -144,6 +149,21 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
         if (!insideAnyRoot(file, allowedRoots)) throw new Error("journal target is outside the selected source roots");
       }
     };
+    // The byte-restore of a set of targets, containment first. Passed to the
+    // host's `restore` hook so it can run inside whatever lock the target's
+    // layer needs.
+    const applyRestore = async (targets) => {
+      for (const target of targets) {
+        assertContained(target, ["path", "backup", "staged"]);
+        if (target.created === true) {
+          if (await placedByTransaction(target)) {
+            await fsp.unlink(target.path).catch((error) => { if (error.code !== "ENOENT") throw error; });
+          }
+        } else {
+          await fsp.copyFile(target.backup, target.path);
+        }
+      }
+    };
     for (const tx of pending) {
       try {
         // A decision is appended only after every replacement succeeds. If the
@@ -158,18 +178,10 @@ export function createDiscrepancyTransactionJournal(manifestPath, { profileId = 
           await append({ id: tx.id, state: "committed", recoveredAt: new Date().toISOString(), reason: "decision log confirmed commit" });
           continue;
         }
-        for (const target of tx.targets ?? []) {
-          assertContained(target, ["path", "backup", "staged"]);
-          if (target.created === true) {
-            if (await placedByTransaction(target)) {
-              await fsp.unlink(target.path).catch((error) => { if (error.code !== "ENOENT") throw error; });
-            }
-          } else {
-            await fsp.copyFile(target.backup, target.path);
-          }
-        }
-        if (onRestored) await onRestored(tx, (tx.targets ?? []).map((target) => target.path));
-        for (const target of tx.targets ?? []) {
+        const targets = tx.targets ?? [];
+        if (restore) await restore(tx, targets, applyRestore);
+        else await applyRestore(targets);
+        for (const target of targets) {
           await unlinkIfPresent(target.staged);
           await unlinkIfPresent(target.backup);
         }

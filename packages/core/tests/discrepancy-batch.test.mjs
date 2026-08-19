@@ -112,7 +112,7 @@ async function fixture(opsOptions = {}) {
   const link = (conceptId, target) => record((item) => item.kind === "broken_link" && item.conceptId === conceptId && item.target === target);
   const read = (layer, rel) => fsp.readFile(path.join(layer === "team-live" ? team : company, rel), "utf8");
   return {
-    dir, team, company, manifestPath, roots, ops, state, gitCalls, resolutionLog, ruleStore, section, link, read,
+    dir, team, company, manifestPath, roots, ops, state, git, gitCalls, resolutionLog, ruleStore, section, link, read,
     cleanup: async () => { ops.close(); await fsp.rm(dir, { recursive: true, force: true }); },
   };
 }
@@ -209,6 +209,7 @@ test("stopOnError applies up to the first failure and skips the rest; validation
     // with stopOnError, a first item whose rewrite target does not exist stops
     // the batch and the (valid) acknowledgement behind it is never applied.
     const search = await f.section("decisions/search");
+    const gone = await f.link("notes/d", "old/gone");
     const logBefore = (await f.resolutionLog.list()).length;
     const early = await f.ops.decideBatch({ stopOnError: true, decisions: [
       { discrepancyId: db.id, revision: db.revision, action: "rewrite_link", newTarget: "runbooks/nowhere" },
@@ -224,7 +225,11 @@ test("stopOnError applies up to the first failure and skips the rest; validation
       [{ discrepancyId: db.id, revision: db.revision, action: "choose_contribution", selectedSource: "team-live" }, "BROKEN_LINK_NOT_WRITABLE"],
       [{ discrepancyId: db.id, revision: db.revision, action: "create_stub" }, "LAYER_REQUIRED"],
       [{ discrepancyId: db.id, revision: db.revision, action: "create_stub", layer: "nope" }, "SOURCE_NOT_WRITABLE"],
-      [{ discrepancyId: db.id, revision: db.revision, action: "create_stub", layer: "team-live", type: "bad type" }, "STUB_TYPE_INVALID"],
+      [{ discrepancyId: gone.id, revision: gone.revision, action: "create_stub", layer: "team-live", type: "bad type" }, "STUB_TYPE_INVALID"],
+      // `Runbooks/Postgres` would land in the existing `runbooks/` on a
+      // case-insensitive filesystem — a different concept than the link names.
+      ...(await fsp.stat(path.join(f.team, "RUNBOOKS")).then(() => true, () => false)
+        ? [[{ discrepancyId: db.id, revision: db.revision, action: "create_stub", layer: "team-live" }, "TARGET_CASE_CONFLICT"]] : []),
       [{ discrepancyId: db.id, revision: db.revision, action: "rewrite_link", newTarget: "../x" }, "NEW_TARGET_INVALID"],
     ]) {
       const res = await f.ops.decideBatch({ decisions: [body] });
@@ -478,5 +483,94 @@ test("an automatic item is re-checked under the lock: a rule disabled while the 
     await f.ops.runAutomaticRules();
     f.state.indexing = false;
     assert.equal((await f.resolutionLog.list()).length, 4);
+  } finally { await f.cleanup(); }
+});
+
+test("the live-layer push runs after the manifest lock is released: a concurrent priority write completes while the push is pending", async () => {
+  const f = await fixture();
+  try {
+    // A push that does not return until the test says so.
+    let releasePush;
+    let pushStarted;
+    const pushGate = new Promise((resolve) => { releasePush = resolve; });
+    const pushBegun = new Promise((resolve) => { pushStarted = resolve; });
+    f.git.push = async (root) => { f.gitCalls.pushes.push(root); pushStarted(); await pushGate; return { pushed: true }; };
+    const db = await f.link("decisions/db", "Runbooks/Postgres");
+    const deciding = f.ops.decide({ discrepancyId: db.id, revision: db.revision, action: "rewrite_link", newTarget: "runbooks/postgres" });
+    await pushBegun;
+    // The push is in flight; the manifest lock must already be free.
+    const priority = await Promise.race([
+      f.ops.setPriority(db.id, "high").then(() => "priority-done"),
+      new Promise((resolve) => setTimeout(() => resolve("priority-timed-out"), 3000)),
+    ]);
+    assert.equal(priority, "priority-done", "a lock-taking write completed while the push was pending — the push is not under the manifest lock");
+    releasePush();
+    const out = await deciding;
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.git, { layer: "team-live", paths: ["decisions/db.md"], committed: true, pushed: true, queued: false }, "the marker is consumed and the push result merged");
+    assert.equal(f.gitCalls.pushes.length, 1);
+    // The batch takes the same path: its summary carries no marker either.
+    const second = await f.link("decisions/db", "old/cache");
+    f.git.push = async (root) => { f.gitCalls.pushes.push(root); return { pushed: true }; };
+    const batch = await f.ops.decideBatch({ decisions: [{ discrepancyId: second.id, revision: second.revision, action: "rewrite_link", newTarget: "runbooks/cache" }] });
+    assert.deepEqual(batch.git, { layer: "team-live", commits: 1, pushed: true, queued: false });
+    assert.equal(batch.results[0].git.pushed, false, "per-item entries never push on their own");
+    assert.equal("pushRoot" in batch.results[0].git, false);
+    assert.equal(f.gitCalls.pushes.length, 2);
+  } finally { await f.cleanup(); }
+});
+
+test("startup recovery restores a live-layer target INSIDE the repo lock and commits the restore in the same mutation", async () => {
+  const f = await fixture();
+  try {
+    const target = path.join(await fsp.realpath(f.team), "decisions", "queue.md");
+    const original = await fsp.readFile(target, "utf8");
+    const backup = `${target}.contextcake-tx-crash-0.bak`;
+    const staged = `${target}.contextcake-tx-crash-0.new`;
+    await fsp.writeFile(backup, original);
+    await fsp.writeFile(staged, doc("Queue", "crashed write"));
+    await fsp.writeFile(target, doc("Queue", "crashed write"));
+    const journal = createDiscrepancyTransactionJournal(f.manifestPath);
+    await journal.append({ id: "tx-crash-live", state: "prepared", preparedAt: "2026-01-01T00:00:00.000Z", targets: [{ path: target, staged, backup }] });
+    // The stub git observes the bytes when the locked mutation starts and ends.
+    let bytesAtMutateStart = null;
+    let bytesAfterMutate = null;
+    f.git.commitPathsWithMutation = async (root, paths, message, { mutate }) => {
+      bytesAtMutateStart = await fsp.readFile(target, "utf8");
+      await mutate();
+      bytesAfterMutate = await fsp.readFile(target, "utf8");
+      f.gitCalls.commits.push({ root, paths, message });
+      return { committed: true };
+    };
+    await f.ops.ensureRecovery();
+    assert.match(bytesAtMutateStart, /crashed write/, "the restore had NOT happened before the locked mutation began");
+    assert.equal(bytesAfterMutate, original, "the restore happened inside the locked mutation");
+    assert.equal(await fsp.readFile(target, "utf8"), original);
+    assert.deepEqual(f.gitCalls.commits.map((c) => [c.paths, c.message]), [[["decisions/queue.md"], "chore(contextcake): roll back uncommitted discrepancy transaction tx-crash-live"]]);
+    await assert.rejects(fsp.stat(staged), { code: "ENOENT" });
+    await assert.rejects(fsp.stat(backup), { code: "ENOENT" });
+    assert.equal((await journal.list()).at(-1).state, "rolled_back");
+  } finally { await f.cleanup(); }
+});
+
+test("a blocked row rebuilt from the log alone is NOT_OPEN, like a resolved one", async () => {
+  const f = await fixture();
+  try {
+    // A failed automatic attempt against a discrepancy that no longer exists:
+    // the projection rebuilds it as a `blocked` row from the record.
+    await f.resolutionLog.append({
+      schemaVersion: 2, id: "auto-blocked", discrepancyId: "broken_link::decisions/retired::choice::old/thing",
+      discrepancyKind: "broken_link", conceptId: "decisions/retired", title: "Retired", conceptType: "decision",
+      sectionKey: "choice", linkTarget: "old/thing", revision: "rev-1", action: "rewrite_link", method: "automatic",
+      transactionState: "blocked", reason: "boom", decidedAt: "2026-08-01T00:00:00.000Z",
+      contributions: [{ layer: "team-live", level: 2, content: "old/thing", updated: null }],
+    });
+    f.ops.noteWrite();
+    const row = (await f.ops.project()).byId.get("broken_link::decisions/retired::choice::old/thing");
+    assert.equal(row?.status, "blocked");
+    const out = await f.ops.decideBatch({ decisions: [{ discrepancyId: row.id, revision: row.revision, action: "acknowledge", reasonCode: "target_missing" }] });
+    assert.deepEqual(out.results.map((r) => [r.status, r.code]), [[409, "NOT_OPEN"]]);
+    await assert.rejects(f.ops.decide({ discrepancyId: row.id, revision: row.revision, action: "acknowledge", reasonCode: "target_missing" }), { code: "NOT_OPEN", status: 409 });
+    assert.equal((await f.resolutionLog.list()).length, 1, "nothing appended");
   } finally { await f.cleanup(); }
 });

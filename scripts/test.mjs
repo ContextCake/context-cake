@@ -39,6 +39,7 @@ const SUITES = [
   // Pure units. Fast, no network, no temp dirs.
   { group: "unit", name: "tokens", ...node("tokens.test.mjs") },
   { group: "unit", name: "git-auth", ...node("git-auth.test.mjs") },
+  { group: "unit", name: "git-core", ...node("git-core.test.mjs") },
   { group: "unit", name: "manifest", ...node("manifest.test.mjs") },
   { group: "unit", name: "index-keys", ...node("index-keys.test.mjs") },
   { group: "unit", name: "walk", ...node("walk.test.mjs") },

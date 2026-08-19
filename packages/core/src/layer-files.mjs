@@ -23,7 +23,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { assertInsideRoot, httpError, json, parseJson, MIME } from "./http-util.mjs";
+import { assertInsideRoot, httpError, json, parseJson, realpathLenient, MIME } from "./http-util.mjs";
 import { defaultWalkLimits, MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 
@@ -62,6 +62,18 @@ export function layerRootMap(manifest, manifestDir) {
     }
   }
   return map;
+}
+
+/**
+ * The path a resolved absolute file has inside its layer root, POSIX-style —
+ * both sides taken through realpathLenient, so a root behind a symlink
+ * compares to its own files. This is what a creating writer compares against
+ * the path it ASKED for: on a case-insensitive filesystem realpath folds
+ * `Guides/Deploy.md` onto an existing `guides/`, and the file that would land
+ * names a different concept than the link that wanted it.
+ */
+export function relativeWithinRoot(abs, root) {
+  return path.relative(realpathLenient(root), realpathLenient(abs)).split(path.sep).join("/");
 }
 
 /**

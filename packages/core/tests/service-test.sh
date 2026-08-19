@@ -191,6 +191,44 @@ grep -q '"source": "files"' "$TMP/manifest.json" && pass "markdown folder is per
 curl -s "${AUTH[@]}" "$BASE/api/resolve?concept=notes" | grep -q 'No frontmatter needed' && pass "markdown folder resolves plain files" || fail "markdown folder resolve"
 code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=notes")" "remove markdown folder source"
 
+# ---- PUT /api/sources/order: the cascade as an ordered list ------------------
+# The same gates as every other source mutation, then the shape of a refusal:
+# a bad body is a 400 whose detail says which names are unknown/missing, and it
+# never writes. The 200 path (levels actually move, /api/graph agrees, the
+# merge winner flips) runs on the graph-cache host below, where a merged
+# concept exists to observe it on.
+echo "cascade reorder (PUT /api/sources/order)"
+code 403 "$(C -X PUT "${AUTH[@]}" -H 'Origin: http://evil.com' -H 'content-type: application/json' -d '{"order":["t"]}' "$BASE/api/sources/order")" "reorder is behind the CSRF guard"
+code 401 "$(C -X PUT -H 'content-type: application/json' -d '{"order":["t"]}' "$BASE/api/sources/order")" "reorder without token rejected"
+code 400 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"order":"t"}' "$BASE/api/sources/order")" "order that is not an array is a 400"
+code 400 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d 'null' "$BASE/api/sources/order")" "a null body is a 400, not a TypeError"
+code 400 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"order":["t","t"]}' "$BASE/api/sources/order")" "a duplicated name is a 400"
+BADORDER="$(curl -s -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"order":["ghost"]}' "$BASE/api/sources/order")"
+code 400 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"order":["ghost"]}' "$BASE/api/sources/order")" "an unknown name is a 400"
+[ "$(JQ 'JSON.stringify([d.code, d.unknown, d.missing, d.duplicate])' <<<"$BADORDER")" = '["ORDER_INVALID",["ghost"],["t"],[]]' ] \
+  && pass "the refusal carries its machine code and names the unknown and the missing sources" || fail "ORDER_INVALID body ($BADORDER)"
+TLEVEL() { node -e 'const m=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String((m.layers??m.profiles.default.layers).find((l)=>l.name==="t").level))' "$TMP/manifest.json"; }
+[ "$(TLEVEL)" = "1" ] && pass "the refused reorders left the manifest's levels alone" || fail "a refused reorder changed a level ($(TLEVEL))"
+# The same code exposure on the other level-shaped refusals a client branches on.
+[ "$(curl -s -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"t","level":null}' "$BASE/api/sources" | JQ 'd.code')" = "LEVEL_INVALID" ] \
+  && pass "PATCH level:null is LEVEL_INVALID (used to silently become level 0)" || fail "PATCH level:null not refused as LEVEL_INVALID"
+[ "$(curl -s -X PATCH "${AUTH[@]}" -H 'content-type: application/json' -d '{"name":"t","level":"abc"}' "$BASE/api/sources" | JQ 'd.code')" = "LEVEL_INVALID" ] \
+  && pass "PATCH level:\"abc\" is LEVEL_INVALID (used to be silently ignored)" || fail "PATCH level:abc not refused as LEVEL_INVALID"
+[ "$(TLEVEL)" = "1" ] && pass "the refused level patches left the level alone (not 0)" || fail "a refused level patch changed the level ($(TLEVEL))"
+[ "$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"lp\",\"path\":\"$TMP/files\",\"level\":1,\"position\":1}" "$BASE/api/sources" | JQ 'd.code')" = "LEVEL_AND_POSITION" ] \
+  && pass "POST with both level and position is LEVEL_AND_POSITION" || fail "level+position not refused"
+# A one-layer cascade is a legal, if trivial, order — and its single level survives.
+code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"order":["t"]}' "$BASE/api/sources/order")" "the complete (one-name) order is accepted"
+[ "$(TLEVEL)" = "1" ] && pass "a single distinct level is reused as-is" || fail "single-layer reorder moved the level ($(TLEVEL))"
+# position through the HTTP adapter: onto the one-layer cascade [t(1)], a
+# newcomer at position 1 renumbers 2..1 — it wins, t moves under it.
+POSADD="$(curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' -d "{\"kind\":\"files\",\"name\":\"posit\",\"path\":\"$TMP/files\",\"position\":1}" "$BASE/api/sources")"
+[ "$(JQ 'JSON.stringify([d.ok, d.added, d.level, d.order])' <<<"$POSADD")" = '[true,"posit",2,[{"name":"posit","level":2},{"name":"t","level":1}]]' ] \
+  && pass "POST position:1 answers the assigned level and the whole new order" || fail "position add response ($POSADD)"
+[ "$(curl -s "${AUTH[@]}" "$BASE/api/graph" | JQ 'JSON.stringify(d.sources.map((s) => [s.name, s.level]).sort())')" = '[["posit",2],["t",1]]' ] \
+  && pass "/api/graph shows the newcomer above the existing layer" || fail "graph levels after position add"
+code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE/api/sources?name=posit")" "cleanup the positioned source"
+
 echo "section writes: stale-editor guard + updated= refresh (B4)"
 TODAY="$(date -u +%Y-%m-%d)"
 printf -- '---\ntype: note\ntitle: Merge me\n---\n\n# Merge me\n\n## Pick {#pick updated=2026-01-01}\n\nold value.\n\n## After {#after}\n\nuntouched.\n' > "$TMP/bundle/merge-me.md"
@@ -596,6 +634,7 @@ code 405 "$(C -X POST -H 'content-type: application/json' -d '{}' "$BASE2/api/so
 code 405 "$(C -X PATCH -H 'content-type: application/json' -d '{}' "$BASE2/api/sources")" "PATCH /api/sources returns 405"
 code 405 "$(C -X DELETE "$BASE2/api/sources?name=t")" "DELETE /api/sources returns 405"
 code 405 "$(C -X POST "$BASE2/api/sources/sync?name=t")" "POST /api/sources/sync returns 405"
+code 405 "$(C -X PUT -H 'content-type: application/json' -d '{"order":["t"]}' "$BASE2/api/sources/order")" "PUT /api/sources/order returns 405"
 grep -q '"t"' "$TMP/manifest2.json" && pass "manifest untouched by blocked mutations" || fail "manifest mutated despite 405"
 FT="$(curl -s "$BASE2/nope")"
 grep -q host-fallthrough <<<"$FT" && pass "fall-through works on this host too" || fail "fall-through host2 ($FT)"
@@ -702,6 +741,28 @@ code 200 "$(C -X DELETE "${AUTH[@]}" "$BASE4/api/sources?name=c2")" "remove the 
 [ "$(G4 | JQ 'd.concepts.find((c) => c.id === "shared").winner')" = "b" ] && pass "the removal hands the merge back" || fail "the cached rows kept a removed layer"
 [ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts match a fresh encode after a remove" || fail "stale counts after a source remove"
 
+echo "  invalidation: the cascade reordered"
+# a(1) and b(2) both define `shared`; b wins. Put a first: the levels become a
+# permutation of {2, 1}, /api/graph reports them, and the merge flips. The
+# generation moves (level is in its signature — a poller must refetch) but no
+# source re-indexes: level is outside the index identity, so every entry is
+# adopted as-is and its pass counter and start time do not budge.
+PASSES4() { curl -s "${AUTH[@]}" "$BASE4/api/indexing/activity" | JQ 'JSON.stringify(d.sources.map((s) => [s.name, s.passes, s.startedAt]).sort())'; }
+GEN_BEFORE="$(GEN4)"
+PASSES_BEFORE="$(PASSES4)"
+ORD="$(curl -s -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"order":["a","b"]}' "$BASE4/api/sources/order")"
+[ "$(JQ 'JSON.stringify([d.ok, d.order])' <<<"$ORD")" = '[true,[{"name":"a","level":2},{"name":"b","level":1}]]' ] \
+  && pass "PUT /api/sources/order answers the new order with its levels" || fail "reorder response ($ORD)"
+[ "$(G4 | JQ 'JSON.stringify(d.sources.map((s) => [s.name, s.level]))')" = '[["a",2],["b",1]]' ] \
+  && pass "/api/graph reports the reassigned levels" || fail "graph levels after reorder ($(G4 | JQ 'JSON.stringify(d.sources.map((s) => [s.name, s.level]))'))"
+[ "$(G4 | JQ 'd.concepts.find((c) => c.id === "shared").winner')" = "a" ] && pass "the reorder flips the merge winner" || fail "the cached rows kept the old winner after a reorder"
+[ "$(GRAPHTOK4)" = "$(EXPECT4)" ] && pass "counts match a fresh encode after a reorder" || fail "stale counts after a reorder"
+[ "$(GEN4)" != "$GEN_BEFORE" ] && pass "generation moved on the reorder (a poller refetches)" || fail "generation did not move on a reorder"
+[ "$(PASSES4)" = "$PASSES_BEFORE" ] && pass "re-leveling did not re-index (pass counters and start times unchanged)" || fail "a reorder re-indexed the sources ($PASSES_BEFORE -> $(PASSES4))"
+code 200 "$(C -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"order":["b","a"]}' "$BASE4/api/sources/order")" "put the cascade back"
+[ "$(G4 | JQ 'JSON.stringify(d.sources.map((s) => [s.name, s.level]))')" = '[["a",1],["b",2]]' ] && pass "the round trip restores 1/2 exactly" || fail "round trip did not restore the levels"
+[ "$(G4 | JQ 'd.concepts.find((c) => c.id === "shared").winner')" = "b" ] && pass "and hands the merge back to b" || fail "winner did not flip back"
+
 echo "  invalidation: an indexing setting change"
 # A layer big enough to be refused by a lowered document cap, so the re-index a
 # settings change forces is observable rather than inferred: the cap is a
@@ -753,6 +814,16 @@ ONE="$(curl -s -o "$TMP/one.json" -w '%{http_code}' -X DELETE "${AUTH[@]}" "$BAS
 code 409 "$ONE" "removing one of three invalid entries is refused"
 grep -q '2 other sources are also invalid' "$TMP/one.json" && pass "the refusal names how many others block it" || fail "refusal message unhelpful ($(cat "$TMP/one.json"))"
 grep -q 'notarealkind' "$TMP/manifest-bad.json" && pass "the refused removal left the manifest untouched" || fail "a refused removal edited the manifest"
+
+# A reorder is a whole-cascade statement, and a quarantined row has no rank to
+# give it — refused with the same "what blocks it" listing removal gives, never
+# a raw validation 500 from the strict read.
+RO="$(curl -s -o "$TMP/ro.json" -w '%{http_code}' -X PUT "${AUTH[@]}" -H 'content-type: application/json' -d '{"order":["seed"]}' "$BASE5/api/sources/order")"
+code 409 "$RO" "reordering is refused while entries are quarantined"
+grep -q '3 sources are invalid' "$TMP/ro.json" && pass "the reorder refusal counts the quarantined rows" || fail "reorder refusal message ($(cat "$TMP/ro.json"))"
+[ "$(JQ 'JSON.stringify(d.blocking.map((b) => b.name))' < "$TMP/ro.json")" = '["bad-kind","seed (2)","layer 4"]' ] \
+  && pass "the reorder refusal lists the blocking rows by their graph names" || fail "reorder refusal detail ($(cat "$TMP/ro.json"))"
+grep -q 'notarealkind' "$TMP/manifest-bad.json" && pass "the refused reorder left the manifest untouched" || fail "a refused reorder edited the manifest"
 
 # Settings are a strict write and stay one — but the answer has to point at the
 # repair rather than dropping a layer validation error on the Settings screen.

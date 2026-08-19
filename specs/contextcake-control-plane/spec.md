@@ -190,6 +190,12 @@ auditable CLI — never in tools an agent can invoke implicitly.
   current source-name list for the selected profile, assign unique
   descending levels deterministically, update Pack assignments, and refuse
   with a 409-style listing when quarantined layers exist in that profile.
+  *Status 2026-08-18: the operation (`reorderSources` in
+  `packages/core/src/control/sources.mjs`, with `assignCascadeLevels`) and
+  its HTTP adapter (`PUT /api/sources/order`) shipped; the CLI adapter is
+  pending with the rest of the `source` family. Levels are reassigned as a
+  permutation of the existing distinct levels when there are enough of them
+  (a 3/2/0 cascade stays a permutation of {3, 2, 0}), otherwise N..1.*
 - [ ] WHEN `source pending list|configure|dismiss` run THE SYSTEM SHALL
   surface pending sources and let the user supply the missing machine-local
   requirements or discard the entry, without ever activating a pending

@@ -11,7 +11,10 @@ ContextCake-powered surfaces.
 catalog includes the **ContextCake Context Pack** (`specs/contextcake-packs/packs/contextcake/`,
 served at `/packs/contextcake`) and the built, validated **Data & Analytics Teams** preview at
 `/packs/data-analytics-teams`. The commercial model in this spec is unchanged — it activates
-when the `paymentsLive` flag flips.
+when the `paymentsLive` flag in `apps/site/src/config/flags.json` flips. Since 2026-08-18 the
+same file also carries `commerceVisible`, which hides every price and plan on the site
+until there are users to sell to (see `specs/contextcake-commerce/spec.md`, amendment
+2026-08-18).
 **Workflow:** Requirements-first
 **Primary target:** small in-house data and analytics teams
 **Depends on:** `specs/contextcake-core/design.md` and `specs/contextcake-site/`
@@ -166,8 +169,10 @@ plain zip.
 ## 7. Distribution
 
 - v1 launches as a **free preview**: the full base pack is readable on the public site and live
-  payments are deferred (the checkout infrastructure is kept dormant behind a `paymentsLive` flag).
-  Paid updates and future packs are marketed as coming soon.
+  payments are deferred (the checkout infrastructure is kept dormant behind the `paymentsLive`
+  flag in `apps/site/src/config/flags.json`). Paid updates and future packs are marketed as
+  coming soon only while `commerceVisible` is also true; with it false the site shows no
+  prices at all.
 - Plain zip is the baseline channel. It must work without ContextCake, Claude Code, or a terminal.
 - Claude Code plugin packaging is first-class for this first pack.
 - Future ContextCake integration can point `layers.json` at an unzipped pack, but that is not a v1

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, apiFetch, computeLevelBuckets, isCompactRecord, LiveDataError, mergeSourceStatus,
-  runSequentially, selectMode, trivialConflictReason,
+  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptSources, apiFetch, computeLevelBuckets, computeSourceBuckets, isCompactRecord,
+  LiveDataError, mergeSourceStatus, runSequentially, selectMode, trivialConflictReason,
 } from './api'
 import type { DiscrepancyRecord, GraphSummary, ResolvedConcept } from './types'
 
@@ -253,28 +253,57 @@ describe('desktop API credential transport', () => {
 
 // ---- Adapters: raw engine types -> console view model -------------------
 
-describe('computeLevelBuckets', () => {
-  it('ranks the highest level present as personal, the next as team, the rest as company', () => {
-    const buckets = computeLevelBuckets([0, 1, 2, 3])
-    expect(buckets.get(3)).toBe('personal')
-    expect(buckets.get(2)).toBe('team')
-    expect(buckets.get(1)).toBe('company')
-    expect(buckets.get(0)).toBe('company')
+// computeLevelBuckets is re-exported from cascade-order.ts; its contract (and
+// the parity between ranks and lanes) is pinned in cascade-order.test.ts.
+
+describe('LiveSource.reorderSources', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn())
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
-  it('puts the sole level present in the top lane rather than folding it into company', () => {
-    expect(computeLevelBuckets([1]).get(1)).toBe('personal')
+  it('PUTs the complete order to /api/sources/order and returns the engine-assigned levels', async () => {
+    const { createDataSource } = await import('./api')
+    const order = [{ name: 'team', level: 3 }, { name: 'personal', level: 2 }, { name: 'company', level: 0 }]
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ ok: true, order }), { status: 200 }))
+    const source = createDataSource('live')
+
+    await expect(source.reorderSources(['team', 'personal', 'company'])).resolves.toEqual(order)
+    const [calledUrl, init] = vi.mocked(fetch).mock.calls[0]
+    expect(String(calledUrl)).toBe('/api/sources/order')
+    expect(init?.method).toBe('PUT')
+    expect(JSON.parse(String(init?.body))).toEqual({ order: ['team', 'personal', 'company'] })
   })
 
-  it('promotes a second-place level to team even when it is not 2', () => {
-    expect(computeLevelBuckets([3, 1]).get(1)).toBe('team')
-    expect(computeLevelBuckets([5, 4]).get(4)).toBe('team')
+  it('surfaces the engine machine code beside the message on a refused reorder', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockResolvedValue(new Response(
+      JSON.stringify({ error: 'Nothing was reordered: 1 source is invalid and cannot be given a position.', code: 'REORDER_BLOCKED', blocking: [{ name: 'bad', error: 'unsupported kind' }] }),
+      { status: 409, headers: { 'content-type': 'application/json' } },
+    ))
+    const source = createDataSource('live')
+
+    await expect(source.reorderSources(['a', 'bad'])).rejects.toMatchObject({
+      kind: 'bad-status', status: 409, code: 'REORDER_BLOCKED', message: expect.stringContaining('Nothing was reordered'),
+    })
   })
 
-  it('ignores duplicate levels when ranking', () => {
-    const buckets = computeLevelBuckets([2, 2, 0, 0])
-    expect(buckets.get(2)).toBe('personal')
-    expect(buckets.get(0)).toBe('team')
+  it('leaves code undefined when the body has none — a Node fs error code is not a contract', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ error: 'boom' }), { status: 500 }))
+    const source = createDataSource('live')
+
+    await expect(source.reorderSources(['a'])).rejects.toMatchObject({ kind: 'bad-status', status: 500, code: undefined })
+  })
+})
+
+describe('DemoSource.reorderSources', () => {
+  it('refuses with a 405 like every other demo write — never a silent success', async () => {
+    const { createDataSource } = await import('./api')
+    const source = createDataSource('demo')
+    await expect(source.reorderSources(['personal', 'team', 'company'])).rejects.toMatchObject({ kind: 'bad-status', status: 405 })
   })
 })
 
@@ -500,6 +529,29 @@ describe('adaptConcept with headingless documents', () => {
 })
 
 describe('adaptSources', () => {
+  // A quarantined manifest entry arrives with a level (whatever the file
+  // said) but is not in the cascade. Bucketing over it shifted every real
+  // source down a lane: with `broken` at 9, the level-3 vault — rank #1 —
+  // wore the Team chip and the Personal lane sat empty. Lanes and ranks must
+  // come from the same list, and that list excludes quarantined rows.
+  it('buckets lanes over the sources that are in the cascade — a quarantined row never shifts them', () => {
+    const graph: GraphSummary = {
+      totals: { sourceTokens: 0, resolvedTokens: 0, concepts: 6, sources: 4 },
+      concepts: [],
+      sources: [
+        { name: 'broken', level: 9, kind: 'notarealkind', conceptCount: 0, tokens: 0, latestUpdated: null, status: 'error', error: 'unsupported source kind: notarealkind', quarantined: true },
+        { name: 'vault', level: 3, kind: 'files', conceptCount: 4, tokens: 0, latestUpdated: null, status: 'ok', error: null },
+        { name: 'shared', level: 2, kind: 'files', conceptCount: 1, tokens: 0, latestUpdated: null, status: 'ok', error: null },
+        { name: 'archive', level: 0, kind: 'files', conceptCount: 1, tokens: 0, latestUpdated: null, status: 'ok', error: null },
+      ],
+    }
+    const lanes = Object.fromEntries(adaptSources(graph).map((s) => [s.name, s.layer]))
+    expect(lanes).toEqual({ broken: 'company', vault: 'personal', shared: 'team', archive: 'company' })
+    // The same helper the store's readAll and the rank display use.
+    expect(computeSourceBuckets(graph.sources).get(3)).toBe('personal')
+    expect(computeSourceBuckets(graph.sources).has(9)).toBe(false)
+  })
+
   // The field report, in one assertion: a 3,000-note vault fifteen seconds into
   // its first read rendered as "synced · 0 concepts". The app claimed to be
   // finished with work it had barely started, and there was nowhere to look.

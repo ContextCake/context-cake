@@ -6,12 +6,13 @@
   "scripts": {
     "build-demo-data": "node scripts/build-demo-data.mjs",
     "clean-legacy-demo": "node scripts/clean-legacy-demo.mjs",
-    "predev": "npm run build-demo-data && npm run clean-legacy-demo",
+    "render-redirects": "node scripts/render-redirects.mjs",
+    "predev": "npm run build-demo-data && npm run clean-legacy-demo && npm run render-redirects",
     "dev": "astro dev",
     "start": "astro dev",
-    "prebuild": "npm run build-demo-data && npm run clean-legacy-demo",
+    "prebuild": "npm run build-demo-data && npm run clean-legacy-demo && npm run render-redirects",
     "build": "astro build",
-    "postbuild": "node scripts/verify-install-page.mjs",
+    "postbuild": "node scripts/verify-install-page.mjs && node scripts/verify-commerce-hidden.mjs",
     "preview": "astro preview",
     "astro": "astro"
   },
@@ -21,5 +22,8 @@
     "@fontsource/jetbrains-mono": "^5.3.0",
     "astro": "^7.1.4",
     "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@astrojs/sitemap": "3.7.3"
   }
 }

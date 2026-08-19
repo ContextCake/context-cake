@@ -58,7 +58,7 @@ const bannerText = () => Array.from(container.querySelectorAll('[role="status"]'
 /** The rendered Sources row for a layer, as text — what the user actually reads. */
 const sourceRow = (name: string) => Array.from(container.querySelectorAll('button'))
   .map((b) => (b.textContent ?? '').replace(/\s+/g, ' ').trim())
-  .find((t) => t.startsWith(name) && / level \d/.test(t)) ?? '(no row)'
+  .find((t) => t.startsWith(name) && / #\d+( \(tied\))? in cascade/.test(t)) ?? '(no row)'
 
 /**
  * One engine whose state advances, answering every route from it — so no test

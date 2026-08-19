@@ -41,6 +41,8 @@ const SUITES = [
   { group: "unit", name: "git-auth", ...node("git-auth.test.mjs") },
   { group: "unit", name: "git-core", ...node("git-core.test.mjs") },
   { group: "unit", name: "manifest", ...node("manifest.test.mjs") },
+  { group: "unit", name: "control-sources", ...node("control-sources.test.mjs") },
+  { group: "unit", name: "write-target", ...node("write-target.test.mjs") },
   { group: "unit", name: "index-keys", ...node("index-keys.test.mjs") },
   { group: "unit", name: "walk", ...node("walk.test.mjs") },
   { group: "unit", name: "snapshot-reuse", ...node("snapshot-reuse.test.mjs") },
@@ -96,7 +98,7 @@ const SUITES = [
     group: "release",
     name: "release-surfaces",
     command: process.execPath,
-    args: ["--test", "scripts/tests/app-release-sync.test.mjs", "scripts/tests/release-workflow.test.mjs", "scripts/tests/verify-release-surfaces.test.mjs"],
+    args: ["--test", "scripts/tests/app-release-sync.test.mjs", "scripts/tests/release-workflow.test.mjs", "scripts/tests/verify-release-surfaces.test.mjs", "scripts/tests/verify-commerce-hidden.test.mjs"],
   },
 
   // Indexing behaviour over time. Slowest in the suite by design — these wait

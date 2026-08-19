@@ -260,15 +260,20 @@ auditable CLI — never in tools an agent can invoke implicitly.
 
 ### 5.8 Reconciliation
 
-- [ ] WHEN `discrepancy list|show|summary|resolve|priority`, `rule
+- [ ] WHEN `discrepancy list|show|summary|resolve|batch|priority`, `rule
   list|suggestions|approve|update|remove|promote`, and `resolution log` run
   THE SYSTEM SHALL reuse the existing discrepancy, rule, priority, and
   transaction-journal machinery, including rollback/recovery and
   contributor-fingerprint checks; resolution SHALL require the expected
-  discrepancy revision. (Engine side shipped 2026-08-18 as
+  discrepancy revision; `discrepancy batch` SHALL read its decisions from
+  stdin or `--file` (never argv), support `--dry-run` (per-item
+  `wouldWrite`, nothing written) and `--stop-on-error`, and answer per-item
+  results with the same `applied`/`failed` counts the HTTP route answers.
+  (Engine side shipped 2026-08-18 as
   `packages/core/src/control/discrepancies.mjs` —
-  `createDiscrepancyOperations(caps)`, the HTTP service is a shim over it;
-  the CLI adapter is pending.)
+  `createDiscrepancyOperations(caps)` with `decide`, `decideBatch`,
+  `runAutomaticRules`, the HTTP service is a shim over it; the CLI adapter
+  is pending.)
 
 ### 5.9 Packs
 

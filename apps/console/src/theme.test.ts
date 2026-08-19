@@ -14,7 +14,7 @@ import { BLOCKS, LIGHT_SELECTOR } from './themes/gates'
 /** Every TS/TSX source under src/, keyed by path relative to this file. */
 const ALL_SOURCES = import.meta.glob('./**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
 
-/** Files the walk skips: tests, generated bundles, the registry itself, and the palette files PR 8 adds. */
+/** Files the walk skips: tests, generated bundles, the token registry itself, and src/themes/ (gated by its own suites). */
 const SKIP_PATH = (path: string) =>
   /\.test\.[cm]?tsx?$/.test(path) || path.startsWith('./generated/') || path.startsWith('./themes/') || path === './theme.ts'
 

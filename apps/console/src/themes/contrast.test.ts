@@ -96,8 +96,9 @@ describe('resolveToken', () => {
 })
 
 // ---------------------------------------------------------------------------
-// The gate. One `it` per (palette, mode); PR 8 appends its families to
-// PALETTES in ./gates.ts and everything below runs unchanged over them.
+// The gate. One `it` per (palette, mode), over PALETTES in ./gates.ts —
+// ContextCake plus every family under src/themes/. A new family is scored
+// here without touching this file, and there is no per-family exception list.
 
 interface Check { fg: string; bg: string; backdrop?: string[]; min: number }
 

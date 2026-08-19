@@ -1,15 +1,16 @@
 // Shared fixtures and constants for the theme gate suites (`tokens.test.ts`,
 // `contrast.test.ts`, `../theme.test.ts`). Not application code — it lives
 // beside the tests so a later suite can import a constant without importing a
-// test file (which would re-register that file's `describe`s). PR 8 extends
-// PALETTES, PRIMITIVES and TOKEN_BLOCK_SELECTOR_RE here; the suites read them.
+// test file (which would re-register that file's `describe`s).
 //
-// The stylesheet arrives as a Vite raw import rather than through node:fs —
+// The stylesheets arrive as Vite raw imports rather than through node:fs —
 // the console has no @types/node (it is a browser package) and this keeps it
 // that way; vitest.config.ts lets `.css?raw` through its CSS blanking.
 import STYLES from '../styles.css?raw'
+import DERIVED from './_derived.css?raw'
 import { parseColor, type Declarations, type Rgba } from './contrast'
 import { ccTokens, declarationsFor, parseCssBlocks, type CssBlock } from './css-blocks'
+import { PALETTES as FAMILIES, type PaletteId } from './registry'
 
 export const STYLESHEET: string = STYLES
 export const BLOCKS: readonly CssBlock[] = parseCssBlocks(STYLES)
@@ -18,11 +19,45 @@ export const LIGHT_SELECTOR = ':root'
 export const DARK_SELECTOR = ':root[data-theme="dark"]'
 
 /**
- * A block is a token block — allowed to carry literal colors — when one of its
- * selectors is `:root`, the dark `:root`, or (PR 8) a palette family block on
- * `:root` / `.cc-theme-swatch` keyed by `data-palette` and `data-theme`.
+ * Every `themes/<id>.css` family file, keyed by id, read as text. Vite's
+ * glob is eager so a missing file is simply absent from the map — which is
+ * what lets `tokens.test.ts` (gate e) diff the registry against the disk.
+ * `_derived.css` and `index.css` are excluded by the leading-underscore /
+ * name test below rather than by a glob negation, so a new family file is
+ * picked up without touching this list.
  */
-export const TOKEN_BLOCK_SELECTOR_RE = /^(?::root|\.cc-theme-swatch)(?:\[data-(?:theme|palette)="[a-z][a-z0-9-]*"\])*$/
+const FAMILY_SOURCES = import.meta.glob('./*.css', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
+export const FAMILY_FILES: ReadonlyMap<string, string> = new Map(
+  Object.entries(FAMILY_SOURCES)
+    .map(([path, css]) => [path.replace(/^\.\//, '').replace(/\.css$/, ''), css] as [string, string])
+    .filter(([id]) => !id.startsWith('_') && id !== 'index'),
+)
+
+export const DERIVED_STYLESHEET: string = DERIVED
+export const DERIVED_BLOCKS: readonly CssBlock[] = parseCssBlocks(DERIVED)
+
+/** The `_derived.css` selectors: everything but ContextCake, on the root and on a swatch. */
+export const DERIVED_SELECTOR = ':root[data-palette]:where(:not([data-palette="contextcake"]))'
+export const DERIVED_DARK_SELECTOR = ':root[data-palette]:where(:not([data-palette="contextcake"])[data-theme="dark"])'
+export const DERIVED_SWATCH_SELECTOR = '.cc-theme-swatch[data-palette]:where(:not([data-palette="contextcake"]))'
+export const DERIVED_SWATCH_DARK_SELECTOR = '.cc-theme-swatch[data-palette]:where(:not([data-palette="contextcake"])[data-theme="dark"])'
+
+/** A family block's two selectors, on the root and on a swatch. */
+export function familySelector(id: string, mode: 'light' | 'dark'): string {
+  return `:root[data-palette="${id}"][data-theme="${mode}"]`
+}
+export function swatchSelector(id: string, mode: 'light' | 'dark'): string {
+  return `.cc-theme-swatch[data-palette="${id}"][data-theme="${mode}"]`
+}
+
+/**
+ * A block is a token block — allowed to carry literal colors — when one of its
+ * selectors is `:root`, the dark `:root`, or a palette family block on
+ * `:root` / `.cc-theme-swatch` keyed by `data-palette` and `data-theme`. A
+ * bare `.cc-theme-swatch` (the picker's layout rule) is a component rule and
+ * stays under the literal-color gate, hence the `+` on the swatch branch.
+ */
+export const TOKEN_BLOCK_SELECTOR_RE = /^(?::root(?:\[data-(?:theme|palette)="[a-z][a-z0-9-]*"\])*|\.cc-theme-swatch(?:\[data-(?:theme|palette)="[a-z][a-z0-9-]*"\])+)$/
 
 export function isTokenBlock(block: CssBlock): boolean {
   return block.selectors.some((selector) => TOKEN_BLOCK_SELECTOR_RE.test(selector))
@@ -62,7 +97,7 @@ function sameColor(a: Rgba | null, b: Rgba): boolean {
 }
 
 /**
- * The tokens a theme family declares per mode; `themes/_derived.css` (PR 8)
+ * The tokens a theme family declares per mode; `themes/_derived.css`
  * computes every other canonical color from these. Families also set
  * `color-scheme`, which is not a `--cc-*` token and so is not listed.
  */
@@ -99,5 +134,33 @@ export function contextCakeModes(): PaletteMode[] {
   ]
 }
 
-/** Every (palette, mode) the contrast gate scores. PR 8 appends its families. */
-export const PALETTES: readonly PaletteMode[] = [...contextCakeModes()]
+/**
+ * A family's mode exactly as the cascade resolves it on <html>, in cascade
+ * order: ContextCake's `:root` (0,1,0), in dark mode ContextCake's dark
+ * block (0,2,0 — it is not palette-scoped, so it does apply), then the
+ * derived block and its dark half (0,2,0, later in the cascade, so they win
+ * over the dark block), then the family's own block (0,3,0). Modelling the
+ * real order rather than the intended one means a hole in `_derived.css`
+ * would show up here as ContextCake's value leaking into a family — which is
+ * what a user would see — as well as failing gate (d).
+ */
+export function familyModes(id: PaletteId, css: string): PaletteMode[] {
+  const blocks = parseCssBlocks(css)
+  const out: PaletteMode[] = []
+  for (const mode of ['light', 'dark'] as const) {
+    const decls = new Map(ccTokens(declarationsFor(BLOCKS, LIGHT_SELECTOR)))
+    if (mode === 'dark') for (const [token, value] of ccTokens(declarationsFor(BLOCKS, DARK_SELECTOR))) decls.set(token, value)
+    for (const [token, value] of ccTokens(declarationsFor(DERIVED_BLOCKS, DERIVED_SELECTOR))) decls.set(token, value)
+    if (mode === 'dark') for (const [token, value] of ccTokens(declarationsFor(DERIVED_BLOCKS, DERIVED_DARK_SELECTOR))) decls.set(token, value)
+    for (const [token, value] of ccTokens(declarationsFor(blocks, familySelector(id, mode)))) decls.set(token, value)
+    out.push({ palette: id, mode, decls })
+  }
+  return out
+}
+
+/** Every (palette, mode) the contrast gate scores: ContextCake plus each shipped family. */
+export const PALETTES: readonly PaletteMode[] = [
+  ...contextCakeModes(),
+  ...FAMILIES.filter((family) => family.id !== 'contextcake')
+    .flatMap((family) => familyModes(family.id, FAMILY_FILES.get(family.id) ?? '')),
+]

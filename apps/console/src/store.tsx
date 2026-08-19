@@ -6,13 +6,14 @@ import {
   type Activity, type Concept, type Conflict, type Signal, type Source,
 } from './data'
 import {
-  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptGraphConcept, adaptSources, attachConflictStubs,
-  computeLevelBuckets, createDataSource, LiveDataError, mergeSourceStatus,
+  adaptConcept, adaptConflicts, adaptDiscrepancies, adaptDiscrepancy, adaptGraphConcept, adaptSources, attachConflictStubs,
+  computeLevelBuckets, createDataSource, LiveDataError, mergeSourceStatus, runSequentially,
   type IndexingActivity, type IndexingControlAction, type Mode,
 } from './api'
+import { isActionable, NO_SUMMARY, summarizeConflicts } from './discrepancy-summary'
 import type {
-  DiscrepancyDecisionRequest, DiscrepancyRule, DiscrepancyRuleSuggestion,
-  GraphSummary, SearchHit, SourceStatus, StatusSummary,
+  DiscrepancyBatchRequest, DiscrepancyBatchResponse, DiscrepancyDecisionRequest, DiscrepancyRule,
+  DiscrepancyRuleSuggestion, DiscrepancySummary, GraphSummary, SearchHit, SourceStatus, StatusSummary,
 } from './types'
 import type { LayerId, RouteId } from './theme'
 import { dispatchNavigationGuard, filesHash, isViewId, parseHash, titleForView, type ViewId } from './shell-navigation'
@@ -244,6 +245,13 @@ export interface StoreData {
   sources: Source[]
   signals: Signal[]
   conflicts: Conflict[]
+  /**
+   * Counts and groupings over every discrepancy — the engine's own summary
+   * when it serves one (`?fields=compact`), the local mirror otherwise. Read
+   * for the Discrepancy Center header and tab counts; `NO_SUMMARY` (one
+   * shared identity) until the first payload lands.
+   */
+  conflictSummary: DiscrepancySummary
   activity: Activity[]
   /** Concepts that failed to resolve during load (live mode) — shown, not hidden. */
   loadErrors: { concept: string; error: string }[]
@@ -288,6 +296,21 @@ export interface StoreData {
   resolveConflict: (conflictId: string, sourceLayer: string, method: 'automatic' | 'manual') => Promise<void>
   resolveSafeConflicts: () => Promise<void>
   decideDiscrepancy: (request: DiscrepancyDecisionRequest) => Promise<void>
+  /**
+   * Many decisions in one request (POST /api/discrepancy-decisions/batch):
+   * one in flight at a time, per-item results, ONE refetch afterwards. Rows
+   * whose result is `ok` move status optimistically; a `dryRun` changes
+   * nothing here and only answers what would. Rejects on a whole-batch
+   * refusal (coverage incomplete, mutations disabled) after recording
+   * `resolutionError`, like `decideDiscrepancy`.
+   */
+  decideDiscrepancies: (request: DiscrepancyBatchRequest) => Promise<DiscrepancyBatchResponse>
+  /**
+   * Fetch the full record behind a compact discrepancy row (history, full
+   * values) and swap it in — bounded LRU, same shape as `loadConceptDetail`.
+   * A no-op for rows that already carry their detail.
+   */
+  loadDiscrepancyDetail: (id: string) => Promise<void>
   approveRuleSuggestion: (id: string) => Promise<void>
   updateDiscrepancyRule: (id: string, changes: { mode?: 'recommend' | 'automatic'; enabled?: boolean }) => Promise<void>
   promoteDiscrepancyRule: (id: string, confirm: boolean) => Promise<Record<string, unknown>>
@@ -383,6 +406,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [concepts, setConcepts] = useState<Concept[]>([])
   const [sources, setSources] = useState<Source[]>([])
   const [conflicts, setConflicts] = useState<Conflict[]>([])
+  const [conflictSummary, setConflictSummary] = useState<DiscrepancySummary>(NO_SUMMARY)
   const [loadErrors, setLoadErrors] = useState<{ concept: string; error: string }[]>([])
   const [resolvingConflict, setResolvingConflict] = useState<string | null>(null)
   const [resolutionError, setResolutionError] = useState<{ message: string; partial: boolean } | null>(null)
@@ -526,6 +550,73 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (selConcept) void loadConceptDetail(selConcept)
   }, [selConcept, loadConceptDetail])
 
+  // ---- Discrepancy details on demand ------------------------------------------
+  //
+  // The same shape as concepts. The list is built from COMPACT rows
+  // (`?fields=compact`: previews, no history) and the full record for the row
+  // on screen arrives on selection through `?id=`. `compactConflictRef` keeps
+  // the compact form so an evicted detail regresses to it, and
+  // `coverageRef` remembers the payload's coverage flag, which a single
+  // record does not carry.
+  const compactConflictRef = useRef<Map<string, Conflict>>(new Map())
+  const loadedConflictDetailsRef = useRef<string[]>([])
+  const conflictDetailInFlightRef = useRef<Set<string>>(new Set())
+  const coverageRef = useRef(true)
+  const conflictDetailRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadDiscrepancyDetail = useCallback(async (id: string) => {
+    if (!compactConflictRef.current.has(id)) return
+    if (loadedConflictDetailsRef.current.includes(id)) return
+    if (conflictDetailInFlightRef.current.has(id)) return
+    if (!source.discrepancyDetail) return
+    conflictDetailInFlightRef.current.add(id)
+    try {
+      const record = await source.discrepancyDetail(id)
+      const buckets = bucketsRef.current
+      if (!buckets || !compactConflictRef.current.has(id)) return // a refetch rebuilt the world mid-flight
+      // Gone from the projection between the list and this read (decided
+      // elsewhere, or the source moved): leave the compact row; the next
+      // refetch drops it. Marking it loaded would show an empty history as
+      // if it were the truth.
+      if (!record) return
+      const full = adaptDiscrepancy(record, coverageRef.current, buckets)
+      const order = loadedConflictDetailsRef.current.filter((held) => held !== id)
+      order.push(id)
+      const evict = order.length > DETAIL_CACHE_LIMIT ? order.shift() : undefined
+      loadedConflictDetailsRef.current = order
+      setConflicts((prev) => prev.map((c) => {
+        if (c.id === id) {
+          // A decision may have landed on this row while the read was in
+          // flight (the optimistic flip in decideDiscrepancy/decideDiscrepancies).
+          // The full record is from the same projection as the list, so it can
+          // only be older than that flip: keep the flipped status and any
+          // decision record the projection has not seen yet. The refetch the
+          // decision scheduled settles both a moment later.
+          const flipped = c.discrepancyStatus !== full.discrepancyStatus && !isActionable(c)
+          if (!flipped) return full
+          const unseen = c.history.filter((entry) => !full.history.some((known) => known.id === entry.id))
+          return { ...full, discrepancyStatus: c.discrepancyStatus, status: c.status, history: [...full.history, ...unseen] }
+        }
+        if (evict !== undefined && c.id === evict) return compactConflictRef.current.get(evict) ?? c
+        return c
+      }))
+    } catch {
+      // Same retry-while-selected policy as concepts: the compact row stays
+      // (a skeleton, never an empty panel) and the load tries again while
+      // this row is still the one on screen.
+      if (conflictDetailRetryRef.current) clearTimeout(conflictDetailRetryRef.current)
+      conflictDetailRetryRef.current = setTimeout(() => {
+        conflictDetailRetryRef.current = null
+        if (selConflictRef.current === id) void loadDiscrepancyDetail(id)
+      }, 2500)
+    } finally {
+      conflictDetailInFlightRef.current.delete(id)
+    }
+  }, [source])
+
+  useEffect(() => {
+    if (selConflict) void loadDiscrepancyDetail(selConflict)
+  }, [selConflict, loadDiscrepancyDetail])
+
   // Load the cascade in two stages so the app is usable immediately, then keep
   // the page honest about what the engine is still doing.
   //
@@ -667,14 +758,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const derivedConflicts = discrepancyPayload
         ? adaptDiscrepancies(discrepancyPayload.discrepancies, discrepancyPayload.coverageComplete, buckets)
         : adaptConflicts(legacyAll?.concepts ?? [], resolutionHistory, buckets)
+      // The engine's summary rides in the compact envelope. An engine that
+      // ignored `?fields=compact` (full records, no `summary`), the legacy
+      // path and the demo bundle all get the local mirror — same shape, same
+      // numbers, so the header does not care which it is drawing from.
+      const summary = discrepancyPayload?.summary ?? summarizeConflicts(derivedConflicts)
       const levelBySource = new Map(g.sources.map((s) => [s.name, s.level]))
       const compact = legacy
         ? (legacyAll?.concepts ?? []).map((c) => adaptConcept(c, buckets))
         : g.concepts.map((row) => attachConflictStubs(adaptGraphConcept(row, levelBySource, buckets), derivedConflicts))
       compactRef.current = new Map(compact.map((c) => [c.id, c]))
       loadedDetailsRef.current = []
+      // Only rows born compact are detail-loadable; full rows never enter the map.
+      compactConflictRef.current = new Map(derivedConflicts.filter((c) => c.detailLoaded === false).map((c) => [c.id, c]))
+      loadedConflictDetailsRef.current = []
+      coverageRef.current = discrepancyPayload?.coverageComplete ?? true
       setConcepts(compact)
       setConflicts(derivedConflicts)
+      setConflictSummary(summary)
       setDiscrepancyRules(rulePayload.rules)
       setDiscrepancyRuleSuggestions(rulePayload.suggestions)
       // Honor a deep-linked concept from the URL hash; else default to the
@@ -695,6 +796,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // regress to a spinner because content moved somewhere in the corpus.
       const selected = selConceptRef.current
       if (!legacy && selected && compactRef.current.has(selected)) void loadConceptDetail(selected)
+      // Same for the discrepancy on screen: its full record reloads behind
+      // the rebuilt compact row rather than dropping back to a skeleton.
+      const selectedConflict = selConflictRef.current || derivedConflicts[0]?.id
+      if (selectedConflict && compactConflictRef.current.has(selectedConflict)) void loadDiscrepancyDetail(selectedConflict)
       // Seed the gate from the payload we just took, so the next poll does not
       // immediately pull the same thing back for a generation it already has.
       // This is the ONLY place the gate advances, and it is past every await:
@@ -1161,6 +1266,50 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [source])
 
+  /** The batch marker in `resolvingConflict` while a bulk decision is in flight. */
+  const BATCH_MARKER = 'batch'
+  const decideDiscrepancies = useCallback(async (request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> => {
+    if (resolvingConflictRef.current) throw new Error('Another decision is still being applied.')
+    resolvingConflictRef.current = BATCH_MARKER
+    setResolvingConflict(BATCH_MARKER)
+    setResolutionError(null)
+    try {
+      // Several test harnesses stub a partial DataSource with no batch method,
+      // and an engine older than the route answers 404 inside the real one —
+      // both land on the same one-at-a-time loop.
+      const response = source.decideDiscrepancies
+        ? await source.decideDiscrepancies(request)
+        : await runSequentially(request, (decision) => source.decideDiscrepancy(decision))
+      if (!request.dryRun) {
+        const byId = new Map(request.decisions.map((decision) => [decision.discrepancyId, decision]))
+        const landed = new Map(response.results.filter((result) => result.ok).map((result) => [result.discrepancyId, result]))
+        if (landed.size > 0) {
+          setConflicts((previous) => previous.map((item) => {
+            const result = landed.get(item.id)
+            const decision = byId.get(item.id)
+            if (!result || !decision) return item
+            const acknowledged = decision.action === 'acknowledge'
+            return {
+              ...item,
+              status: acknowledged ? 'open' : 'resolved',
+              discrepancyStatus: acknowledged ? 'acknowledged' : 'resolved',
+              history: result.decision ? [...item.history, result.decision] : item.history,
+            }
+          }))
+          // ONE refetch for the whole batch — not one per result.
+          window.setTimeout(() => setReloadKey((key) => key + 1), 300)
+        }
+      }
+      return response
+    } catch (error) {
+      setResolutionError({ message: error instanceof Error ? error.message : String(error), partial: false })
+      throw error
+    } finally {
+      resolvingConflictRef.current = null
+      setResolvingConflict(null)
+    }
+  }, [source])
+
   const approveRuleSuggestion = useCallback(async (id: string) => {
     const rule = await source.createDiscrepancyRule(id)
     setDiscrepancyRules((items) => [...items, rule])
@@ -1273,18 +1422,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const data = useMemo<StoreData>(() => ({
     mode, loading, load, error,
-    concepts, sources, signals, conflicts, activity, loadErrors, resolvingConflict, resolutionError,
+    concepts, sources, signals, conflicts, conflictSummary, activity, loadErrors, resolvingConflict, resolutionError,
     discrepancyRules, discrepancyRuleSuggestions,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery, search,
     setFilesScope, setFilesPath, openFilesScope, openConcept,
     openChat, closeChat, setChatInput,
-    retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
+    retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy, decideDiscrepancies, loadDiscrepancyDetail,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
     send, reload, reloadKey,
     fetchIndexingActivity, indexingControl, canControlIndexing,
-  }), [mode, loading, load, error, concepts, sources, signals, conflicts, activity, loadErrors,
+  }), [mode, loading, load, error, concepts, sources, signals, conflicts, conflictSummary, activity, loadErrors,
     resolvingConflict, resolutionError, discrepancyRules, discrepancyRuleSuggestions,
-    retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy,
+    retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy, decideDiscrepancies, loadDiscrepancyDetail,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
     send, reload, reloadKey, setView, setSelConcept, setQuery, search, setFilesScope, setFilesPath,
     openFilesScope, openConcept, openChat, closeChat,

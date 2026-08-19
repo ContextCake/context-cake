@@ -13,7 +13,8 @@
 
 import demoBundleRaw from './generated/demo-cascade.json'
 import type {
-  ConflictResolutionRecord, DemoBundle, DiscrepanciesResponse, DiscrepancyDecisionRequest, DiscrepancyRecord,
+  ConflictResolutionRecord, DemoBundle, DiscrepanciesResponse, DiscrepancyBatchRequest, DiscrepancyBatchResponse,
+  DiscrepancyBatchResult, DiscrepancyDecisionRequest, DiscrepancyDetailResponse, DiscrepancyRecord,
   DiscrepancyRule, DiscrepancyRuleSuggestion, GraphConcept, GraphSummary, GraphSource, ResolveConflictRequest,
   ResolvedConcept, ResolvedSection, SearchHit, SourceStatus, StatusSummary,
 } from './types'
@@ -29,11 +30,14 @@ export type LiveErrorKind = 'unreachable' | 'bad-status' | 'bad-shape'
 export class LiveDataError extends Error {
   kind: LiveErrorKind
   status?: number
-  constructor(kind: LiveErrorKind, message: string, status?: number) {
+  /** The engine's stable machine code (`ControlError.code`, e.g. `COVERAGE_INCOMPLETE`), when the body carried one. */
+  code?: string
+  constructor(kind: LiveErrorKind, message: string, status?: number, code?: string) {
     super(message)
     this.name = 'LiveDataError'
     this.kind = kind
     this.status = status
+    this.code = code
   }
 }
 
@@ -69,8 +73,29 @@ export interface DataSource {
   search(query: string, limit?: number): Promise<SearchHit[] | null>
   conflictResolutions(): Promise<ConflictResolutionRecord[]>
   resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord>
+  /**
+   * The list the Discrepancy Center draws from — compact rows plus the
+   * engine's summary in one round trip (`?fields=compact`). An engine too old
+   * for the compact route ignores the parameter and answers full records
+   * with no `summary`; the store notices (`summary` absent, no row marked
+   * `compact`) and computes one locally. `null` means no discrepancies route
+   * at all — the legacy resolve-all path.
+   */
   discrepancies(): Promise<DiscrepanciesResponse | null>
+  /**
+   * One full record (`?id=`) for the row on screen — history, untruncated
+   * values. `null` when it is no longer open (or the engine predates the
+   * route, which answers the whole list; the record is picked out of it).
+   */
+  discrepancyDetail(id: string): Promise<DiscrepancyRecord | null>
   decideDiscrepancy(request: DiscrepancyDecisionRequest): Promise<ConflictResolutionRecord>
+  /**
+   * POST /api/discrepancy-decisions/batch — one lock, one projection, a
+   * per-item result each. Against an engine without the route (404) the
+   * decisions run one at a time through `decideDiscrepancy` and the answer
+   * says so (`fallback: 'sequential'`); a dry run then checks nothing.
+   */
+  decideDiscrepancies(request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse>
   discrepancyRules(): Promise<{ rules: DiscrepancyRule[]; suggestions: DiscrepancyRuleSuggestion[] }>
   createDiscrepancyRule(suggestionId: string): Promise<DiscrepancyRule>
   patchDiscrepancyRule(id: string, changes: { mode?: 'recommend' | 'automatic'; enabled?: boolean }): Promise<DiscrepancyRule>
@@ -263,6 +288,9 @@ class DemoSource implements DataSource {
       coverageComplete: true, indexing: false, indexingSources: [], errors: [], generation: 1,
     }
   }
+  async discrepancyDetail(id: string): Promise<DiscrepancyRecord | null> {
+    return (await this.discrepancies()).discrepancies.find((item) => item.id === id) ?? null
+  }
   async decideDiscrepancy(request: DiscrepancyDecisionRequest): Promise<ConflictResolutionRecord> {
     if (request.action !== 'choose_contribution' || !request.selectedSource) {
       const current = (await this.discrepancies()).discrepancies.find((item) => item.id === request.discrepancyId)
@@ -270,6 +298,11 @@ class DemoSource implements DataSource {
       const chosen = request.action === 'compose'
         ? { layer: current.effectiveSource ?? current.contributions[0].source, content: request.content ?? '', updated: new Date().toISOString() }
         : null
+      const reason = request.action === 'acknowledge' ? 'You kept this scoped difference.'
+        : request.action === 'rewrite_link' ? `You rewrote the link to ${request.newTarget ?? 'a new target'}.`
+          : request.action === 'unlink' ? 'You removed the link.'
+            : request.action === 'create_stub' ? `You created ${current.target ?? 'the target'} in ${request.layer ?? 'a layer'}.`
+              : 'You wrote a reconciled answer.'
       const record: ConflictResolutionRecord = {
         schemaVersion: 2, id: `demo-${Date.now()}-${this.resolutions.length + 1}`,
         conflictId: current.legacyId ?? current.id, discrepancyId: current.id,
@@ -277,7 +310,7 @@ class DemoSource implements DataSource {
         sectionHeading: current.label,
         contributions: current.contributions.map((item) => ({ layer: item.source, level: item.level, content: String(item.value), updated: item.updated })),
         chosen, method: 'manual', actor: 'local-user', decidedAt: new Date().toISOString(),
-        action: request.action, reason: request.action === 'acknowledge' ? 'You kept this scoped difference.' : 'You wrote a reconciled answer.',
+        action: request.action, reason,
         reasonCode: request.reasonCode, note: request.note,
         transactionState: request.action === 'acknowledge' ? 'not_required' : 'committed', writtenTargets: [],
       }
@@ -286,6 +319,10 @@ class DemoSource implements DataSource {
     }
     const [, conceptId, sectionKey] = request.discrepancyId.split('::')
     return this.resolveConflict({ conceptId, sectionKey, selectedLayer: request.selectedSource, method: 'manual' })
+  }
+  /** The batch is the single-decision simulation in a loop; a dry run changes nothing and says every item would go through. */
+  async decideDiscrepancies(request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> {
+    return runSequentially(request, (decision) => this.decideDiscrepancy(decision))
   }
   async discrepancyRules() { return { rules: [], suggestions: [] } }
   async createDiscrepancyRule(): Promise<DiscrepancyRule> { throw new LiveDataError('bad-status', 'Simulation rules reset on reload.', 405) }
@@ -420,16 +457,51 @@ class LiveSource implements DataSource {
     return response.resolution
   }
   async discrepancies(): Promise<DiscrepanciesResponse | null> {
-    try { return await this.get<DiscrepanciesResponse>('/api/discrepancies') }
+    // Compact rows carry everything the list, the grouping and a decision
+    // need (id, revision, kind, status, candidates, ≤240-char previews) and
+    // the summary rides in the same envelope. Full history and full values
+    // arrive per row through discrepancyDetail(). An older engine ignores the
+    // parameter and answers the old full-record shape, which the adapter
+    // also understands — only a missing route (404) means "no discrepancies".
+    try { return await this.get<DiscrepanciesResponse>('/api/discrepancies?fields=compact') }
     catch (error) {
       if (error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404) return null
       throw error
     }
   }
+  async discrepancyDetail(id: string): Promise<DiscrepancyRecord | null> {
+    let body: DiscrepancyDetailResponse | DiscrepanciesResponse
+    try {
+      body = await this.get<DiscrepancyDetailResponse | DiscrepanciesResponse>(`/api/discrepancies?id=${encodeURIComponent(id)}`)
+    } catch (error) {
+      if (error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404) return null
+      throw error
+    }
+    if ('discrepancy' in body) return body.discrepancy ?? null
+    // An engine older than the `?id=` route ignores the parameter and answers
+    // the whole list — full records, so the one we want is in there.
+    if (Array.isArray((body as DiscrepanciesResponse).discrepancies)) {
+      return (body as DiscrepanciesResponse).discrepancies.find((item) => item.id === id) ?? null
+    }
+    throw new LiveDataError('bad-shape', 'Malformed response from /api/discrepancies?id=')
+  }
   async decideDiscrepancy(request: DiscrepancyDecisionRequest): Promise<ConflictResolutionRecord> {
     return (await this.request<{ decision: ConflictResolutionRecord }>('/api/discrepancy-decisions', {
       method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(request),
     })).decision
+  }
+  async decideDiscrepancies(request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> {
+    try {
+      return await this.request<DiscrepancyBatchResponse>('/api/discrepancy-decisions/batch', {
+        method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(request),
+      })
+    } catch (error) {
+      // Only a MISSING route falls back to singles. A 405 (mutations off), a
+      // 409 (coverage incomplete — the whole batch is refused while sources
+      // index) or a 413 (over 500) is an answer, not an absence.
+      if (!(error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404)) throw error
+      return runSequentially(request, (decision) => this.decideDiscrepancy(decision))
+    }
   }
   async discrepancyRules(): Promise<{ rules: DiscrepancyRule[]; suggestions: DiscrepancyRuleSuggestion[] }> {
     return this.get('/api/discrepancy-rules')
@@ -497,11 +569,13 @@ class LiveSource implements DataSource {
     }
     if (!res.ok) {
       let detail = ''
+      let code: string | undefined
       try {
-        const body = await res.clone().json() as { error?: unknown }
+        const body = await res.clone().json() as { error?: unknown; code?: unknown }
         if (typeof body.error === 'string') detail = body.error
+        if (typeof body.code === 'string') code = body.code
       } catch { /* keep the status fallback */ }
-      throw new LiveDataError('bad-status', detail || `Server returned ${res.status} for ${path}`, res.status)
+      throw new LiveDataError('bad-status', detail || `Server returned ${res.status} for ${path}`, res.status, code)
     }
     try {
       return (await res.json()) as T
@@ -509,6 +583,43 @@ class LiveSource implements DataSource {
       throw new LiveDataError('bad-shape', `Malformed response from ${path}`)
     }
   }
+}
+
+/**
+ * The batch contract met one decision at a time — the demo simulation and the
+ * fallback for an engine without the batch route. `stopOnError` is honored;
+ * `dryRun` cannot be (there is nothing to pre-check against), so it answers
+ * "would go through" for every item with no `wouldWrite` and flags the answer
+ * `fallback` so the UI can say the preview is not real.
+ */
+export async function runSequentially(
+  request: DiscrepancyBatchRequest,
+  decide: (decision: DiscrepancyDecisionRequest) => Promise<ConflictResolutionRecord>,
+): Promise<DiscrepancyBatchResponse> {
+  const results: DiscrepancyBatchResult[] = []
+  if (request.dryRun) {
+    for (const decision of request.decisions) results.push({ discrepancyId: decision.discrepancyId, ok: true })
+    return { ok: true, applied: 0, failed: 0, results, suggestions: [], fallback: 'sequential' }
+  }
+  let applied = 0
+  let failed = 0
+  for (const decision of request.decisions) {
+    try {
+      const record = await decide(decision)
+      results.push({ discrepancyId: decision.discrepancyId, ok: true, decision: record, written: record.writtenTargets ?? [] })
+      applied += 1
+    } catch (error) {
+      failed += 1
+      results.push({
+        discrepancyId: decision.discrepancyId, ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof LiveDataError && error.status !== undefined ? { status: error.status } : {}),
+        ...(error instanceof LiveDataError && error.code ? { code: error.code } : {}),
+      })
+      if (request.stopOnError) break
+    }
+  }
+  return { ok: failed === 0, applied, failed, results, suggestions: [], fallback: 'sequential' }
 }
 
 export function createDataSource(mode: Mode = selectMode()): DataSource {
@@ -991,33 +1102,55 @@ function legacyConflictRecord(conflict: Conflict): DiscrepancyRecord {
  *  `buckets` is the rank-based level→lane assignment for this resolve pass
  *  (see `computeLevelBuckets`). */
 export function adaptDiscrepancies(records: DiscrepancyRecord[], coverageComplete = true, buckets: LevelBuckets): Conflict[] {
-  return records.map((record) => {
-    // The raw contribution value carries its real type (the engine never
-    // stringifies a list-typed frontmatter field before serving it) — check
-    // it BEFORE the display value below coerces every non-string into JSON
-    // text. `isList` rides with the discrepancy, not a contribution, because
-    // the engine's own compose guard (service.mjs) rejects the action for the
-    // whole field, not per-contributor.
-    const isList = record.contributions.some((item) => Array.isArray(item.value))
-    const contributions = record.contributions.map((item) => ({
-      layer: layerOf(item.source, item.level, buckets), sourceLayer: item.source,
-      value: typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2),
-      updated: item.updated ?? '',
-      ...(record.fresherDissent && !item.effective ? { fresherDissent: true } : {}),
-    }))
-    const effective = record.contributions.find((item) => item.effective) ?? record.contributions[0]
-    return {
-      id: record.id, concept: record.conceptId, sectionKey: record.key,
-      section: record.label, title: `${record.label} — ${record.conceptTitle}`,
-      status: record.status === 'resolved' ? 'resolved' : 'open',
-      winner: layerOf(effective?.source ?? '', effective?.level ?? 0, buckets),
-      contributions, safe: false, history: record.history,
-      kind: record.kind, discrepancyStatus: record.status, revision: record.revision,
-      owner: record.owner, priority: record.priority, winnerReason: record.winnerReason,
-      effectiveSource: record.effectiveSource, coverageComplete, sourceHealth: record.sourceHealth,
-      matchingRules: record.matchingRules, ruleConflict: record.ruleConflict, target: record.target,
-      affectedLinks: record.affectedLinks,
-      ...(isList ? { isList: true } : {}),
-    }
-  })
+  return records.map((record) => adaptDiscrepancy(record, coverageComplete, buckets))
+}
+
+/**
+ * A compact row (`?fields=compact`) is told apart from a full record by the
+ * marks the engine leaves on it: `compact: true`, or a preview flag on a
+ * contribution. Either alone would do; both are checked so a record with no
+ * contributions at all still classifies correctly.
+ */
+export function isCompactRecord(record: DiscrepancyRecord): boolean {
+  return record.compact === true || record.contributions?.[0]?.truncated !== undefined
+}
+
+/** One raw record → one navigator row. `buckets` as for adaptDiscrepancies. */
+export function adaptDiscrepancy(record: DiscrepancyRecord, coverageComplete = true, buckets: LevelBuckets): Conflict {
+  // The raw contribution value carries its real type (the engine never
+  // stringifies a list-typed frontmatter field before serving it) — check
+  // it BEFORE the display value below coerces every non-string into JSON
+  // text. `isList` rides with the discrepancy, not a contribution, because
+  // the engine's own compose guard (service.mjs) rejects the action for the
+  // whole field, not per-contributor. A compact row has already been
+  // previewed to text and says what it was (`valueKind`).
+  const isList = record.contributions.some((item) => Array.isArray(item.value) || item.valueKind === 'list')
+  const contributions = record.contributions.map((item) => ({
+    layer: layerOf(item.source, item.level, buckets), sourceLayer: item.source,
+    value: typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2),
+    updated: item.updated ?? '',
+    ...(record.fresherDissent && !item.effective ? { fresherDissent: true } : {}),
+    ...(item.truncated === true ? { truncated: true } : {}),
+  }))
+  const effective = record.contributions.find((item) => item.effective) ?? record.contributions[0]
+  const compact = isCompactRecord(record)
+  return {
+    id: record.id, concept: record.conceptId, sectionKey: record.key,
+    section: record.label, title: `${record.label} — ${record.conceptTitle}`,
+    status: record.status === 'resolved' ? 'resolved' : 'open',
+    winner: layerOf(effective?.source ?? '', effective?.level ?? 0, buckets),
+    contributions, safe: false, history: record.history ?? [],
+    kind: record.kind, discrepancyStatus: record.status, revision: record.revision,
+    owner: record.owner, priority: record.priority, winnerReason: record.winnerReason,
+    effectiveSource: record.effectiveSource, coverageComplete, sourceHealth: record.sourceHealth,
+    matchingRules: record.matchingRules, ruleConflict: record.ruleConflict, target: record.target,
+    affectedLinks: record.affectedLinks,
+    conceptTitle: record.conceptTitle, conceptType: record.conceptType,
+    ...(isList ? { isList: true } : {}),
+    ...(record.candidates ? { candidates: record.candidates } : {}),
+    ...(record.bestCandidate !== undefined ? { bestCandidate: record.bestCandidate } : {}),
+    ...(compact
+      ? { detailLoaded: false, historyCount: record.historyCount ?? 0, latestDecision: record.latestDecision ?? null }
+      : {}),
+  }
 }

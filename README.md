@@ -68,7 +68,7 @@ Context lives in separate repositories or directories. Repository membership rem
               one effective, sourced answer for an agent
 ```
 
-Resolution is **section-by-section**, not whole-document replacement. A team can override the database choice while inheriting the company backup policy.
+Resolution is **section-by-section**, not whole-document replacement. A team can override the database choice while inheriting the company backup policy. The higher `level` wins, but you don't have to do arithmetic on the numbers: the cascade can be reordered as a list (position 1 wins) and the levels are reassigned underneath.
 
 ```markdown
 <!-- company/decisions/primary-db.md -->

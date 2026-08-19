@@ -45,8 +45,9 @@ playground/service command documented in the repository instructions.
   geometry. Right-click a concept or folder to hide it from Cascade, then use
   **Hidden** to restore it. Hidden concepts remain available in Knowledge and
   Review. Pan, zoom, fit, concept detail, and dissent links remain available.
-- **Overview** summarizes live sources, concepts, and conflicts. Recent activity
-  is demo-only until the engine exposes an activity API.
+- **Overview** summarizes live sources, concepts, and conflicts, and lists the
+  cascade order — one row per source, position 1 first, with what each wins
+  over. Recent activity is demo-only until the engine exposes an activity API.
 - **Queue** demonstrates review, stored, and discarded signal routing in demo
   mode; live/Desktop mode has no signal API yet and is read-only.
 - **Resolve** clears formatting-only conflicts automatically and presents
@@ -64,9 +65,11 @@ playground/service command documented in the repository instructions.
   document, and editing with re-resolve on save. Demo mode renders the same
   navigator read-only. Sources whose content is remote — a GitHub repository
   read over the API, an MCP graph — keep no files here and say so.
-- **Sources** manages the layers themselves: rename, re-level, repoint a
-  folder-backed source, remove, and sync. Read-only in demo mode, where the way
-  into the navigator is still offered.
+- **Sources** manages the layers themselves: rename, reposition (a position
+  select in the edit drawer, or **Reorder** mode — drag a row or use its arrows;
+  position 1 wins and every move saves immediately), repoint a folder-backed
+  source, remove, and sync. Read-only in demo mode, where the way into the
+  navigator is still offered.
 - **Ask ContextCake** uses the resolved cascade when a compatible
   `window.claude.complete` harness bridge is present. Demo mode falls back to
   visibly labeled sample answers. Live mode never substitutes demo knowledge:

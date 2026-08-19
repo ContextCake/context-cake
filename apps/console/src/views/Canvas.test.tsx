@@ -441,9 +441,14 @@ describe('lane header honesty (F3)', () => {
     await act(async () => root.render(<Canvas />))
 
     expect(container.textContent).toContain('messy-vault')
-    // The team lane's round badge shows the real level (1), not the static 2 —
-    // and the lane's static "runbooks, decisions, system docs" blurb is gone,
-    // replaced by the source name.
+    // The lane's round badge shows the source's cascade POSITION (#1 — the
+    // only source wins), never the manifest level: no "L1", no bare "1"
+    // pill. And the lane's static "runbooks, decisions, system docs" blurb is
+    // gone, replaced by the source name.
+    const laneText = Array.from(container.querySelectorAll('div')).map((el) => el.textContent ?? '').find((text) => /^#\d/.test(text) && text.includes('messy-vault'))
+    expect(laneText).toBeDefined()
+    expect(laneText).toMatch(/^#1/)
+    expect(container.textContent).not.toContain('L1')
     expect(container.textContent).not.toContain('runbooks, decisions, system docs')
 
     await act(async () => root.unmount())

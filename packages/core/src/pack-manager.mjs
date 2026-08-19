@@ -587,6 +587,10 @@ function readPackRecord(manifest, packId) {
   return record;
 }
 
+// Writes the layer FROM the assignment (registry → layers). The other
+// direction — a source operation moving a pack layer's level and needing the
+// assignment to follow — is manifest.mjs syncPackAssignmentLevel; both exist
+// because validateContextManifest refuses any drift between the two copies.
 function upsertPackLayer(layers, assignment, packId, versionRoot, manifestPath) {
   const layer = {
     name: assignment.layerName,

@@ -120,9 +120,10 @@ function ConflictsInner() {
     return () => window.removeEventListener('contextcake:close-detail', close)
   }, [])
 
+  const filtersAtDefault = (Object.keys(DEFAULT_FILTERS) as (keyof ConflictFilters)[]).every((key) => filters[key] === DEFAULT_FILTERS[key])
   const emptyState = normalizedQuery
     ? <div className="cc-conflict-empty"><strong>No matches for &quot;{query.trim()}&quot; in this status.</strong><p>The search keeps filtering across status tabs until cleared.</p><button type="button" onClick={() => setQuery('')}>Clear search</button></div>
-    : <div className="cc-conflict-empty"><strong>No discrepancies in this view</strong><p>Adjust the filters or return to Needs review.</p>{filters !== DEFAULT_FILTERS && <button type="button" onClick={() => setFilters(DEFAULT_FILTERS)}>Reset filters</button>}</div>
+    : <div className="cc-conflict-empty"><strong>No discrepancies in this view</strong><p>Adjust the filters or return to Needs review.</p>{!filtersAtDefault && <button type="button" onClick={() => setFilters(DEFAULT_FILTERS)}>Reset filters</button>}</div>
 
   return (
     <div className="cc-conflicts cc-discrepancy-center">

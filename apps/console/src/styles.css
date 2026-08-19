@@ -2669,7 +2669,8 @@ textarea:focus-visible,
 @media (max-width: 980px) {
   .cc-discrepancy-guide { align-items: flex-start; flex-direction: column; gap: 9px; }
   .cc-discrepancy-guide ol { width: 100%; }
-  .cc-dc-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* Two columns: the four kind tiles fill two rows with no empty cell showing through. */
+  .cc-dc-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cc-dc-tile--total { grid-column: 1 / -1; }
   .cc-discrepancy-center .cc-conflict-layout { grid-template-columns: 1fr; }
   /* The window stays a window at every width — never a wrapping grid of cards. */
@@ -2678,7 +2679,6 @@ textarea:focus-visible,
 @media (max-width: 700px) {
   .cc-discrepancy-guide ol { flex-direction: column; gap: 8px; }
   .cc-evidence-grid { grid-template-columns: 1fr; }
-  .cc-dc-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cc-discrepancy-filters select { flex-basis: 100%; }
   .cc-discrepancy-center .cc-conflict-detail { padding: 17px; }
   .cc-link-candidates li, .cc-link-fix-row { align-items: flex-start; flex-direction: column; }

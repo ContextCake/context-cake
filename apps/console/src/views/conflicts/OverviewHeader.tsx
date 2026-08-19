@@ -44,7 +44,7 @@ export function OverviewHeader({ summary, actionableKinds, filters, onFilters, g
   return (
     <>
       <div className="cc-dc-tiles" role="group" aria-label="What needs attention">
-        <button type="button" className="cc-dc-tile cc-dc-tile--total" aria-pressed={allActive} onClick={() => onFilters({ ...DEFAULT_FILTERS })}>
+        <button type="button" className="cc-dc-tile cc-dc-tile--total" aria-pressed={allActive} onClick={() => onFilters(DEFAULT_FILTERS)}>
           <strong>{summary.actionable}</strong>
           <span>actionable</span>
           <small>{plural(summary.total, 'discrepancy', 'discrepancies')} in all</small>

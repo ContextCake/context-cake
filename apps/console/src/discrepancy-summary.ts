@@ -62,6 +62,16 @@ export function isBrokenLink(conflict: Pick<Conflict, 'kind' | 'originalKind'>):
   return (conflict.originalKind ?? conflict.kind) === 'broken_link'
 }
 
+/**
+ * The kind a row is filed under on screen: a broken link stays "broken link"
+ * after it reopens (its `kind` is then `changed_after_decision`). The tiles,
+ * the kind filter and the Overview subtitle all count with this, so a tile's
+ * number and its filter never disagree.
+ */
+export function effectiveKind(conflict: Pick<Conflict, 'kind' | 'originalKind'>): DiscrepancyKind {
+  return isBrokenLink(conflict) ? 'broken_link' : displayKind(conflict)
+}
+
 /** Something a person (or an automatic rule) still has to do about it. */
 export function isActionable(conflict: Pick<Conflict, 'discrepancyStatus' | 'status'>): boolean {
   return ACTIONABLE_STATUSES.has(displayStatus(conflict))
@@ -191,9 +201,12 @@ export function describeItems(items: Conflict[]): ItemsDescription {
     const target = items[0].target
     if (typeof target === 'string' && items.every((item) => item.target === target)) {
       out.sharedTarget = target
-      const best = items[0].bestCandidate?.id ?? null
-      out.sharedBestCandidate = best !== null && items.every((item) => (item.bestCandidate?.id ?? null) === best)
-        ? items[0].bestCandidate ?? null
+      // Agreed over the ACTIONABLE rows only, mirroring summarizeConflicts: a
+      // resolved row carries no candidate and must not veto the group's fix.
+      const active = items.filter(isActionable)
+      const best = active[0]?.bestCandidate?.id ?? null
+      out.sharedBestCandidate = best !== null && active.every((item) => (item.bestCandidate?.id ?? null) === best)
+        ? active[0].bestCandidate ?? null
         : null
     }
     const byId = new Map<string, LinkCandidate>()
@@ -228,11 +241,34 @@ function finishGroup(key: string, label: string, items: Conflict[]): ConflictGro
   }
 }
 
-/** Actionable rows per kind — what the tiles and the Overview subtitle count (decided rows are noise there). */
+/** Actionable rows per effective kind — what the tiles and the Overview subtitle count (decided rows are noise there). */
 export function actionableByKind(conflicts: Conflict[]): Record<DiscrepancyKind, number> {
   const out: Record<DiscrepancyKind, number> = { section_content: 0, frontmatter_value: 0, broken_link: 0, changed_after_decision: 0 }
-  for (const item of conflicts) if (isActionable(item)) out[displayKind(item)] += 1
+  for (const item of conflicts) if (isActionable(item)) out[effectiveKind(item)] += 1
   return out
+}
+
+/**
+ * The rule suggestion a batch's receipt may offer: one whose action is what
+ * the batch just did (and, for broken links, whose target is the batch's).
+ * Anything else mined at the same time belongs in the rules panel, not on a
+ * receipt that would read as "turn what you just did into a rule".
+ */
+export function suggestionForBatch<S extends { id: string; match: { kind: DiscrepancyKind; target?: string }; action: { type: string } }>(
+  suggestions: S[] | undefined,
+  batch: { action: string; selectedSource?: string; newTarget?: string; reasonCode?: string; target?: string },
+): S | undefined {
+  const wanted = batch.action === 'acknowledge' ? 'acknowledge' : batch.action === 'choose_contribution' ? 'prefer_source' : batch.action === 'rewrite_link' ? 'rewrite_link' : null
+  if (!wanted) return undefined
+  return (suggestions ?? []).find((suggestion) => {
+    const action = suggestion.action as { type: string; source?: string; newTarget?: string; reasonCode?: string }
+    if (action.type !== wanted) return false
+    if (wanted === 'prefer_source' && action.source !== batch.selectedSource) return false
+    if (wanted === 'rewrite_link' && action.newTarget !== batch.newTarget) return false
+    if (wanted === 'acknowledge' && batch.reasonCode && action.reasonCode !== batch.reasonCode) return false
+    if (batch.target !== undefined && suggestion.match.target !== batch.target) return false
+    return true
+  })
 }
 
 const byCountThenLabel = (a: ConflictGroup, b: ConflictGroup) => b.count - a.count || a.label.localeCompare(b.label)

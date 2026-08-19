@@ -58,7 +58,9 @@ export function DecisionPanel({ conflict, onApplied }: { conflict: Conflict; onA
   const isFrontmatterValue = conflict.kind === 'frontmatter_value'
   const winningSource = conflict.effectiveSource ?? conflict.contributions[0]?.sourceLayer ?? null
   const winningValue = conflict.contributions.find((item) => item.sourceLayer === winningSource)?.value
-  const reasonOptions = reasonOptionsFor(conflict.kind)
+  // By what the row IS (a reopened broken link is still one), so the seeded
+  // target_missing reason is always among the options offered for it.
+  const reasonOptions = reasonOptionsFor(brokenLink ? 'broken_link' : conflict.kind)
   const demo = mode === 'demo'
 
   useEffect(() => {

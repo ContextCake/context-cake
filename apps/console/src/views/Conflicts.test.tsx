@@ -993,3 +993,131 @@ describe('Discrepancy Center — batch tails, busy panel, search vs selection', 
     expect(history.textContent).toContain('Now points at decisions/old')
   })
 })
+
+describe('Discrepancy Center — pinned selections, partial batches, reopened links', () => {
+  const okBatch = (request: DiscrepancyBatchRequest): DiscrepancyBatchResponse => ({
+    ok: true, applied: request.dryRun ? 0 : request.decisions.length, failed: 0, notAttempted: 0, dryRun: request.dryRun === true,
+    results: request.decisions.map((decision) => ({ discrepancyId: decision.discrepancyId, ok: true, ...(request.dryRun ? { wouldWrite: [] } : {}) })),
+    suggestions: [],
+  })
+
+  it('drops a dry run whose selection changed while it was in flight — no confirm for rows the apply would not act on', async () => {
+    const rows = [brokenTo('l1', 'decisions/Old', 'decisions/old'), brokenTo('l2', 'decisions/Old', 'decisions/old'), brokenTo('l3', 'decisions/gone', null)]
+    const store = storeWith(rows, rows[0].id)
+    let release: ((value: DiscrepancyBatchResponse) => void) | null = null
+    store.decideDiscrepancies = vi.fn((request: DiscrepancyBatchRequest) => new Promise<DiscrepancyBatchResponse>((resolve) => { release = () => resolve(okBatch(request)) }))
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    const oldGroup = groupRows().find((row) => row.getAttribute('aria-label')?.startsWith('Broken link → decisions/Old'))!
+    await act(async () => click(oldGroup.querySelector('.cc-row-check')!))
+    await act(async () => buttons().find((button) => button.textContent?.startsWith('Rewrite 2 links'))!.click())
+    expect(store.decideDiscrepancies).toHaveBeenCalledTimes(1)
+    // The selection moves before the answer lands.
+    const goneGroup = groupRows().find((row) => row.getAttribute('aria-label')?.startsWith('Broken link → decisions/gone'))!
+    await act(async () => click(goneGroup.querySelector('.cc-row-check')!))
+    expect(container.querySelector('.cc-bulk-bar')?.textContent).toContain('3 selected')
+    await act(async () => { release!(okBatch({ decisions: [] , dryRun: true })) })
+    expect(container.querySelector('.cc-bulk-confirm')).toBeNull()
+  })
+
+  it('refuses to (de)select rows while a batch is in flight', async () => {
+    const rows = [freshConflict, staleConflict]
+    const store = storeWith(rows, freshConflict.id)
+    ;(store as unknown as { resolvingConflict: string | null }).resolvingConflict = 'batch'
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    expect(container.querySelector('.cc-conflict-list')?.getAttribute('data-selection-locked')).toBe('true')
+    await act(async () => click(itemRows()[0].querySelector('.cc-row-check')!))
+    expect(itemRows()[0].getAttribute('aria-selected')).toBe('false')
+    await act(async () => click(groupRows()[0].querySelector('.cc-row-check')!))
+    expect(container.querySelector('.cc-bulk-bar')).toBeNull()
+  })
+
+  it('counts a reopened broken link on the broken-links tile and includes it in that tile\'s filter and its panel', async () => {
+    const reopened = brokenTo('r1', 'decisions/Old', 'decisions/old', { kind: 'changed_after_decision', originalKind: 'broken_link', discrepancyStatus: 'reopened' })
+    const store = storeWith([reopened, freshConflict], reopened.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    const tiles = $$<HTMLButtonElement>('.cc-dc-tile')
+    const brokenTile = tiles.find((tile) => tile.textContent?.includes('broken link'))!
+    expect(brokenTile.querySelector('strong')?.textContent).toBe('1')
+    expect(tiles.find((tile) => tile.textContent?.includes('changed since decided'))?.querySelector('strong')?.textContent).toBe('0')
+    expect(container.querySelector('.cc-dc-quick')?.textContent).toContain('1 of 1 broken links have a suggested fix')
+    await act(async () => brokenTile.click())
+    expect(itemRows()).toHaveLength(1)
+    expect(itemRows()[0].textContent).toContain('decisions/Old')
+    // The panel treats it as the link it is: suggested fix leads, target_missing is offered.
+    expect(container.querySelector('.cc-smart-resolution h3')?.textContent).toBe('Rewrite to decisions/old')
+    expect(Array.from(container.querySelectorAll<HTMLOptionElement>('[aria-label="Acknowledgement reason"] option')).map((option) => option.textContent)).toContain('Target not created yet')
+    expect(container.querySelector('.cc-discrepancy-explanation')?.textContent).toContain('reopened automatically')
+  })
+
+  it('keeps the user\'s selection minus what succeeded, and says when a failure could not be identified', async () => {
+    const rows = [freshConflict, staleConflict, codeConflict]
+    const store = storeWith(rows, freshConflict.id)
+    store.decideDiscrepancies = vi.fn(async (request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> => (request.dryRun ? okBatch(request) : {
+      ok: false, applied: 1, failed: 2, notAttempted: 0, dryRun: false,
+      results: [
+        { discrepancyId: freshConflict.id, ok: true },
+        { discrepancyId: staleConflict.id, ok: false, status: 409, code: 'STALE', error: 'stale' },
+        { discrepancyId: null, ok: false, status: 400, code: 'DECISION_INVALID', error: 'malformed' },
+      ],
+      suggestions: [],
+    }))
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    await act(async () => click(groupRows()[0].querySelector('.cc-row-check')!))
+    await act(async () => buttons().find((button) => button.textContent === 'Acknowledge 3…')!.click())
+    const reason = container.querySelector<HTMLSelectElement>('.cc-bulk-ack [aria-label="Acknowledgement reason"]')!
+    await act(async () => { reason.value = 'other'; reason.dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => buttons().find((button) => button.textContent === 'Preview')!.click())
+    await act(async () => buttons().find((button) => button.textContent === 'Simulate for 3')!.click())
+    const receipt = container.querySelector('[role="status"].cc-decision-receipt')!
+    expect(receipt.textContent).toContain('1 done · 2 need attention.')
+    expect(receipt.textContent).toContain('1 decision could not be identified')
+    // The success left; the failure and the un-identifiable row (which the user had selected) both stay.
+    expect(itemRows().filter((row) => row.getAttribute('aria-selected') === 'true').map((row) => row.textContent?.includes('Choice'))).toEqual([false, false])
+    expect(container.querySelector('.cc-bulk-bar')?.textContent).toContain('2 selected')
+  })
+
+  it('names what a group create-stub sends, and keeps the sibling links selected after the one decision lands', async () => {
+    const rows = [brokenTo('l1', 'decisions/gone', null), brokenTo('l2', 'decisions/gone', null)]
+    const store = storeWith(rows, rows[0].id)
+    store.decideDiscrepancies = vi.fn(async (request: DiscrepancyBatchRequest) => okBatch(request))
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    await act(async () => click(groupRows()[0].querySelector('.cc-row-check')!))
+    await act(async () => buttons().find((button) => button.textContent?.startsWith('Create'))!.click())
+    expect(store.decideDiscrepancies.mock.calls[0][0].decisions).toHaveLength(1)
+    expect(container.querySelector('.cc-bulk-confirm')?.textContent).toContain('Create decisions/gone in personal (one decision; the 2 selected links resolve on the next scan).')
+    await act(async () => buttons().find((button) => button.textContent === 'Simulate for 1')!.click())
+    expect(container.querySelector('[role="status"].cc-decision-receipt')?.textContent).toContain('1 done. Create decisions/gone in personal (one decision; the 2 selected links resolve on the next scan).')
+    // l1 carried the decision and left the selection; its sibling stays until the rescan resolves it.
+    expect(itemRows().filter((row) => row.getAttribute('aria-selected') === 'true')).toHaveLength(1)
+  })
+
+  it('offers "Create rule" only for a suggestion that matches what the batch did, and reports a refused later batch', async () => {
+    const rows = [brokenTo('l1', 'decisions/Old', 'decisions/old'), brokenTo('l2', 'decisions/Old', 'decisions/old')]
+    const store = storeWith(rows, rows[0].id)
+    store.mode = 'live'
+    store.decideDiscrepancies = vi.fn(async (request: DiscrepancyBatchRequest): Promise<DiscrepancyBatchResponse> => (request.dryRun ? okBatch(request) : {
+      ...okBatch(request), ok: false,
+      error: { message: 'Coverage is incomplete while sources index.', chunk: 2, status: 409, code: 'COVERAGE_INCOMPLETE' },
+      suggestions: [
+        { id: 'unrelated', match: { kind: 'section_content', conceptType: '*', key: '*', sources: ['personal'] }, action: { type: 'acknowledge', reasonCode: 'other' }, evidenceDecisionIds: [], evidenceCount: 3 },
+        { id: 'matching', match: { kind: 'broken_link', conceptType: '*', key: '*', sources: ['personal'], target: 'decisions/Old' }, action: { type: 'rewrite_link', newTarget: 'decisions/old' }, evidenceDecisionIds: [], evidenceCount: 3, generalized: true },
+      ],
+    }))
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    await act(async () => click(groupRows()[0].querySelector('.cc-row-check')!))
+    await act(async () => buttons().find((button) => button.textContent?.startsWith('Rewrite 2 links'))!.click())
+    await act(async () => buttons().find((button) => button.textContent === 'Apply to 2')!.click())
+    const receipt = container.querySelector('[role="status"].cc-decision-receipt')!
+    expect(receipt.textContent).toContain('Batch 2 failed: Coverage is incomplete while sources index.')
+    const rule = buttons().find((button) => button.textContent?.startsWith('Create rule:'))!
+    expect(rule.textContent).toBe('Create rule: Rewrite → decisions/old')
+    await act(async () => rule.click())
+    expect(store.approveRuleSuggestion).toHaveBeenCalledWith('matching')
+  })
+})

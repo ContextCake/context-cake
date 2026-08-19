@@ -504,10 +504,11 @@ class LiveSource implements DataSource {
     for (let i = 0; i < request.decisions.length; i += BATCH_LIMIT) chunks.push(request.decisions.slice(i, i + BATCH_LIMIT))
     if (chunks.length === 0) chunks.push([])
     const merged: DiscrepancyBatchResponse = { ok: true, applied: 0, failed: 0, notAttempted: 0, dryRun: request.dryRun === true, results: [], suggestions: [] }
-    let stopped = false
+    const suggestionsById = new Map<string, DiscrepancyRuleSuggestion>()
+    let stopped: string | null = null // the reason the remaining chunks are not sent
     for (const [index, decisions] of chunks.entries()) {
       if (stopped) {
-        for (const decision of decisions) merged.results.push({ discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'SKIPPED', error: 'Skipped: an earlier decision in this batch failed and stopOnError was set.' })
+        for (const decision of decisions) merged.results.push({ discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'SKIPPED', error: stopped })
         merged.notAttempted = (merged.notAttempted ?? 0) + decisions.length
         continue
       }
@@ -520,21 +521,45 @@ class LiveSource implements DataSource {
         // Only a MISSING route falls back to singles. A 405 (mutations off), a
         // 409 (coverage incomplete — the whole batch is refused while sources
         // index) or a 413 is an answer, not an absence.
-        if (!(error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404)) throw error
-        // The engine predates the batch route: the whole request goes one at
-        // a time (index 0 is the only chunk that can reach here).
-        if (index !== 0) throw error
-        return runSequentially(request, (decision) => this.decideDiscrepancy(decision))
+        if (error instanceof LiveDataError && error.kind === 'bad-status' && error.status === 404 && index === 0) {
+          // The engine predates the batch route: the whole request goes one at a time.
+          return runSequentially(request, (decision) => this.decideDiscrepancy(decision))
+        }
+        // The first chunk's refusal is the request's refusal. A LATER chunk's
+        // throw must not discard what the earlier ones already applied: the
+        // partial answer comes back with the error attached and the rest of
+        // the selection reported not attempted, so the caller still flips what
+        // landed, refetches, and can say which batch failed and why.
+        if (index === 0) throw error
+        const message = error instanceof Error ? error.message : String(error)
+        merged.error = {
+          message, chunk: index + 1,
+          ...(error instanceof LiveDataError && error.status !== undefined ? { status: error.status } : {}),
+          ...(error instanceof LiveDataError && error.code ? { code: error.code } : {}),
+        }
+        stopped = `Not attempted: batch ${index + 1} of ${chunks.length} was refused (${message}). Resubmit the remaining decisions.`
+        for (const decision of decisions) merged.results.push({ discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'SKIPPED', error: stopped })
+        merged.notAttempted = (merged.notAttempted ?? 0) + decisions.length
+        continue
       }
       merged.applied += answer.applied ?? 0
       merged.failed += answer.failed ?? 0
       merged.notAttempted = (merged.notAttempted ?? 0) + (answer.notAttempted ?? 0)
       merged.results.push(...(answer.results ?? []))
-      merged.suggestions = answer.suggestions ?? merged.suggestions
+      // Suggestions are mined over the whole log after each batch, so later
+      // chunks repeat earlier ones under the same ids: merge, don't replace.
+      for (const suggestion of answer.suggestions ?? []) suggestionsById.set(suggestion.id, suggestion)
       if (answer.git) merged.git = answer.git
-      if (request.stopOnError && (answer.failed ?? 0) > 0) stopped = true
+      // A write that could not be rolled back needs a person before anything
+      // else is applied — the engine stops its own batch on it and so must the
+      // next one; likewise a batch the engine did not finish (its time budget)
+      // says nothing about whether the rest is safe to send.
+      const halted = (answer.results ?? []).some((result) => result.code === 'RECOVERY_REQUIRED')
+      if (halted) stopped = 'Not attempted: an earlier write in this batch requires recovery.'
+      else if (request.stopOnError && (answer.failed ?? 0) > 0) stopped = 'Skipped: an earlier decision in this batch failed and stopOnError was set.'
     }
-    merged.ok = merged.failed === 0 && (merged.notAttempted ?? 0) === 0
+    merged.suggestions = [...suggestionsById.values()]
+    merged.ok = merged.failed === 0 && (merged.notAttempted ?? 0) === 0 && !merged.error
     return merged
   }
   async discrepancyRules(): Promise<{ rules: DiscrepancyRule[]; suggestions: DiscrepancyRuleSuggestion[] }> {

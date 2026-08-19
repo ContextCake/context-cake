@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ACTIONABLE_STATUSES, buildHaystack, groupConflicts, isActionable, NO_SUMMARY, partitionBatchResults, summarizeConflicts,
+  ACTIONABLE_STATUSES, actionableByKind, buildHaystack, describeItems, effectiveKind, groupConflicts, isActionable, NO_SUMMARY,
+  partitionBatchResults, suggestionForBatch, summarizeConflicts,
 } from './discrepancy-summary'
 import type { Conflict } from './data'
 
@@ -149,6 +150,39 @@ describe('groupConflicts', () => {
     expect(platform.sharedSources).toBeUndefined() // contains broken links → no source action
     const [pair] = groupConflicts(rows.filter((row) => row.kind !== 'broken_link'), 'owner')
     expect(pair.sharedSources).toEqual(['personal', 'team'])
+  })
+})
+
+describe('describeItems', () => {
+  it('agrees the shared fix over actionable rows only, like the summary', () => {
+    const items = [
+      brokenLink('l1', 'x', 'y'),
+      brokenLink('l2', 'x', null, { discrepancyStatus: 'resolved', status: 'resolved' }),
+    ]
+    expect(describeItems(items).sharedBestCandidate).toEqual({ id: 'y', reason: 'case', confidence: 0.95 })
+    expect(describeItems([brokenLink('l1', 'x', 'y'), brokenLink('l2', 'x', 'z')]).sharedBestCandidate).toBeNull()
+    // A reopened broken link is still a broken link to the description.
+    const reopened = brokenLink('l3', 'x', 'y', { kind: 'changed_after_decision', originalKind: 'broken_link', discrepancyStatus: 'reopened' })
+    expect(describeItems([reopened]).allBrokenLinks).toBe(true)
+    expect(effectiveKind(reopened)).toBe('broken_link')
+    expect(actionableByKind([reopened]).broken_link).toBe(1)
+  })
+})
+
+describe('suggestionForBatch', () => {
+  const suggestions = [
+    { id: 'ack', match: { kind: 'section_content' as const, conceptType: '*', key: '*', sources: ['personal'] }, action: { type: 'acknowledge' as const, reasonCode: 'other' as const }, evidenceDecisionIds: [], evidenceCount: 3 },
+    { id: 'rw', match: { kind: 'broken_link' as const, conceptType: '*', key: '*', sources: ['personal'], target: 'decisions/Old' }, action: { type: 'rewrite_link' as const, newTarget: 'decisions/old' }, evidenceDecisionIds: [], evidenceCount: 3 },
+    { id: 'pref', match: { kind: 'section_content' as const, conceptType: 'decision', key: 'choice', sources: ['personal', 'team'] }, action: { type: 'prefer_source' as const, source: 'team' }, evidenceDecisionIds: [], evidenceCount: 3 },
+  ]
+  it('offers only the suggestion that matches what the batch just did', () => {
+    expect(suggestionForBatch(suggestions, { action: 'rewrite_link', newTarget: 'decisions/old', target: 'decisions/Old' })?.id).toBe('rw')
+    expect(suggestionForBatch(suggestions, { action: 'rewrite_link', newTarget: 'decisions/old', target: 'decisions/Other' })).toBeUndefined()
+    expect(suggestionForBatch(suggestions, { action: 'choose_contribution', selectedSource: 'team' })?.id).toBe('pref')
+    expect(suggestionForBatch(suggestions, { action: 'choose_contribution', selectedSource: 'personal' })).toBeUndefined()
+    expect(suggestionForBatch(suggestions, { action: 'acknowledge', reasonCode: 'other' })?.id).toBe('ack')
+    expect(suggestionForBatch(suggestions, { action: 'unlink' })).toBeUndefined()
+    expect(suggestionForBatch(suggestions, { action: 'create_stub' })).toBeUndefined()
   })
 })
 

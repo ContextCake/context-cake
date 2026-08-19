@@ -5,7 +5,7 @@
 // broken links to one target can be rewritten or given a stub concept, any
 // broken links can be unlinked, rows sharing a source can all take it, and
 // anything can be acknowledged with a reason.
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Conflict } from '../../data'
 import type { AcknowledgementReason, DiscrepancyBatchRequest, DiscrepancyBatchResponse, DiscrepancyDecisionRequest } from '../../types'
 import { describeItems, isActionable, partitionBatchResults } from '../../discrepancy-summary'
@@ -102,6 +102,8 @@ export function BulkBar({ items, hiddenBySearch = 0, onClear, onOutcome }: BulkB
   // refetch between Preview and Apply produces; applying the old request
   // would send revisions the engine no longer has and STALE the whole batch.
   const selectionKey = decidable.map((item) => `${item.id}@${item.revision}`).join('|')
+  const selectionKeyRef = useRef(selectionKey)
+  selectionKeyRef.current = selectionKey
   useEffect(() => { setPending(null); setError(null) }, [selectionKey])
 
   const canRewrite = description.allBrokenLinks && Boolean(description.sharedTarget) && description.candidates.length > 0
@@ -116,10 +118,16 @@ export function BulkBar({ items, hiddenBySearch = 0, onClear, onOutcome }: BulkB
   const preview = async (label: string, decisions: DiscrepancyDecisionRequest[]) => {
     if (busy || decisions.length === 0) return
     setError(null)
+    // The dry run is for THIS selection at THESE revisions. If either moved
+    // while it was in flight (a click, a refetch), its answer describes rows
+    // the confirm would not act on — drop it rather than show it.
+    const askedFor = selectionKeyRef.current
     try {
       const response = await decideDiscrepancies({ decisions, dryRun: true })
+      if (selectionKeyRef.current !== askedFor) return
       setPending({ label, request: { decisions }, preview: response })
     } catch (caught) {
+      if (selectionKeyRef.current !== askedFor) return
       setError(caught instanceof Error ? caught.message : String(caught))
     }
   }
@@ -179,7 +187,7 @@ export function BulkBar({ items, hiddenBySearch = 0, onClear, onOutcome }: BulkB
           )}
           {canCreate && target && (
             <span className="cc-bulk-group">
-              <button type="button" disabled={busy || !stubLayer} onClick={() => void preview(`Create ${target} in ${stubLayer}`, [{ discrepancyId: decidable[0].id, revision: decidable[0].revision as string, action: 'create_stub', layer: stubLayer }])} title="One new concept file; every selected link resolves to it">
+              <button type="button" disabled={busy || !stubLayer} onClick={() => void preview(`Create ${target} in ${stubLayer} (one decision; the ${plural(n, 'selected link')} resolve${n === 1 ? 's' : ''} on the next scan)`, [{ discrepancyId: decidable[0].id, revision: decidable[0].revision as string, action: 'create_stub', layer: stubLayer }])} title={`One decision creates one concept file; the ${plural(n, 'selected link')} resolve on the next scan and stay selected until then`}>
                 Create <code>{target}</code> in
               </button>
               <select aria-label="Layer to create the concept in" value={stubLayer} disabled={busy} onChange={(event) => setStubLayer(event.target.value)}>

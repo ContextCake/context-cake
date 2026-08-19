@@ -8,13 +8,13 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Conflict } from '../data'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import { useDetailSurface } from '../components/useDetailSurface'
-import { actionableByKind, buildHaystack, groupConflicts, isBrokenLink, partitionBatchResults, summarizeConflicts, type GroupBy } from '../discrepancy-summary'
+import { actionableByKind, buildHaystack, describeItems, groupConflicts, isBrokenLink, partitionBatchResults, suggestionForBatch, summarizeConflicts, type GroupBy } from '../discrepancy-summary'
 import { OverviewHeader } from './conflicts/OverviewHeader'
 import { GroupedList } from './conflicts/GroupedList'
 import { BulkBar, type BulkOutcome } from './conflicts/BulkBar'
 import { DecisionPanel, type AppliedDecision } from './conflicts/DecisionPanel'
 import { History, Skeleton, SourceAnswer } from './conflicts/Evidence'
-import { Rules } from './conflicts/Rules'
+import { actionLabel, Rules } from './conflicts/Rules'
 import { DEFAULT_FILTERS, matchesFilters, tabFor, type ConflictFilters } from './conflicts/filters'
 import { KIND_LABEL, STATUS_LABEL, plural } from './conflicts/labels'
 
@@ -22,7 +22,7 @@ import { KIND_LABEL, STATUS_LABEL, plural } from './conflicts/labels'
 const OPEN_BY_DEFAULT_MAX = 3
 
 function ConflictsInner() {
-  const { mode, conflicts, conflictSummary, setSelConflict, setQuery, loadDiscrepancyDetail, approveRuleSuggestion } = useStoreData()
+  const { mode, conflicts, conflictSummary, resolvingConflict, setSelConflict, setQuery, loadDiscrepancyDetail, approveRuleSuggestion } = useStoreData()
   const { selConflict } = useStoreNav()
   const { query } = useStoreInput()
   const [filters, setFilters] = useState<ConflictFilters>(DEFAULT_FILTERS)
@@ -101,14 +101,21 @@ function ConflictsInner() {
     restoreListFocus()
   }
 
-  const onBulkOutcome = ({ label, response }: BulkOutcome) => {
-    const { failed, notAttempted } = partitionBatchResults(response.results)
+  const onBulkOutcome = ({ label, request, response }: BulkOutcome) => {
+    const { ok, failed, notAttempted } = partitionBatchResults(response.results)
+    const succeeded = new Set(ok.map((result) => result.discrepancyId).filter((id): id is string => typeof id === 'string'))
     const failedIds = failed.map((result) => result.discrepancyId).filter((id): id is string => typeof id === 'string')
-    const notAttemptedIds = notAttempted.map((result) => result.discrepancyId).filter((id): id is string => typeof id === 'string')
-    // Failures AND the not-attempted tail stay selected — that is the retry /
-    // resubmit set; successes leave it.
-    setSelection(new Set([...failedIds, ...notAttemptedIds]))
-    const suggestion = response.suggestions?.[0]
+    const unidentified = failed.length - failedIds.length
+    // Successes leave the selection; everything else the user had selected
+    // stays exactly as it was — failures and the not-attempted tail are the
+    // retry set, and a create-stub's sibling links (one decision for many
+    // rows) stay until the rescan resolves them.
+    setSelection((prev) => { const next = new Set(prev); for (const id of succeeded) next.delete(id); return next })
+    const first = request.decisions[0]
+    const suggestion = suggestionForBatch(response.suggestions, {
+      action: first?.action ?? '', selectedSource: first?.selectedSource, newTarget: first?.newTarget, reasonCode: first?.reasonCode,
+      target: describeItems(selectedItems).sharedTarget,
+    })
     // The first failure's own words: "3 need attention" alone would leave
     // the user guessing whether it was a stale revision or a read-only layer.
     const firstError = failed.find((result) => result.error || result.code)
@@ -119,10 +126,17 @@ function ConflictsInner() {
       failed: failed.length,
       notAttempted: notAttempted.length,
       failedIds,
-      message: `${label}.${failed.length ? ` The ones that need attention stay selected${why}.` : ''}${notAttempted.length ? ` ${plural(notAttempted.length, 'decision was', 'decisions were')} not attempted — the batch ran out of time; they stay selected, resubmit them.` : ''}${response.git?.queued ? ' The team push is queued until the remote is reachable.' : ''}`,
+      message: [
+        `${label}.`,
+        response.error ? `Batch ${response.error.chunk} failed: ${response.error.message}.` : '',
+        failed.length ? `The ones that need attention stay selected${why}.` : '',
+        unidentified ? `${plural(unidentified, 'decision')} could not be identified by the engine and cannot be reselected.` : '',
+        notAttempted.length ? `${plural(notAttempted.length, 'decision was', 'decisions were')} not attempted; they stay selected — resubmit them.` : '',
+        response.git?.queued ? 'The team push is queued until the remote is reachable.' : '',
+      ].filter(Boolean).join(' '),
       ...(suggestion ? {
         suggestionId: suggestion.id,
-        suggestionLabel: suggestion.action.type === 'rewrite_link' ? `Rewrite → ${suggestion.action.newTarget}` : suggestion.action.type === 'prefer_source' ? `Prefer ${suggestion.action.source}` : `Acknowledge as ${suggestion.action.reasonCode.replace(/_/g, ' ')}`,
+        suggestionLabel: actionLabel(suggestion.action),
       } : {}),
     })
   }
@@ -173,6 +187,7 @@ function ConflictsInner() {
             onOpen={openRow}
             selection={selection}
             onSelectionChange={onSelectionChange}
+            selectionLocked={resolvingConflict === 'batch'}
             emptyState={emptyState}
             label="Discrepancies"
           />

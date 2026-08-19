@@ -481,6 +481,13 @@ export interface DiscrepancyBatchResponse {
    * check nothing, so `results` then carry no `wouldWrite`.
    */
   fallback?: 'sequential'
+  /**
+   * Console-side only: a selection past 500 goes over as consecutive batches,
+   * and one AFTER the first was refused outright. What the earlier batches
+   * applied is in `results`; the refused batch and everything after it are
+   * reported `SKIPPED` (not attempted); this says which batch and why.
+   */
+  error?: { message: string; chunk: number; status?: number; code?: string }
 }
 
 export interface ResolveConflictRequest {

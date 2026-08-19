@@ -4,7 +4,7 @@
 // loaded list) cannot disagree about what a tab means.
 import type { Conflict } from '../../data'
 import type { DiscrepancyKind, DiscrepancyStatus, DiscrepancySummary } from '../../types'
-import { displayStatus } from '../../discrepancy-summary'
+import { displayStatus, effectiveKind } from '../../discrepancy-summary'
 
 export type StatusTab = 'actionable' | 'recommended' | 'automated' | 'acknowledged' | 'resolved'
 
@@ -44,7 +44,8 @@ export function matchesFilters(item: Conflict, filters: ConflictFilters): boolea
   const status = displayStatus(item)
   const tab = STATUS_TABS.find((entry) => entry.value === filters.status)
   if (tab && !tab.statuses.includes(status)) return false
-  if (filters.kind !== 'all' && (item.kind ?? 'section_content') !== filters.kind) return false
+  // effectiveKind, so the tile that counted a reopened broken link as a broken link is the filter that shows it.
+  if (filters.kind !== 'all' && effectiveKind(item) !== filters.kind) return false
   if (filters.owner !== 'all' && (item.owner ?? 'Unassigned') !== filters.owner) return false
   if (filters.source !== 'all' && item.effectiveSource !== filters.source && !item.contributions.some((entry) => entry.sourceLayer === filters.source)) return false
   if (filters.priority !== 'all' && (item.priority ?? 'unassigned') !== filters.priority) return false

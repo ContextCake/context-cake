@@ -1046,8 +1046,8 @@ describe('LiveSource discrepancy routes', () => {
     expect(out.results[0].discrepancyId).toBe('d0')
     expect(out.results[1200].discrepancyId).toBe('d1200')
     expect(out.ok).toBe(true)
-    // The last batch's suggestions are the ones mined over the whole log.
-    expect(out.suggestions?.[0]?.id).toBe('after-d1200')
+    // Suggestions merge across batches by id (each batch mines the whole log).
+    expect(out.suggestions?.map((suggestion) => suggestion.id)).toEqual(['after-d499', 'after-d999', 'after-d1200'])
   })
 
   it('falls back to one decision at a time when the batch route is missing, and says so', async () => {
@@ -1076,6 +1076,60 @@ describe('LiveSource discrepancy routes', () => {
     expect(out.results[1]).toMatchObject({ status: 409, code: 'STALE', error: 'The record changed since you loaded it.' })
     // One batch attempt, then one single per decision.
     expect(vi.mocked(fetch).mock.calls.map(url)).toEqual(['/api/discrepancy-decisions/batch', '/api/discrepancy-decisions', '/api/discrepancy-decisions', '/api/discrepancy-decisions'])
+  })
+
+  it('keeps what earlier batches applied when a later batch is refused, and reports the rest not attempted', async () => {
+    const { createDataSource } = await import('./api')
+    let calls = 0
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      const body = JSON.parse(String(init?.body)) as { decisions: { discrepancyId: string }[] }
+      if (calls === 2) return status(409, { error: 'Coverage is incomplete while sources index.', code: 'COVERAGE_INCOMPLETE' })
+      return okJson({
+        ok: true, applied: body.decisions.length, failed: 0, notAttempted: 0, dryRun: false,
+        results: body.decisions.map((decision) => ({ discrepancyId: decision.discrepancyId, ok: true })),
+        suggestions: [{ id: 's-shared' }, { id: `s-${calls}` }],
+      })
+    })
+    const decisions = Array.from({ length: 600 }, (_, index) => ({ discrepancyId: `d${index}`, revision: '1', action: 'unlink' as const }))
+    const out = await createDataSource('live').decideDiscrepancies({ decisions })
+    expect(calls).toBe(2)
+    expect(out.applied).toBe(500)
+    expect(out.notAttempted).toBe(100)
+    expect(out.failed).toBe(0)
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatchObject({ chunk: 2, status: 409, code: 'COVERAGE_INCOMPLETE' })
+    expect(out.results).toHaveLength(600)
+    expect(out.results[499]).toMatchObject({ discrepancyId: 'd499', ok: true })
+    expect(out.results[500]).toMatchObject({ discrepancyId: 'd500', ok: false, code: 'SKIPPED' })
+    expect(out.results[500].error).toContain('batch 2 of 2 was refused')
+    // Suggestions merge by id across batches rather than the last one winning.
+    expect(out.suggestions?.map((suggestion) => suggestion.id)).toEqual(['s-shared', 's-1'])
+  })
+
+  it('stops sending further batches once one reports RECOVERY_REQUIRED, regardless of stopOnError', async () => {
+    const { createDataSource } = await import('./api')
+    let calls = 0
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      const body = JSON.parse(String(init?.body)) as { decisions: { discrepancyId: string }[] }
+      return okJson({
+        ok: false, applied: 1, failed: 1, notAttempted: body.decisions.length - 2, dryRun: false,
+        results: body.decisions.map((decision, index) => (index === 0
+          ? { discrepancyId: decision.discrepancyId, ok: true }
+          : index === 1
+            ? { discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'RECOVERY_REQUIRED', error: 'A previous write needs recovery.' }
+            : { discrepancyId: decision.discrepancyId, ok: false, status: 409, code: 'SKIPPED', error: 'Skipped: an earlier write in this batch requires recovery.' })),
+        suggestions: [],
+      })
+    })
+    const decisions = Array.from({ length: 600 }, (_, index) => ({ discrepancyId: `d${index}`, revision: '1', action: 'unlink' as const }))
+    const out = await createDataSource('live').decideDiscrepancies({ decisions })
+    expect(calls).toBe(1)
+    expect(out.applied).toBe(1)
+    expect(out.notAttempted).toBe(598)
+    expect(out.results[599]).toMatchObject({ discrepancyId: 'd599', ok: false, code: 'SKIPPED' })
+    expect(out.results[599].error).toContain('requires recovery')
   })
 
   it('does not fall back on a real refusal — a 409 from the batch route is an answer, with its code', async () => {

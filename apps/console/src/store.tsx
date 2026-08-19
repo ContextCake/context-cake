@@ -562,7 +562,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const loadedConflictDetailsRef = useRef<string[]>([])
   const conflictDetailInFlightRef = useRef<Set<string>>(new Set())
   const coverageRef = useRef(true)
-  const conflictDetailRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // One retry timer per id, cleared on success and on unmount — a single
+  // shared timer let a second failing row cancel the first row's retry.
+  const conflictDetailRetryRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  useEffect(() => () => {
+    for (const timer of conflictDetailRetryRef.current.values()) clearTimeout(timer)
+    conflictDetailRetryRef.current.clear()
+  }, [])
   const loadDiscrepancyDetail = useCallback(async (id: string) => {
     if (!compactConflictRef.current.has(id)) return
     if (loadedConflictDetailsRef.current.includes(id)) return
@@ -579,6 +585,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // if it were the truth.
       if (!record) return
       const full = adaptDiscrepancy(record, coverageRef.current, buckets)
+      const pendingRetry = conflictDetailRetryRef.current.get(id)
+      if (pendingRetry) { clearTimeout(pendingRetry); conflictDetailRetryRef.current.delete(id) }
       const order = loadedConflictDetailsRef.current.filter((held) => held !== id)
       order.push(id)
       const evict = order.length > DETAIL_CACHE_LIMIT ? order.shift() : undefined
@@ -603,11 +611,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Same retry-while-selected policy as concepts: the compact row stays
       // (a skeleton, never an empty panel) and the load tries again while
       // this row is still the one on screen.
-      if (conflictDetailRetryRef.current) clearTimeout(conflictDetailRetryRef.current)
-      conflictDetailRetryRef.current = setTimeout(() => {
-        conflictDetailRetryRef.current = null
+      const previous = conflictDetailRetryRef.current.get(id)
+      if (previous) clearTimeout(previous)
+      conflictDetailRetryRef.current.set(id, setTimeout(() => {
+        conflictDetailRetryRef.current.delete(id)
         if (selConflictRef.current === id) void loadDiscrepancyDetail(id)
-      }, 2500)
+      }, 2500))
     } finally {
       conflictDetailInFlightRef.current.delete(id)
     }
@@ -773,7 +782,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           && prev.history.length === (c.historyCount ?? 0) && prev.priority === c.priority && prev.owner === c.owner
         if (!unchanged) return c
         carried.push(c.id)
-        return { ...prev, coverageComplete: c.coverageComplete }
+        // Only the BODIES and the history come from the old detail — the
+        // parts a compact row cannot carry. Everything the fresh row does
+        // carry (candidates, the suggested fix, matching rules, health,
+        // status) is taken from it: an index pass that added a concept can
+        // give a link a new best candidate without touching its revision.
+        return {
+          ...c,
+          contributions: prev.contributions, history: prev.history,
+          detailLoaded: prev.detailLoaded, historyCount: undefined, latestDecision: undefined,
+        }
       })
       // The engine's summary rides in the compact envelope. An engine that
       // ignored `?fields=compact` (full records, no `summary`), the legacy
@@ -1278,9 +1296,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setResolutionError(null)
     try {
       const record = await source.decideDiscrepancy(request)
-      setConflicts((previous) => previous.map((item) => item.id === request.discrepancyId
-        ? { ...item, status: request.action === 'acknowledge' ? 'open' : 'resolved', discrepancyStatus: request.action === 'acknowledge' ? 'acknowledged' : 'resolved', history: [...item.history, record] }
-        : item))
+      // The header count and the tab counts read the summary, so the flip
+      // recomputes it locally; the refetch a moment later overwrites it with
+      // the engine's numbers.
+      const next = conflictsRef.current.map((item) => item.id === request.discrepancyId
+        ? { ...item, status: request.action === 'acknowledge' ? 'open' as const : 'resolved' as const, discrepancyStatus: request.action === 'acknowledge' ? 'acknowledged' as const : 'resolved' as const, history: [...item.history, record] }
+        : item)
+      conflictsRef.current = next
+      setConflicts(next)
+      setConflictSummary(summarizeConflicts(next))
       window.setTimeout(() => setReloadKey((key) => key + 1), 300)
     } catch (error) {
       setResolutionError({ message: error instanceof Error ? error.message : String(error), partial: false })
@@ -1309,18 +1333,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const byId = new Map(request.decisions.map((decision) => [decision.discrepancyId, decision]))
         const landed = new Map(response.results.filter((result) => result.ok && result.discrepancyId).map((result) => [result.discrepancyId as string, result]))
         if (landed.size > 0) {
-          setConflicts((previous) => previous.map((item) => {
+          const next = conflictsRef.current.map((item) => {
             const result = landed.get(item.id)
             const decision = byId.get(item.id)
             if (!result || !decision) return item
             const acknowledged = decision.action === 'acknowledge'
             return {
               ...item,
-              status: acknowledged ? 'open' : 'resolved',
-              discrepancyStatus: acknowledged ? 'acknowledged' : 'resolved',
+              status: acknowledged ? 'open' as const : 'resolved' as const,
+              discrepancyStatus: acknowledged ? 'acknowledged' as const : 'resolved' as const,
               history: result.decision ? [...item.history, result.decision] : item.history,
             }
-          }))
+          })
+          conflictsRef.current = next
+          setConflicts(next)
+          setConflictSummary(summarizeConflicts(next))
         }
         // ONE refetch for the whole batch — not one per result — and even
         // when nothing landed: a batch that came back all STALE / NOT_OPEN

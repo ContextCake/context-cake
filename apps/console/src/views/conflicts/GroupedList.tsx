@@ -165,11 +165,13 @@ export interface GroupedListProps {
   onOpen: (id: string) => void
   selection: ReadonlySet<string>
   onSelectionChange: (next: Set<string>) => void
+  /** While a preview or a bulk apply is in flight the selection is what it acts on — (de)selecting rows is refused. */
+  selectionLocked?: boolean
   emptyState: ReactNode
   label: string
 }
 
-export function GroupedList({ groups, isCollapsed, onToggleGroup, currentId, onOpen, selection, onSelectionChange, emptyState, label }: GroupedListProps) {
+export function GroupedList({ groups, isCollapsed, onToggleGroup, currentId, onOpen, selection, onSelectionChange, selectionLocked = false, emptyState, label }: GroupedListProps) {
   const rows = useMemo(() => flattenGroups(groups, isCollapsed), [groups, isCollapsed])
   const heights = useMemo(() => rows.map((row) => (row.kind === 'group' ? GROUP_ROW_HEIGHT : ITEM_ROW_HEIGHT)), [rows])
   const indexByKey = useMemo(() => {
@@ -188,6 +190,8 @@ export function GroupedList({ groups, isCollapsed, onToggleGroup, currentId, onO
   const anchorRef = useRef<string | null>(null)
   const selectionRef = useRef(selection)
   selectionRef.current = selection
+  const lockedRef = useRef(selectionLocked)
+  lockedRef.current = selectionLocked
   const rowsRef = useRef(rows)
   rowsRef.current = rows
 
@@ -239,6 +243,7 @@ export function GroupedList({ groups, isCollapsed, onToggleGroup, currentId, onO
   }, [])
 
   const toggleItem = useCallback((id: string) => {
+    if (lockedRef.current) return
     const next = new Set(selectionRef.current)
     if (next.has(id)) next.delete(id); else next.add(id)
     anchorRef.current = id
@@ -247,6 +252,7 @@ export function GroupedList({ groups, isCollapsed, onToggleGroup, currentId, onO
 
   /** Select every item row between the anchor and `id` (visual order, expanded groups only). */
   const rangeTo = useCallback((id: string) => {
+    if (lockedRef.current) return
     const anchor = anchorRef.current
     const items = rowsRef.current.filter((row): row is Extract<ListRow, { kind: 'item' }> => row.kind === 'item')
     const from = anchor ? items.findIndex((row) => row.item.id === anchor) : -1
@@ -258,6 +264,7 @@ export function GroupedList({ groups, isCollapsed, onToggleGroup, currentId, onO
   }, [onSelectionChange, toggleItem])
 
   const checkGroup = useCallback((group: ConflictGroup) => {
+    if (lockedRef.current) return
     const next = new Set(selectionRef.current)
     const all = group.items.every((item) => next.has(item.id))
     for (const item of group.items) { if (all) next.delete(item.id); else next.add(item.id) }
@@ -362,6 +369,7 @@ export function GroupedList({ groups, isCollapsed, onToggleGroup, currentId, onO
       role="listbox"
       aria-multiselectable="true"
       aria-label={label}
+      data-selection-locked={selectionLocked || undefined}
       onScroll={virtual.onScroll}
       onKeyDown={onKeyDown}
       onFocus={() => { hasFocus.current = true }}

@@ -898,6 +898,8 @@ describe('discrepancies: compact rows, detail on selection, batch decisions', ()
         data-sel-history={String(selected?.history.length ?? '')}
         data-sel-value={selected?.contributions[0]?.value ?? ''}
         data-sel-truncated={String(selected?.contributions[0]?.truncated)}
+        data-sel-best={selected?.bestCandidate?.id ?? ''}
+        data-sel-rules={(selected?.matchingRules ?? []).map((rule) => rule.id).join(',')}
       >
         <button type="button" onClick={() => setSelConflict('section_content::b::body')}>select b</button>
         <button type="button" onClick={() => void decideDiscrepancies({ decisions: conflicts.map((c) => ({ discrepancyId: c.id, revision: c.revision as string, action: 'acknowledge' as const, reasonCode: 'other' as const })) }).catch(() => {})}>batch</button>
@@ -1028,6 +1030,75 @@ describe('discrepancies: compact rows, detail on selection, batch decisions', ()
     mocks.status.mockResolvedValue(statusPayload({ generation: 3, indexing: false, conceptCount: 1 }))
     await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
     expect(mocks.discrepancyDetail).toHaveBeenCalledTimes(2)
+    expect(cprobe().dataset.selDetail).toBe('undefined')
+  })
+
+  it('a carried detail takes candidates, rules and health from the FRESH compact row, keeping only bodies and history', async () => {
+    mocks.flags.withDiscrepancies = true
+    mocks.graph.mockResolvedValue(graphWith([graphRow('a')]))
+    mocks.discrepancies.mockResolvedValue(compactPayload(['a']))
+    mocks.discrepancyDetail.mockImplementation(async (id: string) => fullRecord(id.split('::')[1]))
+    mocks.resolve.mockImplementation(async (id: string) => conceptPayload(id))
+    mocks.status.mockResolvedValue(statusPayload({ generation: 1, indexing: false, conceptCount: 1 }))
+    await act(async () => root.render(<StoreProvider><ConflictProbe /></StoreProvider>))
+    expect(cprobe().dataset.selValue).toBe('mine, in full')
+    expect(cprobe().dataset.selBest).toBe('')
+
+    // Same revision, but an index pass gave the row a suggested fix and a matching rule.
+    const fresher = compactPayload(['a'])
+    fresher.discrepancies[0] = {
+      ...fresher.discrepancies[0],
+      bestCandidate: { id: 'decisions/new', reason: 'case', confidence: 0.95 }, candidates: [{ id: 'decisions/new', reason: 'case', confidence: 0.95 }],
+      matchingRules: [{ id: 'rule-1', scope: 'local', mode: 'recommend', action: { type: 'acknowledge', reasonCode: 'other' }, evidenceDecisionIds: ['d1', 'd2', 'd3'] }],
+    } as unknown as (typeof fresher.discrepancies)[number]
+    mocks.discrepancies.mockResolvedValue(fresher)
+    mocks.status.mockResolvedValue(statusPayload({ generation: 2, indexing: false, conceptCount: 1 }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(mocks.discrepancyDetail).toHaveBeenCalledTimes(1) // still carried — no reload
+    expect(cprobe().dataset.selDetail).toBe('undefined')
+    expect(cprobe().dataset.selValue).toBe('mine, in full') // the loaded body survives
+    expect(cprobe().dataset.selBest).toBe('decisions/new') // the fresh candidate arrives
+    expect(cprobe().dataset.selRules).toBe('rule-1')
+  })
+
+  it('moves the summary the moment a batch flips rows, before the refetch confirms it', async () => {
+    mocks.flags.withDiscrepancies = true
+    mocks.graph.mockResolvedValue(graphWith([graphRow('a'), graphRow('b'), graphRow('c')]))
+    mocks.discrepancies.mockResolvedValue(compactPayload(['a', 'b', 'c']))
+    mocks.discrepancyDetail.mockImplementation(async (id: string) => fullRecord(id.split('::')[1]))
+    mocks.resolve.mockImplementation(async (id: string) => conceptPayload(id))
+    mocks.decideDiscrepancies.mockImplementation(async (request: { decisions: { discrepancyId: string }[] }) => ({
+      ok: true, applied: request.decisions.length, failed: 0, notAttempted: 0, dryRun: false,
+      results: request.decisions.map((decision) => ({ discrepancyId: decision.discrepancyId, ok: true })), suggestions: [],
+    }))
+    await act(async () => root.render(<StoreProvider><ConflictProbe /></StoreProvider>))
+    expect(cprobe().dataset.summary).toBe('3')
+    const [, batch] = Array.from(cprobe().querySelectorAll<HTMLButtonElement>('button'))
+    await act(async () => batch.click())
+    // No timers advanced: the refetch has not run, the summary already moved.
+    expect(cprobe().dataset.statuses).toBe('a:acknowledged,b:acknowledged,c:acknowledged')
+    expect(cprobe().dataset.summary).toBe('0')
+  })
+
+  it('retries a failed detail load per row - a second row failing does not cancel the first row retry', async () => {
+    mocks.flags.withDiscrepancies = true
+    mocks.graph.mockResolvedValue(graphWith([graphRow('a'), graphRow('b')]))
+    mocks.discrepancies.mockResolvedValue(compactPayload(['a', 'b']))
+    let attempts = 0
+    mocks.discrepancyDetail.mockImplementation(async (id: string) => {
+      attempts += 1
+      if (attempts <= 2) throw new Error('engine mid-restart')
+      return fullRecord(id.split('::')[1])
+    })
+    mocks.resolve.mockImplementation(async (id: string) => conceptPayload(id))
+    await act(async () => root.render(<StoreProvider><ConflictProbe /></StoreProvider>))
+    expect(cprobe().dataset.selDetail).toBe('false') // 'a' failed once
+    // Select 'b' (fails once too, arming its own timer), then come back to 'a'.
+    await act(async () => cprobe().querySelector<HTMLButtonElement>('button')!.click())
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    // b's retry landed (attempt 3 succeeds); a's own retry, armed first, was not cancelled by b's failure and
+    // fires only if a is still selected — it is not, so a stays compact until re-selected.
+    expect(cprobe().dataset.selected).toBe('section_content::b::body')
     expect(cprobe().dataset.selDetail).toBe('undefined')
   })
 })

@@ -8,6 +8,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Conflict } from '../data'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import { useDetailSurface } from '../components/useDetailSurface'
+import { OneTimeHint } from '../components/OneTimeHint'
 import { actionableByKind, buildHaystack, describeItems, groupConflicts, isBrokenLink, partitionBatchResults, suggestionForBatch, summarizeConflicts, type GroupBy } from '../discrepancy-summary'
 import { OverviewHeader } from './conflicts/OverviewHeader'
 import { GroupedList } from './conflicts/GroupedList'
@@ -156,15 +157,17 @@ function ConflictsInner() {
 
   return (
     <div className="cc-conflicts cc-discrepancy-center">
-      <header className="cc-discrepancy-header"><div><span className="cc-eyebrow">Alignment workspace</span><h2>Discrepancy Center</h2><p>{plural(summary.actionable, 'actionable item')}. Structural evidence only—no model-inferred contradictions.</p></div><span className="cc-actionable-count">{summary.actionable}</span></header>
-      <section className="cc-discrepancy-guide" aria-label="How to resolve a discrepancy">
-        <strong>Resolve differences one at a time, or many at once</strong>
-        <ol>
-          <li><span>1</span>Review the evidence</li>
-          <li><span>2</span>Choose the safest next step</li>
-          <li><span>3</span>Confirm what changes</li>
-        </ol>
-      </section>
+      <header className="cc-discrepancy-header">
+        <div><h2>Discrepancy Center</h2><p>{plural(summary.actionable, 'actionable item')}. Structural evidence only—no model-inferred contradictions.</p></div>
+        <span className="cc-actionable-count">{summary.actionable}</span>
+        <OneTimeHint id="discrepancy-workflow" title="Resolve differences one at a time, or many at once">
+          <ol>
+            <li><span>1</span>Review the evidence</li>
+            <li><span>2</span>Choose the safest next step</li>
+            <li><span>3</span>Confirm what changes</li>
+          </ol>
+        </OneTimeHint>
+      </header>
       {conflicts.some((item) => item.coverageComplete === false) && <div className="cc-coverage-warning" role="status">Coverage is incomplete while sources index or recover. Broken-link findings are paused.</div>}
       <OverviewHeader
         summary={summary}

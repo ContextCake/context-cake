@@ -155,6 +155,8 @@ const resolvedViaEffectiveSource: Conflict = {
 
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  // The first-visit hint remembers its dismissal; every test starts on a first visit.
+  localStorage.clear()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -166,14 +168,24 @@ afterEach(async () => {
 })
 
 describe('Discrepancy Center', () => {
-  it('explains the review workflow before presenting filters and evidence', async () => {
+  const HINT = '[aria-label="Resolve differences one at a time, or many at once"]'
+
+  it('explains the review workflow on the first visit, and never again', async () => {
     mocks.useStore.mockReturnValue(storeWith([freshConflict], freshConflict.id))
     await act(async () => root.render(<Conflicts />))
 
-    const guide = container.querySelector('[aria-label="How to resolve a discrepancy"]')
-    expect(guide?.textContent).toContain('Review the evidence')
-    expect(guide?.textContent).toContain('Choose the safest next step')
-    expect(guide?.textContent).toContain('Confirm what changes')
+    const hint = container.querySelector(HINT)
+    expect(hint?.textContent).toContain('Review the evidence')
+    expect(hint?.textContent).toContain('Choose the safest next step')
+    expect(hint?.textContent).toContain('Confirm what changes')
+
+    await act(async () => { hint?.querySelector('button')?.click() })
+    expect(container.querySelector(HINT)).toBeNull()
+
+    // A later visit — a fresh mount — gets the space, not the lesson.
+    await act(async () => root.render(<Conflicts key="second" />))
+    expect(container.querySelector(HINT)).toBeNull()
+
     // Tabs carry a count now ("Needs review 1"), so match on the label prefix.
     expect(Array.from(container.querySelectorAll<HTMLButtonElement>('.cc-status-tabs button')).find((button) => button.textContent?.startsWith('Needs review'))?.getAttribute('aria-pressed')).toBe('true')
   })

@@ -37,7 +37,7 @@ function normalizeCascadeHiddenNodes(value) {
 }
 
 export const DEFAULT_UI_STATE = Object.freeze({
-  sidebar: { collapsed: false, width: 232 },
+  sidebar: { collapsed: true, width: 232 },
   lastView: 'overview',
   knowledgeView: 'concepts',
   reviewView: 'triage',

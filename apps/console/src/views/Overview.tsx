@@ -1,119 +1,111 @@
-import { memo, useState } from 'react'
-import { progressLabel, progressPercent } from '../api'
-import { computeCascadeOrder, rankLabel, winsOverHint } from '../cascade-order'
-import { layerName } from '../data'
+import { memo, useMemo, useState } from 'react'
+import { progressLabel } from '../api'
+import { computeCascadeOrder, rankLabel } from '../cascade-order'
+import type { Concept, Source } from '../data'
 import { useStoreData } from '../store'
-import { LayerChip } from '../components/LayerChip'
-import { EmptyState, StatusBadge, Button } from '../components/ui'
-import { AgentIcon } from '../components/icons'
-import { actionableByKind, isActionable, summarizeConflicts } from '../discrepancy-summary'
+import { actionableByKind, summarizeConflicts } from '../discrepancy-summary'
+import './workspace.css'
 
-/** "12 broken links · 3 sections · 1 value" — the kinds behind the actionable count, largest first, zeros dropped. */
-function kindSubtitle(byKind: Record<string, number>): string {
-  const parts: [string, string, number][] = [
-    ['broken link', 'broken links', byKind.broken_link ?? 0],
-    ['section', 'sections', byKind.section_content ?? 0],
-    ['value', 'values', byKind.frontmatter_value ?? 0],
-    ['changed', 'changed', byKind.changed_after_decision ?? 0],
-  ]
-  return parts.filter(([, , count]) => count > 0).sort((a, b) => b[2] - a[2])
-    .map(([one, many, count]) => `${count} ${count === 1 ? one : many}`).join(' · ')
+function latestSectionDate(concept: Concept): string | null {
+  // Compact graph rows do not know every section yet. Never turn missing
+  // dates into a made-up "recently viewed" feed or issue N detail requests.
+  if (concept.detailLoaded === false) return null
+  const dates = concept.sections.map((section) => section.updated).filter((date): date is string => Boolean(date) && Number.isFinite(Date.parse(date!)))
+  return dates.sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null
+}
+
+function sourceState(source: Source): string {
+  if (source.quarantined) return 'Invalid configuration'
+  if (source.status === 'error') return 'Unavailable'
+  if (source.status === 'degraded') return 'Partial context'
+  if (source.status === 'indexing') return progressLabel(source.indexing)
+  if (source.indexing?.refreshing) return 'Refreshing'
+  if (source.warnings) return `${source.warnings} indexing warning${source.warnings === 1 ? '' : 's'}`
+  if (source.status === 'empty' || source.conceptCount === 0) return 'No indexed documents'
+  return 'Available'
+}
+
+function discrepancyKinds(kinds: Record<string, number>): string {
+  return [['broken_link', 'broken link'], ['section_content', 'section'], ['frontmatter_value', 'value'], ['changed_after_decision', 'changed decision']]
+    .filter(([key]) => kinds[key] > 0)
+    .map(([key, noun]) => `${kinds[key]} ${noun}${kinds[key] === 1 ? '' : 's'}`).join(' · ')
 }
 
 function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
   const [question, setQuestion] = useState('')
-  const { mode, setView, openConceptSearch, signals, conflicts, conflictSummary, sources, concepts, activity, loadErrors } = useStoreData()
-  // The real cascade, in the order it resolves: position 1 wins. Both modes
-  // read the sources the store holds — the demo bundle's trio is a real
-  // cascade too, not a static blurb to fall back to. A quarantined entry is
-  // not in the cascade (nothing was built for it), so it gets no position;
-  // Needs Attention and Source health still show it.
-  const cascade = computeCascadeOrder(sources.filter((source) => !source.quarantined))
-  const queue = signals.filter((signal) => signal.route === 'review_required')
-  const openConflicts = conflicts.filter(isActionable)
-  // The engine's summary when the store has one; the local mirror otherwise
-  // (demo bundle, an engine without the compact route, or a test store).
+  const { mode, setView, openConcept, openConceptSearch, signals, conflicts, conflictSummary, sources, concepts, loadErrors, load } = useStoreData()
   const summary = conflictSummary ?? summarizeConflicts(conflicts)
-  const failedSources = sources.filter((source) => source.status === 'error' || source.status === 'degraded')
-  const attention = [
-    ...(queue.length ? [{ key: 'queue', label: `${queue.length} item${queue.length === 1 ? '' : 's'} waiting in Queue`, detail: 'Review captured knowledge before it is stored.', view: 'triage' as const, tone: 'attention' as const }] : []),
-    ...(openConflicts.length ? [{ key: 'conflicts', label: `${openConflicts.length} actionable discrepanc${openConflicts.length === 1 ? 'y' : 'ies'}`, detail: 'Compare evidence and record a governed decision.', view: 'conflicts' as const, tone: 'attention' as const }] : []),
-    ...failedSources.map((source) => ({ key: `source-${source.name}`, label: `${source.name} is ${source.status}`, detail: source.error || 'Open Sources for status and recovery actions.', view: 'sources' as const, tone: 'attention' as const })),
-    ...(loadErrors.length ? [{ key: 'resolution', label: `${loadErrors.length} partial resolution failure${loadErrors.length === 1 ? '' : 's'}`, detail: 'The rest of the cascade remains available.', view: 'concepts' as const, tone: 'attention' as const }] : []),
-  ]
-  const metrics = [
-    { label: 'Sources', value: sources.length, view: 'sources' as const },
-    { label: 'Concepts', value: concepts.length, view: 'concepts' as const },
-    // The subtitle counts actionable rows per kind (the summary's byKind counts decided rows too).
-    { label: 'Discrepancies', value: summary.actionable, view: 'conflicts' as const, detail: kindSubtitle(actionableByKind(conflicts)) },
-    { label: 'Queue', value: queue.length, view: 'triage' as const },
-  ]
+  const queueCount = signals.filter((signal) => signal.route === 'review_required').length
+  const unhealthy = sources.filter((source) => source.quarantined || source.status === 'error' || source.status === 'degraded' || Boolean(source.warnings))
+  const indexing = sources.some((source) => source.status === 'indexing' || source.indexing?.refreshing)
+  const partial = unhealthy.length > 0 || indexing || loadErrors.length > 0 || Boolean(load?.refreshError)
+  const cascade = computeCascadeOrder(sources.filter((source) => !source.quarantined))
+  const positions = new Map(cascade.map((source) => [source.name, rankLabel(source)]))
+  const orderedSources = [...cascade, ...sources.filter((source) => source.quarantined)]
+  const dated = useMemo(() => concepts.flatMap((concept) => {
+    const date = latestSectionDate(concept)
+    return date ? [{ concept, date }] : []
+  }).sort((a, b) => Date.parse(b.date) - Date.parse(a.date) || a.concept.title.localeCompare(b.concept.title)).slice(0, 6), [concepts])
+  const datedIds = new Set(dated.map(({ concept }) => concept.id))
+  const documents = [...dated, ...concepts.filter((concept) => !datedIds.has(concept.id)).slice(0, 6 - dated.length).map((concept) => ({ concept, date: null }))]
+  const reviewHeading = summary.actionable
+    ? `${summary.actionable} discrepanc${summary.actionable === 1 ? 'y needs' : 'ies need'} review`
+    : partial ? 'Your context is incomplete' : load?.concepts ? 'Checking your context' : sources.length ? 'No open discrepancies' : 'Start with a source'
+  const reviewBody = summary.actionable
+    ? 'Compare the sources, choose a resolution, or set a source policy.'
+    : partial ? 'You can work with available documents. Check source status before relying on coverage.'
+      : load?.concepts ? 'Documents are available while the rest of your context loads.'
+        : sources.length ? 'Recorded decisions and source evidence are available in Trust.'
+          : 'Connect a project folder, repository, or knowledge source to build your workspace.'
 
   return (
-    <div className="cc-home">
-      <section className="cc-workspace-section cc-home-search" aria-labelledby="cc-find-context">
-        <div className="cc-section-heading"><div><h2 id="cc-find-context">Your project context</h2><p>Find the decisions, instructions, and notes behind your next change.</p></div></div>
-        <form onSubmit={(event) => { event.preventDefault(); openConceptSearch(question) }}><input aria-label="Search your project context" placeholder="Build commands, database choices, release process…" value={question} onChange={(event) => setQuestion(event.target.value)} /><Button type="submit" variant="primary">Search context</Button></form>
-        <div className="cc-home-shortcuts">{['build and test', 'architecture', 'release process'].map((query) => <button type="button" key={query} onClick={() => { openConceptSearch(query) }}>{query}</button>)}</div>
+    <div className="cc-workspace">
+      <section className="cc-workspace-find" aria-labelledby="cc-workspace-find-title">
+        <div className="cc-workspace-intro"><h2 id="cc-workspace-find-title">Context for your next change.</h2><p>Find the decisions, instructions, and notes your work depends on.</p></div>
+        <form className="cc-workspace-search" role="search" onSubmit={(event) => { event.preventDefault(); openConceptSearch(question) }}>
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
+          <input aria-label="Search your project context" placeholder="Search your project context…" value={question} onChange={(event) => setQuestion(event.target.value)} />
+          <button type="submit">Search context <span aria-hidden="true">↵</span></button>
+        </form>
+        <div className="cc-workspace-shortcuts"><span>Try</span>{['build and test', 'architecture', 'release process'].map((query) => <button type="button" key={query} onClick={() => openConceptSearch(query)}>{query}<span aria-hidden="true">↗</span></button>)}</div>
       </section>
 
-      <nav className="cc-metric-strip" aria-label="Workspace totals">
-        {metrics.map((metric) => <button key={metric.label} type="button" onClick={() => setView(metric.view)}><strong>{metric.value}</strong><span>{metric.label}</span>{'detail' in metric && metric.detail ? <small className="cc-metric-detail">{metric.detail}</small> : null}</button>)}
-      </nav>
-
-      <section className={`cc-workspace-section cc-home-attention${attention.length ? "" : " cc-home-attention--clear"}`} aria-labelledby="cc-needs-attention">
-        <div className="cc-section-heading"><div><h2 id="cc-needs-attention">Needs Attention</h2><p>Work that may need a decision or recovery.</p></div>{attention.length > 0 && <StatusBadge tone="attention">{attention.length}</StatusBadge>}</div>
-        {attention.length === 0 ? <EmptyState title="Nothing needs review">Your cascade is resolving cleanly.</EmptyState> : (
-          <div className="cc-attention-list">{attention.map((item) => <button key={item.key} type="button" onClick={() => setView(item.view)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><span aria-hidden="true">›</span></button>)}</div>
-        )}
-      </section>
-
-      <section className="cc-workspace-section" aria-labelledby="cc-source-health">
-        <div className="cc-section-heading"><div><h2 id="cc-source-health">Source health</h2><p>Current engine status for every layer feeding the cascade.</p></div><button type="button" onClick={() => setView('sources')}>Manage Sources</button></div>
-        {sources.length === 0 ? <EmptyState title="No sources yet">Add a folder, repository, or MCP server to begin.</EmptyState> : <div className="cc-health-list">{sources.map((source) => <button key={source.name} type="button" onClick={() => setView('sources')}><span className={`cc-health-indicator cc-health-indicator--${source.status}`} aria-hidden="true" /><strong>{source.name}</strong><span>{layerName(source.layer)} · {source.status === 'indexing' ? progressLabel(source.indexing) : `${source.conceptCount} concept${source.conceptCount === 1 ? '' : 's'}`}{source.status !== 'indexing' && source.indexing?.refreshing ? ' · refreshing' : ''}</span><StatusBadge tone={source.status === 'serving' || source.status === 'synced' ? 'success' : source.status === 'error' || source.status === 'degraded' ? 'attention' : source.status === 'indexing' ? 'info' : 'neutral'}>{source.status === 'indexing' ? `indexing${progressPercent(source.indexing) == null ? '' : ` ${progressPercent(source.indexing)}%`}` : source.status}</StatusBadge></button>)}</div>}
-      </section>
-
-      <details className="cc-workspace-section cc-home-precedence"><summary>How your sources resolve</summary>
-        <div className="cc-section-heading"><div><h2 id="cc-cascade-order">Cascade order</h2><p>Position 1 wins wherever it speaks; everything else is inherited from the layers below.</p></div><button type="button" onClick={() => setView('sources')}>{mode === 'live' ? 'Reorder in Sources' : 'Open Sources'}</button></div>
-        {cascade.length === 0 ? <EmptyState title={sources.length ? 'No working sources' : 'No sources yet'}>{sources.length ? 'Every entry in the manifest is invalid — open Sources to remove them.' : 'Add a folder, repository, or MCP server to begin.'}</EmptyState> : (
-          <ol className="cc-cascade-order" aria-label="Cascade order">{cascade.map((entry) => {
-            // The engine's own count for this source, not a lane tally: two
-            // sources sharing a lane are two rows here, each with its own number.
-            const count = entry.conceptCount
-            return (
-              <li key={entry.name}>
-                <span className="cc-cascade-rank" aria-label={`Position ${entry.rank}${entry.tied ? ', tied' : ''}`}>{rankLabel(entry)}</span>
-                <LayerChip id={entry.layer} />
-                <span><strong>{entry.name}</strong><small>{entry.sourceKind} · {winsOverHint(entry, cascade)}</small></span>
-                <span>{count} concept{count === 1 ? '' : 's'}</span>
-              </li>
-            )
-          })}</ol>
-        )}
-      </details>
-
-      {onConnectAgent && (
-        <section className="cc-workspace-section cc-connect-cta" aria-labelledby="cc-connect-agent">
-          <div className="cc-section-heading">
-            <div>
-              <h2 id="cc-connect-agent">Connect an AI agent</h2>
-              <p>Bring this context into Claude, Copilot, Cursor, or your preferred coding agent.</p>
-            </div>
-            <AgentIcon size={20} />
-          </div>
-          <Button type="button" onClick={onConnectAgent}>Connect an agent</Button>
+      <div className="cc-workspace-columns">
+        <section className="cc-workspace-documents" aria-labelledby="cc-workspace-documents-title">
+          <header className="cc-workspace-heading"><div><h3 id="cc-workspace-documents-title">From your library</h3><p>Available documents, with known section dates.</p></div><button className="cc-workspace-link" type="button" onClick={() => setView('concepts')}>Browse all <span aria-hidden="true">→</span></button></header>
+          {documents.length ? <ul className="cc-workspace-document-list">{documents.map(({ concept, date }) => <li key={concept.id}>
+            <button type="button" onClick={() => openConcept(concept.id)}>
+              <svg className="cc-workspace-document-icon" aria-hidden="true" width="20" height="24" viewBox="0 0 20 24" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M4 2h8l5 5v15H4zM12 2v6h5M7 12h7M7 16h5" /></svg>
+              <span className="cc-workspace-document-copy"><strong>{concept.title}</strong><span className="cc-workspace-document-path">{concept.id}</span><span className="cc-workspace-document-sources">{(concept.contributorLayers ?? concept.layers).join(' · ')}</span></span>
+              <span className="cc-workspace-document-meta">{date && <time dateTime={date}>{new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(date))}</time>}<span>{concept.type}</span>{concept.conflict && <span className="cc-workspace-disputed">Sources differ</span>}</span>
+            </button>
+          </li>)}</ul> : <div className="cc-workspace-empty"><strong>{indexing ? 'Your documents are being indexed' : sources.length ? 'No indexed documents yet' : 'Bring your project into context'}</strong><p>{indexing ? 'Results appear as each source becomes available.' : 'Add a folder with project instructions, decisions, or documentation.'}</p><button className="cc-workspace-link" type="button" onClick={() => setView('sources')}>{sources.length ? 'Check sources' : 'Open Sources'} <span aria-hidden="true">→</span></button></div>}
+          {partial && <p className="cc-workspace-coverage-note">Available context is shown. Indexing or source issues may limit coverage.</p>}
         </section>
-      )}
 
-      {mode === 'demo' && activity.length > 0 && <section className="cc-workspace-section" aria-labelledby="cc-recent-activity"><div className="cc-section-heading"><div><h2 id="cc-recent-activity">Recent activity</h2><p>Illustrative demo events.</p></div></div><div className="cc-activity-list">{activity.map((item, index) => <div key={`${item.time}-${index}`}><LayerChip id={item.layer} /><span>{item.pre}<strong>{item.strong}</strong>{item.post}</span><time>{item.time}</time></div>)}</div></section>}
+        <aside className="cc-workspace-rail" aria-label="Workspace status">
+          <section className="cc-workspace-review" data-attention={summary.actionable > 0 || partial || undefined} aria-labelledby="cc-workspace-review-title">
+            <span className="cc-workspace-status-label"><span aria-hidden="true" />{mode === 'demo' ? 'Demo context' : 'Context status'}</span>
+            <h3 id="cc-workspace-review-title">{reviewHeading}</h3><p>{reviewBody}</p>
+            {summary.actionable > 0 && <><span className="cc-workspace-review-kinds">{discrepancyKinds(actionableByKind(conflicts))}</span><button className="cc-workspace-link" type="button" onClick={() => setView('conflicts')}>Review discrepancies <span aria-hidden="true">→</span></button></>}
+            {!summary.actionable && !partial && !load?.concepts && sources.length > 0 && <button className="cc-workspace-link" type="button" onClick={() => setView('conflicts')}>Open Trust <span aria-hidden="true">→</span></button>}
+            {!summary.actionable && (partial || !sources.length) && <button className="cc-workspace-link" type="button" onClick={() => setView('sources')}>{sources.length ? 'Check source status' : 'Open Sources'} <span aria-hidden="true">→</span></button>}
+            {queueCount > 0 && <button className="cc-workspace-queue" type="button" onClick={() => setView('triage')}>{queueCount} captured item{queueCount === 1 ? '' : 's'} waiting in Queue <span aria-hidden="true">→</span></button>}
+            {loadErrors.length > 0 && <p className="cc-workspace-error">{loadErrors.length} document{loadErrors.length === 1 ? '' : 's'} could not be resolved.</p>}
+            {load?.refreshError && <p className="cc-workspace-error">Updates are unavailable. Showing the last loaded context.</p>}
+          </section>
+
+          <section className="cc-workspace-sources" aria-labelledby="cc-workspace-sources-title"><header className="cc-workspace-heading"><h3 id="cc-workspace-sources-title">Connected sources</h3><button className="cc-workspace-link" type="button" onClick={() => setView('sources')}>Manage</button></header>
+            {orderedSources.length ? <ul>{orderedSources.map((source) => <li key={source.name}><button type="button" onClick={() => setView('sources')}>
+              <span className="cc-workspace-source-order" title={source.quarantined ? 'Excluded from the cascade' : 'Cascade position'}>{positions.get(source.name) ?? '—'}</span><span className="cc-workspace-source-copy"><strong>{source.name}</strong><span>{sourceState(source)}</span>{source.error && <small>{source.error}</small>}</span><span className="cc-workspace-source-count" title="Indexed concepts">{source.conceptCount.toLocaleString()}</span>
+            </button></li>)}</ul> : <p>No sources connected.</p>}
+            {cascade.length > 1 && <p className="cc-workspace-source-note">Higher sources take precedence for each section. Source policies can change the selected answer.</p>}
+          </section>
+          {onConnectAgent && <section className="cc-workspace-connect"><h3>Use this in your agent</h3><p>Bring source-backed context into your coding workflow.</p><button className="cc-workspace-link" type="button" onClick={onConnectAgent}>Connect an agent <span aria-hidden="true">↗</span></button></section>}
+        </aside>
+      </div>
     </div>
   )
 }
 
-/**
- * Memoized. The shell re-renders for its own reasons — a drawer, a dialog, a
- * background-activity tick — and this view has no business repainting for any
- * of them. It re-renders when the store slices it subscribes to change, and
- * otherwise not at all.
- */
 export const Overview = memo(OverviewInner)

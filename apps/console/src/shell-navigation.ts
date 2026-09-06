@@ -99,13 +99,13 @@ export const SEARCHABLE_VIEWS = new Set<ViewId>(['concepts', 'files', 'sources',
 
 /** Per-view document title, same names the command palette's "Go to …" entries use. */
 export const VIEW_TITLES: Record<ViewId, string> = {
-  overview: 'Home',
-  canvas: 'Cascade',
-  concepts: 'Knowledge: Concepts',
-  files: 'Knowledge: Files',
+  overview: 'Workspace',
+  canvas: 'Map',
+  concepts: 'Library: Context',
+  files: 'Library: Files',
   sources: 'Sources',
-  triage: 'Review: Queue',
-  conflicts: 'Review: Discrepancies',
+  triage: 'Trust: Captures',
+  conflicts: 'Trust: Discrepancies',
 }
 
 export function titleForView(view: ViewId): string {

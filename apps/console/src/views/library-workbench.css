@@ -1,0 +1,47 @@
+/* Library is a continuous workspace: one query surface, a bounded navigator,
+   and an independently scrolling document. Scoped overrides leave the other
+   destinations and their reader overlays alone. */
+.cc-main:has(> .cc-library-workbench),
+.cc-workbench[data-view="concepts"] .cc-main:has(> .cc-library-workbench) { padding: 0; overflow: hidden; display: flex; }
+.cc-library-workbench { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--cc-surface); }
+.cc-library-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; flex: 0 0 auto; padding: 14px 20px; border-bottom: 1px solid var(--cc-line); }
+.cc-library-search { flex: 1 1 320px; display: flex; align-items: center; min-width: 0; gap: 8px; }
+.cc-library-search .cc-ui-search { width: 100%; flex: 1; min-width: 0; }
+.cc-library-search .cc-ui-search:focus-within { outline: 2px solid var(--cc-teal-stroke-e); outline-offset: 1px; }
+.cc-library-search .cc-ui-search input { width: 100%; min-height: 38px; font-size: 14px; }
+.cc-library-search .cc-ui-search input::placeholder { color: var(--cc-caption); opacity: 1; }
+.cc-library-toolbar .cc-search-filters { flex: 0 1 340px; min-width: 0; }
+.cc-library-toolbar .cc-search-filters select { min-height: 38px; }
+.cc-library-clear, .cc-library-reset { font: inherit; font-size: 12px; color: var(--cc-body); cursor: pointer; background: transparent; border: 0; padding: 6px; min-height: 34px; white-space: nowrap; }
+.cc-library-clear:hover, .cc-library-reset:hover { background: var(--cc-neutral-fill); }
+.cc-library-clear:focus-visible, .cc-library-reset:focus-visible { outline: 2px solid var(--cc-teal-stroke-e); outline-offset: 2px; }
+.cc-library-reset { text-decoration: underline; }
+.cc-library-workbench .cc-knowledge-layout { flex: 1; min-height: 0; overflow: hidden; grid-template-columns: minmax(290px, 32%) minmax(0, 1fr); align-items: stretch; }
+.cc-library-workbench .cc-concept-results { display: flex; flex-direction: column; min-height: 0; padding: 0; border-right: 1px solid var(--cc-line); background: var(--cc-page); }
+.cc-library-workbench .cc-search-state { flex: 0 0 auto; padding: 12px 16px; border-bottom: 1px solid var(--cc-line); font-size: 11px; }
+.cc-library-workbench .cc-search-state span { margin-top: 4px; }
+.cc-library-workbench .cc-concept-window { height: auto; min-height: 0; flex: 1; overscroll-behavior: contain; }
+.cc-library-workbench .cc-concept-result { padding: 12px 16px; }
+.cc-library-workbench .cc-concept-result[aria-current="true"] { border-radius: 0; box-shadow: inset 3px 0 var(--cc-teal-stroke-e); background: var(--cc-neutral-fill); }
+.cc-library-workbench .cc-result-title { font-size: 14px; }
+.cc-library-workbench .cc-result-snippet { font-size: 12px; }
+.cc-library-workbench .cc-result-excerpt-label { margin-top: 6px; font-size: 11px; }
+.cc-library-workbench .cc-result-footer { gap: 6px; padding-top: 7px; }
+.cc-library-workbench .cc-knowledge-reader { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 28px 36px 64px; border: 0; }
+.cc-library-workbench .cc-reader-placeholder { display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 32px; min-width: 0; }
+.cc-library-workbench .cc-reader-placeholder p { max-width: 32ch; line-height: 1.6; }
+.cc-library-workbench .cc-concept-reader { max-width: 74ch; }
+.cc-library-workbench .cc-ui-empty { padding: 28px 20px; }
+@container (max-width: 839px) {
+  .cc-library-workbench .cc-knowledge-layout { min-height: 0; }
+  .cc-library-workbench .cc-concept-results { height: 100%; border: 0; }
+  .cc-library-workbench .cc-reader-placeholder { display: none; }
+  .cc-library-workbench .cc-knowledge-reader { padding: 18px 24px 48px; }
+  .cc-library-workbench .cc-detail-close { margin-bottom: 18px; }
+}
+@container (max-width: 559px) {
+  .cc-library-toolbar { gap: 8px; padding: 12px; }
+  .cc-library-search { flex-basis: 100%; }
+  .cc-library-toolbar .cc-search-filters { flex: 1 1 100%; }
+  .cc-library-workbench .cc-knowledge-reader { padding: 16px 18px 40px; }
+}

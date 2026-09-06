@@ -4,189 +4,125 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Overview } from './Overview'
 
-const mocks = vi.hoisted(() => ({ useStore: vi.fn(), setView: vi.fn() }))
-vi.mock('../store', () => ({ useStore: mocks.useStore, useStoreData: mocks.useStore, useStoreNav: mocks.useStore, useStoreInput: mocks.useStore, useStoreChat: mocks.useStore }))
-
+const mocks = vi.hoisted(() => ({ useStore: vi.fn(), setView: vi.fn(), openConcept: vi.fn(), openConceptSearch: vi.fn() }))
+vi.mock('../store', () => ({ useStoreData: mocks.useStore }))
 let container: HTMLDivElement
 let root: Root
-
+const source = (name = 'project', level = 3) => ({ name, level, layer: 'personal', status: 'synced', conceptCount: 12, sourceKind: 'files' })
+const concept = (id: string, updated?: string) => ({ id, title: id, type: 'note', layers: ['personal'], contributorLayers: ['project'], sections: updated ? [{ name: 'Context', updated, sourceLayer: 'project', winner: 'personal', value: 'Evidence' }] : [] })
+function store(extra = {}) { return { mode: 'live', setView: mocks.setView, openConcept: mocks.openConcept, openConceptSearch: mocks.openConceptSearch, signals: [], conflicts: [], sources: [source()], concepts: [], loadErrors: [], activity: [], ...extra } }
+const button = (text: string) => Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes(text))!
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  container = document.createElement('div')
-  document.body.appendChild(container)
-  root = createRoot(container)
-  mocks.setView.mockReset()
+  container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
+  vi.clearAllMocks()
 })
 afterEach(async () => { await act(async () => root.unmount()); container.remove() })
 
-it('prioritizes actionable work and never renders fixture activity in live mode', async () => {
-  mocks.useStore.mockReturnValue({
-    mode: 'live', setView: mocks.setView,
-    signals: [{ id: 'q', route: 'review_required' }],
-    conflicts: [{ id: 'c', status: 'open', contributions: [] }],
-    sources: [{ name: 'docs', status: 'error', error: 'Source failed exactly', layer: 'team', conceptCount: 0 }],
-    concepts: [], activity: [{ strong: 'fixture should not render' }],
-    loadErrors: [{ concept: 'x', error: 'partial' }],
-  })
+it('leads with search and preserves the submitted query and shortcut actions', async () => {
+  mocks.useStore.mockReturnValue(store())
   await act(async () => root.render(<Overview />))
-  expect(container.textContent).toContain('Needs Attention')
+  const input = container.querySelector<HTMLInputElement>('[aria-label="Search your project context"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'build and test')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => input.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(mocks.openConceptSearch).toHaveBeenCalledWith('build and test')
+  await act(async () => button('architecture').click())
+  expect(mocks.openConceptSearch).toHaveBeenLastCalledWith('architecture')
+  expect(container.querySelector('.cc-metric-strip')).toBeNull()
+})
+
+it('orders only real known section dates and opens the actual document', async () => {
+  mocks.useStore.mockReturnValue(store({ concepts: [concept('older', '2026-01-01'), concept('undated'), concept('latest', '2026-08-20'), { ...concept('compact', '2026-09-01'), detailLoaded: false }, concept('invalid', 'not-a-date')] }))
+  await act(async () => root.render(<Overview />))
+  const rows = Array.from(container.querySelectorAll('.cc-workspace-document-list li'))
+  expect(rows).toHaveLength(5)
+  expect(rows[0].textContent).toContain('latest')
+  expect(rows[0].querySelector('time')?.dateTime).toBe('2026-08-20')
+  expect(rows[1].textContent).toContain('older')
+  expect(rows.slice(2).map((row) => row.querySelector('time'))).toEqual([null, null, null])
+  await act(async () => rows[0].querySelector('button')!.click())
+  expect(mocks.openConcept).toHaveBeenCalledWith('latest')
+})
+
+it('fills six library places with undated documents after known updates without duplicating dated entries', async () => {
+  mocks.useStore.mockReturnValue(store({ concepts: [concept('old', '2026-01-01'), ...Array.from({ length: 10 }, (_, i) => concept(`doc-${i}`)), concept('new', '2026-08-20')] }))
+  await act(async () => root.render(<Overview />))
+  const titles = Array.from(container.querySelectorAll('.cc-workspace-document-copy strong')).map((title) => title.textContent)
+  expect(titles).toEqual(['new', 'old', 'doc-0', 'doc-1', 'doc-2', 'doc-3'])
+  expect(container.querySelectorAll('time')).toHaveLength(2)
+  expect(container.textContent).toContain('Available documents, with known section dates.')
+})
+
+it('shows bounded indexed context without inventing dates or viewing history', async () => {
+  mocks.useStore.mockReturnValue(store({ concepts: Array.from({ length: 100 }, (_, i) => ({ ...concept(`doc-${i}`), detailLoaded: false })), activity: [{ strong: 'Fake recent visit' }] }))
+  await act(async () => root.render(<Overview />))
+  expect(container.textContent).toContain('From your library')
+  expect(container.querySelectorAll('.cc-workspace-document-list li')).toHaveLength(6)
+  expect(container.querySelector('time')).toBeNull()
+  expect(container.textContent).not.toContain('Recently updated')
+  expect(container.textContent).not.toContain('Fake recent visit')
+})
+
+it('prioritizes actionable discrepancies and preserves queue and partial failure routes', async () => {
+  mocks.useStore.mockReturnValue(store({ signals: [{ route: 'review_required' }], conflicts: [{ id: 'c', status: 'open', kind: 'broken_link', discrepancyStatus: 'needs_review', contributions: [] }, { id: 'done', status: 'resolved', kind: 'section_content', discrepancyStatus: 'resolved', contributions: [] }], sources: [{ ...source(), status: 'error', error: 'Source failed exactly' }], loadErrors: [{ error: 'partial' }] }))
+  await act(async () => root.render(<Overview />))
+  expect(container.textContent).toContain('1 discrepancy needs review')
+  expect(container.textContent).toContain('1 broken link')
   expect(container.textContent).toContain('Source failed exactly')
-  expect(container.textContent).not.toContain('fixture should not render')
-  const conflict = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('actionable discrepancy'))
-  await act(async () => conflict?.click())
+  expect(container.textContent).toContain('1 document could not be resolved')
+  await act(async () => button('Review discrepancies').click())
+  expect(mocks.setView).toHaveBeenLastCalledWith('conflicts')
+  await act(async () => button('waiting in Queue').click())
+  expect(mocks.setView).toHaveBeenLastCalledWith('triage')
+})
+
+it.each([{ status: 'indexing' }, { status: 'degraded' }, { warnings: 2 }, { indexing: { refreshing: true } }])('never claims complete context while source health is partial: %j', async (state) => {
+  mocks.useStore.mockReturnValue(store({ sources: [{ ...source(), ...state }] }))
+  await act(async () => root.render(<Overview />))
+  expect(container.textContent).toContain('Your context is incomplete')
+  expect(container.textContent).not.toContain('No open discrepancies')
+  expect(container.textContent).toContain('may limit coverage')
+})
+
+it('distinguishes a failing refresh from settled context', async () => {
+  mocks.useStore.mockReturnValue(store({ load: { refreshError: { message: 'offline' } } }))
+  await act(async () => root.render(<Overview />))
+  expect(container.textContent).toContain('Updates are unavailable')
+  expect(container.textContent).not.toContain('No open discrepancies')
+})
+
+it('shows settled review status with a working route to Trust', async () => {
+  mocks.useStore.mockReturnValue(store())
+  await act(async () => root.render(<Overview />))
+  expect(container.textContent).toContain('No open discrepancies')
+  expect(container.textContent).toContain('Recorded decisions and source evidence are available in Trust.')
+  await act(async () => button('Open Trust').click())
   expect(mocks.setView).toHaveBeenCalledWith('conflicts')
 })
 
-it('shows a calm resolved state when nothing needs review', async () => {
-  mocks.useStore.mockReturnValue({ mode: 'demo', setView: mocks.setView, signals: [], conflicts: [], sources: [], concepts: [], activity: [], loadErrors: [] })
+it('lists real source precedence and leaves invalid sources unranked', async () => {
+  mocks.useStore.mockReturnValue(store({ sources: [source('base', 0), { ...source('broken', 0), quarantined: true, status: 'error' }, source('project', 3)] }))
   await act(async () => root.render(<Overview />))
-  expect(container.textContent).toContain('Nothing needs review')
-})
-
-// The MCP connect entry point only exists where App.tsx wires it in (desktop
-// mode) — Overview must stay silent about it otherwise rather than offering a
-// dead button.
-it('offers no agent-connect entry point when onConnectAgent is not supplied', async () => {
-  mocks.useStore.mockReturnValue({ mode: 'demo', setView: mocks.setView, signals: [], conflicts: [], sources: [], concepts: [], activity: [], loadErrors: [] })
-  await act(async () => root.render(<Overview />))
-  expect(container.textContent).not.toContain('Connect an agent')
-})
-
-it('surfaces a prominent Connect an agent CTA when onConnectAgent is supplied', async () => {
-  mocks.useStore.mockReturnValue({ mode: 'demo', setView: mocks.setView, signals: [], conflicts: [], sources: [], concepts: [], activity: [], loadErrors: [] })
-  const onConnectAgent = vi.fn()
-  await act(async () => root.render(<Overview onConnectAgent={onConnectAgent} />))
-  const cta = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Connect an agent')
-  expect(cta).toBeDefined()
-  await act(async () => cta?.click())
-  expect(onConnectAgent).toHaveBeenCalledOnce()
-})
-
-// The Cascade order section is the real cascade, position 1 first, one row
-// per source: its name, its rank, and who it wins over. Never the manifest
-// level (F3 named a level-1 source as itself; this pass stops showing the
-// number at all) and never the static "runbooks, decisions, system docs" blurb.
-it('lists every source in cascade order with its position and what it wins over', async () => {
-  mocks.useStore.mockReturnValue({
-    mode: 'live', setView: mocks.setView,
-    signals: [], conflicts: [],
-    sources: [
-      { name: 'company-graph', status: 'serving', layer: 'company', level: 0, conceptCount: 126, sourceKind: 'mcp' },
-      { name: 'messy-vault', status: 'synced', layer: 'personal', level: 1, conceptCount: 4, sourceKind: 'files' },
-    ],
-    concepts: [], activity: [], loadErrors: [],
-  })
-  await act(async () => root.render(<Overview />))
-  expect(container.textContent).toContain('Cascade order')
-  expect(container.textContent).toContain('Position 1 wins wherever it speaks')
-  const rows = Array.from(container.querySelectorAll('.cc-cascade-order > li')).map((row) => row.textContent ?? '')
-  expect(rows).toHaveLength(2)
-  expect(rows[0]).toContain('#1')
-  expect(rows[0]).toContain('messy-vault')
-  expect(rows[0]).toContain('Wins over company-graph')
-  expect(rows[0]).toContain('4 concepts')
-  expect(rows[1]).toContain('#2')
-  expect(rows[1]).toContain('company-graph')
-  expect(rows[1]).toContain('Base — everything above inherits from it')
-  expect(rows[1]).toContain('126 concepts')
-  // The manifest integer never shows here — position is the only number.
-  expect(container.querySelector('.cc-cascade-rank')?.textContent).toBe('#1')
-  expect(container.textContent).not.toContain('level 1')
-  expect(container.textContent).not.toContain('runbooks, decisions, system docs')
-})
-
-// A quarantined manifest entry contributes nothing to resolution, so it holds
-// no position: it must not appear as "#2 (tied)" beside a real source.
-it('leaves a quarantined entry out of the cascade order', async () => {
-  mocks.useStore.mockReturnValue({
-    mode: 'live', setView: mocks.setView,
-    signals: [], conflicts: [],
-    sources: [
-      { name: 'notes', status: 'synced', layer: 'personal', level: 3, conceptCount: 4, sourceKind: 'files' },
-      { name: 'base', status: 'synced', layer: 'company', level: 0, conceptCount: 2, sourceKind: 'files' },
-      { name: 'bad-kind', status: 'error', layer: 'company', level: 0, conceptCount: 0, sourceKind: 'notarealkind', quarantined: true, error: 'unsupported source kind' },
-    ],
-    concepts: [], activity: [], loadErrors: [],
-  })
-  await act(async () => root.render(<Overview />))
-  const rows = Array.from(container.querySelectorAll('.cc-cascade-order > li')).map((row) => row.textContent ?? '')
-  expect(rows).toHaveLength(2)
-  expect(rows[0]).toContain('Wins over base')
-  expect(rows[1]).toContain('Base — everything above inherits from it')
-  expect(rows.join(' ')).not.toContain('bad-kind')
-  expect(container.textContent).not.toContain('tied')
-  // Still surfaced where it belongs — as something to fix.
-  expect(container.textContent).toContain('bad-kind is error')
-})
-
-it('sends "Reorder in Sources" to the Sources view', async () => {
-  mocks.useStore.mockReturnValue({
-    mode: 'live', setView: mocks.setView,
-    signals: [], conflicts: [],
-    sources: [{ name: 'notes', status: 'synced', layer: 'personal', level: 3, conceptCount: 4, sourceKind: 'files' }],
-    concepts: [], activity: [], loadErrors: [],
-  })
-  await act(async () => root.render(<Overview />))
-  const reorder = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Reorder in Sources')
-  expect(reorder).toBeDefined()
-  await act(async () => reorder?.click())
+  const rows = Array.from(container.querySelectorAll('.cc-workspace-sources li'))
+  expect(rows[0].textContent).toContain('#1project')
+  expect(rows[1].textContent).toContain('#2base')
+  expect(rows[2].textContent).toContain('—brokenInvalid configuration')
+  await act(async () => button('Manage').click())
   expect(mocks.setView).toHaveBeenCalledWith('sources')
 })
 
-// Demo mode renders the same real rows from its own sources — the static
-// "runbooks, decisions, system docs" fallback is gone — but Sources is
-// read-only there, so the button only offers a look, not a reorder.
-it('renders real cascade rows in demo mode too, and does not promise a reorder', async () => {
-  mocks.useStore.mockReturnValue({
-    mode: 'demo', setView: mocks.setView,
-    signals: [], conflicts: [],
-    sources: [
-      { name: 'team', status: 'synced', layer: 'team', level: 2, conceptCount: 4, sourceKind: 'okf-local' },
-      { name: 'personal', status: 'synced', layer: 'personal', level: 3, conceptCount: 2, sourceKind: 'okf-local' },
-    ],
-    concepts: [], activity: [], loadErrors: [],
-  })
+it('shows a source setup action for a new workspace and gates agent setup on its real callback', async () => {
+  mocks.useStore.mockReturnValue(store({ sources: [] }))
   await act(async () => root.render(<Overview />))
-  expect(container.textContent).not.toContain('Reorder in Sources')
-  expect(container.textContent).toContain('Open Sources')
-  const rows = Array.from(container.querySelectorAll('.cc-cascade-order > li')).map((row) => row.textContent ?? '')
-  expect(rows[0]).toContain('#1')
-  expect(rows[0]).toContain('personal')
-  expect(rows[1]).toContain('#2')
-  expect(rows[1]).toContain('team')
-  expect(container.textContent).not.toContain('runbooks, decisions, system docs')
-})
-
-// The Discrepancies tile reads the engine's summary (actionable count) and
-// says what kinds are behind it, largest first, zeros dropped.
-it('counts actionable discrepancies on the tile with a per-kind subtitle', async () => {
-  const conflicts = [
-    { id: 'a', status: 'open', kind: 'broken_link', discrepancyStatus: 'needs_review', contributions: [] },
-    { id: 'b', status: 'open', kind: 'broken_link', discrepancyStatus: 'reopened', contributions: [] },
-    { id: 'c', status: 'open', kind: 'section_content', discrepancyStatus: 'recommended', contributions: [] },
-    { id: 'd', status: 'open', kind: 'frontmatter_value', discrepancyStatus: 'acknowledged', contributions: [] },
-  ]
-  mocks.useStore.mockReturnValue({
-    mode: 'live', setView: mocks.setView, signals: [], conflicts,
-    conflictSummary: { total: 4, actionable: 3, byKind: { section_content: 1, frontmatter_value: 1, broken_link: 2, changed_after_decision: 0 }, byStatus: {}, bySourcePair: [], byOwner: [], byConceptType: [], topTargets: [], topConcepts: [], quickWins: { autoReady: 0, recommended: 1, brokenLinksWithBestCandidate: 0, brokenLinksTotal: 2 } },
-    sources: [], concepts: [], activity: [], loadErrors: [],
-  })
-  await act(async () => root.render(<Overview />))
-  const tile = Array.from(container.querySelectorAll('.cc-metric-strip button')).find((button) => button.textContent?.includes('Discrepancies'))!
-  expect(tile.querySelector('strong')?.textContent).toBe('3')
-  // Actionable per kind from the rows: the acknowledged frontmatter value is not counted.
-  expect(tile.querySelector('.cc-metric-detail')?.textContent).toBe('2 broken links · 1 section')
-  expect(container.textContent).toContain('3 actionable discrepancies')
-})
-
-it('falls back to a local summary when the store carries none (an older engine, or a partial store)', async () => {
-  mocks.useStore.mockReturnValue({
-    mode: 'live', setView: mocks.setView, signals: [],
-    conflicts: [{ id: 'a', status: 'open', kind: 'broken_link', discrepancyStatus: 'needs_review', contributions: [] }],
-    sources: [], concepts: [], activity: [], loadErrors: [],
-  })
-  await act(async () => root.render(<Overview />))
-  const tile = Array.from(container.querySelectorAll('.cc-metric-strip button')).find((button) => button.textContent?.includes('Discrepancies'))!
-  expect(tile.querySelector('strong')?.textContent).toBe('1')
-  expect(tile.querySelector('.cc-metric-detail')?.textContent).toBe('1 broken link')
+  expect(container.textContent).toContain('Start with a source')
+  expect(container.textContent).not.toContain('Connect an agent')
+  await act(async () => button('Open Sources').click())
+  expect(mocks.setView).toHaveBeenCalledWith('sources')
+  const connect = vi.fn()
+  await act(async () => root.render(<Overview onConnectAgent={connect} />))
+  await act(async () => button('Connect an agent').click())
+  expect(connect).toHaveBeenCalledOnce()
 })

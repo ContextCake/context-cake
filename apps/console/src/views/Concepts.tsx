@@ -4,14 +4,22 @@ import { ConceptDetail } from '../components/ConceptDetail'
 import { useDetailSurface } from '../components/useDetailSurface'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import type { SearchHit } from '../types'
+import { SearchField } from '../components/ui'
+import './library-workbench.css'
 
 /** How long a keystroke waits before it becomes an /api/search request. */
 const SEARCH_DEBOUNCE_MS = 250
 
 function ConceptsInner() {
-  const { setSelConcept, concepts, mode, search, sources } = useStoreData()
+  const { setSelConcept, setQuery, concepts, mode, search, sources } = useStoreData()
   const { selConcept } = useStoreNav()
   const { query } = useStoreInput()
+  const searchInput = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    const focus = () => searchInput.current?.focus()
+    window.addEventListener('contextcake:focus-search', focus)
+    return () => window.removeEventListener('contextcake:focus-search', focus)
+  }, [])
   const q = query.trim().toLowerCase()
   const substringList = concepts.filter((c) => !q || `${c.title} ${c.id}`.toLowerCase().includes(q))
 
@@ -69,22 +77,31 @@ function ConceptsInner() {
     return () => window.removeEventListener('contextcake:close-detail', close)
   }, [])
 
-  if (concepts.length === 0) return <div className="cc-ui-empty"><strong>No concepts yet</strong><p>Add or index a source to build the resolved cascade.</p></div>
-
   return (
-    <div ref={detail.containerRef} className="cc-navigator-detail cc-knowledge-layout">
-      <div className="cc-concept-results">
+    <div className="cc-library-workbench">
+      <div className="cc-library-toolbar">
+        <form className="cc-library-search" role="search" aria-label="Search Library" onSubmit={(event) => event.preventDefault()}>
+          <SearchField ref={searchInput} data-context-search label="Search Library" placeholder="Search titles and content…" value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery('') }
+            }} />
+          {query && <button type="button" className="cc-library-clear" onClick={() => { setQuery(''); searchInput.current?.focus() }}>Clear search</button>}
+        </form>
         <div className="cc-search-filters">
           <select aria-label="Filter concepts by source" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}><option value="">All sources</option>{sources.map((source) => <option key={source.name} value={source.name}>{source.name}</option>)}</select>
           <select aria-label="Filter concepts by type" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="">All types</option>{[...new Set(concepts.map((c) => c.type))].sort().map((type) => <option key={type}>{type}</option>)}</select>
         </div>
+      </div>
+    <div ref={detail.containerRef} className="cc-navigator-detail cc-knowledge-layout">
+      <div className="cc-concept-results">
         <div className="cc-search-state" role="status">
           {pending ? (usingEngine ? 'Refreshing content matches… Showing the last search result.' : 'Searching content… Title matches shown while you wait.') : failed ? (usingEngine ? 'Content search unavailable. Showing the last successful results.' : 'Content search unavailable. Showing title matches only.') : `${list.length} result${list.length === 1 ? '' : 's'}${usingEngine ? ' · ranked by relevance' : ''}`}
           {failed && <button type="button" onClick={() => { setAnswer(null); setRetry((n) => n + 1) }}>Retry search</button>}
           {partial && <span>Sources are still indexing or unavailable; results may be incomplete.</span>}
           {usingEngine && <span>Source excerpts below. Open a result for the current resolved answer.</span>}
         </div>
-        {list.length === 0 && <div className="cc-ui-empty"><strong>{pending ? 'Searching your sources…' : failed ? 'No title matches' : partial ? 'No matches in available context' : 'No matching concepts'}</strong><p>{pending ? 'Content results will appear here.' : usingEngine ? 'No matches in titles or content.' : 'Try a title, concept ID, or type.'}</p></div>}
+        {concepts.length === 0 ? <div className="cc-ui-empty"><strong>No concepts yet</strong><p>Add or index a source to build the resolved cascade.</p></div> : list.length === 0 && <div className="cc-ui-empty"><strong>{pending ? 'Searching your sources…' : failed ? 'No title matches' : partial ? 'No matches in available context' : 'No matching concepts'}</strong><p>{pending ? 'Content results will appear here.' : usingEngine ? 'No matches in titles or content.' : 'Try a title, concept ID, or type.'}</p>{(query || sourceFilter || typeFilter) && <button type="button" className="cc-library-reset" onClick={() => { setQuery(''); setSourceFilter(''); setTypeFilter(''); searchInput.current?.focus() }}>Clear search and filters</button>}</div>}
         <div ref={virtual.scrollRef} onScroll={virtual.onScroll} className="cc-concept-window" aria-label="Concept results" aria-busy={pending}>
         <div style={{ height: virtual.totalHeight, position: 'relative' }}>
         {virtual.indices.map((i) => {
@@ -120,10 +137,10 @@ function ConceptsInner() {
         </div></div>
       </div>
 
-      {!selCpt && list.length > 0 && (
+      {!selCpt && (
         <section className="cc-navigator-detail-panel cc-reader-placeholder" aria-label="Concept reader">
-          <strong>Choose a result</strong>
-          <p>Inspect its current answer, sources, and alternatives.</p>
+          <strong>{list.length > 0 ? 'Choose a result' : concepts.length > 0 ? 'Search your context' : 'Your Library starts with a source'}</strong>
+          <p>{list.length > 0 ? 'Inspect its current answer, sources, and alternatives.' : concepts.length > 0 ? 'Try another query or broaden the filters to find a document.' : 'Connected documents appear here with their sources and alternatives.'}</p>
         </section>
       )}
       {selCpt && (
@@ -132,6 +149,7 @@ function ConceptsInner() {
           <ConceptDetail key={selCpt.id} concept={selCpt} matchQuery={q} />
         </section>
       )}
+    </div>
     </div>
   )
 }

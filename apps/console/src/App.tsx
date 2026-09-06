@@ -191,13 +191,13 @@ export function App() {
   }, [closeDrawer, drawerOpen])
 
   const paletteCommands = useMemo<PaletteCommand[]>(() => [
-    { id: 'home', label: 'Go to Home', keywords: 'overview', shortcut: '⌘1', run: () => setView('overview') },
-    { id: 'cascade', label: 'Go to Cascade', keywords: 'canvas graph', shortcut: '⌘2', run: () => setView('canvas') },
-    { id: 'concepts', label: 'Go to Knowledge: Concepts', keywords: 'browse', run: () => setView('concepts') },
-    { id: 'files', label: 'Go to Knowledge: Files', keywords: 'markdown documents', shortcut: '⇧⌘F', run: () => setView('files') },
+    { id: 'home', label: 'Go to Workspace', keywords: 'overview', shortcut: '⌘1', run: () => setView('overview') },
+    { id: 'cascade', label: 'Go to Map', keywords: 'canvas graph', shortcut: '⌘2', run: () => setView('canvas') },
+    { id: 'concepts', label: 'Go to Library: Context', keywords: 'browse', run: () => setView('concepts') },
+    { id: 'files', label: 'Go to Library: Files', keywords: 'markdown documents', shortcut: '⇧⌘F', run: () => setView('files') },
     { id: 'sources', label: 'Go to Sources', shortcut: '⌘4', run: () => setView('sources') },
-    { id: 'queue', label: 'Go to Review: Queue', keywords: 'triage', run: () => setView('triage') },
-    { id: 'conflicts', label: 'Go to Review: Discrepancies', keywords: 'resolve align', run: () => setView('conflicts') },
+    { id: 'queue', label: 'Go to Trust: Captures', keywords: 'triage', run: () => setView('triage') },
+    { id: 'conflicts', label: 'Go to Trust: Discrepancies', keywords: 'resolve align', run: () => setView('conflicts') },
     // One per source: the palette is the keyboard route into the navigator,
     // matching the Sources panel's "Browse files" button — including in the
     // demo, where that button is offered too. Browsing is a read.
@@ -363,7 +363,7 @@ export function App() {
     body = <ErrorState kind={error.kind} message={error.message} reload={reload} />
   } else {
     body = (
-      <div className="cc-app-shell" data-drawer={drawerOpen ? 'open' : 'closed'} data-ask={chatOpen ? 'open' : 'closed'}>
+      <div className="cc-app-shell cc-workbench" data-view={view} data-drawer={drawerOpen ? 'open' : 'closed'} data-ask={chatOpen ? 'open' : 'closed'}>
         <div className="cc-drawer-scrim" onClick={closeDrawer} aria-hidden="true" />
         <div className="cc-shell-inner">
           <Sidebar onOpenSettings={openSettings} onNavigate={closeDrawer} />

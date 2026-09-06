@@ -154,7 +154,7 @@ describe('render hygiene', () => {
   })
 
   it('does not re-render the sidebar while the user types in the toolbar search', () => {
-    window.location.hash = '#/concepts'
+    window.location.hash = '#/sources'
     act(() => root.render(
       <StoreProvider>
         <Sidebar />

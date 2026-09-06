@@ -49,3 +49,36 @@ Knowledge uses a wider result rail, flatter rows with less repeated metadata, wr
 Review omits zero-count tiles and irrelevant filters in the default all-clear view. History tabs remain available; selecting a historical status restores filtering. Empty results no longer occupy a tall bordered card or direct an already-selected Needs review tab back to itself.
 
 Installed checks covered real sources, light/dark appearance, narrower native windows, two-pane to single-pane reader behavior and focus restoration on Close. The original dark appearance was restored. All 746 console tests, typecheck and packaged live build passed. No engine, model transport, policy or source-data behavior changed in this UI revision.
+
+## Holistic workbench redesign
+
+The final local installation uses renderer `index-DnZUB8oL.js` (436.71 kB,
+129.44 kB gzip). Its Workspace, Library and Trust layouts were rebuilt around
+search, reading and evidence. The compact labelled rail is enabled; the user's
+GitHub Dark theme and comfortable density are retained.
+
+Native checks covered:
+
+- All 255 concepts and the two real source connections loaded after replacement.
+- Library Command-F search for `conflict resolution`, real results and resolved
+  document content, source attribution and matching-section navigation.
+- The 439-section document remained paginated; reader and result panes scroll
+  independently. Narrowing the native window switches to a detail sheet; Escape
+  returns focus to results. Sources' inspector also remains reachable at that width.
+- Light appearance was inspected, then the original dark appearance restored.
+- Trust's 17 acknowledged records remained visible. Single-item groups expose
+  their item immediately; Automation opens its policy controls in one click.
+- The source manifest retains SHA-256
+  `55dd1dba3295368ee6f697e3a4e6e1d488ed17a1f19313c208959d35fe978f50`.
+
+Real-app findings corrected before final installation: the Workspace preview now
+fills six rows even when few documents have loaded dates; its breakpoints use
+available content width; a focus-stealing introductory Trust overlay was removed;
+single-item groups no longer require expansion; source names use the shared UI
+font. No new semantic-model capability or reliability claim is introduced.
+
+Validation: 42 console suites / 757 tests, typecheck, live build, 128 desktop tests,
+and ad-hoc signature verification passed. Independent parallel layout/type
+assessments and mechanical scans informed the redesign; native screenshots and
+interaction checks supplied the final visual verification. Private screenshots
+remain excluded from the repository.

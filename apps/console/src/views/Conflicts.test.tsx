@@ -170,23 +170,11 @@ afterEach(async () => {
 describe('Discrepancy Center', () => {
   const HINT = '[aria-label="Resolve differences one at a time, or many at once"]'
 
-  it('explains the review workflow on the first visit, and never again', async () => {
+  it('opens directly on evidence without a focus-stealing onboarding overlay', async () => {
     mocks.useStore.mockReturnValue(storeWith([freshConflict], freshConflict.id))
     await act(async () => root.render(<Conflicts />))
-
-    const hint = container.querySelector(HINT)
-    expect(hint?.textContent).toContain('Review the evidence')
-    expect(hint?.textContent).toContain('Choose the safest next step')
-    expect(hint?.textContent).toContain('Confirm what changes')
-
-    await act(async () => { hint?.querySelector('button')?.click() })
     expect(container.querySelector(HINT)).toBeNull()
-
-    // A later visit — a fresh mount — gets the space, not the lesson.
-    await act(async () => root.render(<Conflicts key="second" />))
-    expect(container.querySelector(HINT)).toBeNull()
-
-    // Tabs carry a count now ("Needs review 1"), so match on the label prefix.
+    expect(container.textContent).toContain('Decision inbox')
     expect(Array.from(container.querySelectorAll<HTMLButtonElement>('.cc-status-tabs button')).find((button) => button.textContent?.startsWith('Needs review'))?.getAttribute('aria-pressed')).toBe('true')
   })
 
@@ -545,7 +533,7 @@ describe('Discrepancy Center — overview and grouping', () => {
     expect(container.textContent).toContain('Has a suggested fix')
   })
 
-  it('groups by kind with broken links sub-grouped by target, collapsed by default past three groups', async () => {
+  it('groups by kind and collapses only multi-item groups past three groups', async () => {
     const rows = [
       freshConflict, listConflict,
       brokenTo('l1', 'decisions/Old', 'decisions/old'), brokenTo('l2', 'decisions/Old', 'decisions/old'),
@@ -555,26 +543,45 @@ describe('Discrepancy Center — overview and grouping', () => {
     mocks.useStore.mockReturnValue(storeWith(rows, freshConflict.id))
     await act(async () => root.render(<Conflicts />))
 
-    // Five groups → all closed; only headers render, largest first.
+    // Five groups keep singleton evidence visible; only the multi-item group closes.
     expect(groupRows().map((row) => row.getAttribute('aria-label'))).toEqual([
       'Broken link → decisions/Old, 2 items, 2 actionable, collapsed',
-      'Broken link → decisions/gone, 1 item, 1 actionable, collapsed',
-      'Changed after decision, 1 item, 1 actionable, collapsed',
-      'Frontmatter value, 1 item, 1 actionable, collapsed',
-      'Section content, 1 item, 1 actionable, collapsed',
+      'Broken link → decisions/gone, 1 item, 1 actionable, expanded',
+      'Changed after decision, 1 item, 1 actionable, expanded',
+      'Frontmatter value, 1 item, 1 actionable, expanded',
+      'Section content, 1 item, 1 actionable, expanded',
     ])
-    expect(itemRows()).toHaveLength(0)
+    expect(itemRows()).toHaveLength(4)
     expect(groupRows()[0].textContent).toContain('fix → decisions/old')
 
     await act(async () => click(groupRows()[0]))
-    expect(itemRows()).toHaveLength(2)
+    expect(itemRows()).toHaveLength(6)
     expect(groupRows()[0].getAttribute('aria-label')).toContain('expanded')
 
     // Switching the grouping resets the collapse state.
     const concept = $$<HTMLButtonElement>('.cc-ui-segmented button').find((button) => button.textContent === 'Concept')!
     await act(async () => concept.click())
     expect(groupRows().length).toBeGreaterThan(3)
-    expect(itemRows()).toHaveLength(0)
+    expect(itemRows()).toHaveLength(3)
+  })
+
+  it('preserves an explicit singleton collapse across renders above the default group limit', async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => brokenTo(`single-${index}`, `missing/${index}`, null))
+    const store = storeWith(rows, rows[0].id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    expect(itemRows()).toHaveLength(5)
+
+    await act(async () => click(groupRows()[0]))
+    expect(groupRows()[0].getAttribute('aria-label')).toContain('collapsed')
+    expect(itemRows()).toHaveLength(4)
+
+    await act(async () => root.render(<Conflicts />))
+    expect(groupRows()[0].getAttribute('aria-label')).toContain('collapsed')
+    expect(itemRows()).toHaveLength(4)
+
+    await act(async () => click(groupRows()[0]))
+    expect(itemRows()).toHaveLength(5)
   })
 
   it('opens every group when there are three or fewer', async () => {
@@ -802,10 +809,10 @@ describe('Discrepancy Center — keyboard and windowing', () => {
       brokenTo('l3', 'decisions/gone', null),
       freshConflict, listConflict,
     ]
-    const store = storeWith(rows, freshConflict.id)
+    const store = storeWith(rows, rows[0].id)
     mocks.useStore.mockReturnValue(store)
     await act(async () => root.render(<Conflicts />))
-    // Four groups → closed. One tab stop, on the header of the first group.
+    // The selected multi-item group is closed. Its header is the one tab stop.
     const stops = $$('.cc-conflict-list [role="option"][tabindex="0"]')
     expect(stops).toHaveLength(1)
     await act(async () => stops[0].focus())
@@ -826,8 +833,9 @@ describe('Discrepancy Center — keyboard and windowing', () => {
     await act(async () => press(active()!, 'ArrowLeft')) // closes it
     expect(active()?.getAttribute('aria-label')).toContain('collapsed')
     await act(async () => press(active()!, 'End'))
+    expect(active()?.getAttribute('data-row')).toBe('item')
+    await act(async () => press(active()!, 'ArrowLeft')) // singleton remains expanded
     expect(active()?.getAttribute('aria-label')).toContain('Section content')
-    await act(async () => press(active()!, 'ArrowRight'))
     await act(async () => press(active()!, 'ArrowRight'))
     await act(async () => press(active()!, 'Enter'))
     expect(store.setSelConflict).toHaveBeenCalledWith(freshConflict.id)
@@ -909,6 +917,8 @@ describe('Discrepancy Center — copy helpers', () => {
     }]
     mocks.useStore.mockReturnValue(store)
     await act(async () => root.render(<Conflicts />))
+    expect(container.querySelector('.cc-rules')).toBeNull()
+    await act(async () => $$<HTMLButtonElement>('button').find(button => button.textContent === 'Rules and history')!.click())
     const rules = container.querySelector('.cc-rules')!
     expect(rules.textContent).toContain('Rewrite → decisions/new')
     expect(rules.textContent).toContain('any type · any key')
@@ -1052,8 +1062,8 @@ describe('Discrepancy Center — pinned selections, partial batches, reopened li
     await act(async () => root.render(<Conflicts />))
     const tiles = $$<HTMLButtonElement>('.cc-dc-tile')
     const brokenTile = tiles.find((tile) => tile.textContent?.includes('broken link'))!
-    expect(brokenTile.querySelector('strong')?.textContent).toBe('1')
-    expect(tiles.find((tile) => tile.textContent?.includes('changed since decided'))?.querySelector('strong')?.textContent).toBe('0')
+    expect(brokenTile.textContent).toContain('1 broken links')
+    expect(tiles.find((tile) => tile.textContent?.includes('changed after decision'))?.textContent).toContain('0')
     expect(container.querySelector('.cc-dc-quick')?.textContent).toContain('1 of 1 broken links have a suggested fix')
     await act(async () => brokenTile.click())
     expect(itemRows()).toHaveLength(1)
@@ -1131,5 +1141,37 @@ describe('Discrepancy Center — pinned selections, partial batches, reopened li
     expect(rule.textContent).toBe('Create rule: Rewrite → decisions/old')
     await act(async () => rule.click())
     expect(store.approveRuleSuggestion).toHaveBeenCalledWith('matching')
+  })
+})
+
+
+describe('Trust workbench composition', () => {
+  it('puts the decision inbox and evidence first, with filters, metadata and history disclosed on demand', async () => {
+    mocks.useStore.mockReturnValue(storeWith([freshConflict], freshConflict.id))
+    await act(async () => root.render(<Conflicts />))
+    expect(container.querySelector('.cc-trust-heading h2')?.textContent).toBe('Trust')
+    expect(container.querySelector('.cc-trust-inbox-label')?.textContent).toContain('Decision inbox')
+    expect(container.querySelector('.cc-discrepancy-title h2')?.textContent).toBe(freshConflict.title)
+    expect(container.querySelector<HTMLDetailsElement>('.cc-trust-filter-disclosure')?.open).toBe(false)
+    expect(container.querySelector<HTMLDetailsElement>('.cc-trust-context')?.open).toBe(false)
+    expect(container.querySelector<HTMLDetailsElement>('.cc-trust-history')?.open).toBe(false)
+    expect(container.querySelector('.cc-dc-tiles')).toBeNull()
+    expect(container.querySelector('.cc-rules')).toBeNull()
+    expect(container.querySelector('.cc-answer-stack')?.textContent).toContain('SingleStore')
+    expect(container.querySelector('.cc-answer-stack')?.textContent).toContain('Postgres')
+  })
+
+  it('opens secondary rules in place and closes them without changing the selected discrepancy', async () => {
+    const store = storeWith([freshConflict], freshConflict.id)
+    mocks.useStore.mockReturnValue(store)
+    await act(async () => root.render(<Conflicts />))
+    const tools = $$<HTMLButtonElement>('button').find(button => button.textContent === 'Rules and history')!
+    await act(async () => tools.click())
+    expect(tools.getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelector('.cc-rules')).not.toBeNull()
+    expect(container.querySelector('.cc-answer-stack')).not.toBeNull()
+    await act(async () => $$<HTMLButtonElement>('button').find(button => button.textContent === 'Close tools')!.click())
+    expect(tools.getAttribute('aria-expanded')).toBe('false')
+    expect(store.setSelConflict).not.toHaveBeenCalled()
   })
 })

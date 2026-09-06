@@ -652,7 +652,7 @@ describe('document title', () => {
     mocks.resolveAll.mockResolvedValue({ concepts: [], errors: [], indexing: false })
 
     await act(async () => root.render(<StoreProvider><Probe /></StoreProvider>))
-    expect(document.title).toBe('Home — ContextCake')
+    expect(document.title).toBe('Workspace — ContextCake')
 
     await click('to sources')
     expect(document.title).toBe('Sources — ContextCake')

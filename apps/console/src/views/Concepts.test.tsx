@@ -427,3 +427,57 @@ describe('bounded, evidence-rich search', () => {
     } finally { vi.useRealTimers() }
   })
 })
+
+describe('Library workbench toolbar', () => {
+  it('keeps search above both panes and focuses it from the app search command even with an empty corpus', async () => {
+    mocks.useStore.mockReturnValue({ ...storeWith([], ''), setQuery: vi.fn() })
+    await act(async () => root.render(<Concepts />))
+    const field = container.querySelector<HTMLInputElement>('[data-context-search]')!
+    expect(field.closest('.cc-library-toolbar')).toBeTruthy()
+    expect(field.closest('.cc-navigator-detail')).toBeNull()
+    expect(container.textContent).toContain('No concepts yet')
+    window.dispatchEvent(new Event('contextcake:focus-search'))
+    expect(document.activeElement).toBe(field)
+  })
+
+  it('updates the shared query while typing and Escape clears it without closing the workspace', async () => {
+    const setQuery = vi.fn()
+    mocks.useStore.mockReturnValue({ ...storeWith([populated()], ''), query: 'database', setQuery })
+    await act(async () => root.render(<Concepts />))
+    const field = container.querySelector<HTMLInputElement>('[data-context-search]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, 'deployment')
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(setQuery).toHaveBeenCalledWith('deployment')
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => field.dispatchEvent(escape))
+    expect(setQuery).toHaveBeenLastCalledWith('')
+    expect(escape.defaultPrevented).toBe(true)
+  })
+
+  it('offers one way back from an empty scoped result and restores search focus', async () => {
+    const setQuery = vi.fn()
+    mocks.useStore.mockReturnValue({ ...storeWith([populated()], ''), query: 'no-match', setQuery, sources: [{ name: 'personal' }] })
+    await act(async () => root.render(<Concepts />))
+    const source = container.querySelector<HTMLSelectElement>('[aria-label="Filter concepts by source"]')!
+    await act(async () => { source.value = 'personal'; source.dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => button('Clear search and filters')!.click())
+    expect(setQuery).toHaveBeenCalledWith('')
+    expect(source.value).toBe('')
+    expect(document.activeElement).toBe(container.querySelector('[data-context-search]'))
+  })
+
+  it('keeps roving keyboard navigation and selection in the bounded results pane', async () => {
+    const store = storeWith([populated(), empty()], '')
+    mocks.useStore.mockReturnValue({ ...store, setQuery: vi.fn() })
+    await act(async () => root.render(<Concepts />))
+    const first = container.querySelector<HTMLButtonElement>('[data-result-index="0"]')!
+    await act(async () => { first.focus(); first.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })) })
+    const last = container.querySelector<HTMLButtonElement>('[data-result-index="1"]')!
+    expect(last.tabIndex).toBe(0)
+    expect(first.tabIndex).toBe(-1)
+    await act(async () => last.click())
+    expect(store.setSelConcept).toHaveBeenCalledWith('decisions/empty-note')
+  })
+})

@@ -14,14 +14,14 @@ interface Decision {
 interface ResolutionState { version: number; revision: number; policies: Policy[]; decisions: Decision[] }
 
 /** Exact source authority is a standing policy, not a model's confidence score. */
-export function AutomaticResolutionPanel({ conflict }: { conflict: Conflict | null }) {
+export function AutomaticResolutionPanel({ conflict, defaultExpanded = false }: { conflict: Conflict | null; defaultExpanded?: boolean }) {
   const { reload, reloadKey } = useStoreData()
   const [state, setState] = useState<ResolutionState | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [selectedSource, setSelectedSource] = useState('')
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const [unavailable, setUnavailable] = useState(false)
   const refresh = useCallback(async () => {
     const response = await apiFetch('/api/context-resolutions')

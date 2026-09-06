@@ -10,7 +10,11 @@ let container: HTMLDivElement
 let root: Root
 
 function button(label: string): HTMLButtonElement {
-  const match = Array.from(container.querySelectorAll('button')).find((item) => item.textContent?.trim() === label)
+  const match = Array.from(container.querySelectorAll('button')).find((item) => {
+    const copy = item.cloneNode(true) as HTMLElement
+    copy.querySelectorAll('[aria-hidden="true"]').forEach((hidden) => hidden.remove())
+    return copy.textContent?.trim() === label
+  })
   if (!match) throw new Error(`Button not found: ${label}`)
   return match
 }
@@ -44,7 +48,7 @@ describe('Mac-first application shell', () => {
 
     await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: '5', metaKey: true, bubbles: true })))
     expect(container.querySelector('[data-destination="review"]')?.getAttribute('aria-current')).toBe('page')
-    expect(button('Queue 3')).toBeTruthy()
+    expect(button('Captures 3')).toBeTruthy()
     expect(button('Discrepancies 3')).toBeTruthy()
     expect(container.textContent).toContain('Simulation—no files will change.')
     expect(container.textContent).toContain('Automatic rules never run.')
@@ -80,7 +84,7 @@ describe('Mac-first application shell', () => {
       expect(guard).toHaveBeenCalledOnce()
       expect(window.location.hash).toBe('#/overview')
     } finally { window.removeEventListener('contextcake:before-navigate', guard) }
-    await act(async () => button('Knowledge').click())
+    await act(async () => button('Library').click())
     expect(container.querySelector<HTMLInputElement>('input[data-context-search]')?.value).toBe('')
   })
 
@@ -126,7 +130,7 @@ describe('Mac-first application shell', () => {
     })))
     await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    await act(async () => button('Ask').click())
+    await act(async () => button('Use with agent').click())
     const ask = container.querySelector('[aria-label="Ask ContextCake"]')
     expect(ask?.getAttribute('role')).toBe('complementary')
     expect(ask?.hasAttribute('aria-modal')).toBe(false)
@@ -135,7 +139,7 @@ describe('Mac-first application shell', () => {
   it('focuses contextual search with Command-F and clears it with Escape', async () => {
     await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    await act(async () => button('Knowledge').click())
+    await act(async () => button('Library').click())
     const concept = container.querySelector<HTMLButtonElement>('.cc-navigator-detail > div button')
     await act(async () => concept?.click())
     expect(container.querySelector('.cc-navigator-detail-panel[data-open]')).toBeTruthy()
@@ -161,12 +165,12 @@ describe('Mac-first application shell', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     const guard = (event: Event) => event.preventDefault()
     window.addEventListener('contextcake:before-navigate', guard)
-    await act(async () => button('Home').click())
+    await act(async () => button('Workspace').click())
     expect(container.querySelector('[data-destination="cascade"]')?.getAttribute('aria-current')).toBe('page')
     window.removeEventListener('contextcake:before-navigate', guard)
   })
 
-  it('uses five destinations and supports the 64–300 px sidebar contract', async () => {
+  it('uses five destinations and supports the 88–300 px sidebar contract', async () => {
     await act(async () => root.render(
       <ThemeModeProvider>
         <StoreProvider><App /></StoreProvider>
@@ -180,8 +184,9 @@ describe('Mac-first application shell', () => {
     expect(brand?.querySelector('img')).toBeTruthy()
     expect(brand?.textContent).toBe('ContextCake')
     expect(container.querySelectorAll('.cc-nav-button')).toHaveLength(5)
-    expect(sidebar?.dataset.collapsed).toBe('false')
-    expect(sidebar?.style.width).toBe('232px')
+    expect(sidebar?.dataset.collapsed).toBe('true')
+    expect(sidebar?.style.width).toBe('88px')
+    await act(async () => window.dispatchEvent(new Event('contextcake:toggle-sidebar')))
 
     await act(async () => {
       separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 232 }))
@@ -189,14 +194,14 @@ describe('Mac-first application shell', () => {
       window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 80 }))
     })
     expect(sidebar?.dataset.collapsed).toBe('true')
-    expect(sidebar?.style.width).toBe('64px')
-    expect(container.querySelector('[data-destination="review"]')?.getAttribute('aria-label')).toBe('Review, 6 items needing review')
+    expect(sidebar?.style.width).toBe('88px')
+    expect(container.querySelector('[data-destination="review"]')?.getAttribute('aria-label')).toBe('Trust, 6 items needing review')
 
     await act(async () => {
       separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }))
     })
     expect(sidebar?.dataset.collapsed).toBe('true')
-    expect(sidebar?.style.width).toBe('64px')
+    expect(sidebar?.style.width).toBe('88px')
 
     await act(async () => {
       separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }))
@@ -328,7 +333,7 @@ describe('Mac-first application shell', () => {
     ))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
-    await act(async () => button('Ask').click())
+    await act(async () => button('Use with agent').click())
     expect(container.querySelector('[aria-label="Ask ContextCake"]')).toBeTruthy()
     await act(async () => button('Settings⌘,').click())
 

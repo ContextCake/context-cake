@@ -6,6 +6,7 @@ import '@fontsource/jetbrains-mono/700.css'
 import './styles.css'
 // Theme families (see themes/index.css); ContextCake's own tokens are in styles.css.
 import './themes/index.css'
+import './workbench.css'
 import { App } from './App'
 import { StoreProvider } from './store'
 import { ThemeModeProvider, applyInitialAppearance } from './theme-mode'

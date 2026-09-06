@@ -51,3 +51,12 @@ it('keeps original decisions visible and limits Undo to the latest decision per 
   expect(container.textContent).toContain('Paused')
   expect([...container.querySelectorAll('button')].filter((button) => button.textContent === 'Undo')).toHaveLength(1)
 })
+
+
+it('opens directly when its parent already disclosed the automation tool', async () => {
+  await act(async () => root.render(<AutomaticResolutionPanel conflict={conflict} defaultExpanded />))
+  expect(container.querySelector('[aria-label="Authoritative source for this section"]')).not.toBeNull()
+  expect(button('Enable this source policy').disabled).toBe(true)
+  expect(button('Hide policies').getAttribute('aria-expanded')).toBe('true')
+  expect(mocks.apiFetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+})

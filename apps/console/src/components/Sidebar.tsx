@@ -6,7 +6,7 @@ import { CascadeIcon, HomeIcon, KnowledgeIcon, ReviewIcon, SettingsIcon, Sources
 
 const contextCakeLogo = `${import.meta.env.BASE_URL}favicon.svg`
 const BROWSER_KEY = 'contextcake.sidebar'
-const COLLAPSED_WIDTH = 64
+const COLLAPSED_WIDTH = 88
 const MIN_WIDTH = 208
 const DEFAULT_WIDTH = 232
 const MAX_WIDTH = 300
@@ -27,16 +27,16 @@ function readPreference(): SidebarPreference {
   if (desktop) return { collapsed: desktop.collapsed === true, width: clampWidth(desktop.width) }
   try {
     const value = JSON.parse(localStorage.getItem(BROWSER_KEY) ?? '{}') as Partial<SidebarPreference>
-    return { collapsed: value.collapsed === true, width: Number.isFinite(value.width) ? clampWidth(value.width!) : DEFAULT_WIDTH }
-  } catch { return { collapsed: false, width: DEFAULT_WIDTH } }
+    return { collapsed: value.collapsed !== false, width: Number.isFinite(value.width) ? clampWidth(value.width!) : DEFAULT_WIDTH }
+  } catch { return { collapsed: true, width: DEFAULT_WIDTH } }
 }
 
 const NAV: Array<{ id: ShellDestination; label: string; icon: ReactNode }> = [
-  { id: 'home', label: 'Home', icon: <HomeIcon /> },
-  { id: 'cascade', label: 'Cascade', icon: <CascadeIcon /> },
-  { id: 'knowledge', label: 'Knowledge', icon: <KnowledgeIcon /> },
+  { id: 'home', label: 'Workspace', icon: <HomeIcon /> },
+  { id: 'knowledge', label: 'Library', icon: <KnowledgeIcon /> },
+  { id: 'review', label: 'Trust', icon: <ReviewIcon /> },
   { id: 'sources', label: 'Sources', icon: <SourcesIcon /> },
-  { id: 'review', label: 'Review', icon: <ReviewIcon /> },
+  { id: 'cascade', label: 'Map', icon: <CascadeIcon /> },
 ]
 
 function SidebarInner({ onOpenSettings, onNavigate }: { onOpenSettings?: () => void; onNavigate?: () => void }) {

@@ -1,4 +1,4 @@
-# Indexing concurrency, memory pressure, and the abort gap
+# Indexing concurrency, memory pressure, and cancellation
 
 **Rule:** indexing passes queue — they do not all start at once. `indexing`
 means "no answer yet", not "working".
@@ -14,12 +14,21 @@ stays alive. A pass that blows its time budget frees its slot the instant
 `withDeadline` rejects — but the abandoned `listConceptIds()` call underneath
 keeps running until the adapter itself notices the abort signal.
 
-## The gap, stated plainly
+## Remote cancellation
 
-`okf-local.mjs` checks the abort signal every directory. `github.mjs` and
-`mcp.mjs` currently do not check it at all during listing. So a timed-out remote
-source's scanning phase can outlive both its own slot and the queued source that
-took it. This is a known gap, not a subtlety to rediscover.
+`okf-local.mjs` checks the abort signal every directory. GitHub passes the job's
+signal through metadata, tree, content and history requests, combined with each
+request's own timeout. Cancellation propagates without recording a provider
+outage or poisoning its retry cooldown. Cache and git-sync wrappers forward
+read options, and the snapshot loader passes the signal through document reads.
+
+The foreign MCP adapter stops waiting promptly and sends the protocol's
+`notifications/cancelled` for the individual request. It removes request timers
+and abort listeners without closing a shared source or interrupting other
+readers. An abort while waiting for the shared handshake stops that caller's
+wait, preserving initialization for other consumers. A foreign server can
+ignore cancellation and keep computing: we cannot guarantee external work
+stops without terminating its process, which would also interrupt other readers.
 
 ## Memory pressure
 

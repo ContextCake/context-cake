@@ -143,6 +143,13 @@ describe('LiveSource.search', () => {
     expect(String(calledUrl)).toBe(`/api/search?q=${encodeURIComponent('primary db?')}&limit=5`)
   })
 
+  it('sends source and type filters for ranking before the result limit', async () => {
+    const { createDataSource } = await import('./api')
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ hits: [] }), { status: 200 }))
+    await createDataSource('live').search('build', 20, { source: 'ContextCake specs', type: 'note' })
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe('/api/search?q=build&limit=20&source=ContextCake%20specs&type=note')
+  })
+
   // The existing older-engine-fallback idiom (see status() above): a 404
   // means this engine predates /api/search, and the signal is `null`, not a
   // thrown error — the caller (store.search) decides what to do with that.

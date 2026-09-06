@@ -1,9 +1,9 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { C, css, lc, MONO, conceptTypeStyle } from '../theme'
 import type { Concept } from '../data'
 import { filesRevalidation, useLayerFiles } from '../layer-files'
 import { useStoreData } from '../store'
-import { LayerChip } from './LayerChip'
+import { Markdown } from './Markdown'
 
 /** Which document extension wins when one concept id has several files behind it. */
 const DOC_EXT = ['.md', '.markdown', '.mdx', '.txt']
@@ -47,7 +47,7 @@ function OpenFile({ layer, path, conceptId }: { layer: string; path: string | un
   return (
     <button
       type="button"
-      className="cc-h-bd-strong"
+      className="cc-h-bd-strong cc-open-source"
       aria-label={`Open the ${layer} file behind ${conceptId}`}
       onClick={() => openFilesScope(layer, path)}
       style={css(`flex:0 0 auto; padding:2px 8px; border:1px solid ${C.line}; border-radius:999px; background:${C.raised}; cursor:pointer; font:inherit; font-size:10.5px; font-weight:600; color:${C.caption};`)}
@@ -89,23 +89,42 @@ function EmptyConcept({ concept, fileFor }: { concept: Concept; fileFor: (source
 
 /** The resolved read of a concept — provenance chips per section + inline dissent.
  *  Shared by the Concepts view and the Canvas node slide-over. */
-export function ConceptDetail({ concept }: { concept: Concept }) {
+export function ConceptDetail({ concept, matchQuery = '' }: { concept: Concept; matchQuery?: string }) {
+  const PAGE_SIZE = 20
+  const [page, setPage] = useState(0)
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+  const lastMatch = useRef(-1)
+  const reader = useRef<HTMLDivElement>(null)
+  const pages = Math.max(1, Math.ceil(concept.sections.length / PAGE_SIZE))
+  const currentPage = Math.min(page, pages - 1)
+  const matches = useMemo(() => {
+    const words = matchQuery.toLowerCase().split(/\s+/).filter(Boolean)
+    return concept.sections.flatMap((section, index) => words.length && words.some((word) => `${section.name} ${section.value}`.toLowerCase().includes(word)) ? [index] : [])
+  }, [concept.sections, matchQuery])
+  useEffect(() => { lastMatch.current = -1 }, [concept.id, concept.sections, matchQuery])
+  useEffect(() => { setPage(0); setCollapsed(new Set()) }, [concept.id])
+  const jump = (index: number) => {
+    lastMatch.current = index
+    setPage(Math.floor(index / PAGE_SIZE))
+    setCollapsed((prev) => { const next = new Set(prev); next.delete(index); return next })
+    requestAnimationFrame(() => reader.current?.querySelector<HTMLButtonElement>(`[data-section="${index}"]`)?.focus())
+  }
   const fileByContributor = useFileByContributor()
   const fileFor = (sourceLayer: string) => fileByContributor.get(contributorKey(sourceLayer, concept.id))
   return (
-    <>
+    <div ref={reader} className="cc-concept-reader">
       <div style={css('display:flex; align-items:center; gap:10px;')}>
         <span style={conceptTypeStyle(concept.type)}>{concept.type}</span>
-        <code style={css(`font-family:${MONO}; font-size:12px; color:#57564F;`)}>{concept.id}</code>
+        <code style={css(`font-family:${MONO}; font-size:12px; color:${C.caption};`)}>{concept.id}</code>
       </div>
-      <h2 style={css('margin:13px 0 12px; font-size:22px; font-weight:600; letter-spacing:-0.01em;')}>{concept.title}</h2>
-      <div style={css('display:flex; align-items:center; gap:10px; padding-bottom:18px; margin-bottom:4px; border-bottom:1px solid #E4E1D6;')}>
-        <span style={css('font-size:11px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; color:#8A8A82;')}>Resolved from</span>
-        <div style={css('display:flex; gap:5px;')}>
-          {concept.layers.map((l) => <LayerChip key={l} id={l} />)}
-        </div>
-        <span style={css(`margin-left:auto; font-size:11.5px; color:#57564F; font-family:${MONO};`)}>{concept.sections.length} sections</span>
-      </div>
+      <h2 style={css('margin:13px 0 12px; font-size:26px; font-weight:600; letter-spacing:-0.01em;')}>{concept.title}</h2>
+      <div className="cc-reader-origin"><span>Resolved from</span><strong>{(concept.contributorLayers ?? concept.layers).join(' · ')}</strong><span>{concept.sections.length} sections</span></div>
+      {concept.sections.length > 1 && <nav className="cc-section-nav" aria-label="Document sections">
+        <select aria-label="Jump to section" value="" onChange={(event) => jump(Number(event.target.value))}><option value="" disabled>Jump to section…</option>{concept.sections.map((section, index) => <option key={index} value={index}>{index + 1}. {section.name}</option>)}</select>
+        {matches.length > 0 && <button type="button" onClick={() => jump(matches.find((index) => index > lastMatch.current) ?? matches[0])}>Jump to matching section ({matches.length})</button>}
+        <button type="button" onClick={() => setCollapsed((prev) => prev.size ? new Set() : new Set(concept.sections.map((_, i) => i)))}>{collapsed.size ? 'Expand sections' : 'Collapse sections'}</button>
+        {pages > 1 && <><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous sections</button><span role="status">{currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, concept.sections.length)} of {concept.sections.length}</span><button type="button" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)}>Next sections</button></>}
+      </nav>}
 
       <div style={css('display:flex; flex-direction:column;')}>
         {concept.detailLoaded === false && (
@@ -116,7 +135,8 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
           <div role="status" style={css('padding:22px 0; font-size:13px; color:#8A8A82;')}>Resolving this concept…</div>
         )}
         {concept.detailLoaded !== false && concept.sections.length === 0 && <EmptyConcept concept={concept} fileFor={fileFor} />}
-        {concept.detailLoaded !== false && concept.sections.map((s) => {
+        {concept.detailLoaded !== false && concept.sections.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map((s, offset) => {
+          const index = currentPage * PAGE_SIZE + offset
           const col = lc(s.winner)
           const dissents = s.dissents ?? []
           // The real source that won this section, not the three-lane bucket it
@@ -126,20 +146,22 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
           const provenance = `${s.sourceLayer}${s.updated ? ' · ' + s.updated : ''}`
           return (
             <div key={s.key ?? s.name} style={css('padding:16px 0; border-bottom:1px solid #EDEAE0;')}>
-              <div style={css('display:flex; align-items:center; gap:9px; margin-bottom:8px;')}>
+              <div className="cc-section-heading-row">
                 <span aria-hidden="true" style={css(`flex:0 0 auto; width:10px; height:10px; border-radius:3px; background:${col.strokeE};`)} />
-                <h3 style={css('margin:0; font-size:14px; font-weight:600;')}>{s.name}</h3>
-                <span style={css(`margin-left:auto; flex:0 0 auto; font-family:${MONO}; font-size:10.5px; color:${col.text2};`)}>{provenance}</span>
+                <h3><button type="button" data-section={index} aria-expanded={!collapsed.has(index)} onClick={() => setCollapsed((prev) => { const next = new Set(prev); if (next.has(index)) next.delete(index); else next.add(index); return next })}>{s.name}<span aria-hidden="true">{collapsed.has(index) ? ' +' : ' −'}</span></button></h3>
+                <span className="cc-section-provenance">{provenance}</span>
                 <OpenFile layer={s.sourceLayer} path={fileFor(s.sourceLayer)} conceptId={concept.id} />
               </div>
 
+              {s.contextResolution && <p className="cc-context-resolution-note">{s.contextResolution.status === 'applied' ? `Source policy applied: ${s.contextResolution.selectedSource}. Original alternatives are preserved below.` : s.contextResolution.status === 'stale' ? 'The source policy is not currently applicable. This section is using the original cascade.' : 'Resolution undone. This section is using the original cascade.'}</p>}
+              {!collapsed.has(index) && <>
               {s.suppressed ? (
                 <div style={css('display:flex; align-items:center; gap:7px; font-size:12px; color:#8A8A82;')}>
                   <span aria-hidden="true">▢</span>
                   <span>suppressed by {s.sourceLayer}</span>
                 </div>
               ) : (
-                <div style={css('font-size:13.5px; color:#1A1915; line-height:1.55;')}>{s.value}</div>
+                <Markdown source={s.value} className="cc-md" />
               )}
 
               {dissents.length > 0 && (
@@ -147,10 +169,10 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
                   {dissents.map((d, i) => {
                     const dc = lc(d.layer)
                     return (
-                      <div key={`${d.layer}-${i}`} style={css('display:flex; align-items:flex-start; gap:9px; padding:10px 12px; background:#FBF0DD; border:1px solid #E8C88C; border-radius:9px;')}>
+                      <div key={`${d.layer}-${i}`} className="cc-reader-dissent" style={css('display:flex; align-items:flex-start; gap:9px; padding:10px 12px; background:#FBF0DD; border:1px solid #E8C88C; border-radius:9px;')}>
                         <svg style={{ flex: '0 0 auto', marginTop: 1 }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C77D2A" strokeWidth="2.2" strokeLinecap="round"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></svg>
                         <div style={css('flex:1; font-size:12px; color:#5A3D12; line-height:1.45;')}>
-                          <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:1px 6px; border-radius:999px; background:#FFFFFF; color:${dc.text}; margin-right:2px;`)}>{d.sourceLayer}</span> says <span style={{ color: 'var(--cc-amber-text2)' }}>"{d.value}"</span> — overridden here.
+                          <span style={css(`display:inline-flex; align-items:center; font-family:${MONO}; font-size:9px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; padding:1px 6px; border-radius:999px; background:#FFFFFF; color:${dc.text}; margin-right:2px;`)}>{d.sourceLayer}</span> · alternate value<Markdown source={d.value} className="cc-md" />
                         </div>
                         {d.updated && <span style={css(`flex:0 0 auto; font-family:${MONO}; font-size:10px; color:${C.amberText2};`)}>{d.updated}</span>}
                         <OpenFile layer={d.sourceLayer} path={fileFor(d.sourceLayer)} conceptId={concept.id} />
@@ -159,10 +181,11 @@ export function ConceptDetail({ concept }: { concept: Concept }) {
                   })}
                 </div>
               )}
+              </>}
             </div>
           )
         })}
       </div>
-    </>
+    </div>
   )
 }

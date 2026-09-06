@@ -2,7 +2,7 @@
 // (CLAUDE.md, AGENTS.md, README.md, docs/**, .context/**) into a context layer
 // — no clone, no OKF authoring. Read-only: git-tree calls scoped to the
 // configured selectors build the id index, then raw content plus the file's
-// last commit date per concept. Document parsing is delegated to files.mjs so
+// last author date per concept. Document parsing is delegated to files.mjs so
 // a repo-hosted doc and a local one produce identical section keys and merge
 // in the cascade.
 //
@@ -66,7 +66,7 @@ export function createGithubSource({
   // the generation of the tree it was read against, so a refreshed index must
   // start with an empty date memo or an upstream edit would keep reporting its
   // old date for the life of the process.
-  let index = null; // { entries: Map<conceptId,{path,ext}>, dates: Map, branch, pushedAt, at }
+  let index = null; // { entries: Map<conceptId,{path,ext}>, dates: Map, branch, at }
   let failure = null; // { at, error } — most recent refresh failure, drives the retry cooldown
   let warnedAt = 0;
   // Everything above is about staying up; this one is about being honest. Reads
@@ -107,7 +107,8 @@ export function createGithubSource({
     lastError = { at: now(), scope, message: scrub(e.message) };
   }
 
-  async function api(pathname, { raw = false, search = null } = {}) {
+  async function api(pathname, { raw = false, search = null, signal = null } = {}) {
+    signal?.throwIfAborted();
     const url = new URL(base + pathname);
     if (search) for (const [key, value] of Object.entries(search)) url.searchParams.set(key, value);
     const headers = {
@@ -125,7 +126,7 @@ export function createGithubSource({
     // the fetch implementation. The token is bound to one host upstream
     // (sources/index.mjs); honoring a redirect would hand that decision back to
     // the server. A redirect is reported as the failure it is.
-    const res = await fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(requestTimeoutMs) });
+    const res = await fetch(url, { headers, redirect: "manual", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(requestTimeoutMs)]) : AbortSignal.timeout(requestTimeoutMs) });
     if (res.status >= 300 && res.status < 400) {
       throw new Error(`GitHub API ${res.status} redirect on ${pathname} — not followed on a credentialed request`);
     }
@@ -148,19 +149,21 @@ export function createGithubSource({
   // On a failed refresh the previous index is served rather than dropped, and
   // retries pause for the cooldown — a rate-limited repo must not be hit once
   // per concept, and a one-second blip must not blank a layer.
-  async function loadIndex() {
+  async function loadIndex(signal = null) {
+    signal?.throwIfAborted();
     if (index && now() - index.at < indexTtlMs) return index;
     if (failure && now() - failure.at < failureCooldownMs) {
       if (index) return index;
       throw failure.error;
     }
     try {
-      index = await fetchIndex();
+      index = await fetchIndex(signal);
       failure = null;
       warnedAt = 0;
       lastError = null;
       return index;
     } catch (e) {
+      signal?.throwIfAborted(); // Cancellation is not an outage and must not poison the cooldown.
       failure = { at: now(), error: e };
       recordFailure(e, "index");
       if (!index) throw e;
@@ -180,8 +183,8 @@ export function createGithubSource({
   // "every scope missed" can't tell those two apart on its own — a probe of
   // the ref's root settles it with one extra request, only in that otherwise-
   // ambiguous case.
-  async function fetchIndex() {
-    const meta = await api(`/repos/${slug}`);
+  async function fetchIndex(signal) {
+    const meta = await api(`/repos/${slug}`, { signal });
     if (!meta) throw new Error(`repository ${slug} not found (or not visible to this token)`);
     const branch = ref ?? meta.default_branch ?? "HEAD";
     if (scopes.length === 0) {
@@ -191,7 +194,7 @@ export function createGithubSource({
       // to rule out. Always an error, no probe needed.
       throw new Error(`ref "${branch}" not found in ${slug}, or it holds none of the selected paths`);
     }
-    const trees = await Promise.all(scopes.map((scope) => fetchScope(branch, scope)));
+    const trees = await Promise.all(scopes.map((scope) => fetchScope(branch, scope, signal)));
     if (trees.every((tree) => tree === null)) {
       // A scope with prefix "" already IS a root probe — if one was among the
       // scopes, its own fetch already came back null (every entry here did,
@@ -199,7 +202,7 @@ export function createGithubSource({
       // Otherwise nothing here checked the root at all, so ask once, directly.
       const refExists = scopes.some((s) => s.prefix === "")
         ? false
-        : (await api(`/repos/${slug}/git/trees/${encodeURIComponent(branch)}`)) !== null;
+        : (await api(`/repos/${slug}/git/trees/${encodeURIComponent(branch)}`, { signal })) !== null;
       if (!refExists) throw new Error(`ref "${branch}" not found in ${slug}`);
       // else: the ref is real, the configured directories just don't exist
       // yet — an empty layer, not a failure. entries below stays empty.
@@ -227,10 +230,10 @@ export function createGithubSource({
         entries.set(id, { path: repoPath, ext });
       }
     });
-    return { entries, dates: new Map(), branch, pushedAt: dateOnly(meta.pushed_at), at: now() };
+    return { entries, dates: new Map(), branch, at: now() };
   }
 
-  async function fetchScope(branch, scope) {
+  async function fetchScope(branch, scope, signal) {
     // "{ref}:{dir}" is GitHub's syntax for the tree object at a path — the
     // whole point of scoping, since it is the request itself that shrinks.
     const treeRef = scope.prefix
@@ -238,7 +241,7 @@ export function createGithubSource({
       : encodeURIComponent(branch);
     const tree = await api(
       `/repos/${slug}/git/trees/${treeRef}`,
-      scope.recursive ? { search: { recursive: "1" } } : {},
+      { signal, ...(scope.recursive ? { search: { recursive: "1" } } : {}) },
     );
     if (!tree) return null; // this repo doesn't have that directory
     if (tree.truncated) {
@@ -253,20 +256,21 @@ export function createGithubSource({
     return tree;
   }
 
-  // The section date users actually care about is when the doc last changed,
-  // not when the repo was last pushed — but a rate-limited or forbidden commits
-  // call must not lose the concept, so pushed_at is the fallback.
-  async function commitDate(generation, repoPath) {
-    const { dates, branch, pushedAt } = generation;
+  // Only the author date describes this document's content. A rebase changes
+  // the committer date; an unrelated push changes pushed_at. Neither may make
+  // old guidance look newly authored. Unavailable history leaves it undated.
+  async function commitDate(generation, repoPath, signal) {
+    const { dates, branch } = generation;
     if (dates.has(repoPath)) return dates.get(repoPath);
-    let date = pushedAt;
+    let date = null;
     try {
       const commits = await api(`/repos/${slug}/commits`, {
-        search: { path: repoPath, sha: branch, per_page: "1" },
+        signal, search: { path: repoPath, sha: branch, per_page: "1" },
       });
-      date = dateOnly(commits?.[0]?.commit?.committer?.date ?? commits?.[0]?.commit?.author?.date) ?? pushedAt;
+      date = dateOnly(commits?.[0]?.commit?.author?.date);
     } catch {
-      // keep pushedAt — a missing history date is not worth dropping the doc over
+      signal?.throwIfAborted();
+      // Keep the document, without manufacturing a date when history is unavailable.
     }
     dates.set(repoPath, date);
     return date;
@@ -275,13 +279,15 @@ export function createGithubSource({
   const source = {
     name,
     level,
-    async loadConcept(id) {
+    async loadConcept(id, { signal = null } = {}) {
+      signal?.throwIfAborted();
       const repoPath = withinRepo(id, slug);
       if (!repoPath) return null;
       let generation;
       try {
-        generation = await loadIndex(); // records its own failure, as scope "index"
+        generation = await loadIndex(signal); // records its own failure, as scope "index"
       } catch (e) {
+        signal?.throwIfAborted();
         warn(e);
         return null;
       }
@@ -289,11 +295,11 @@ export function createGithubSource({
       if (!entry) return null;
       try {
         const content = await api(`/repos/${slug}/contents/${encodePath(entry.path)}`, {
-          raw: true,
+          raw: true, signal,
           search: { ref: generation.branch },
         });
         if (content == null) return null;
-        const updated = await commitDate(generation, entry.path);
+        const updated = await commitDate(generation, entry.path, signal);
         const doc = parseDocument({
           content,
           stem: path.posix.basename(entry.path, entry.ext),
@@ -303,15 +309,17 @@ export function createGithubSource({
         if (lastError?.scope === "content") lastError = null; // this file reads fine again
         return doc;
       } catch (e) {
+        signal?.throwIfAborted();
         recordFailure(e, "content"); // the index is fine; this one file isn't readable
         warn(e);
         return null;
       }
     },
-    async listConceptIds() {
+    async listConceptIds({ signal = null } = {}) {
       try {
-        return [...(await loadIndex()).entries.keys()].sort();
+        return [...(await loadIndex(signal)).entries.keys()].sort();
       } catch (e) {
+        signal?.throwIfAborted();
         warn(e);
         return [];
       }

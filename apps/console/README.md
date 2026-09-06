@@ -42,37 +42,46 @@ playground/service command documented in the repository instructions.
 
 ## Product flow
 
-- **Canvas** defaults to the Grouped Cascade view. Folders with four or more
+- **Map** defaults to the Grouped Cascade view. Folders with four or more
   concepts in the same precedence lane become one summary node; opening one
   launches a separate searchable folder browser without changing the graph's
   geometry. Right-click a concept or folder to hide it from Cascade, then use
-  **Hidden** to restore it. Hidden concepts remain available in Knowledge and
-  Review. Pan, zoom, fit, concept detail, and dissent links remain available.
-- **Overview** summarizes live sources, concepts, and conflicts, and lists the
-  cascade order — one row per source, position 1 first, with what each wins
-  over. Recent activity is demo-only until the engine exposes an activity API.
-- **Queue** demonstrates review, stored, and discarded signal routing in demo
+  **Hidden** to restore it. Hidden concepts remain available in Library and
+  Trust. Pan, zoom, fit, concept detail, and dissent links remain available.
+- **Workspace** leads with project search and a six-document library preview.
+  Known section dates sort first; undated indexed documents fill the remaining
+  places. Source health, precedence, and links to outstanding review work stay
+  visible. The preview is not a recently-viewed history or complete update feed.
+- **Trust → Captures** demonstrates review, stored, and discarded signal routing in demo
   mode; live/Desktop mode has no signal API yet and is read-only.
-- **Resolve** (the Discrepancy Center) opens on what needs attention: an
-  actionable count, per-kind tiles and quick wins (each a filter), status
-  tabs with counts, and a grouped, windowed list — by kind (broken links
-  sub-grouped by target), concept, source pair or owner — that costs the same
-  at 1,500 rows as at 15. Rows carry a checkbox; the bulk bar acts on the
+- **Trust → Discrepancies** opens a decision inbox with status tabs and a
+  grouped, windowed list. Filters, grouping and quick wins are in the
+  **Filters and grouping** disclosure. Group by kind (broken links subdivided
+  by target), concept, source pair or owner. Windowing bounds the mounted rows
+  for large lists. Rows carry a checkbox; the bulk bar acts on the
   selection (acknowledge with a reason, rewrite N links to a candidate, remove
   N links, create the missing concept in a writable layer, use one source for
   N) and previews every action through a dry run first, then applies it as
   one batch with per-item results — failures stay selected. A broken link's
   detail leads with the engine's suggested fix (a structural near-match: case,
   extension, slug, moved file, typo) beside remove / create / acknowledge. In
-  live/Desktop mode, choosing an answer preflights every contributing writable
-  local layer, updates them together, and appends the original answers and
+  live/Desktop mode, source-editing answer selection preflights every
+  contributing writable local layer, updates them together, and appends the original answers and
   decision to `.contextcake/profiles/<profile-id>/conflict-resolutions.ndjson`
   beside the manifest. History can be reopened to choose a different saved
   answer later. The service refuses the whole change if a source is remote,
   missing, or changed since review.
-- **Concepts** shows the effective concept with per-section provenance, and each
-  contributor links to the file it came from.
-- **Files** is the source navigator: a keyboard tree per source, scoping to one
+- **Trust → Automation** manages exact concept/section source policies. Enabling
+  a policy is standing consent for that source to supply the section after
+  evidence checks; original files remain unchanged. History, Pause and latest-
+  decision Undo are available here. Installed local models can provide advisory
+  assessments; their output never selects a source or enables a policy.
+- **Library → Context** offers source/type-scoped content search and a windowed
+  result list. Search excerpts are original source text; opening a result shows
+  the current resolved answer, safe Markdown, provenance and alternatives.
+  The reader renders 20 sections per page, with section and match navigation.
+  Each contributor links to its original file.
+- **Library → Files** is the source navigator: a keyboard tree per source, scoping to one
   source, deep links (`#/files/<source>/<path>`), a rendered/raw view of each
   document, and editing with re-resolve on save. Demo mode renders the same
   navigator read-only. Sources whose content is remote — a GitHub repository
@@ -82,10 +91,11 @@ playground/service command documented in the repository instructions.
   position 1 wins and every move saves immediately), repoint a folder-backed
   source, remove, and sync. Read-only in demo mode, where the way into the
   navigator is still offered.
-- **Ask ContextCake** uses the resolved cascade when a compatible
+- **Use with agent** opens Ask ContextCake, which uses the resolved cascade when a compatible
   `window.claude.complete` harness bridge is present. Demo mode falls back to
   visibly labeled sample answers. Live mode never substitutes demo knowledge:
-  without a bridge it points the user to the agent connection flow instead.
+  without a bridge it prepares a question to copy into an external agent,
+  with a direct Library search alternative and connection setup.
   Electron does not currently provide that completion bridge.
 - **Settings** opens from the sidebar or Cmd/Ctrl-comma. General → Appearance
   holds Appearance (System / Light / Dark), Theme (the palette family — a grid
@@ -96,7 +106,7 @@ playground/service command documented in the repository instructions.
   deletion.
 
 The desktop sidebar remembers its expanded width, can be resized by pointer or
-keyboard, and collapses to a 72px icon rail. On narrow screens it becomes a
+keyboard, and collapses to an 88px labelled rail. On narrow screens it becomes a
 full-width off-canvas drawer.
 
 ## First run

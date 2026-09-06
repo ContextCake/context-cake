@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ACTIONABLE_STATUSES, bestCandidateOf, buildDiscrepancies, buildLinkIndex, candidatesFor, compactDiscrepancy,
-  discrepancyRevision, filterDiscrepancies, fingerprint, removeLink, rewriteLinkTarget, summarizeDiscrepancies,
+  ACTIONABLE_STATUSES, bestCandidateOf, blockedContextResolutionKeys, buildDiscrepancies, buildLinkIndex, candidatesFor, compactDiscrepancy,
+  discrepancyRevision, extractLinks, filterDiscrepancies, fingerprint, removeLink, rewriteLinkTarget, summarizeDiscrepancies,
 } from "../src/discrepancies.mjs";
 import { parseRuleDocument, serializeRuleDocument, suggestDiscrepancyRules } from "../src/discrepancy-rules.mjs";
 import { mergeConcepts } from "../src/resolver.mjs";
@@ -28,6 +28,25 @@ const concept = {
     conflicts: [{ layer: "company", updated: "2026-07-01", content: "Use MySQL." }],
   }],
 };
+
+test("context resolution blocking matches projected section rules without blocking unrelated fixes", () => {
+  const recommendation = { id: "one", enabled: true, mode: "recommend",
+    match: { kind: "section_content", conceptType: "decision", key: "choice", sources: ["company", "team"] },
+    action: { type: "prefer_source", source: "team" } };
+  const cases = [
+    [], [recommendation],
+    [{ ...recommendation, mode: "automatic" }],
+    [recommendation, { ...recommendation, id: "other", action: { type: "prefer_source", source: "company" } }],
+    [{ ...recommendation, enabled: false, mode: "automatic" }],
+    [{ ...recommendation, mode: "automatic", match: { ...recommendation.match, key: "unrelated" } }],
+    [{ ...recommendation, mode: "automatic", match: { kind: "broken_link", conceptType: "decision", key: "choice", sources: ["team"], target: "runbooks/missing" }, action: { type: "rewrite_link", newTarget: "runbooks/present" } }],
+  ];
+  for (const rules of cases) {
+    const projected = buildDiscrepancies([concept], { coverageComplete: true, rules }).discrepancies
+      .filter(item => item.originalKind === "section_content" && (item.ruleConflict || item.matchingRules.some(rule => rule.mode === "automatic")));
+    assert.deepEqual([...blockedContextResolutionKeys([concept], rules)], projected.map(item => `${item.conceptId}::${item.key}`));
+  }
+});
 
 test("builds section, frontmatter, and settled broken-link discrepancies", () => {
   const result = buildDiscrepancies([concept], { coverageComplete: true });
@@ -657,4 +676,115 @@ test("removeLink turns links into their label, alias, or basename; images and ot
   assert.equal(replaced, 3);
   assert.equal(out, "See the runbook, Alias, missing, ![img](runbooks/missing), [z](runbooks/other).");
   assert.deepEqual(removeLink("[[Missing Runbook]]", "Missing Runbook"), { text: "Missing Runbook", replaced: 1 });
+});
+
+
+test("link detection and both repairs preserve code examples, escapes, images, and comments byte-for-byte", () => {
+  const examples = [
+    '`[example](runbooks/missing) [[runbooks/missing]]`',
+    '``[example](runbooks/missing) ` [[runbooks/missing]]``',
+    '```markdown\n[example](runbooks/missing)\n[[runbooks/missing]]\n```',
+    '~~~~\n```\n[example](runbooks/missing)\n~~~~',
+    '> ```md\n> [[runbooks/missing]]\n> ```',
+    '    [example](runbooks/missing)',
+    '\\[example](runbooks/missing)',
+    '\\[[runbooks/missing]]',
+    '![image](runbooks/missing) ![[runbooks/missing]]',
+    '<!-- [example](runbooks/missing) -->',
+    '<pre>[example](runbooks/missing)</pre>',
+    '<code>[[runbooks/missing]]</code>',
+  ];
+  for (const example of examples) {
+    const text = `${example}\n\nActual [runbook](runbooks/missing).`;
+    assert.deepEqual(extractLinks(example), [], example);
+    assert.deepEqual(extractLinks(text), ['runbooks/missing'], example);
+    assert.deepEqual(rewriteLinkTarget(text, 'runbooks/missing', 'runbooks/found'), {
+      text: `${example}\n\nActual [runbook](runbooks/found).`, replaced: 1,
+    });
+    assert.deepEqual(removeLink(text, 'runbooks/missing'), {
+      text: `${example}\n\nActual runbook.`, replaced: 1,
+    });
+  }
+});
+
+test("link destinations exclude titles and preserve balanced syntax and code in labels", () => {
+  const text = '[the `]` label]( <./runbooks/old(v2).md#setup> "Migration guide") and [[ ./runbooks/old(v2).md#setup |alias]].';
+  assert.deepEqual(extractLinks(text), ['runbooks/old(v2)']);
+  assert.deepEqual(rewriteLinkTarget(text, 'runbooks/old(v2)', 'runbooks/new'), {
+    text: '[the `]` label]( <./runbooks/new.md#setup> "Migration guide") and [[ ./runbooks/new.md#setup |alias]].', replaced: 2,
+  });
+  assert.deepEqual(extractLinks('[nested [label]](runbooks/old(v2).md "title")'), ['runbooks/old(v2)']);
+  assert.deepEqual(extractLinks('[external]( https://example.com/x "title") [cdn](//example.com/x) [anchor]( #setup )'), []);
+});
+
+test("unclosed fences are literal to EOF but unmatched inline ticks do not swallow real links", () => {
+  assert.deepEqual(extractLinks('```md\n[[missing]]'), []);
+  assert.deepEqual(extractLinks('literal ` then [link](real)'), ['real']);
+  assert.deepEqual(extractLinks('``[example](hidden)\nwith newline`` [link](real)'), ['real']);
+});
+
+test("consecutive link rewrites reparse current text while preserving embedded examples", () => {
+  const original = '`[[old/a]] [[old/b]]` [A](old/a "A title") [[old/b|B]] ![B](old/b)';
+  const first = rewriteLinkTarget(original, 'old/a', 'new/much-longer-a');
+  const second = rewriteLinkTarget(first.text, 'old/b', 'new/b');
+  assert.equal(first.replaced, 1);
+  assert.equal(second.replaced, 1);
+  assert.equal(second.text, '`[[old/a]] [[old/b]]` [A](new/much-longer-a "A title") [[new/b|B]] ![B](old/b)');
+  assert.deepEqual(extractLinks(second.text), ['new/much-longer-a', 'new/b']);
+});
+
+
+test('adversarial backslash runs and invalid nested wiki syntax stay bounded', () => {
+  const started = performance.now();
+  assert.deepEqual(extractLinks('\\'.repeat(100_000)), []);
+  const destination = '\\'.repeat(100_000) + 'target';
+  assert.deepEqual(extractLinks(`[label](${destination})`), [destination]);
+  assert.deepEqual(extractLinks('['.repeat(100_000) + '\n' + ']'.repeat(100_000)), []);
+  assert.deepEqual(extractLinks('['.repeat(100_000) + '`literal`' + ']'.repeat(100_000)), []);
+  assert.ok(performance.now() - started < 2000, 'link parsing must not scan a backslash or hidden span repeatedly');
+});
+
+test('unfinished destination prefixes use bounded work without losing later links or long balanced targets', () => {
+  const started = performance.now();
+  const unfinished = '[x]('.repeat(25_000);
+  const text = unfinished + '[Keep](valid/path "Exact title")';
+  assert.deepEqual(extractLinks(text), ['valid/path']);
+  assert.equal(rewriteLinkTarget(text, 'valid/path', 'next/path').text, unfinished + '[Keep](next/path "Exact title")');
+  assert.equal(removeLink(text, 'valid/path').text, unfinished + 'Keep');
+  // A length/depth cutoff would avoid the attack by silently dropping this
+  // valid link. The suffix index must instead jump balanced parentheses.
+  const target = 'part('.repeat(25_000) + 'leaf' + ')'.repeat(25_000);
+  assert.deepEqual(extractLinks(`[Long](${target})`), [target]);
+  assert.ok(performance.now() - started < 2000, 'each candidate must reuse destination boundaries instead of rescanning the suffix');
+});
+
+test('many plain wiki links search for aliases only inside their own spans', () => {
+  const started = performance.now();
+  const text = '[[target]] '.repeat(100_000) + '[[other|Visible alias]]';
+  assert.deepEqual(extractLinks(text), ['target', 'other']);
+  const rewritten = rewriteLinkTarget(text, 'other', 'next');
+  assert.equal(rewritten.replaced, 1);
+  assert.equal(rewritten.text, '[[target]] '.repeat(100_000) + '[[next|Visible alias]]');
+  assert.ok(performance.now() - started < 2000, 'plain wiki links must not repeatedly search the remaining document for an alias');
+});
+
+test('unfinished literal HTML and unmatched unequal backtick runs retain real links with bounded work', () => {
+  const started = performance.now();
+  assert.deepEqual(extractLinks('<pre '.repeat(100_000) + '[Visible](real/path)'), ['real/path']);
+  const unmatchedTicks = 'text ' + Array.from({ length: 1500 }, (_, index) => '`'.repeat(index + 1) + 'x').join('');
+  assert.deepEqual(extractLinks(unmatchedTicks + '[Visible](real/path)'), ['real/path']);
+  assert.ok(performance.now() - started < 2000, 'unmatched literal delimiters must reuse indexed boundaries');
+});
+
+test('large mixed-link repairs assemble original spans once and preserve literal examples', () => {
+  const started = performance.now();
+  const block = '[[target|Alias]] [Label](./target.md#anchor "Title") `[[target]]` ![Image](target)\n';
+  const text = block.repeat(50_000);
+  const rewritten = rewriteLinkTarget(text, 'target', 'longer/destination');
+  assert.equal(rewritten.replaced, 100_000);
+  assert.equal(rewritten.text, '[[longer/destination|Alias]] [Label](./longer/destination.md#anchor "Title") `[[target]]` ![Image](target)\n'.repeat(50_000));
+  const unlinked = removeLink(text, 'target');
+  assert.equal(unlinked.replaced, 100_000);
+  assert.equal(unlinked.text, 'Alias Label `[[target]]` ![Image](target)\n'.repeat(50_000));
+  assert.ok(performance.now() - started < 10000, 'repairs must not copy the entire section for each match');
 });

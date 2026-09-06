@@ -27,6 +27,10 @@ import { MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createSourceOperations, normalizeRepo } from "./control/sources.mjs";
 import { createDiscrepancyOperations } from "./control/discrepancies.mjs";
+import { createContextResolutionOperations } from "./control/context-resolutions.mjs";
+import { blockedContextResolutionKeys as contextResolutionRuleBlocks, discrepancyRevision, fingerprint } from "./discrepancies.mjs";
+import { createContextResolutionStore, applyContextResolutions, contextManifestFingerprint, sectionEvidence } from "./context-resolutions.mjs";
+import { createAssessmentOperations } from "./discrepancy-assessment.mjs";
 import { ControlError } from "./control/errors.mjs";
 import { patchSettings, settingsView } from "./control/settings.mjs";
 import { withDeadline } from "./control/util.mjs";
@@ -231,7 +235,7 @@ async function snapshotSource(source, entry, signal = null, previousSnap = null,
       stats.carried += 1;
       if (fromSeed) carriedFromSeed += 1;
     } else {
-      const concept = await source.loadConcept(item.id, item.ext ? { ext: item.ext } : undefined);
+      const concept = await source.loadConcept(item.id, { signal, ...(item.ext ? { ext: item.ext } : {}) });
       throwIfAborted();
       concepts.set(item.id, concept);
       tokens += tokenizeConcept(source, item.id, concept, tokensById, tokenCache, stats);
@@ -488,6 +492,7 @@ export function createEngineService({
                          //   Injected by the caller that owns the OS keychain;
                          //   the engine never reads a keychain itself and never
                          //   returns these over HTTP. See setTokens().
+  assessmentProvider = null, // desktop-owned local transport; never gives a model write capabilities
 } = {}) {
   if (!manifestPath) throw new Error("createEngineService: manifestPath is required");
   const MANIFEST = path.resolve(manifestPath);
@@ -510,6 +515,7 @@ export function createEngineService({
   const discrepancyTransactionJournal = createDiscrepancyTransactionJournal(MANIFEST, { profileId: SERVICE_PROFILE_ID });
   const discrepancyRuleStore = createDiscrepancyRuleStore(MANIFEST, { profileId: SERVICE_PROFILE_ID });
   const discrepancyPriorityStore = createDiscrepancyPriorityStore(MANIFEST, { profileId: SERVICE_PROFILE_ID });
+  const contextResolutionStore = createContextResolutionStore(MANIFEST, { profileId: SERVICE_PROFILE_ID });
   // Shared control operations (control/sources.mjs): the CRUD routes below are
   // parsing shims over these. Credentials flow in as a capability so the
   // operations never touch tokenState directly.
@@ -536,6 +542,27 @@ export function createEngineService({
   });
   let automaticTimer = null;
   let automaticTail = Promise.resolve();
+  const contextResolutionOps = createContextResolutionOperations({
+    store: contextResolutionStore,
+    project: () => discrepancyOps.project(),
+    manifest: () => openSources().manifest,
+    readLiveResolved: async (id) => {
+      const { sources } = openSources();
+      const result = await resolveConcept(id, sources);
+      if (sources.some(source => source.health?.()?.lastError)) throw new ControlError('SOURCE_UNHEALTHY', 'A source failed during evidence validation.', { status: 409 });
+      return result;
+    },
+  });
+  const assessmentOps = createAssessmentOperations({
+    profileId: SERVICE_PROFILE_ID, provider: assessmentProvider,
+    project: () => discrepancyOps.project(), manifest: () => openSources().manifest,
+    readLiveResolved: async (id) => {
+      const { sources } = openSources();
+      const result = await resolveConcept(id, sources);
+      if (sources.some(source => source.health?.()?.lastError)) throw new ControlError('SOURCE_UNHEALTHY', 'A source failed during evidence validation.', { status: 409 });
+      return result;
+    },
+  });
 
   // ---- source lifecycle ------------------------------------------------------
   //
@@ -1762,6 +1789,22 @@ export function createEngineService({
       if (p === "/api/resolve") { json(res, 200, await resolveOne(url.searchParams.get("concept"))); return true; }
       if (p === "/api/resolve-all") { await streamResolveAll(res, await resolveAllApi(waitParam(url))); return true; }
       if (p === "/api/search") { json(res, 200, await searchApi(url, waitParam(url))); return true; }
+      if (p === "/api/discrepancy-assessment/models" && req.method === 'GET') {
+        json(res, 200, await assessmentOps.models()); return true;
+      }
+      if (p === "/api/discrepancy-assessment" && req.method === 'POST') {
+        if (!allowMutations) { json(res, 405, { error: 'Assessments are disabled on this service' }); return true; }
+        json(res, 200, await assessmentOps.assess(parseJson(await readBody(req)))); return true;
+      }
+      if (p === "/api/context-resolutions") {
+        if (req.method === "GET") { json(res, 200, await contextResolutionsView()); return true; }
+        if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
+        const body = parseJson(await readBody(req));
+        if (req.method === "POST") { json(res, 200, await contextResolutionOps.enable(body)); return true; }
+        if (req.method === "PATCH") { json(res, 200, await contextResolutionOps.pause(body.policyId)); return true; }
+        if (req.method === "DELETE") { json(res, 200, await contextResolutionOps.undo(body.decisionId)); return true; }
+        json(res, 405, { error: "Method not allowed" }); return true;
+      }
       if (p === "/api/discrepancies" && req.method === "GET") {
         // Three answers from one memoized projection (control/discrepancies.mjs):
         // `?id=` is one full record; any filter/paging/fields param is the
@@ -2018,6 +2061,9 @@ export function createEngineService({
         // may be stale or partial; and failed to be read at all, so it
         // contributed nothing.
         status: degraded ? "degraded" : status,
+        // Content failures need not hide a usable snapshot, but that snapshot
+        // cannot establish complete evidence for an automatic selection.
+        evidenceHealthy: health?.ok !== false,
         error: degraded ? health.lastError : error ?? null,
         // This row is a manifest entry that failed validation, not a source
         // that failed to read: there is nothing behind it to retry, and the
@@ -2185,6 +2231,13 @@ export function createEngineService({
    */
   function bumpGeneration(pinned) {
     const parts = [manifestStamp(), `t${tokenState.epoch}`];
+    // A source-preserving decision changes no index entry. Observe its atomic
+    // sidecar replacement so an automatic run (or another process's Undo)
+    // refreshes the console through the existing cheap status poll.
+    try {
+      const stat = fs.statSync(contextResolutionStore.filename, { throwIfNoEntry: false });
+      parts.push(stat ? `r${stat.ino}:${stat.mtimeMs}:${stat.size}` : 'r:none');
+    } catch { parts.push('r:unreadable'); }
     for (const { source, snap, progress, error, health } of pinned) {
       parts.push([
         source.name, source.level, snap?.gen ?? 0,
@@ -2234,6 +2287,7 @@ export function createEngineService({
         kind: source.quarantinedKind ?? layerMeta.get(source.name)?.source ?? "okf-local",
         quarantined: source.quarantined === true, // same meaning as /api/graph's
         status: degraded ? "degraded" : status,
+        evidenceHealthy: health?.ok !== false,
         phase: progress.phase,
         loaded: progress.loaded,
         total: progress.total,
@@ -2245,6 +2299,7 @@ export function createEngineService({
         // Dotfiles/dot-dirs are still skipped silently — this only makes the
         // count visible, never what is inside them. Additive, and already
         // computed by the walk, so it costs nothing on this cheap route.
+        warnings: (snap?.truncated ? 1 : 0) + (snap?.skipped?.length ?? 0) + (snap?.unreadable?.length ?? 0),
         skippedHidden: snap?.hidden ?? 0,
         // The last pass's work breakdown (see indexProgress) — additive, three
         // small integers, and how a test proves an edit cost one read.
@@ -2288,11 +2343,16 @@ export function createEngineService({
   // reflects an edit made a moment ago in the file editor.
   async function resolveOne(conceptId) {
     if (!conceptId) throw httpError(400, "Provide ?concept=<id>");
-    const { sources } = openSources();
+    const { sources, manifest } = openSources();
     const resolved = await resolveConcept(conceptId, sources);
     if (!resolved) throw httpError(404, `Concept not found in any source: ${conceptId}`);
     decorateResolvedDispositions(resolved, await conflictResolutionLog.list());
-    return resolved;
+    const status = statusApi();
+    return applyContextResolutions(resolved, await contextResolutionStore.read(), {
+      profileId: SERVICE_PROFILE_ID, manifestFingerprint: contextManifestFingerprint(manifest),
+      coverageComplete: !status.indexing && status.sources.every(completeResolutionSource) && !sources.some(source => source.health?.()?.lastError),
+      blockedKeys: await blockedContextResolutionKeys([resolved]),
+    });
   }
 
   // Unlike resolveOne, this reads the background index rather than live
@@ -2300,14 +2360,14 @@ export function createEngineService({
   // (or MCP graph) and rebuilt a BM25 index over the whole corpus on every
   // keystroke the console debounced through here — the same shape of cost the
   // engine already refuses to pay per request for /api/graph and countTokens.
-  // search.mjs is still the only ranking module the retrieval eval scores, so
-  // this route never reimplements any part of it: it hands searchConcepts an
-  // adapter-shaped view over already-loaded snapshot concepts (searchSnapshotView)
-  // instead of the live sources array, which is the one substitution that
-  // keeps the ranking byte-identical while removing the disk/MCP reads.
+  // The retained index uses search.mjs's scorer over loaded snapshots.
+  // Optional source/type facets select concepts before top-k, retaining the
+  // full corpus statistics so narrowing a search never changes its scores.
   async function searchApi(url, waitMs = 0) {
     const query = url.searchParams.get("q");
     if (typeof query !== "string" || !query.trim()) throw httpError(400, "Provide ?q=<query>");
+    const source = url.searchParams.get("source") || undefined;
+    const type = url.searchParams.get("type") || undefined;
     let limit = 10;
     const rawLimit = url.searchParams.get("limit");
     if (rawLimit !== null) {
@@ -2323,7 +2383,7 @@ export function createEngineService({
     // same fields and meaning /api/graph and /api/resolve-all use — otherwise
     // a search box on a big vault reads "no results" indistinguishably from a
     // genuinely empty vault for the whole first index.
-    const { entries } = ensureIndexes();
+    const { entries, manifest } = ensureIndexes();
     const pinned = entries.map(pinEntry);
     const contributing = pinned.filter((p) => p.snap);
     const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
@@ -2336,7 +2396,7 @@ export function createEngineService({
     if (tokenizeQuery(query).length === 0) return { hits: [], indexing, indexingSources: pending };
     const key = contributingKey(contributing);
     if (!searchMemo || searchMemo.key !== key) searchMemo = { key, hits: new Map() };
-    const cacheKey = `${query}\u0000${limit}`;
+    const cacheKey = JSON.stringify([query, limit, source, type]);
     let promise = searchMemo.hits.get(cacheKey);
     if (!promise) {
       // The incremental index replaces the per-query corpus rebuild
@@ -2345,7 +2405,7 @@ export function createEngineService({
       const snapshots = contributing.map((p) => ({
         name: p.source.name, level: p.source.level, gen: p.snap.gen, ids: p.snap.ids, concepts: p.snap.concepts,
       }));
-      promise = (async () => searchIndex.search(snapshots, { query, limit }))().catch((err) => {
+      promise = (async () => searchIndex.search(snapshots, { query, limit, source, type }))().catch((err) => {
         if (searchMemo?.hits.get(cacheKey) === promise) searchMemo.hits.delete(cacheKey);
         throw err;
       });
@@ -2548,15 +2608,21 @@ export function createEngineService({
   // named so the client knows the answer is partial and can poll.
   async function resolveAllApi(waitMs = 0) {
     if (waitMs > 0) await awaitIndexes(waitMs);
-    const { entries } = ensureIndexes();
+    const { entries, manifest } = ensureIndexes();
     // Pinned for the same reason /api/graph pins: `indexingSources` has to
     // name the state these concepts were resolved from. The corpus itself
     // comes from the shared memo; only the progress fields are per-request.
     const pinned = entries.map(pinEntry);
-    const { concepts, errors } = await resolvedCorpus(pinned);
-    // Decoration happens per request over the cached objects: it OVERWRITES
-    // section.discrepancy in place (idempotent for one decision list), which
-    // is what keeps a decision recorded a second ago visible on a memo hit.
+    const { concepts: rawConcepts, errors } = await resolvedCorpus(pinned);
+    const state = await contextResolutionStore.read();
+    const status = statusOf(manifest, pinned);
+    const blockedKeys = await blockedContextResolutionKeys(rawConcepts);
+    const concepts = rawConcepts.map(concept => applyContextResolutions(concept, state, {
+      profileId: SERVICE_PROFILE_ID, manifestFingerprint: contextManifestFingerprint(manifest), blockedKeys,
+      coverageComplete: !status.indexing && errors.length === 0 && status.sources.every(completeResolutionSource),
+    }));
+    // Decorate clones only: discrepancy evidence must keep the original
+    // cascade, never a previously selected context resolution.
     const decisions = await conflictResolutionLog.list();
     for (const concept of concepts) decorateResolvedDispositions(concept, decisions);
     const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
@@ -2580,6 +2646,45 @@ export function createEngineService({
     };
   }
 
+  async function blockedContextResolutionKeys(concepts) {
+    return contextResolutionRuleBlocks(concepts, await discrepancyOps.effectiveRules());
+  }
+
+  async function contextResolutionsView() {
+    const state = await contextResolutionOps.view();
+    if (!state.decisions.length) return state;
+    const { entries, manifest } = ensureIndexes();
+    const pinned = entries.map(pinEntry);
+    const { concepts, errors } = await resolvedCorpus(pinned);
+    const status = statusOf(manifest, pinned);
+    const blockedKeys = await blockedContextResolutionKeys(concepts);
+    const relevant = new Set(state.decisions.map(row => row.conceptId));
+    const outcomes = new Map();
+    for (const concept of concepts) {
+      if (!relevant.has(concept.id)) continue;
+      const selected = applyContextResolutions(concept, state, {
+        profileId: SERVICE_PROFILE_ID, manifestFingerprint: contextManifestFingerprint(manifest), blockedKeys,
+        coverageComplete: !status.indexing && errors.length === 0 && status.sources.every(completeResolutionSource),
+      });
+      for (const section of selected.sections) {
+        if (!section.contextResolution) continue;
+        const evidence = sectionEvidence(concept, section.key);
+        outcomes.set(section.contextResolution.decisionId, {
+          status: section.contextResolution.status,
+          revision: evidence ? discrepancyRevision(evidence.contributions.map(row => ({ source: row.source, level: row.level, fingerprint: fingerprint(row.content) }))) : null,
+        });
+      }
+    }
+    return { ...state, decisions: state.decisions.map(row => ({ ...row,
+      currentStatus: row.undoneAt ? 'undone' : outcomes.get(row.id)?.status ?? 'stale',
+      currentRevision: outcomes.get(row.id)?.revision ?? null,
+    })) };
+  }
+
+  function completeResolutionSource(row) {
+    return row.status === 'ok' && !row.warnings && !row.refreshing && row.evidenceHealthy !== false;
+  }
+
   function scheduleAutomaticRules() {
     if (!allowMutations || closed || automaticTimer) return;
     automaticTimer = setTimeout(() => {
@@ -2596,10 +2701,11 @@ export function createEngineService({
   // ready all mean the projection would be answering from a moving target.
   // The decision itself (control/discrepancies.mjs) re-checks everything under
   // the manifest lock; this is only the cheap "is now a good time" gate.
-  function runAutomaticRules() {
+  async function runAutomaticRules() {
     const { entries } = ensureIndexes();
     if (entries.some(({ entry }) => entry.running || entry.followUp || entry.status !== "ready")) return;
-    return discrepancyOps.runAutomaticRules();
+    await discrepancyOps.runAutomaticRules();
+    return contextResolutionOps.run();
   }
 
   // ---- settings ---------------------------------------------------------------

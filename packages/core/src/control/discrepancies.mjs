@@ -122,15 +122,15 @@ export function createDiscrepancyOperations({
   // from the source statuses, so naming it here costs no extra miss; a host
   // whose flag can move on its own still gets a fresh coverage answer.
   function sourceHealthSig(status) {
-    return JSON.stringify([status.indexing === true, status.sources.map((source) => [source.name, source.status, source.error ?? null])]);
+    return JSON.stringify([status.indexing === true, status.sources.map((source) => [source.name, source.status, source.error ?? null, source.warnings ?? 0, source.refreshing === true, source.evidenceHealthy !== false])]);
   }
 
   async function buildProjection(c, key) {
     const [{ concepts, errors }, decisions, rules, priorities] = await Promise.all([
       c.resolved(), resolutionLog.list(), effectiveRules(), priorityStore.list(),
     ]);
-    const coverageComplete = !c.status.indexing
-      && c.status.sources.every((source) => source.status !== "error" && source.status !== "degraded" && source.status !== "indexing");
+    const coverageComplete = !c.status.indexing && errors.length === 0
+      && c.status.sources.every((source) => source.status !== "error" && source.status !== "degraded" && source.status !== "indexing" && !(source.warnings > 0) && !source.refreshing && source.evidenceHealthy !== false);
     const built = buildDiscrepancies(concepts, {
       decisions, rules, priorities, coverageComplete, sourceHealth: c.status.sources,
     });

@@ -12,6 +12,7 @@
 
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
+import { markdownLinkSpans } from "./markdown-links.mjs";
 
 export const DISCREPANCY_KINDS = new Set([
   "section_content", "frontmatter_value", "broken_link", "changed_after_decision",
@@ -237,91 +238,88 @@ function matchRules(item, rules) {
   return { rules: matches, conflict: actions.size > 1 };
 }
 
+// Both HTTP and stdio use the same source-choice competition check. This is
+// the existing rule matcher over a section's structural evidence, not another
+// discrepancy projection. A link repair in the same section does not choose
+// between its sources; if it changes text, evidence validation reopens the
+// recorded decision independently.
+export function blockedContextResolutionKeys(concepts, rules) {
+  const blocked = new Set();
+  for (const concept of concepts) {
+    for (const section of concept.sections) {
+      if (!section.conflicts?.length) continue;
+      const matched = matchRules({
+        kind: "section_content", conceptType: String(concept.frontmatter?.type ?? "concept"),
+        key: section.key, contributions: [
+          { source: section.sourceLayer }, ...section.conflicts.map(item => ({ source: item.layer })),
+        ],
+      }, rules);
+      if (matched.conflict || matched.rules.some(rule => rule.mode === "automatic")) {
+        blocked.add(`${concept.id}::${section.key}`);
+      }
+    }
+  }
+  return blocked;
+}
+
 function publicRule(rule) {
   return { id: rule.id, scope: rule.scope, mode: rule.mode, action: rule.action, evidenceDecisionIds: rule.evidenceDecisionIds ?? [] };
 }
 
 // ---- link syntax ---------------------------------------------------------------
 //
-// extractLinks decides what counts as an outgoing local link; rewriteLinkTarget
-// and removeLink walk exactly the same two patterns, so a link this projection
-// reports as broken is a link those helpers can reach, and nothing else in the
-// text is ever touched.
-
-const MARKDOWN_LINK = /!?\[[^\]]*]\(([^)]+)\)/g;
-const WIKI_LINK = /\[\[([^\]|]+)(?:\|[^\]]+)?]]/g;
-
+// Extraction and both edit actions consume the same lossless syntax spans.
+// Only recognized links are editable; code examples and images stay intact.
 export function extractLinks(text) {
-  const out = [];
-  for (const match of String(text).matchAll(MARKDOWN_LINK)) {
-    if (!match[0].startsWith("!") && localTarget(match[1])) out.push(cleanTarget(match[1]));
-  }
-  for (const match of String(text).matchAll(WIKI_LINK)) {
-    if (localTarget(match[1])) out.push(cleanTarget(match[1]));
-  }
-  return [...new Set(out.filter(Boolean))];
+  return [...new Set(markdownLinkSpans(text)
+    .filter((link) => localTarget(link.target))
+    .map((link) => cleanTarget(link.target)).filter(Boolean))];
 }
 
-/**
- * Point every link to `oldTarget` at `newTarget`, preserving everything the
- * author wrote around the id: a `./` prefix, a `.md` extension, a `#anchor`,
- * surrounding whitespace, and a wikilink's `|alias`. Images are never links
- * here (extractLinks skips them), so they are never rewritten either.
- */
+/** Preserve a destination's whitespace, ./ prefix, extension, and anchor. */
 export function rewriteLinkTarget(text, oldTarget, newTarget) {
-  let replaced = 0;
-  const swap = (raw) => {
-    if (!localTarget(raw) || cleanTarget(raw) !== oldTarget) return raw;
-    replaced += 1;
-    // Undo cleanTarget's steps in order so the reassembly is exact: split at
-    // the first '#', strip a leading './', strip a trailing '.md', trim.
-    const hash = raw.indexOf("#");
-    const before = hash === -1 ? raw : raw.slice(0, hash);
-    const anchor = hash === -1 ? "" : raw.slice(hash);
-    let core = before;
-    const dot = core.startsWith("./") ? "./" : "";
-    core = core.slice(dot.length);
-    const ext = /\.md$/i.test(core) ? core.slice(-3) : "";
-    core = core.slice(0, core.length - ext.length);
-    const lead = core.match(/^\s*/)[0];
-    const trail = core.match(/\s*$/)[0];
-    return `${dot}${lead}${newTarget}${trail}${ext}${anchor}`;
-  };
-  let out = String(text).replace(MARKDOWN_LINK, (whole, raw) => {
-    if (whole.startsWith("!")) return whole;
-    const next = swap(raw);
-    return next === raw ? whole : whole.slice(0, whole.length - raw.length - 1) + next + ")";
+  return editLinks(text, oldTarget, (link) => {
+    const raw = link.target;
+    const lead = raw.match(/^\s*/)[0];
+    const trail = raw.match(/\s*$/)[0];
+    const trimmed = raw.trim();
+    const hash = trimmed.indexOf("#");
+    const before = hash === -1 ? trimmed : trimmed.slice(0, hash);
+    const anchor = hash === -1 ? "" : trimmed.slice(hash);
+    const dot = before.startsWith("./") ? "./" : "";
+    const ext = /\.md$/i.test(before) ? before.slice(-3) : "";
+    return { start: link.targetStart, end: link.targetEnd, value: `${lead}${dot}${newTarget}${ext}${anchor}${trail}` };
   });
-  out = out.replace(WIKI_LINK, (whole, raw) => {
-    const next = swap(raw);
-    return next === raw ? whole : `[[${next}${whole.slice(2 + raw.length)}`;
-  });
-  return { text: out, replaced };
 }
 
-/**
- * Turn every link to `target` back into plain text: `[label](t)` → `label`,
- * `[[t|alias]]` → `alias`, `[[t]]` → the target's basename. Images untouched.
- */
+/** Turn a supported link into its label, wiki alias, or target basename. */
 export function removeLink(text, target) {
-  let replaced = 0;
-  const hit = (raw) => localTarget(raw) && cleanTarget(raw) === target;
-  let out = String(text).replace(MARKDOWN_LINK, (whole, raw) => {
-    if (whole.startsWith("!") || !hit(raw)) return whole;
-    replaced += 1;
-    return whole.slice(1, whole.indexOf("]("));
-  });
-  out = out.replace(WIKI_LINK, (whole, raw) => {
-    if (!hit(raw)) return whole;
-    replaced += 1;
-    const pipe = whole.indexOf("|");
-    return pipe === -1 ? posix.basename(cleanTarget(raw)) : whole.slice(pipe + 1, -2);
-  });
-  return { text: out, replaced };
+  return editLinks(text, target, (link) => ({
+    start: link.start, end: link.end,
+    value: link.label ?? posix.basename(cleanTarget(link.target)),
+  }));
 }
 
-function localTarget(target) { return !/^[a-z][a-z0-9+.-]*:/i.test(String(target)) && !String(target).startsWith("#"); }
-function cleanTarget(target) { return String(target).split("#")[0].replace(/^\.\//, "").replace(/\.md$/i, "").trim(); }
+function editLinks(value, target, replacement) {
+  const text = String(value);
+  const edits = markdownLinkSpans(text)
+    .filter((link) => localTarget(link.target) && cleanTarget(link.target) === target)
+    .map(replacement);
+  // Spans are ordered and disjoint. Read each untouched interval from the
+  // original once; changing replacement lengths never shifts those offsets.
+  // Joining once avoids copying the full document for every matching link.
+  const pieces = [];
+  let cursor = 0;
+  for (const edit of edits) {
+    pieces.push(text.slice(cursor, edit.start), edit.value);
+    cursor = edit.end;
+  }
+  pieces.push(text.slice(cursor));
+  return { text: pieces.join(''), replaced: edits.length };
+}
+
+function localTarget(target) { return !/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(String(target).trim()); }
+function cleanTarget(target) { return String(target).trim().split("#")[0].replace(/^\.\//, "").replace(/\.md$/i, "").trim(); }
 
 // ---- broken-link candidates ---------------------------------------------------
 //

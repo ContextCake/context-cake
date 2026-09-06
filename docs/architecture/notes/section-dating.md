@@ -42,3 +42,8 @@ A shallow clone's boundary commit lists the entire tree as though it were
 written at the boundary. There is no way to distinguish "written then" from
 "truncated there", so the adapter declines to answer rather than borrowing a
 date that reads as fresh.
+
+The GitHub adapter follows the same rule: only `commit.author.date` may date a
+remote document. The commit's committer date can reflect a rebase, and repository
+`pushed_at` can reflect an unrelated file. Missing, empty or forbidden commit
+history keeps readable content undated; authored document dates still win.

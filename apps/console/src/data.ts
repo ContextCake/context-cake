@@ -1,5 +1,5 @@
 import type {
-  ConflictResolutionRecord, DiscrepancyKind, DiscrepancyLatestDecision, DiscrepancyStatus, DiscrepancyRule, LinkCandidate,
+  ContextResolution, ConflictResolutionRecord, DiscrepancyKind, DiscrepancyLatestDecision, DiscrepancyStatus, DiscrepancyRule, LinkCandidate,
 } from './types'
 import type { LayerId, RouteId } from './theme'
 
@@ -66,6 +66,8 @@ export interface Contribution {
   truncated?: boolean
 }
 export interface Conflict {
+  contextResolution?: ContextResolution
+  originalEffectiveSource?: string | null
   id: string; concept: string; sectionKey: string; section: string; title: string
   status: 'open' | 'resolved'; contributions: Contribution[]; winner: LayerId
   safe: boolean
@@ -114,6 +116,7 @@ export interface Conflict {
 /** `sourceLayer` is the source's real name; `layer` is the lane it renders in. */
 export interface Dissent { layer: LayerId; sourceLayer: string; value: string; updated?: string | null }
 export interface ConceptSection {
+  contextResolution?: ContextResolution
   name: string; winner: LayerId; value: string
   /**
    * The name of the source that won this section — the manifest's own layer

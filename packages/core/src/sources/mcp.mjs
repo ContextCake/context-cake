@@ -123,25 +123,62 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
     try { child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`); } catch {}
   }
 
-  function send(method, params) {
+  function send(method, params, signal = null) {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(signal.reason);
       if (startError) return reject(startError);
       const id = nextId++;
+      const finish = (fn, value) => {
+        pending.delete(id);
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        fn(value);
+      };
+      const onAbort = () => {
+        // Cancel only this request. Another consumer may still be resolving a
+        // concept through the same child, so abort must never close the source.
+        notify("notifications/cancelled", { requestId: id, reason: "Indexing cancelled" });
+        finish(reject, signal.reason);
+      };
       const timer = setTimeout(() => {
-        if (pending.has(id)) { pending.delete(id); reject(new Error(`MCP source "${name}" timed out on ${method}`)); }
+        finish(reject, new Error(`MCP source "${name}" timed out on ${method}`));
       }, 5000);
-      timer.unref?.(); // don't let a pending timeout keep the process alive
-      pending.set(id, { resolve, reject, timer });
-      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      timer.unref?.();
+      signal?.addEventListener("abort", onAbort, { once: true });
+      pending.set(id, {
+        resolve: (value) => finish(resolve, value),
+        reject: (error) => finish(reject, error),
+        timer,
+      });
+      try { child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`); }
+      catch (error) { finish(reject, error); }
     });
   }
 
-  async function callTool(toolName, toolArgs) {
+  async function callTool(toolName, toolArgs, signal = null) {
+    signal?.throwIfAborted();
     ensureStarted();
-    await ready; // wait for the init handshake (resolved/swallowed; never rejects)
-    const result = await send("tools/call", { name: toolName, arguments: toolArgs });
+    // The handshake is shared. An indexing abort stops this caller waiting
+    // for it without cancelling initialization for other readers.
+    await waitForReady(ready, signal);
+    signal?.throwIfAborted();
+    const result = await send("tools/call", { name: toolName, arguments: toolArgs }, signal);
     const text = result?.content?.[0]?.text;
     return text == null ? null : JSON.parse(text);
+  }
+
+  async function waitForReady(promise, signal) {
+    if (!signal) return promise;
+    signal.throwIfAborted();
+    let onAbort;
+    try {
+      return await Promise.race([promise, new Promise((_, reject) => {
+        onAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+      })]);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 
   function warn(e) { console.error(`[mcp source "${name}"] unreachable: ${e.message} — resolving without it`); }
@@ -149,19 +186,19 @@ export function createMcpSource({ name, level, command, args = [], respawnCooldo
   return {
     name,
     level,
-    async loadConcept(id) {
+    async loadConcept(id, { signal = null } = {}) {
       try {
-        const node = await callTool("get_node", { id });
+        const node = await callTool("get_node", { id }, signal);
         recordSuccess(); // the call answered — a null node is an absent concept, not a failure
         return node ? translateToOkf(node) : null;
-      } catch (e) { recordFailure(e); warn(e); return null; }
+      } catch (e) { signal?.throwIfAborted(); recordFailure(e); warn(e); return null; }
     },
-    async listConceptIds() {
+    async listConceptIds({ signal = null } = {}) {
       try {
-        const res = await callTool("list_nodes", {});
+        const res = await callTool("list_nodes", {}, signal);
         recordSuccess();
         return res?.nodes ?? [];
-      } catch (e) { recordFailure(e); warn(e); return []; }
+      } catch (e) { signal?.throwIfAborted(); recordFailure(e); warn(e); return []; }
     },
     // Add-time health check: unlike the read methods (which degrade to
     // null/[] so one dead source never sinks a resolve), probe() surfaces the

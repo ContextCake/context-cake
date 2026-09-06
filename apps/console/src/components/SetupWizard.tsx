@@ -178,7 +178,7 @@ function describeFolder(path: string, result: AddResult): string {
   if (result.hasDocuments === false && result.scanComplete) {
     return `${path} · no documents found — check this is the right folder`
   }
-  return `${path} · indexing in the background`
+  return path
 }
 
 /** Split a user-provided command without invoking a shell. */
@@ -696,7 +696,7 @@ export function SetupWizard({
   onConnectAgent?: () => void
   addingSource?: boolean
 }) {
-  const { reload, sources } = useStoreData()
+  const { reload, sources, openConcept } = useStoreData()
   // The cascade a new source is being placed into (add mode). `?? []`
   // because the older test mocks of the store hand back no `sources` at all;
   // a quarantined entry has no position and is not in the list.
@@ -874,21 +874,6 @@ export function SetupWizard({
   const completeSetup = () => {
     reload()
     goNext()
-    setSuccessBusy(true)
-    void (async () => {
-      try {
-        const res = await apiFetch('/api/graph', {
-          headers: { accept: 'application/json' },
-          signal: AbortSignal.timeout(20_000),
-        })
-        if (res.ok) {
-          const graph = (await res.json()) as GraphSummary
-          setSuccessConcept(graph.concepts[0]?.id ?? null)
-          setSuccessIndexing(Boolean(graph.indexing))
-        }
-      } catch { /* the live status cards below report what actually happened */ }
-      setSuccessBusy(false)
-    })()
   }
 
   const submitAdd = async () => {
@@ -905,13 +890,35 @@ export function SetupWizard({
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let misses = 0
+    let sampleFound = false
+    let sampleFailures = 0
+    let lastSampleKey: string | null = null
+    const sampleAbort = new AbortController()
     const names = new Set(added.map((a) => a.name))
+    // A full graph is needed only to choose the first document, never to
+    // observe indexing progress. Reuse this status watcher instead of polling
+    // the existing corpus once a second while a new source is still empty.
+    const readSample = async (key: string) => {
+      if (sampleFound || key === lastSampleKey || sampleFailures >= 3) return
+      setSuccessBusy(true)
+      try {
+        const res = await apiFetch('/api/graph', { signal: AbortSignal.any([sampleAbort.signal, AbortSignal.timeout(20_000)]) })
+        if (!res.ok) throw new Error('Graph unavailable')
+        const graph = await res.json() as GraphSummary
+        if (cancelled) return
+        const sample = graph.concepts.find((concept) => concept.contributors?.some((name) => names.has(name)))
+        lastSampleKey = key
+        sampleFound = Boolean(sample)
+        setSuccessConcept(sample?.id ?? null)
+      } catch { sampleFailures += 1 /* Status cards retain independent recovery state. */ }
+      finally { if (!cancelled) setSuccessBusy(false) }
+    }
     const tick = async () => {
       const probe = await probeStatus()
       if (cancelled) return
       // Nothing to poll — this engine has no status route. Say nothing rather
       // than inventing a state, and stop.
-      if (probe.kind === 'absent') { setWatched(null); return }
+      if (probe.kind === 'absent') { setWatched(null); await readSample('legacy'); return }
       // One failed request is not an answer. Keep the last rows on screen and
       // ask again — a blip three seconds into a 3,000-note index used to end
       // the watch, freezing the card while the source was still reading. The
@@ -925,12 +932,16 @@ export function SetupWizard({
       misses = 0
       const rows = probe.status.sources.filter((s) => names.has(s.name))
       setWatched(Object.fromEntries([...names].map((n) => [n, rows.find((s) => s.name === n) ?? null])))
-      if (rows.some((s) => s.status === 'indexing' || s.refreshing)) {
+      const indexing = rows.some((s) => s.status === 'indexing' || s.refreshing)
+      setSuccessIndexing(indexing)
+      const canSample = rows.some((source) => source.conceptCount > 0)
+      if (canSample) await readSample(JSON.stringify(rows.map(({ name, conceptCount, status, refreshing }) => [name, conceptCount, status, refreshing])))
+      if (!cancelled && (indexing || (canSample && !sampleFound && lastSampleKey === null && sampleFailures < 3))) {
         timer = setTimeout(() => void tick(), 900)
       }
     }
     void tick()
-    return () => { cancelled = true; if (timer) clearTimeout(timer) }
+    return () => { cancelled = true; sampleAbort.abort(); if (timer) clearTimeout(timer) }
   }, [added, step])
 
   const setAddKind = (kind: SourceKind) => {
@@ -1235,7 +1246,7 @@ export function SetupWizard({
             stepIndex={steps.length - 1}
             stepCount={steps.length}
             title={isAdding ? 'Source added' : "You're set up"}
-            subtitle={isAdding ? 'It joins the cascade as it indexes.' : 'Your cascade is live.'}
+            subtitle={isAdding ? 'It joins the cascade as it indexes.' : 'Sources saved. Indexing status is shown below.'}
             footer={(
               <div style={css('display:flex; justify-content:flex-end; gap:8px; width:100%;')}>
                 <button type="button" style={btnGhost()} onClick={onClose}>Done</button>
@@ -1261,14 +1272,14 @@ export function SetupWizard({
             )}
             {successConcept ? (
               <div style={css(`padding:12px 14px; border-radius:10px; background:${C.tealFill}; border:1px solid ${C.tealStroke}; font-size:13px; color:${C.tealText};`)}>
-                Your agent can now read: <strong style={css(`font-family:${MONO};`)}>{successConcept}</strong>
+                Indexed from your new source: <strong style={css(`font-family:${MONO};`)}>{successConcept}</strong><button type="button" style={btnGhost()} onClick={() => { openConcept(successConcept); onClose() }}>Open this result</button>
               </div>
             ) : successBusy ? (
-              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Reading the cascade — you can close this any time.</p>
+              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Checking your new source — you can close this any time.</p>
             ) : successIndexing ? (
               <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Setup complete — your sources are still indexing in the background. Concepts will appear here automatically.</p>
             ) : (
-              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Setup complete — no concepts resolved yet. Add content to a layer and reload.</p>
+              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>No indexed result from your new source yet. Check its status above.</p>
             )}
           </StepShell>
         )}

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Proves the github source adapter against a local node:http fixture that
 # speaks the shape of the GitHub REST API (no network). Covers: path-glob
-# selection, repo-qualified concept ids, commit-date sections with a pushed_at
+# selection, repo-qualified concept ids, author-date sections with an undated
 # fallback, OKF-frontmatter delegation, cross-adapter section merging in the
 # cascade, credential indirection, traversal/foreign-id rejection, and
 # warn-and-continue when the API is unreachable or forbidden.
@@ -19,7 +19,7 @@ fail() { echo "FAIL: $1" >&2; [ "${2:-}" ] && echo "$2" >&2; exit 1; }
 # (GET .../git/trees/{ref}:{dir}) so path-scoped indexing is actually
 # exercised rather than mocked. POST-free mode switch drives failure paths:
 #   forbidden  -> 403 on everything (rate limit / bad token)
-#   nocommits  -> 403 on /commits only (exercises the pushed_at fallback)
+#   nocommits  -> 403 on /commits only (exercises undated fallback)
 #   nocontent  -> 403 on /contents only (index fine, per-file reads denied)
 #   truncated  -> every tree listing comes back truncated
 #   bigrepo    -> only the WHOLE-tree listing truncates, as a monorepo does;
@@ -106,9 +106,9 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/repos/acme/payments/commits") {
     if (mode === "nocommits") return json(403, { message: "forbidden" });
     const p = url.searchParams.get("path");
-    if (editedDate) return json(200, [{ commit: { committer: { date: editedDate } } }]);
+    if (editedDate) return json(200, [{ commit: { author: { date: editedDate }, committer: { date: "2026-12-31T00:00:00Z" } } }]);
     if (!COMMIT_DATES[p]) return json(200, []);
-    return json(200, [{ commit: { committer: { date: COMMIT_DATES[p] } } }]);
+    return json(200, [{ commit: { author: { date: COMMIT_DATES[p] }, committer: { date: "2026-12-31T00:00:00Z" } } }]);
   }
   const contents = url.pathname.match(/^\/repos\/acme\/payments\/contents\/(.+)$/);
   if (contents) {
@@ -174,9 +174,9 @@ grep -q '"updated":"2026-06-11"' <<<"$claude" || fail "sections should carry the
 runbook="$(node "$tmpdir/load.mjs" "$api" acme/payments/docs/runbook)"
 grep -q '"updated":"2026-03-02"' <<<"$runbook" || fail "each file should get its own commit date" "$runbook"
 
-# A file with no commit history falls back to the repo pushed_at.
+# A file with no author history must remain undated, even after unrelated pushes.
 nested="$(node "$tmpdir/load.mjs" "$api" acme/payments/docs/deep/nested)"
-grep -q '"updated":"2026-07-20"' <<<"$nested" || fail "empty commit history should fall back to pushed_at" "$nested"
+node -e 'const d = JSON.parse(process.argv[1]); if (d.sections.some(s => s.updated)) process.exit(1)' "$nested" || fail "empty author history must remain undated" "$nested"
 
 # OKF frontmatter in a repo file gets full OKF parsing, same as on disk.
 okf="$(node "$tmpdir/load.mjs" "$api" acme/payments/docs/okf)"
@@ -367,7 +367,7 @@ grep -q 'refusing to index incomplete context' "$tmpdir/trunc.log" || fail "a tr
 
 set_mode nocommits
 fallback="$(node "$tmpdir/load.mjs" "$api" acme/payments/CLAUDE 2>/dev/null)"
-grep -q '"updated":"2026-07-20"' <<<"$fallback" || fail "a forbidden commits call should fall back to pushed_at" "$fallback"
+node -e 'const d = JSON.parse(process.argv[1]); if (d.sections.some(s => s.updated)) process.exit(1)' "$fallback" || fail "forbidden author history must remain undated" "$fallback"
 set_mode ""
 
 # A failed REFRESH (including an incomplete tree) must serve the last good index

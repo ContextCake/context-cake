@@ -141,7 +141,7 @@ const ItemRow = memo(function ItemRow({ item, top, active, current, checked, reg
         >{checked ? <CheckMark /> : null}</span>
         <span className="cc-kind-pill">{KIND_LABEL[item.kind ?? 'section_content']}</span>
         {brokenLink && item.bestCandidate && <span className="cc-fix-pill" title={`Suggested fix: rewrite to ${item.bestCandidate.id}`}>fix ready</span>}
-        <span className="cc-conflict-row-status">{STATUS_LABEL[status]}</span>
+        <span className="cc-conflict-row-status">{item.contextResolution?.status === 'applied' ? 'Selected by policy' : STATUS_LABEL[status]}</span>
       </span>
       <span className="cc-conflict-row-title" title={item.section}>{item.section}</span>
       <code title={item.concept}>{item.concept}</code>

@@ -67,6 +67,17 @@ afterEach(async () => {
   container.remove()
 })
 
+it('guides the reader to choose a result without selecting or fetching one', async () => {
+  mocks.useLayerFiles.mockClear()
+  const store = storeWith([populated()], '')
+  mocks.useStore.mockReturnValue(store)
+  await act(async () => root.render(<Concepts />))
+  expect(container.querySelector('[aria-label="Concept reader"]')?.textContent).toContain('Choose a result')
+  expect(container.textContent).toContain('Inspect its current answer, sources, and alternatives.')
+  expect(store.setSelConcept).not.toHaveBeenCalled()
+  expect(mocks.useLayerFiles).not.toHaveBeenCalled()
+})
+
 describe('a concept with no sections', () => {
   it('shows a quiet note and an Open file affordance instead of an empty panel', async () => {
     mocks.useStore.mockReturnValue(storeWith([empty()], 'decisions/empty-note'))
@@ -97,7 +108,7 @@ describe('a concept with no sections', () => {
     mocks.useStore.mockReturnValue(storeWith([populated(), empty()], 'decisions/primary-db'))
     await act(async () => root.render(<Concepts />))
 
-    const rows = Array.from(container.querySelectorAll('.cc-navigator-detail > div > button'))
+    const rows = Array.from(container.querySelectorAll('.cc-concept-result'))
     const emptyRow = rows.find((row) => row.textContent?.includes('Empty note'))
     const populatedRow = rows.find((row) => row.textContent?.includes('Primary database'))
     expect(emptyRow?.textContent).toContain('empty')
@@ -110,7 +121,7 @@ describe('a concept with no sections', () => {
     mocks.useStore.mockReturnValue(storeWith([compact()], 'decisions/pending-note'))
     await act(async () => root.render(<Concepts />))
 
-    const rows = Array.from(container.querySelectorAll('.cc-navigator-detail > div > button'))
+    const rows = Array.from(container.querySelectorAll('.cc-concept-result'))
     const pending = rows.find((row) => row.textContent?.includes('Pending note'))
     expect(pending).toBeTruthy()
     expect(pending?.textContent).not.toContain('empty')
@@ -130,7 +141,7 @@ describe('Knowledge search (live mode)', () => {
   }
 
   function rows(): HTMLButtonElement[] {
-    return Array.from(container.querySelectorAll('.cc-navigator-detail > div > button'))
+    return Array.from(container.querySelectorAll('.cc-concept-result'))
   }
 
   beforeEach(() => { vi.useFakeTimers() })
@@ -147,6 +158,59 @@ describe('Knowledge search (live mode)', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1) })
     expect(search).toHaveBeenCalledTimes(1)
     expect(search).toHaveBeenCalledWith('singlestore')
+  })
+
+  it('searches each source/type scope before accepting content matches and clears the previous scope immediately', async () => {
+    const a = populated()
+    const b = { ...empty(), contributorLayers: ['specs'] }
+    const hit = (c: Concept) => ({ id: c.id, title: c.title, score: 5, layers: c.contributorLayers, snippet: '<!-- source: auto -->Use <b>build and test</b> commands.' })
+    const search = vi.fn().mockResolvedValueOnce([hit(a)]).mockResolvedValueOnce([hit(b)]).mockResolvedValueOnce([])
+    mocks.useStore.mockReturnValue({ ...liveStoreWith([a, b], 'build and test', search), sources: [{ name: 'personal' }, { name: 'specs' }] })
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(rows()).toHaveLength(1)
+    const source = container.querySelector<HTMLSelectElement>('[aria-label="Filter concepts by source"]')!
+    await act(async () => { source.value = 'specs'; source.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.textContent).toContain('Searching content')
+    expect(container.textContent).not.toContain('No matches in titles or content.')
+    expect(rows()).toHaveLength(0)
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(search).toHaveBeenLastCalledWith('build and test', 20, { source: 'specs', type: undefined })
+    expect(rows()[0].textContent).toContain(b.title)
+    expect(container.querySelector('.cc-result-snippet')?.textContent).toBe('Use <b>build and test</b> commands.')
+    const type = container.querySelector<HTMLSelectElement>('[aria-label="Filter concepts by type"]')!
+    await act(async () => { type.value = 'decision'; type.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.textContent).toContain('Searching content')
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(search).toHaveBeenLastCalledWith('build and test', 20, { source: 'specs', type: 'decision' })
+    expect(rows()).toHaveLength(0)
+  })
+
+  it('preserves code generics and command placeholders while removing metadata comments from excerpts', async () => {
+    const concept = populated()
+    const snippet = '<!-- source: auto --> Return Promise<Result> from load<T>() and --config <file>.'
+    const search = vi.fn().mockResolvedValue([{ id: concept.id, title: concept.title, score: 5, layers: ['personal'], snippet }])
+    mocks.useStore.mockReturnValue(liveStoreWith([concept], 'load', search))
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(rows()[0].querySelector('.cc-result-snippet')?.textContent).toBe('Return Promise<Result> from load<T>() and --config <file>.')
+    expect(rows()[0].querySelector('.cc-result-snippet result')).toBeNull()
+  })
+
+  it('distinguishes the original search excerpt from the policy-selected resolved answer', async () => {
+    const concept = populated()
+    concept.sections[0] = { ...concept.sections[0], sourceLayer: 'team', winner: 'team', value: 'Use SQLite.', contextResolution: { decisionId: 'decision-1', policyId: 'policy-1', status: 'applied', selectedSource: 'team' } }
+    const search = vi.fn().mockResolvedValue([{ id: concept.id, title: concept.title, score: 5, layers: ['personal'], snippet: 'Use PostgreSQL.' }])
+    mocks.useStore.mockReturnValue(liveStoreWith([concept], 'database', search))
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(rows()[0].querySelector('.cc-result-excerpt-label')?.textContent).toBe('Original source excerpt')
+    expect(rows()[0].querySelector('.cc-result-snippet')?.textContent).toBe('Use PostgreSQL.')
+    expect(container.textContent).toContain('Open a result for the current resolved answer')
+    await act(async () => rows()[0].click())
+    const reader = container.querySelector('[aria-label="Primary database concept detail"]')!
+    expect(reader.textContent).toContain('Use SQLite.')
+    expect(reader.textContent).toContain('Source policy applied: team.')
   })
 
   it('narrows and reorders the list to the engine hits once they land', async () => {
@@ -171,7 +235,7 @@ describe('Knowledge search (live mode)', () => {
     expect(container.textContent).toContain('No matches in titles or content.')
   })
 
-  it('falls back to the substring filter silently when the engine call fails', async () => {
+  it('labels title-only results when the engine call fails', async () => {
     // The store's search() action never throws — a failed engine call
     // resolves to null, which is exactly what this exercises.
     const search = vi.fn().mockResolvedValue(null)
@@ -182,6 +246,7 @@ describe('Knowledge search (live mode)', () => {
     // Substring match on the title still renders; no error, no empty state.
     expect(rows()).toHaveLength(1)
     expect(container.textContent).toContain('Primary database')
+    expect(container.textContent).toContain('Content search unavailable')
   })
 
   it('never calls the engine search in demo mode', async () => {
@@ -331,5 +396,88 @@ describe('Knowledge search (live mode)', () => {
       expect(container.textContent).not.toContain('Top matches')
       expect(container.textContent).not.toContain('Also contains')
     })
+  })
+})
+
+describe('bounded, evidence-rich search', () => {
+  it('mounts a bounded set of 10,000 results and keeps keyboard navigation available', async () => {
+    const many = Array.from({ length: 10_000 }, (_, i) => ({ ...populated(), id: `notes/${i}`, title: `Note ${i}` }))
+    mocks.useStore.mockReturnValue(storeWith(many, ''))
+    await act(async () => root.render(<Concepts />))
+    expect(container.querySelectorAll('.cc-concept-result').length).toBeLessThan(30)
+    const first = container.querySelector<HTMLButtonElement>('.cc-concept-result')!
+    await act(async () => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
+    expect(container.querySelector('[data-result-index="9999"]')).toBeTruthy()
+    expect(container.querySelectorAll('.cc-concept-result').length).toBeLessThan(30)
+  })
+
+  it('does not declare an empty result before the delayed content search completes', async () => {
+    vi.useFakeTimers()
+    try {
+      let finish!: (hits: SearchHit[]) => void
+      const search = vi.fn(() => new Promise<SearchHit[]>((resolve) => { finish = resolve }))
+      mocks.useStore.mockReturnValue({ ...storeWith([populated()], ''), mode: 'live', query: 'htap', search })
+      await act(async () => root.render(<Concepts />))
+      expect(container.textContent).toContain('Searching your sources')
+      expect(container.textContent).not.toContain('No matching concepts')
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(async () => finish([{ id: populated().id, title: null, score: 4, layers: ['engineering-notes'], snippet: 'SingleStore supports HTAP workloads.' }]))
+      expect(container.textContent).toContain('SingleStore supports HTAP workloads.')
+      expect(container.textContent).toContain('engineering-notes')
+    } finally { vi.useRealTimers() }
+  })
+})
+
+describe('Library workbench toolbar', () => {
+  it('keeps search above both panes and focuses it from the app search command even with an empty corpus', async () => {
+    mocks.useStore.mockReturnValue({ ...storeWith([], ''), setQuery: vi.fn() })
+    await act(async () => root.render(<Concepts />))
+    const field = container.querySelector<HTMLInputElement>('[data-context-search]')!
+    expect(field.closest('.cc-library-toolbar')).toBeTruthy()
+    expect(field.closest('.cc-navigator-detail')).toBeNull()
+    expect(container.textContent).toContain('No concepts yet')
+    window.dispatchEvent(new Event('contextcake:focus-search'))
+    expect(document.activeElement).toBe(field)
+  })
+
+  it('updates the shared query while typing and Escape clears it without closing the workspace', async () => {
+    const setQuery = vi.fn()
+    mocks.useStore.mockReturnValue({ ...storeWith([populated()], ''), query: 'database', setQuery })
+    await act(async () => root.render(<Concepts />))
+    const field = container.querySelector<HTMLInputElement>('[data-context-search]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, 'deployment')
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(setQuery).toHaveBeenCalledWith('deployment')
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => field.dispatchEvent(escape))
+    expect(setQuery).toHaveBeenLastCalledWith('')
+    expect(escape.defaultPrevented).toBe(true)
+  })
+
+  it('offers one way back from an empty scoped result and restores search focus', async () => {
+    const setQuery = vi.fn()
+    mocks.useStore.mockReturnValue({ ...storeWith([populated()], ''), query: 'no-match', setQuery, sources: [{ name: 'personal' }] })
+    await act(async () => root.render(<Concepts />))
+    const source = container.querySelector<HTMLSelectElement>('[aria-label="Filter concepts by source"]')!
+    await act(async () => { source.value = 'personal'; source.dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => button('Clear search and filters')!.click())
+    expect(setQuery).toHaveBeenCalledWith('')
+    expect(source.value).toBe('')
+    expect(document.activeElement).toBe(container.querySelector('[data-context-search]'))
+  })
+
+  it('keeps roving keyboard navigation and selection in the bounded results pane', async () => {
+    const store = storeWith([populated(), empty()], '')
+    mocks.useStore.mockReturnValue({ ...store, setQuery: vi.fn() })
+    await act(async () => root.render(<Concepts />))
+    const first = container.querySelector<HTMLButtonElement>('[data-result-index="0"]')!
+    await act(async () => { first.focus(); first.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })) })
+    const last = container.querySelector<HTMLButtonElement>('[data-result-index="1"]')!
+    expect(last.tabIndex).toBe(0)
+    expect(first.tabIndex).toBe(-1)
+    await act(async () => last.click())
+    expect(store.setSelConcept).toHaveBeenCalledWith('decisions/empty-note')
   })
 })

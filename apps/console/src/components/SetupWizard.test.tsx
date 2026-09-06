@@ -7,6 +7,7 @@ import { deriveSourceName, parseCommandLine, SetupWizard } from './SetupWizard'
 const mocks = vi.hoisted(() => ({
   apiFetch: vi.fn(),
   reload: vi.fn(),
+  openConcept: vi.fn(),
   /** The cascade the wizard is adding into (add mode reads `sources` for the position picker). */
   sources: [] as Array<{ name: string; level: number }>,
 }))
@@ -16,7 +17,7 @@ vi.mock('../api', async (importOriginal) => ({
   apiFetch: mocks.apiFetch,
 }))
 vi.mock('../store', () => {
-  const store = () => ({ reload: mocks.reload, sources: mocks.sources })
+  const store = () => ({ reload: mocks.reload, sources: mocks.sources, openConcept: mocks.openConcept })
   return { useStore: store, useStoreData: store, useStoreNav: store, useStoreInput: store, useStoreChat: store }
 })
 
@@ -457,6 +458,7 @@ describe('SetupWizard first run', () => {
     // Two more 900ms ticks: the blip, then the answer that was waiting behind it.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)) })
     expect(container.textContent).toContain('Ready · 3000 concepts')
+    expect(container.textContent).not.toContain('/tmp/vault · indexing in the background')
   })
 
   it('surfaces server-side folder validation inline at the add step', async () => {
@@ -497,7 +499,7 @@ describe('SetupWizard first run', () => {
     expect(container.textContent).toContain('no documents found')
   })
 
-  it('says indexing continues in the background rather than blocking setup', async () => {
+  it('keeps source details free of a stale indexing label', async () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
       JSON.stringify(url === '/api/sources' && init?.method === 'POST'
         ? { ok: true, added: 'work-vault', indexing: true, hasDocuments: true, scanComplete: true }
@@ -512,7 +514,8 @@ describe('SetupWizard first run', () => {
     await act(async () => button('Skip').click())
     await act(async () => button('Skip for now').click())
 
-    expect(container.textContent).toContain('indexing in the background')
+    expect(container.textContent).toContain('/tmp/work-vault')
+    expect(container.textContent).not.toContain('indexing in the background')
   })
 
   it('keeps advanced MCP fields hidden until the user chooses to connect a server', async () => {
@@ -612,7 +615,7 @@ describe('SetupWizard first run', () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
       JSON.stringify(url === '/api/sources' && init?.method === 'POST'
         ? { ok: true, added: 'contextcake-personal', indexing: true, hasDocuments: true, scanComplete: true }
-        : { concepts: [], indexing: true, indexingSources: ['contextcake-personal'] }),
+        : { sources: [{ name: 'contextcake-personal', status: 'indexing', conceptCount: 0 }], indexing: true, indexingSources: ['contextcake-personal'] }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     ))
     await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
@@ -835,4 +838,58 @@ describe('parseCommandLine', () => {
   it('rejects unfinished quoting instead of changing command meaning', () => {
     expect(() => parseCommandLine('npx "unfinished')).toThrow(/unfinished quote or escape/)
   })
+})
+
+
+it('shows indexed evidence from the source just added, never an existing first graph row', async () => {
+  mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(JSON.stringify(url === '/api/sources' && init?.method === 'POST'
+    ? { ok: true, added: 'new-project' }
+    : url === '/api/status' ? { generation: 1, sources: [{ name: 'new-project', status: 'ok', conceptCount: 1 }] }
+    : url === '/api/graph' ? { concepts: [{ id: 'old/CHANGELOG', contributors: ['old-vault'] }, { id: 'new/README', contributors: ['new-project'] }], sources: [], indexing: false } : {})))
+  await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+  await act(async () => button('Get started').click())
+  await enter('#wiz-personal-path', '/tmp/new-project')
+  await act(async () => button('Next').click())
+  await act(async () => button('Skip').click())
+  await act(async () => button('Skip for now').click())
+  await act(async () => button('Finish').click())
+  expect(container.textContent).toContain('new/README')
+  expect(container.textContent).not.toContain('old/CHANGELOG')
+  await act(async () => button('Open this result').click())
+  expect(mocks.openConcept).toHaveBeenCalledWith('new/README')
+})
+
+it('polls only lightweight status until the added source has a result, then reads the graph once', async () => {
+  vi.useFakeTimers()
+  try {
+    let added = false
+    let ready = false
+    mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/sources' && init?.method === 'POST') {
+        added = true
+        return new Response(JSON.stringify({ ok: true, added: 'new-project' }))
+      }
+      if (url === '/api/status') return new Response(JSON.stringify({
+        generation: ready ? 2 : 1, indexing: added && !ready,
+        sources: [{ name: 'old-vault', status: 'ok', conceptCount: 10000 },
+          ...(added ? [{ name: 'new-project', status: ready ? 'ok' : 'indexing', conceptCount: ready ? 1 : 0 }] : [])],
+      }))
+      return new Response(JSON.stringify({ concepts: [
+        { id: 'old/CHANGELOG', contributors: ['old-vault'] },
+        { id: 'new/README', contributors: ['new-project'] },
+      ] }))
+    })
+    await act(async () => root.render(<SetupWizard addingSource onClose={vi.fn()} />))
+    await enter('#wiz-add-path', '/tmp/new-project')
+    await act(async () => button('Add source').click())
+    await act(async () => { await vi.advanceTimersByTimeAsync(2700) })
+    expect(mocks.apiFetch.mock.calls.filter(([url]) => url === '/api/status').length).toBeGreaterThan(3)
+    expect(mocks.apiFetch.mock.calls.filter(([url]) => url === '/api/graph')).toHaveLength(0)
+    ready = true
+    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    expect(container.textContent).toContain('new/README')
+    expect(container.textContent).not.toContain('old/CHANGELOG')
+    await act(async () => { await vi.advanceTimersByTimeAsync(2700) })
+    expect(mocks.apiFetch.mock.calls.filter(([url]) => url === '/api/graph')).toHaveLength(1)
+  } finally { vi.useRealTimers() }
 })

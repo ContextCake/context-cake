@@ -8,15 +8,18 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Conflict } from '../data'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import { useDetailSurface } from '../components/useDetailSurface'
-import { OneTimeHint } from '../components/OneTimeHint'
+import { AutomaticResolutionPanel } from '../components/AutomaticResolutionPanel'
 import { actionableByKind, buildHaystack, describeItems, groupConflicts, isBrokenLink, partitionBatchResults, suggestionForBatch, summarizeConflicts, type GroupBy } from '../discrepancy-summary'
-import { OverviewHeader } from './conflicts/OverviewHeader'
+import { GROUP_OPTIONS, type OverviewHeaderProps } from './conflicts/OverviewHeader'
+import { SegmentedControl } from '../components/ui'
+import { DISCREPANCY_KINDS } from '../discrepancy-summary'
+import './trust-workbench.css'
 import { GroupedList } from './conflicts/GroupedList'
 import { BulkBar, type BulkOutcome } from './conflicts/BulkBar'
 import { DecisionPanel, type AppliedDecision } from './conflicts/DecisionPanel'
 import { History, Skeleton, SourceAnswer } from './conflicts/Evidence'
 import { actionLabel, Rules } from './conflicts/Rules'
-import { DEFAULT_FILTERS, matchesFilters, tabFor, type ConflictFilters } from './conflicts/filters'
+import { DEFAULT_FILTERS, STATUS_TABS, tabCount, matchesFilters, tabFor, type ConflictFilters } from './conflicts/filters'
 import { KIND_LABEL, STATUS_LABEL, plural } from './conflicts/labels'
 
 /** Groups start closed once there are more than this many — three open groups still fit a screen. */
@@ -32,6 +35,7 @@ function ConflictsInner() {
   const [collapseOverrides, setCollapseOverrides] = useState<ReadonlyMap<string, boolean>>(() => new Map())
   const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set())
   const [detailOpen, setDetailOpen] = useState(Boolean(selConflict))
+  const [tools, setTools] = useState<'automation' | 'rules' | null>(null)
   const [notice, setNotice] = useState<AppliedDecision | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const detail = useDetailSurface<HTMLDivElement, HTMLElement>(detailOpen)
@@ -55,7 +59,8 @@ function ConflictsInner() {
     : filtered), [filtered, normalizedQuery, haystacks])
   const groups = useMemo(() => groupConflicts(visible, groupBy), [visible, groupBy])
   const collapsedByDefault = groups.length > OPEN_BY_DEFAULT_MAX
-  const isCollapsed = useCallback((key: string) => collapseOverrides.get(key) ?? collapsedByDefault, [collapseOverrides, collapsedByDefault])
+  const singletonGroups = useMemo(() => new Set(groups.filter((group) => group.count === 1).map((group) => group.key)), [groups])
+  const isCollapsed = useCallback((key: string) => collapseOverrides.get(key) ?? (collapsedByDefault && !singletonGroups.has(key)), [collapseOverrides, collapsedByDefault, singletonGroups])
   const onToggleGroup = useCallback((key: string, collapsed: boolean) => {
     setCollapseOverrides((prev) => { const next = new Map(prev); next.set(key, collapsed); return next })
   }, [])
@@ -153,23 +158,23 @@ function ConflictsInner() {
   const filtersAtDefault = (Object.keys(DEFAULT_FILTERS) as (keyof ConflictFilters)[]).every((key) => filters[key] === DEFAULT_FILTERS[key])
   const emptyState = normalizedQuery
     ? <div className="cc-conflict-empty"><strong>No matches for &quot;{query.trim()}&quot; in this status.</strong><p>The search keeps filtering across status tabs until cleared.</p><button type="button" onClick={() => setQuery('')}>Clear search</button></div>
-    : <div className="cc-conflict-empty"><strong>No discrepancies in this view</strong><p>Adjust the filters or return to Needs review.</p>{!filtersAtDefault && <button type="button" onClick={() => setFilters(DEFAULT_FILTERS)}>Reset filters</button>}</div>
+    : <div className="cc-conflict-empty"><strong>No discrepancies in this view</strong><p>{filtersAtDefault && summary.actionable === 0 ? 'Nothing needs review. Your recorded decisions are available in Acknowledged and Resolved.' : 'Adjust the filters or return to Needs review.'}</p>{!filtersAtDefault && <button type="button" onClick={() => setFilters(DEFAULT_FILTERS)}>Reset filters</button>}</div>
 
   return (
-    <div className="cc-conflicts cc-discrepancy-center">
-      <header className="cc-discrepancy-header">
-        <div><h2>Discrepancy Center</h2><p>{plural(summary.actionable, 'actionable item')}. Structural evidence only—no model-inferred contradictions.</p></div>
-        <span className="cc-actionable-count">{summary.actionable}</span>
-        <OneTimeHint id="discrepancy-workflow" title="Resolve differences one at a time, or many at once">
-          <ol>
-            <li><span>1</span>Review the evidence</li>
-            <li><span>2</span>Choose the safest next step</li>
-            <li><span>3</span>Confirm what changes</li>
-          </ol>
-        </OneTimeHint>
+    <div className="cc-conflicts cc-discrepancy-center cc-trust-workbench">
+      <header className="cc-discrepancy-header cc-trust-heading">
+        <div><h2>Trust</h2><p>{summary.actionable ? `${plural(summary.actionable, 'difference')} to review. Compare the sources, then decide what your agent should use.` : 'Your context, with decisions and their evidence kept together.'}</p></div>
+        <div className="cc-trust-tools" aria-label="Trust tools">
+          {mode === 'live' && <button type="button" aria-expanded={tools === 'automation'} aria-controls="cc-trust-tools-panel" onClick={() => setTools(tools === 'automation' ? null : 'automation')}>Automation</button>}
+          <button type="button" aria-expanded={tools === 'rules'} aria-controls="cc-trust-tools-panel" onClick={() => setTools(tools === 'rules' ? null : 'rules')}>Rules and history</button>
+        </div>
       </header>
       {conflicts.some((item) => item.coverageComplete === false) && <div className="cc-coverage-warning" role="status">Coverage is incomplete while sources index or recover. Broken-link findings are paused.</div>}
-      <OverviewHeader
+      {tools && <aside id="cc-trust-tools-panel" className="cc-trust-tool-panel" aria-label={tools === 'automation' ? 'Automatic resolution settings' : 'Resolution rules'}>
+        <div className="cc-trust-tool-heading"><p>{tools === 'automation' ? 'Set standing source policies, or ask a local model for an advisory assessment.' : 'Review learned patterns and configure how recurring differences are handled.'}</p><button type="button" onClick={() => setTools(null)}>Close tools</button></div>
+        {tools === 'automation' ? <AutomaticResolutionPanel conflict={selected} defaultExpanded /> : <Rules />}
+      </aside>}
+      <TrustControls
         summary={summary}
         actionableKinds={actionableKinds}
         filters={filters}
@@ -179,8 +184,8 @@ function ConflictsInner() {
         owners={owners}
         sources={sources}
       />
-      <div ref={detail.containerRef} className="cc-conflict-layout cc-navigator-detail">
-        <div ref={listRef} className="cc-conflict-column">
+      <div ref={detail.containerRef} className="cc-conflict-layout cc-navigator-detail" data-empty={groups.length === 0 || undefined}>
+        <div ref={listRef} className="cc-conflict-column"><div className="cc-trust-inbox-label"><strong>Decision inbox</strong><span>{visible.length} in this view</span></div>
           {selectedItems.length > 0 && <BulkBar items={selectedItems} hiddenBySearch={hiddenBySearch} onClear={clearSelection} onOutcome={onBulkOutcome} />}
           <GroupedList
             groups={groups}
@@ -197,7 +202,6 @@ function ConflictsInner() {
         </div>
         {selected && <Detail conflict={selected} panelRef={detail.panelRef} panelProps={detail.panelProps} open={detailOpen} onClose={() => { setDetailOpen(false); restoreListFocus() }} onApplied={onDecisionApplied} mode={mode} />}
       </div>
-      <Rules />
       {notice && (
         <div className="cc-decision-receipt" role="status" aria-live="polite" aria-atomic="true">
           <span><strong>{notice.kind === 'batch' ? `${notice.applied} done${notice.failed ? ` · ${notice.failed} need attention` : ''}${notice.notAttempted ? ` · ${notice.notAttempted} not attempted` : ''}.` : 'Done.'}</strong> {notice.message}</span>
@@ -221,6 +225,39 @@ function ConflictsInner() {
   )
 }
 
+function TrustControls({ summary, actionableKinds, filters, onFilters, groupBy, onGroupBy, owners, sources }: OverviewHeaderProps) {
+  const set = (patch: Partial<ConflictFilters>) => onFilters({ ...filters, ...patch })
+  const facetsActive = filters.kind !== 'all' || filters.owner !== 'all' || filters.source !== 'all' || filters.priority !== 'all' || filters.newerOnly || filters.fixable
+  return <div className="cc-trust-controls">
+    <nav className="cc-status-tabs" aria-label="Discrepancy status">{STATUS_TABS.map((tab) => {
+      const count = tabCount(summary, tab.value)
+      return <button key={tab.value} type="button" aria-pressed={filters.status === tab.value} data-active={filters.status === tab.value} onClick={() => set({ status: tab.value })}>{tab.label}<span className="cc-status-tab-count" aria-label={`${count} ${count === 1 ? 'item' : 'items'}`}>{count}</span></button>
+    })}</nav>
+    <details className="cc-trust-filter-disclosure"><summary>Filters and grouping{facetsActive ? ' · filters active' : ''}</summary>
+      <div className="cc-trust-filter-body">
+        <div className="cc-trust-kind-filters" role="group" aria-label="What needs attention">
+          <button type="button" className="cc-dc-tile" aria-pressed={filters.kind === 'all' && !filters.fixable && filters.status === 'actionable'} onClick={() => onFilters(DEFAULT_FILTERS)}>{summary.actionable} actionable</button>
+          {DISCREPANCY_KINDS.map((kind) => <button type="button" className="cc-dc-tile" key={kind} aria-pressed={filters.kind === kind && !filters.fixable && filters.status === 'actionable'} onClick={() => set({ status: 'actionable', kind, fixable: false })}>{actionableKinds[kind]} {kind === 'broken_link' ? 'broken links' : KIND_LABEL[kind].toLowerCase()}</button>)}
+        </div>
+        <div className="cc-discrepancy-filters" aria-label="Discrepancy filters">
+          <SegmentedControl<GroupBy> label="Group by" value={groupBy} options={GROUP_OPTIONS} onChange={onGroupBy} />
+          <select aria-label="Kind" value={filters.kind} onChange={(event) => set({ kind: event.target.value as ConflictFilters['kind'], fixable: false })}><option value="all">All kinds</option>{DISCREPANCY_KINDS.map((value) => <option key={value} value={value}>{KIND_LABEL[value]}</option>)}</select>
+          <select aria-label="Owner" value={filters.owner} onChange={(event) => set({ owner: event.target.value })}><option value="all">All owners</option>{owners.map((value) => <option key={value}>{value}</option>)}</select>
+          <select aria-label="Source" value={filters.source} onChange={(event) => set({ source: event.target.value })}><option value="all">All sources</option>{sources.map((value) => <option key={value}>{value}</option>)}</select>
+          <select aria-label="Priority" value={filters.priority} onChange={(event) => set({ priority: event.target.value })}><option value="all">All priorities</option>{['unassigned', 'high', 'medium', 'low'].map((value) => <option value={value} key={value}>{value}</option>)}</select>
+          <label className="cc-filter-check"><input type="checkbox" checked={filters.newerOnly} onChange={(event) => set({ newerOnly: event.target.checked })} /> Newer dissent</label>
+          {filters.fixable && <label className="cc-filter-check"><input type="checkbox" checked onChange={() => set({ fixable: false })} /> Has a suggested fix</label>}
+        </div>
+        <div className="cc-dc-quick" role="group" aria-label="Quick wins">
+          <button type="button" disabled={!summary.quickWins.autoReady} onClick={() => set({ status: 'automated', kind: 'all', fixable: false })}>{summary.quickWins.autoReady} ready to run automatically</button>
+          <button type="button" disabled={!summary.quickWins.recommended} onClick={() => set({ status: 'recommended', kind: 'all', fixable: false })}>{summary.quickWins.recommended} with a recommendation</button>
+          <button type="button" aria-pressed={filters.fixable} disabled={!summary.quickWins.brokenLinksWithBestCandidate} onClick={() => set({ status: 'actionable', kind: 'broken_link', fixable: true })}>{summary.quickWins.brokenLinksWithBestCandidate} of {summary.quickWins.brokenLinksTotal} broken links have a suggested fix</button>
+        </div>
+      </div>
+    </details>
+  </div>
+}
+
 function Detail({ conflict, panelRef, panelProps, open, onClose, onApplied, mode }: {
   conflict: Conflict
   panelRef: React.RefObject<HTMLElement | null>
@@ -230,6 +267,7 @@ function Detail({ conflict, panelRef, panelProps, open, onClose, onApplied, mode
   onApplied: (applied: AppliedDecision) => void
   mode: string
 }) {
+  const selectedByPolicy = conflict.contextResolution?.status === 'applied'
   const decided = ['resolved', 'acknowledged'].includes(conflict.discrepancyStatus ?? '')
   const loading = conflict.detailLoaded === false
   const effectiveValue = conflict.contributions.find((item) => item.sourceLayer === conflict.effectiveSource)?.value ?? conflict.contributions[0]?.value ?? ''
@@ -238,8 +276,8 @@ function Detail({ conflict, panelRef, panelProps, open, onClose, onApplied, mode
       <button type="button" className="cc-detail-close" onClick={onClose}>Close</button>
       <div className="cc-discrepancy-path"><code>{conflict.concept}</code><span>{conflict.section}</span></div>
       <div className="cc-discrepancy-title">
-        <div><span className="cc-kind-pill">{KIND_LABEL[conflict.kind ?? 'section_content']}</span><h2>Why this needs attention</h2></div>
-        <span className="cc-status-large">{STATUS_LABEL[conflict.discrepancyStatus ?? 'needs_review']}</span>
+        <div><span className="cc-kind-pill">{KIND_LABEL[conflict.kind ?? 'section_content']}</span><h2>{conflict.conceptTitle ?? conflict.title}</h2></div>
+        <span className="cc-status-large">{selectedByPolicy ? 'Selected by policy' : STATUS_LABEL[conflict.discrepancyStatus ?? 'needs_review']}</span>
       </div>
       <p className="cc-discrepancy-explanation">{conflict.kind === 'changed_after_decision' && isBrokenLink(conflict) ? `The link to ${conflict.target} changed after the previous decision, so it reopened automatically.` : conflict.kind === 'broken_link' ? `The effective content links to ${conflict.target}, but no settled source currently provides that concept.` : conflict.kind === 'frontmatter_value' ? `Multiple contributors author different values for “${conflict.section}”.` : conflict.kind === 'changed_after_decision' ? 'A contributor changed after the previous decision, so the discrepancy reopened automatically.' : `Multiple contributors give materially different answers for “${conflict.section}”.`}</p>
       {conflict.ruleConflict && <div className="cc-conflict-error" role="alert"><strong>Rule conflict.</strong> Matching rules disagree, so no automatic action will run.</div>}
@@ -262,28 +300,28 @@ function Detail({ conflict, panelRef, panelProps, open, onClose, onApplied, mode
         </>
       ) : (
         <>
-          <div className="cc-evidence-grid">
-            <div><span>Effective source</span><strong>{conflict.effectiveSource ?? 'None'}</strong></div>
+          <details className="cc-trust-context"><summary>Source context and ownership</summary><div className="cc-evidence-grid">
+            <div><span>{selectedByPolicy ? 'Selected by policy' : 'Effective source'}</span><strong>{conflict.effectiveSource ?? 'None'}</strong></div>
             <div><span>Why it won</span><strong>{conflict.winnerReason}</strong></div>
             <div><span>Owner</span><strong>{conflict.owner ?? 'Unassigned'}</strong></div>
             <div><span>Source health</span><strong>{conflict.sourceHealth?.every((item) => item?.status === 'ok') ? 'All healthy' : 'Needs attention'}</strong></div>
-          </div>
-          <section>
+          </div></details>
+          <section className="cc-trust-evidence">
             <h3>Compare every answer</h3>
             {loading
               ? <Skeleton lines={5} label="Loading every answer" />
-              : <div className="cc-answer-stack">{conflict.contributions.map((choice) => <SourceAnswer key={choice.sourceLayer} choice={choice} effective={effectiveValue} isEffective={choice.sourceLayer === conflict.effectiveSource} />)}</div>}
+              : <div className="cc-answer-stack">{conflict.contributions.map((choice) => <SourceAnswer key={choice.sourceLayer} label={selectedByPolicy ? choice.sourceLayer === conflict.effectiveSource ? 'Selected by policy' : choice.sourceLayer === conflict.originalEffectiveSource ? 'Original cascade' : 'Alternative' : undefined} choice={choice} effective={effectiveValue} isEffective={choice.sourceLayer === conflict.effectiveSource} />)}</div>}
           </section>
           {!decided && <DecisionPanel conflict={conflict} onApplied={onApplied} />}
         </>
       )}
-      <section>
-        <h3>Decision history</h3>
+      <details className="cc-trust-history"><summary>{selectedByPolicy ? 'Source decision history' : 'Decision history'}{conflict.history.length ? ` (${conflict.history.length})` : ''}</summary>
+        <section><h3 className="cc-trust-sr-only">{selectedByPolicy ? 'Source decision history' : 'Decision history'}</h3>
         {mode === 'demo' && <p className="cc-muted">Simulation history resets on reload.</p>}
         {loading
           ? (conflict.historyCount ? <Skeleton lines={2} label={`Loading ${plural(conflict.historyCount, 'decision')}`} /> : <p className="cc-muted">No previous decisions.</p>)
-          : <History conflict={conflict} />}
-      </section>
+          : selectedByPolicy && !conflict.history.length ? <p className="cc-muted">No source decisions recorded. The source policy is recorded in Automation settings.</p> : <History conflict={conflict} />}
+      </section></details>
     </section>
   )
 }

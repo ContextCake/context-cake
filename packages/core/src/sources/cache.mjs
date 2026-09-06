@@ -118,8 +118,9 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
     name: source.name,
     level: source.level,
     lastSynced: null,
-    async loadConcept(id) {
-      return cached(`concept:${id}`, () => source.loadConcept(id));
+    async loadConcept(id, options = {}) {
+      options.signal?.throwIfAborted();
+      return cached(`concept:${id}`, () => source.loadConcept(id, options));
     },
     /**
      * Every argument goes through, and what the walk could not read comes back
@@ -145,6 +146,7 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
         return { ids, notes: collected };
       });
       if (notes) {
+        if (entry.notes?.truncated) notes.truncated = { ...entry.notes.truncated };
         for (const item of entry.notes?.skipped ?? []) notes.skipped?.push(item);
         for (const item of entry.notes?.unreadable ?? []) notes.unreadable?.push(item);
         // A count, not a list — unlike skipped/unreadable this only ever holds

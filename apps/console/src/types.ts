@@ -20,8 +20,13 @@ export interface SectionConflict {
   content: string
 }
 
+export interface ContextResolutionDecision { id: string; policyId: string; conceptId: string; key: string; selectedSource: string; createdAt: string; undoneAt?: string; currentStatus?: 'applied' | 'stale' | 'undone'; currentRevision?: string | null }
+
+export interface ContextResolution { decisionId: string; policyId: string; status: 'applied' | 'stale' | 'undone'; selectedSource: string }
+
 /** One resolved section: the winning value plus provenance and any dissent. */
 export interface ResolvedSection {
+  contextResolution?: ContextResolution
   key: string
   /** Null for a document with no heading at all — a plain note in a files layer. */
   heading: string | null
@@ -102,6 +107,9 @@ export interface StatusSummary {
  * the matched terms, so the console never has to re-tokenize the body.
  * Hits arrive pre-sorted by score, highest first.
  */
+/** Filters apply to the searchable corpus before ranking and limiting. */
+export interface SearchOptions { source?: string; type?: string }
+
 export interface SearchHit {
   id: string
   title: string | null

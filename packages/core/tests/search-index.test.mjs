@@ -152,3 +152,40 @@ test("eviction and rebuild land on the same answers", async () => {
   assert.deepEqual(after, before);
   index.close();
 });
+
+test('source and effective type filters select before top-k without changing global scores or index state', async t => {
+  const index = createSearchIndex();
+  t.after(() => index.close());
+  const doc = (title, type, text = 'build and test', extra = {}) => ({ frontmatter: { title, ...(type ? { type } : {}), ...extra }, sections: [{ key: 'body', text }] });
+  const personal = Array.from({ length: 25 }, (_, i) => [`top-${i}`, doc('Build and test', 'note')]);
+  const team = [
+    ['buried', doc('Long guide', 'spec', `build and test ${'other '.repeat(100)}`)],
+    ['shared', doc('No matching words', 'spec', 'unrelated')],
+    ['inherited', doc('Guide', 'spec')],
+    ['overridden', doc('Guide', 'spec')],
+    ['dated', doc('Guide', 'spec', 'build', { updated: '2026-09-02' })],
+  ];
+  personal.push(['shared', doc('Build and test', 'decision')], ['inherited', doc('Guide')],
+    ['overridden', doc('Guide', null, 'build', { override: 'full' })],
+    ['dated', doc('Guide', 'note', 'build', { updated: '2026-09-01' })]);
+  const views = [
+    { name: 'personal', level: 3, ...makeSnapshot(personal) },
+    { name: 'specs', level: 3, ...makeSnapshot(team) },
+  ];
+  const query = 'build and test';
+  const all = index.search(views, { query, limit: 100 });
+  assert.ok(all.findIndex(hit => hit.id === 'buried') >= 20, 'fixture must reproduce the global top-20 false negative');
+  const sourceIds = new Set(team.map(([id]) => id));
+  const selected = index.search(views, { query, limit: 20, source: 'specs' });
+  assert.deepEqual(selected, all.filter(hit => sourceIds.has(hit.id)).slice(0, 20));
+  assert.deepEqual(selected.find(hit => hit.id === 'shared').layers, ['personal'], 'membership includes a source whose own contribution has no query match');
+  const types = new Map([['buried', 'spec'], ['shared', 'decision'], ['inherited', 'spec'], ['overridden', 'concept'], ['dated', 'spec']]);
+  for (const type of ['spec', 'decision', 'concept', 'note', 'unknown']) {
+    assert.deepEqual(index.search(views, { query, limit: 20, type }), all.filter(hit => (types.get(hit.id) ?? 'note') === type).slice(0, 20));
+    assert.deepEqual(index.search(views, { query, limit: 20, type, source: 'specs' }), all.filter(hit => sourceIds.has(hit.id) && types.get(hit.id) === type).slice(0, 20));
+  }
+  assert.deepEqual(index.search(views, { query, source: 'missing' }), []);
+  assert.deepEqual(index.search(views, { query, limit: 100 }), all, 'filter changes must leave the full index warm and unchanged');
+  views[1] = { name: 'specs', level: 3, ...makeSnapshot(team.filter(([id]) => id !== 'buried')) };
+  assert.equal(index.search(views, { query, source: 'specs' }).some(hit => hit.id === 'buried'), false, 'source membership follows incremental removals');
+});

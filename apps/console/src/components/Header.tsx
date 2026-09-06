@@ -2,29 +2,29 @@ import { memo, useEffect, useRef } from 'react'
 import { useStoreData, useStoreInput, useStoreNav, type ViewId } from '../store'
 import { destinationForView, SEARCHABLE_VIEWS } from '../shell-navigation'
 import { isActionable } from '../discrepancy-summary'
-import { AgentIcon, PlusIcon, SidebarIcon, SparkleIcon } from './icons'
+import { AgentIcon, SidebarIcon, SparkleIcon } from './icons'
 import { BackgroundActivity } from './BackgroundActivity'
 import { Button, IconButton, SearchField, SegmentedControl, StatusBadge } from './ui'
 
 const TITLES: Record<ViewId, string> = {
-  overview: 'Home', canvas: 'Cascade', sources: 'Sources', triage: 'Review',
-  conflicts: 'Review', concepts: 'Knowledge', files: 'Knowledge',
+  overview: 'Workspace', canvas: 'Map', sources: 'Sources', triage: 'Trust',
+  conflicts: 'Trust', concepts: 'Library', files: 'Library',
 }
 
 function HeaderInner({
-  onToggleSidebar, onAsk, onAddSource, onConnectAgent,
+  onToggleSidebar, onAsk, onConnectAgent,
 }: {
   onToggleSidebar: () => void
   onAsk: () => void
   onAddSource?: () => void
   onConnectAgent?: () => void
 }) {
-  const { setView, setQuery, loadErrors, mode, signals, conflicts } = useStoreData()
+  const { setView, setQuery, loadErrors, signals, conflicts } = useStoreData()
   const { view } = useStoreNav()
   const { query } = useStoreInput()
   const search = useRef<HTMLInputElement>(null)
   const destination = destinationForView(view)
-  const searchable = SEARCHABLE_VIEWS.has(view)
+  const searchable = SEARCHABLE_VIEWS.has(view) && view !== 'concepts'
   const queueCount = signals.filter((signal) => signal.route === 'review_required').length
   const conflictCount = conflicts.filter(isActionable).length
 
@@ -41,11 +41,11 @@ function HeaderInner({
         <h1>{TITLES[view]}</h1>
       </div>
       <div className="cc-toolbar-center">
-        {destination === 'knowledge' && <SegmentedControl label="Knowledge view" value={view as 'concepts' | 'files'} onChange={setView} options={[
-          { value: 'concepts', label: 'Concepts' }, { value: 'files', label: 'Files' },
+        {destination === 'knowledge' && <SegmentedControl label="Library view" value={view as 'concepts' | 'files'} onChange={setView} options={[
+          { value: 'concepts', label: 'Context' }, { value: 'files', label: 'Files' },
         ]} />}
-        {destination === 'review' && <SegmentedControl label="Review view" value={view as 'triage' | 'conflicts'} onChange={setView} options={[
-          { value: 'triage', label: `Queue ${queueCount}` }, { value: 'conflicts', label: `Discrepancies ${conflictCount}` },
+        {destination === 'review' && <SegmentedControl label="Trust view" value={view as 'triage' | 'conflicts'} onChange={setView} options={[
+          { value: 'triage', label: `Captures ${queueCount}` }, { value: 'conflicts', label: `Discrepancies ${conflictCount}` },
         ]} />}
       </div>
       <div className="cc-toolbar-actions">
@@ -65,9 +65,9 @@ function HeaderInner({
             with no progress and no detail was the badge this replaces. */}
         <BackgroundActivity />
         {loadErrors.length > 0 && <StatusBadge tone="attention">{loadErrors.length} failed</StatusBadge>}
-        {view === 'sources' && mode === 'live' && onAddSource && <Button variant="primary" onClick={onAddSource}><PlusIcon />Add Source</Button>}
+
         {view === 'sources' && onConnectAgent && <IconButton label="Connect Agent" onClick={onConnectAgent}><AgentIcon /></IconButton>}
-        <Button className="cc-toolbar-ask" variant="quiet" onClick={onAsk}><SparkleIcon />Ask</Button>
+        <Button className="cc-toolbar-ask" variant="quiet" onClick={onAsk}><SparkleIcon />Use with agent</Button>
       </div>
     </header>
   )

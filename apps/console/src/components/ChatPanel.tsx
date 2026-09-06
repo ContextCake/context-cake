@@ -6,7 +6,7 @@ const SUGGESTIONS = ['What database do we use?', 'How do we handle on-call?']
 const CONNECT_GUIDE_URL = 'https://contextcake.com/docs/getting-started/connect-an-agent'
 
 function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: { keyboardSuspended?: boolean; onConnectAgent?: () => void; onClose: () => void }) {
-  const { mode, setChatInput, send } = useStoreData()
+  const { mode, setChatInput, send, openConceptSearch } = useStoreData()
   const { chatMessages, chatBusy, chatInput } = useStoreChat()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -15,6 +15,8 @@ function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: 
   const panelRef = useRef<HTMLElement>(null)
   const [docked, setDocked] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia('(min-width: 1280px)').matches)
   const hasCompletion = typeof window !== 'undefined' && typeof window.claude?.complete === 'function'
+  const [handoff, setHandoff] = useState('How do I build and test this project?')
+  const [copyStatus, setCopyStatus] = useState('')
   const canAsk = mode === 'demo' || hasCompletion
 
   const connectAgent = () => {
@@ -60,7 +62,7 @@ function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: 
     ? 'Sample answers from the demo cascade'
     : hasCompletion
       ? 'Answers from your resolved cascade'
-      : 'Connect an agent for live answers'
+      : 'Ask in your connected coding agent'
 
   return (
     <div className="cc-ask-root">
@@ -98,8 +100,12 @@ function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: 
           )}
           {mode === 'live' && !hasCompletion && (
             <div className="cc-ui-empty">
-              <strong>Live asking needs a connected agent.</strong>
-              <p>Connect an AI client to ask questions against your live ContextCake knowledge.</p>
+              <strong>Ask in your agent</strong>
+              <p>Your connected coding agent can read ContextCake. Paste this question there; connecting MCP does not enable chat in this panel.</p>
+              <label className="cc-handoff-label">Your question<input aria-label="Question for your agent" value={handoff} onChange={(event) => { setHandoff(event.target.value); setCopyStatus('') }} /></label>
+              <button type="button" className="cc-handoff-action" disabled={!handoff.trim()} onClick={async () => { try { await navigator.clipboard.writeText(`Use ContextCake to answer: ${handoff.trim()} Read the relevant sources, cite the evidence, and surface conflicts or missing information.`); setCopyStatus('Question copied. Paste it into your connected agent.') } catch { setCopyStatus('Clipboard unavailable. Select and copy your question above.') } }}>Copy question for agent</button>
+              <span role="status">{copyStatus}</span>
+              <button type="button" className="cc-handoff-action" onClick={() => { if (openConceptSearch(handoff)) onClose() }}>Search these sources instead</button>
               {onConnectAgent ? (
                 <button ref={emptyButtonRef} type="button" className="cc-h-tealdark" onClick={connectAgent} style={css('min-height:40px; padding:0 15px; border:0; border-radius:8px; background:#1E6B64; color:var(--cc-on-teal); font:inherit; font-size:12px; font-weight:600; cursor:pointer;')}>Connect an agent</button>
               ) : (

@@ -1,0 +1,57 @@
+/* ContextCake workbench. Structural chrome shared by every destination.
+   Theme colors remain user-owned; geometry and type are shared across themes. */
+.cc-workbench { --cc-panel-padding: 24px; --cc-radius-md: 8px; font-size: .875rem; }
+.cc-workbench .cc-sidebar { padding: 48px 12px 16px; gap: 24px; }
+.cc-workbench .cc-brand { min-height: 32px; padding: 0 8px; }
+.cc-workbench .cc-brand-logo { width: 28px; height: 28px; }
+.cc-workbench .cc-brand-name { font-size: .875rem; letter-spacing: -.02em; }
+.cc-workbench .cc-nav { gap: 8px; padding: 0; }
+.cc-workbench .cc-nav-button { position: relative; min-height: 48px; padding: 12px; border: 1px solid transparent; font-size: .875rem; }
+.cc-workbench .cc-nav-button[aria-current="page"] { background: var(--cc-teal-fill); border-color: var(--cc-teal-badge-bd); }
+.cc-workbench .cc-nav-button[data-destination="cascade"] { margin-top: 24px; }
+.cc-workbench .cc-sidebar-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--cc-line); }
+.cc-workbench .cc-toolbar { height: 64px; min-height: 64px; grid-template-columns: auto 1fr auto; gap: 24px; padding: 0 24px; }
+.cc-workbench .cc-toolbar-leading h1 { font-size: 1rem; font-weight: 650; letter-spacing: -.02em; }
+.cc-workbench .cc-toolbar-center { justify-content: flex-start; }
+.cc-workbench .cc-toolbar .cc-ui-segmented { background: transparent; border: 0; padding: 0; gap: 4px; }
+.cc-workbench .cc-toolbar .cc-ui-segmented button { min-height: 36px; border-radius: 6px; }
+.cc-workbench .cc-toolbar-ask { font-size: .75rem; }
+.cc-workbench .cc-main:not(.cc-main-canvas) { padding: 24px; }
+.cc-workbench[data-view="concepts"] .cc-main { display: flex; flex-direction: column; overflow: hidden; }
+.cc-workbench .cc-sources-workspace { gap: 24px; }
+.cc-workbench .cc-sources-split { grid-template-columns: 280px minmax(0,1fr); border-radius: 12px; }
+.cc-workbench .cc-source-navigator { background: var(--cc-surface); padding: 8px; }
+.cc-workbench .cc-source-navigator > button { padding: 16px 12px; border: 0; border-radius: 8px; margin-bottom: 4px; }
+.cc-workbench .cc-source-navigator strong { font-size: .875rem; font-weight: 600; }
+.cc-workbench .cc-source-navigator small, .cc-workbench .cc-source-navigator em { font-size: .75rem; }
+.cc-workbench .cc-source-detail { padding: 32px; gap: 24px; }
+.cc-workbench .cc-source-title h2 { font-size: 1.5rem; letter-spacing: -.025em; }
+.cc-workbench .cc-source-chips { gap: 8px; font-size: .75rem; }
+.cc-workbench .cc-source-metadata { padding: 16px 0; border-top: 1px solid var(--cc-line); border-bottom: 1px solid var(--cc-line); }
+@media (min-width: 901px) {
+  .cc-workbench .cc-sidebar[data-collapsed="true"] { padding: 48px 8px 16px; gap: 24px; }
+  .cc-workbench .cc-sidebar[data-collapsed="true"] .cc-brand-logo { width: 28px; height: 28px; }
+  .cc-workbench .cc-sidebar[data-collapsed="true"] .cc-nav-label,
+  .cc-workbench .cc-sidebar[data-collapsed="true"] .cc-settings-cta span { display: block; }
+  .cc-workbench .cc-sidebar[data-collapsed="true"] .cc-nav-button,
+  .cc-workbench .cc-sidebar[data-collapsed="true"] .cc-settings-cta { width: 72px; min-width: 0; min-height: 64px; padding: 8px 0; flex-direction: column; gap: 8px; font-size: .6875rem; line-height: 1.2; }
+  .cc-workbench .cc-sidebar[data-collapsed="true"] .cc-nav-badge { position: absolute; top: 4px; right: 4px; min-width: 16px; padding: 0 3px; font-size: .625rem; }
+}
+@media (max-width: 1100px) {
+  .cc-workbench .cc-toolbar { gap: 12px; padding-right: 16px; }
+  .cc-workbench .cc-toolbar-ask { font-size: 0; width: 36px; padding: 0; justify-content: center; }
+  .cc-workbench .cc-toolbar-ask svg { width: 16px; height: 16px; }
+}
+@media (max-width: 900px) {
+  .cc-workbench .cc-toolbar { padding-left: 80px; }
+  .cc-workbench .cc-main:not(.cc-main-canvas) { padding: 16px; }
+}
+@media (max-width: 600px) {
+  .cc-workbench .cc-toolbar { height: auto; min-height: 64px; grid-template-columns: 1fr auto; gap: 8px; padding-block: 8px; }
+  .cc-workbench .cc-toolbar-center { grid-row: 2; grid-column: 1 / -1; }
+  .cc-workbench .cc-toolbar-actions { grid-column: 2; grid-row: 1; }
+  .cc-workbench .cc-main:not(.cc-main-canvas) { padding: 12px; }
+  .cc-workbench .cc-source-detail { padding: 16px; }
+}
+.cc-workbench .cc-concept-reader .cc-md { font-size: 1rem; line-height: 1.7; }
+.cc-workbench .cc-source-title h2 { font-family: inherit; }

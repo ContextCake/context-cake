@@ -5,6 +5,11 @@ decision-ready evidence, safe resolution, and user-approved reusable policy. It
 extends the shipped conflict-resolution workflow without changing resolver
 precedence or inferring semantic contradictions.
 
+The approved [automatic-resolution extension](../contextcake-automatic-resolution/spec.md)
+adds exact source-preserving section selection and advisory assessment of these
+existing structural discrepancies. Cross-document semantic detection and
+model-authorized writes remain outside this implementation.
+
 ## Problem Statement
 
 The shipped resolver and Conflicts view expose same-concept, same-section text

@@ -28,6 +28,7 @@
 import http from 'node:http'
 import crypto from 'node:crypto'
 import { pathToFileURL } from 'node:url'
+import { createLocalContextAssessor } from './context-assessor.mjs'
 
 const [manifestPath, serviceModule, consoleDist] = process.argv.slice(2)
 
@@ -52,6 +53,7 @@ async function start() {
     manifestPath,
     consoleDist: consoleDist || null,
     token,
+    assessmentProvider: createLocalContextAssessor(),
   })
 
   const server = http.createServer((req, res) => {

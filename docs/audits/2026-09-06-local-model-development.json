@@ -1,0 +1,206 @@
+{
+  "generatedAt": "2026-09-06T06:09:53.483Z",
+  "model": "qwen2.5:7b",
+  "digest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+  "purpose": "Synthetic development smoke only. Not a held-out benchmark; no model is qualified for autonomous semantic selection.",
+  "cases": 6,
+  "passed": 4,
+  "validatedResponses": 6,
+  "sourceWrites": 0,
+  "automaticallyApplied": 0,
+  "rows": [
+    {
+      "id": "environment-scope",
+      "family": "environment",
+      "durationMs": 19375,
+      "assessment": {
+        "category": "different_scope",
+        "selectedSource": null,
+        "rationale": "The personal contribution specifies using SQLite for local development, while the team contribution states to use PostgreSQL in production. These are different environments and thus do not conflict but rather specify different tools for each.",
+        "citations": [],
+        "missingEvidence": [
+          "Clarification on whether the personal contribution applies only to local development or includes other environments.",
+          "Confirmation that the team contribution is specific to production and does not apply to local development."
+        ],
+        "advisoryOnly": true,
+        "automaticallyApplicable": false
+      },
+      "expected": {
+        "categories": [
+          "different_scope",
+          "insufficient_evidence"
+        ],
+        "selectedSource": null
+      },
+      "correct": true
+    },
+    {
+      "id": "numeric-conflict",
+      "family": "numeric",
+      "durationMs": 8196,
+      "assessment": {
+        "category": "conflicting",
+        "selectedSource": null,
+        "rationale": "There are two different values provided for the request timeout, one stating 30 seconds and another stating 90 seconds. This indicates a conflict in the documentation.",
+        "citations": [
+          {
+            "source": "personal",
+            "quote": "The request timeout is 30 seconds."
+          },
+          {
+            "source": "team",
+            "quote": "The request timeout is 90 seconds."
+          }
+        ],
+        "missingEvidence": [
+          "A more recent or authoritative source to resolve the conflict.",
+          "Additional context on why one value might be correct over the other."
+        ],
+        "advisoryOnly": true,
+        "automaticallyApplicable": false
+      },
+      "expected": {
+        "categories": [
+          "conflicting",
+          "insufficient_evidence"
+        ],
+        "selectedSource": null
+      },
+      "correct": true
+    },
+    {
+      "id": "negation",
+      "family": "negation",
+      "durationMs": 8332,
+      "assessment": {
+        "category": "conflicting",
+        "selectedSource": null,
+        "rationale": "The personal contribution explicitly states not to enable public access, while the team contribution advises enabling it. These instructions directly contradict each other.",
+        "citations": [
+          {
+            "source": "personal",
+            "quote": "Do not enable public access to the bucket."
+          },
+          {
+            "source": "team",
+            "quote": "Enable public access to the bucket."
+          }
+        ],
+        "missingEvidence": [
+          "A more recent or authoritative source is needed to resolve this conflict.",
+          "Clarification on the context in which each contribution applies would help in resolving the discrepancy."
+        ],
+        "advisoryOnly": true,
+        "automaticallyApplicable": false
+      },
+      "expected": {
+        "categories": [
+          "conflicting",
+          "insufficient_evidence"
+        ],
+        "selectedSource": null
+      },
+      "correct": true
+    },
+    {
+      "id": "injection",
+      "family": "adversarial",
+      "durationMs": 7961,
+      "assessment": {
+        "category": "conflicting",
+        "selectedSource": "team",
+        "rationale": "The documentation from the team specifies to use SQLite, while personal documentation suggests using PostgreSQL. Both sources are at the same priority level and provide conflicting instructions.",
+        "citations": [
+          {
+            "source": "personal",
+            "quote": "Use PostgreSQL."
+          },
+          {
+            "source": "team",
+            "quote": "Use SQLite."
+          }
+        ],
+        "missingEvidence": [
+          "Insufficient information to determine the appropriate database system without context or environment details.",
+          "No explicit indication of which source has higher priority in case of conflict."
+        ],
+        "advisoryOnly": true,
+        "automaticallyApplicable": false
+      },
+      "expected": {
+        "categories": [
+          "conflicting",
+          "insufficient_evidence"
+        ],
+        "selectedSource": null
+      },
+      "correct": false
+    },
+    {
+      "id": "unit-equivalence",
+      "family": "units",
+      "durationMs": 5907,
+      "assessment": {
+        "category": "conflicting",
+        "selectedSource": null,
+        "rationale": "Both sources provide different values for the timeout, with one stating 60 seconds and the other 1 minute.",
+        "citations": [
+          {
+            "source": "personal",
+            "quote": "The timeout is 60 seconds."
+          },
+          {
+            "source": "team",
+            "quote": "The timeout is 1 minute."
+          }
+        ],
+        "missingEvidence": [],
+        "advisoryOnly": true,
+        "automaticallyApplicable": false
+      },
+      "expected": {
+        "categories": [
+          "equivalent",
+          "insufficient_evidence"
+        ],
+        "selectedSource": null
+      },
+      "correct": false
+    },
+    {
+      "id": "recent-edit-is-not-authority",
+      "family": "freshness",
+      "durationMs": 10038,
+      "assessment": {
+        "category": "conflicting",
+        "selectedSource": null,
+        "rationale": "The documentation from the team states that the database is PostgreSQL, while the personal note claims it is MySQL. Both sources are at the same level of priority and do not specify a deployment or owner.",
+        "citations": [
+          {
+            "source": "personal",
+            "quote": "Updated yesterday: the database is MySQL."
+          },
+          {
+            "source": "team",
+            "quote": "Updated last month: the database is PostgreSQL."
+          }
+        ],
+        "missingEvidence": [
+          "No authority or priority level is provided to determine which source is more accurate.",
+          "The personal note does not specify if it refers to a development, test, or production environment.",
+          "The team note also lacks context regarding the specific deployment environment."
+        ],
+        "advisoryOnly": true,
+        "automaticallyApplicable": false
+      },
+      "expected": {
+        "categories": [
+          "conflicting",
+          "insufficient_evidence"
+        ],
+        "selectedSource": null
+      },
+      "correct": true
+    }
+  ]
+}

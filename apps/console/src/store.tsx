@@ -10,10 +10,11 @@ import {
   computeSourceBuckets, createDataSource, LiveDataError, mergeSourceStatus, runSequentially,
   type CascadeOrderResult, type IndexingActivity, type IndexingControlAction, type Mode,
 } from './api'
+import { withContextResolutionDecisions } from './context-resolution-view'
 import { isActionable, NO_SUMMARY, summarizeConflicts } from './discrepancy-summary'
 import type {
-  DiscrepancyBatchRequest, DiscrepancyBatchResponse, DiscrepancyDecisionRequest, DiscrepancyRule,
-  DiscrepancyRuleSuggestion, DiscrepancySummary, GraphSummary, SearchHit, SourceStatus, StatusSummary,
+  ContextResolutionDecision, DiscrepancyBatchRequest, DiscrepancyBatchResponse, DiscrepancyDecisionRequest, DiscrepancyRule,
+  DiscrepancyRuleSuggestion, DiscrepancySummary, GraphSummary, SearchHit, SearchOptions, SourceStatus, StatusSummary,
 } from './types'
 import type { LayerId, RouteId } from './theme'
 import { dispatchNavigationGuard, filesHash, isViewId, parseHash, titleForView, type ViewId } from './shell-navigation'
@@ -276,6 +277,8 @@ export interface StoreData {
   openFilesScope: (layer: string | null, file?: string | null) => void
   /** Go to Concepts on one concept — the cross-link from the file behind it. */
   openConcept: (id: string) => void
+  /** Navigate and set the destination query together; false means navigation was cancelled. */
+  openConceptSearch: (query: string) => boolean
   setQuery: (q: string) => void
   /**
    * Full-text search over section content (GET /api/search), for Knowledge's
@@ -285,7 +288,7 @@ export interface StoreData {
    * resolves to `null`, the signal to fall back to the substring filter
    * silently rather than break the list.
    */
-  search: (query: string, limit?: number) => Promise<SearchHit[] | null>
+  search: (query: string, limit?: number, options?: SearchOptions) => Promise<SearchHit[] | null>
   openChat: () => void
   closeChat: () => void
   setChatInput: (v: string) => void
@@ -413,6 +416,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [concepts, setConcepts] = useState<Concept[]>([])
   const [sources, setSources] = useState<Source[]>([])
   const [conflicts, setConflicts] = useState<Conflict[]>([])
+  const [contextDecisions, setContextDecisions] = useState<ContextResolutionDecision[]>([])
   const [conflictSummary, setConflictSummary] = useState<DiscrepancySummary>(NO_SUMMARY)
   const [loadErrors, setLoadErrors] = useState<{ concept: string; error: string }[]>([])
   const [resolvingConflict, setResolvingConflict] = useState<string | null>(null)
@@ -743,10 +747,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // bootstrap and content move, against a 60s deadline: the "timeout" and
       // the white-window half of the large-vault failure. Full documents now
       // arrive one concept at a time on selection (loadConceptDetail below).
-      const [resolutionHistory, discrepancyPayload, rulePayload] = await Promise.all([
+      const [resolutionHistory, discrepancyPayload, rulePayload, contextDecisionPayload] = await Promise.all([
         source.conflictResolutions(),
         source.discrepancies ? source.discrepancies() : Promise.resolve(null),
         source.discrepancyRules ? source.discrepancyRules().catch(() => ({ rules: [], suggestions: [] })) : Promise.resolve({ rules: [], suggestions: [] }),
+        source.contextResolutionDecisions ? source.contextResolutionDecisions() : Promise.resolve([]),
       ])
       if (cancelled) return false
       // Capability is judged by the ANSWER, not only by the method: a live
@@ -820,6 +825,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       coverageRef.current = discrepancyPayload?.coverageComplete ?? true
       setConcepts(compact)
       setConflicts(derivedConflicts)
+      setContextDecisions(contextDecisionPayload)
       setConflictSummary(summary)
       setDiscrepancyRules(rulePayload.rules)
       setDiscrepancyRuleSuggestions(rulePayload.suggestions)
@@ -1070,6 +1076,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!dispatchNavigationGuard()) return
     if (next === 'concepts') setConceptRouteMode('bare')
     setViewState(next)
+  }, [])
+
+  const openConceptSearch = useCallback((value: string) => {
+    if (!dispatchNavigationGuard()) return false
+    setQueries((current) => ({ ...current, concepts: value }))
+    setConceptRouteMode('bare')
+    setSelConceptState('')
+    setViewState('concepts')
+    return true
   }, [])
 
   const setFilesScope = useCallback((layer: string | null) => setFilesScopeState(layer), [])
@@ -1441,10 +1456,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // directly. Any rejection (network, timeout, a malformed body) is caught
   // here too: this is the one place that owns "never break the list",
   // regardless of which layer the failure came from.
-  const search = useCallback(async (query: string, limit?: number): Promise<SearchHit[] | null> => {
+  const search = useCallback(async (query: string, limit?: number, options?: SearchOptions): Promise<SearchHit[] | null> => {
     if (!source.search) return null
     try {
-      return await source.search(query, limit)
+      return await source.search(query, limit, options)
     } catch {
       return null
     }
@@ -1493,23 +1508,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [loading, conceptsLoading, indexingSources, tasks, refreshError, lastRefreshAt],
   )
 
+  const presentedConflicts = useMemo(() => withContextResolutionDecisions(conflicts, contextDecisions), [conflicts, contextDecisions])
+  const presentedSummary = useMemo(() => presentedConflicts === conflicts ? conflictSummary : summarizeConflicts(presentedConflicts), [presentedConflicts, conflicts, conflictSummary])
+
   const data = useMemo<StoreData>(() => ({
     mode, loading, load, error,
-    concepts, sources, signals, conflicts, conflictSummary, activity, loadErrors, resolvingConflict, resolutionError,
+    concepts, sources, signals, conflicts: presentedConflicts, conflictSummary: presentedSummary, activity, loadErrors, resolvingConflict, resolutionError,
     discrepancyRules, discrepancyRuleSuggestions,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery, search,
-    setFilesScope, setFilesPath, openFilesScope, openConcept,
+    setFilesScope, setFilesPath, openFilesScope, openConcept, openConceptSearch,
     openChat, closeChat, setChatInput,
     retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy, decideDiscrepancies, loadDiscrepancyDetail,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
     send, reload, reloadKey,
     fetchIndexingActivity, indexingControl, canControlIndexing, reorderSources,
-  }), [mode, loading, load, error, concepts, sources, signals, conflicts, conflictSummary, activity, loadErrors,
+  }), [mode, loading, load, error, concepts, sources, signals, presentedConflicts, presentedSummary, activity, loadErrors,
     resolvingConflict, resolutionError, discrepancyRules, discrepancyRuleSuggestions,
     retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy, decideDiscrepancies, loadDiscrepancyDetail,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
     send, reload, reloadKey, setView, setSelConcept, setQuery, search, setFilesScope, setFilesPath,
-    openFilesScope, openConcept, openChat, closeChat,
+    openFilesScope, openConcept, openConceptSearch, openChat, closeChat,
     fetchIndexingActivity, indexingControl, canControlIndexing, reorderSources])
 
   const nav = useMemo<StoreNav>(

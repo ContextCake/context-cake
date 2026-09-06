@@ -33,6 +33,7 @@
 import {
   FIELD_COUNT, analyzeConceptFields, conceptBody, makeSnippet, scoreEntry, tokenizeQuery, analyze,
 } from "./search.mjs";
+import { mergeConcepts, orderContributors } from "./resolver.mjs";
 
 const IDLE_EVICT_MS = 30_000;
 
@@ -154,7 +155,7 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
      * Same answer shape, order and scores as searchConcepts(views, ...) over
      * the same snapshots — see the header for why that equality holds.
      */
-    search(contributing, { query, limit = 10 }) {
+    search(contributing, { query, limit = 10, source, type }) {
       const rawTokens = tokenizeQuery(query);
       if (!query || typeof query !== "string" || rawTokens.length === 0) {
         throw new Error("search requires a non-empty query string with at least one searchable token");
@@ -172,10 +173,17 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
         [...new Set(names)].sort((a, b) => (levelByName.get(b) ?? 0) - (levelByName.get(a) ?? 0));
 
       const byId = new Map();
+      // Filters select concepts, not scoring documents: keep the complete
+      // corpus statistics and best-layer score, including a match in another
+      // contribution to the selected source's concept. Switching a filter
+      // must neither rebuild the index nor change a surviving hit's score.
+      const sourceEntries = source ? layers.get(source)?.entries : null;
+      if (source && !sourceEntries) return [];
       for (const view of contributing) {
         const layer = layers.get(view.name);
         if (!layer) continue;
         for (const entry of layer.entries.values()) {
+          if (sourceEntries && !sourceEntries.has(entry.id)) continue;
           const score = scoreEntry(index, entry, terms);
           if (score <= 0) continue;
           const existing = byId.get(entry.id);
@@ -200,6 +208,17 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
         }
       }
       return [...byId.values()]
+        .filter((hit) => {
+          if (!type) return true;
+          // Use the resolver's frontmatter semantics, including equal-level
+          // date ties, inherited types, and full overrides. Section bodies
+          // aren't needed to compute this facet.
+          const contributors = contributing.flatMap((view) => {
+            const concept = layers.get(view.name)?.entries.get(hit.id)?.concept;
+            return concept ? [{ layer: view.name, level: view.level, updated: concept.frontmatter.updated ?? null, frontmatter: concept.frontmatter, sections: [] }] : [];
+          });
+          return (mergeConcepts(orderContributors(contributors)).frontmatter.type ?? "concept") === type;
+        })
         .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
         .slice(0, Number(limit) || 10)
         .map(({ snippetOf, ...hit }) => ({

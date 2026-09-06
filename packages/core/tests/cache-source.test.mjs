@@ -203,3 +203,19 @@ test("a full index sweep never evicts the listing itself", async () => {
   await cached.listConceptIds({});
   assert.equal(listLoads, 1, "the listing was evicted by unrelated concept reads");
 });
+
+test('document-cap coverage survives cache miss, memory hit and disk hit', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-cache-cap-'));
+  try {
+    let walks = 0;
+    const source = { name: 'capped', level: 1, async listConceptIds({ notes }) { walks++; notes.truncated = { cap: 100 }; return ['a']; }, close() {} };
+    const cached = withCache(source, { cacheDir: root });
+    for (const wrapper of [cached, cached, withCache(source, { cacheDir: root })]) {
+      const notes = { skipped: [], unreadable: [] };
+      assert.deepEqual(await wrapper.listConceptIds({ notes }), ['a']);
+      assert.deepEqual(notes.truncated, { cap: 100 });
+      notes.truncated.cap = 999; // a consumer cannot alter the retained warning
+    }
+    assert.equal(walks, 1);
+  } finally { fs.rmSync(root, { force: true, recursive: true }); }
+});

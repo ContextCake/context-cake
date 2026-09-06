@@ -876,31 +876,6 @@ export function SetupWizard({
     goNext()
   }
 
-  // Only an indexed concept contributed by this addition is evidence of success.
-  useEffect(() => {
-    if (step !== 'success' || !added.length) return
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const names = new Set(added.map((source) => source.name))
-    const inspect = async () => {
-      setSuccessBusy(true)
-      try {
-        const res = await apiFetch('/api/graph', { signal: AbortSignal.timeout(20_000) })
-        if (!res.ok) throw new Error('Graph unavailable')
-        const graph = await res.json() as GraphSummary
-        if (cancelled) return
-        const sample = graph.concepts.find((concept) => concept.contributors?.some((name) => names.has(name)))
-        setSuccessConcept(sample?.id ?? null)
-        const indexing = (graph.sources ?? []).some((source) => names.has(source.name) && (source.status === 'indexing' || source.indexing?.refreshing)) || graph.indexingSources?.some((name) => names.has(name)) || (graph.indexing && !graph.indexingSources && !graph.sources?.length)
-        setSuccessIndexing(Boolean(indexing))
-        if (!sample && indexing) timer = setTimeout(() => void inspect(), 900)
-      } catch { /* The source status cards retain their independent recovery state. */ }
-      finally { if (!cancelled) setSuccessBusy(false) }
-    }
-    void inspect()
-    return () => { cancelled = true; if (timer) clearTimeout(timer) }
-  }, [step, added])
-
   const submitAdd = async () => {
     if (addDraft.kind === 'mcp' && !addDraft.trusted) return
     if (await submitDraft(addDraft, setAddErr, setAddBusy)) completeSetup()
@@ -915,13 +890,35 @@ export function SetupWizard({
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let misses = 0
+    let sampleFound = false
+    let sampleFailures = 0
+    let lastSampleKey: string | null = null
+    const sampleAbort = new AbortController()
     const names = new Set(added.map((a) => a.name))
+    // A full graph is needed only to choose the first document, never to
+    // observe indexing progress. Reuse this status watcher instead of polling
+    // the existing corpus once a second while a new source is still empty.
+    const readSample = async (key: string) => {
+      if (sampleFound || key === lastSampleKey || sampleFailures >= 3) return
+      setSuccessBusy(true)
+      try {
+        const res = await apiFetch('/api/graph', { signal: AbortSignal.any([sampleAbort.signal, AbortSignal.timeout(20_000)]) })
+        if (!res.ok) throw new Error('Graph unavailable')
+        const graph = await res.json() as GraphSummary
+        if (cancelled) return
+        const sample = graph.concepts.find((concept) => concept.contributors?.some((name) => names.has(name)))
+        lastSampleKey = key
+        sampleFound = Boolean(sample)
+        setSuccessConcept(sample?.id ?? null)
+      } catch { sampleFailures += 1 /* Status cards retain independent recovery state. */ }
+      finally { if (!cancelled) setSuccessBusy(false) }
+    }
     const tick = async () => {
       const probe = await probeStatus()
       if (cancelled) return
       // Nothing to poll — this engine has no status route. Say nothing rather
       // than inventing a state, and stop.
-      if (probe.kind === 'absent') { setWatched(null); return }
+      if (probe.kind === 'absent') { setWatched(null); await readSample('legacy'); return }
       // One failed request is not an answer. Keep the last rows on screen and
       // ask again — a blip three seconds into a 3,000-note index used to end
       // the watch, freezing the card while the source was still reading. The
@@ -935,12 +932,16 @@ export function SetupWizard({
       misses = 0
       const rows = probe.status.sources.filter((s) => names.has(s.name))
       setWatched(Object.fromEntries([...names].map((n) => [n, rows.find((s) => s.name === n) ?? null])))
-      if (rows.some((s) => s.status === 'indexing' || s.refreshing)) {
+      const indexing = rows.some((s) => s.status === 'indexing' || s.refreshing)
+      setSuccessIndexing(indexing)
+      const canSample = rows.some((source) => source.conceptCount > 0)
+      if (canSample) await readSample(JSON.stringify(rows.map(({ name, conceptCount, status, refreshing }) => [name, conceptCount, status, refreshing])))
+      if (!cancelled && (indexing || (canSample && !sampleFound && lastSampleKey === null && sampleFailures < 3))) {
         timer = setTimeout(() => void tick(), 900)
       }
     }
     void tick()
-    return () => { cancelled = true; if (timer) clearTimeout(timer) }
+    return () => { cancelled = true; sampleAbort.abort(); if (timer) clearTimeout(timer) }
   }, [added, step])
 
   const setAddKind = (kind: SourceKind) => {

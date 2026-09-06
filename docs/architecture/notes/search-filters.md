@@ -9,7 +9,7 @@ findable even when other sources fill the global top 20.
 Source membership includes any contribution to the concept, including one
 whose text does not match the query. Type follows the resolver's frontmatter
 cascade, including inherited values, date ties and full overrides; an absent
-type is `concept`. This matches the Knowledge view's facets.
+type is `concept`. This matches the Library view's facets.
 
 Filtering retains the complete indexed corpus for BM25F statistics and the
 best matching contribution for each hit. A surviving hit keeps its original

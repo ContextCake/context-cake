@@ -57,7 +57,7 @@ via their pre-hooks.
   freshest values through refs so they don't re-subscribe. State is in-memory
   only — reloads reset it. See the subscribe-narrowly gotcha below before
   adding a consumer.
-- **Secondary loading** — Canvas, Review, Settings, and connection setup use
+- **Secondary loading** — Map, Trust, Settings, and connection setup use
   lazy imports with visible loading states. Settings is also lazy at the
   standalone `?surface=settings` entry; a static import there defeats the split.
 - **Views** — `src/views/` (Canvas, Overview, Sources, Triage, Conflicts,
@@ -81,27 +81,31 @@ via their pre-hooks.
   never something the user types (Sources sends orders, not levels; only the
   first-run wizard still sends the conventional 3/2/0) and shows in exactly
   one place, the Sources detail's "Manifest level" row.
-- **Knowledge search and reader** — Concepts windows rows with `useVirtualWindow`,
+- **Library search and reader** — Concepts windows rows with `useVirtualWindow`,
   combines ranked content matches with title matches, and labels pending, failed,
   and partial search states. Source health changes refresh search without discarding
   the last successful answer for that query. The resolved reader uses the safe
   Markdown renderer and mounts 20 sections per page; its section selector and
   matching-section jump reach the whole document. Source names accompany results.
-- **Automatic context resolution** — `AutomaticResolutionPanel` in Review manages
+- **Automatic context resolution** — `AutomaticResolutionPanel` in Trust → Automation manages
   exact concept/section source policies through `/api/context-resolutions`. Enabling
   is standing consent for that scope; the engine validates evidence. Original
   files remain intact, with pause and latest-decision undo. Resolved section
   `contextResolution` metadata survives the adapter and labels applied/stale/undone.
   The store derives a policy-aware presentation from raw discrepancy rows; an
   applied decision only counts handled when its `currentRevision` exactly matches
-  that row. This keeps counts consistent across Home/sidebar/Review while
+  that row. This keeps counts consistent across Workspace/sidebar/Trust while
   source control operations continue to use the original evidence.
   `LocalDiscrepancyAssessment` discovers installed models on request and pins an
-  assessment to the discrepancy revision and model digest. Assessments are
-  advisory only: they never change the selected source or enable a policy.
+  assessment to the discrepancy revision and model digest. Date, source-health
+  and coverage changes retire pending and displayed advice even when the text
+  revision is unchanged. Policy history follows the store's content changes;
+  superseded requests cannot overwrite newer history. Assessments are advisory only: they never change the selected source or enable a policy.
 - **Discrepancy Center** — `views/Conflicts.tsx` is the root; the pieces are in
-  `views/conflicts/` (OverviewHeader tiles/tabs/group-by, GroupedList,
-  BulkBar, DecisionPanel, Evidence, Rules, `filters.ts`). It is built for
+  `views/conflicts/` (GroupedList,
+  BulkBar, DecisionPanel, Evidence, Rules, `filters.ts`). `TrustControls` in
+  Conflicts owns the tabs and disclosed filters; Automation and Rules have
+  separate disclosures. It is built for
   1,500 rows: the store fetches `/api/discrepancies?fields=compact` (every
   row's identity, status, revision, candidates and ≤240-char previews plus
   the engine's `summary` in one envelope) and loads a row's full record

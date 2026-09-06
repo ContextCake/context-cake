@@ -131,3 +131,29 @@ test("stdio retrieval is app-independent, profile-bound, current after edit", as
   child.stdin.end();
   await new Promise((resolve) => child.once("exit", resolve));
 });
+
+test('a failed refresh still evicts the previously retained corpus after all concurrent callers settle', async t => {
+  const { source } = await fixture(t);
+  let fail = false;
+  let reads = 0;
+  const retained = createRetainedSearch([{ ...source,
+    async listEntries(options) {
+      if (fail) { await sleep(30); throw new Error('listing unavailable'); }
+      return source.listEntries(options);
+    },
+    async loadConcept(...args) { reads++; return source.loadConcept(...args); },
+  }], { idleEvictMs: 20 });
+  t.after(() => retained.close());
+  await retained.search({ query: 'database' });
+  assert.equal(reads, 2);
+  fail = true;
+  await Promise.all([
+    assert.rejects(retained.search({ query: 'database' }), /listing unavailable/),
+    assert.rejects(retained.search({ query: 'deploy' }), /listing unavailable/),
+  ]);
+  await sleep(60);
+  fail = false;
+  const answer = await retained.search({ query: 'database' });
+  assert.equal(reads, 4, 'a failed last search cannot retain parsed documents indefinitely');
+  assert.deepEqual(answer.hits, await searchConcepts([source], { query: 'database' }));
+});

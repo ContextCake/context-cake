@@ -4,9 +4,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AutomaticResolutionPanel } from './AutomaticResolutionPanel'
 import type { Conflict } from '../data'
-const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), reload: vi.fn() }))
+const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), reload: vi.fn(), conflicts: [] as Conflict[] }))
 vi.mock('../api', () => ({ apiFetch: mocks.apiFetch }))
-vi.mock('../store', () => ({ useStoreData: () => ({ reload: mocks.reload, reloadKey: 0 }) }))
+vi.mock('../store', () => ({ useStoreData: () => ({ reload: mocks.reload, reloadKey: 0, conflicts: mocks.conflicts }) }))
 let root: Root
 let container: HTMLDivElement
 const conflict: Conflict = { id: 'd1', concept: 'decisions/db', sectionKey: 'choice', section: 'Choice', title: 'Database', kind: 'section_content', revision: 'rev1', status: 'open', safe: true, winner: 'personal', history: [], contributions: [{ layer: 'personal', sourceLayer: 'project-docs', value: 'Use PostgreSQL.', updated: '2026-01-01' }] }
@@ -14,6 +14,7 @@ const initial = { version: 1, revision: 'state1', policies: [], decisions: [] }
 function button(text: string) { return [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === text)! }
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  mocks.conflicts = []
   mocks.apiFetch.mockReset(); mocks.reload.mockReset()
   mocks.apiFetch.mockResolvedValue(new Response(JSON.stringify(initial)))
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
@@ -59,4 +60,23 @@ it('opens directly when its parent already disclosed the automation tool', async
   expect(button('Enable this source policy').disabled).toBe(true)
   expect(button('Hide policies').getAttribute('aria-expanded')).toBe('true')
   expect(mocks.apiFetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+})
+
+it('refreshes history on background evidence changes and ignores an older response arriving last', async () => {
+  let finishOld!: (response: Response) => void
+  const old = new Promise<Response>((resolve) => { finishOld = resolve })
+  const decision = { id: 'd1', conceptId: 'decisions/db', key: 'choice', selectedSource: 'project-docs', createdAt: '2026-09-06T00:00:00Z' }
+  mocks.apiFetch.mockReturnValueOnce(old).mockResolvedValueOnce(new Response(JSON.stringify({ ...initial, decisions: [{ ...decision, currentStatus: 'stale' }] })))
+  await act(async () => root.render(<AutomaticResolutionPanel conflict={conflict} defaultExpanded />))
+  const signal = mocks.apiFetch.mock.calls[0][1].signal as AbortSignal
+  mocks.conflicts = [{ ...conflict, revision: 'rev2' }]
+  await act(async () => root.render(<AutomaticResolutionPanel conflict={mocks.conflicts[0]} defaultExpanded />))
+  expect(signal.aborted).toBe(true)
+  expect(mocks.apiFetch).toHaveBeenCalledTimes(2)
+  expect(container.textContent).toContain('Not currently applicable')
+  await act(async () => finishOld(new Response(JSON.stringify({ ...initial, decisions: [{ ...decision, currentStatus: 'applied' }] }))))
+  expect(container.textContent).not.toContain('Applied to current evidence')
+  expect(container.textContent).toContain('Not currently applicable')
+  await act(async () => root.render(<AutomaticResolutionPanel conflict={mocks.conflicts[0]} defaultExpanded />))
+  expect(mocks.apiFetch).toHaveBeenCalledTimes(2)
 })

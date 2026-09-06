@@ -143,7 +143,7 @@ const tools = [
   },
   {
     name: "get_links",
-    description: "Return outgoing and incoming links for a concept, resolved against the effective graph. Links are extracted from effective (winning) section content only — a link that appears only in a dissenting `conflicts[]` entry is not followed.",
+    description: "Return outgoing links from the effective section content, including applicable source policies; dissent-only links are not followed. Incoming links are original source references, each labeled with its source layer, and may include references that lose in the resolved cascade.",
     inputSchema: {
       type: "object",
       properties: {
@@ -615,8 +615,9 @@ async function listConcepts({ type } = {}) {
 
 async function getLinks({ concept_id }) {
   const id = normalizeId(concept_id);
-  const resolved = await resolveConcept(id, layers);
+  let resolved = await resolveConcept(id, layers);
   if (!resolved) throw new Error(`Concept not found in any layer: ${id}`);
+  resolved = await applyRecordedContextResolution(resolved);
 
   const body = resolved.sections.map((s) => `${s.heading ?? ""}\n${s.content}`).join("\n");
   const rawLinks = extractLinks(body).map((link) => {

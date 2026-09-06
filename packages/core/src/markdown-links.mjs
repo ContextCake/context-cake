@@ -10,6 +10,7 @@ export function markdownLinkSpans(value) {
   const lineBreaks = /[\r\n]/g;
   let lineEnd = lineBreaks.exec(text)?.index ?? text.length;
   const links = [];
+  let destinations = null;
   for (let i = 0; i < text.length; i++) {
     while (i > lineEnd) lineEnd = lineBreaks.exec(text)?.index ?? text.length;
     if (hidden[i] || text[i] !== '[' || escaped(text, i)) continue;
@@ -19,8 +20,10 @@ export function markdownLinkSpans(value) {
       const outerClose = brackets.get(i);
       const close = outerClose === undefined ? -1 : outerClose - 1;
       if (close !== -1 && text[close] === ']' && close < lineEnd && hiddenPrefix[close + 2] === hiddenPrefix[i]) {
-        const pipe = text.indexOf('|', i + 2);
-        const targetEnd = pipe !== -1 && pipe < close ? pipe : close;
+        // Search only this link: a document of plain wiki links must not
+        // rescan every remaining link while looking for a nonexistent alias.
+        const aliasOffset = text.slice(i + 2, close).indexOf('|');
+        const targetEnd = aliasOffset !== -1 ? i + 2 + aliasOffset : close;
         if (targetEnd > i + 2) parsed = {
           start: i, end: close + 2, targetStart: i + 2, targetEnd,
           label: targetEnd < close ? text.slice(targetEnd + 1, close) : null, kind: 'wiki',
@@ -30,7 +33,8 @@ export function markdownLinkSpans(value) {
       const close = brackets.get(i);
       // Find the balanced label without treating inline code's brackets as syntax.
       if (close !== undefined && text[close + 1] === '(') {
-        const destination = parseDestination(text, close + 2, hidden);
+        destinations ??= destinationIndex(text, hidden);
+        const destination = parseDestination(text, close + 2, hidden, destinations);
         if (destination) parsed = { start: i, ...destination, label: text.slice(i + 1, close), kind: 'markdown' };
       }
     }
@@ -60,40 +64,65 @@ function escaped(text, index) {
   return slashes % 2 === 1;
 }
 
-function parseDestination(text, start, hidden) {
-  let cursor = start;
-  while (/\s/.test(text[cursor] ?? '') && cursor < text.length) cursor++;
+// Each candidate consults this suffix index in constant time. In particular,
+// repeated "[x](" prefixes must not rescan the entire unfinished destination.
+// bareEnd jumps balanced parentheses; angleEnd and titleEnd preserve the
+// existing delimiter/escape rules without imposing an arbitrary length cap.
+function destinationIndex(text, hidden) {
+  const length = text.length;
+  const bareEnd = new Int32Array(length + 1);
+  const angleEnd = new Int32Array(length + 1);
+  const nextText = new Int32Array(length + 1);
+  const titleEnd = new Int32Array(length + 1);
+  const escapes = new Uint8Array(length);
+  let slashes = 0;
+  for (let i = 0; i < length; i++) {
+    escapes[i] = slashes % 2;
+    slashes = text[i] === '\\' ? slashes + 1 : 0;
+  }
+  bareEnd[length] = angleEnd[length] = -1;
+  nextText[length] = length;
+  let single = -1, double = -1, right = -1;
+  for (let i = length - 1; i >= 0; i--) {
+    const char = text[i];
+    const space = /\s/.test(char);
+    nextText[i] = space ? nextText[i + 1] : i;
+    titleEnd[i] = char === "'" ? single : char === '"' ? double : char === '(' ? right : -1;
+    if (!escapes[i]) {
+      if (char === "'") single = i;
+      if (char === '"') double = i;
+      if (char === ')') right = i;
+    }
+    if (hidden[i]) {
+      bareEnd[i] = angleEnd[i] = -1;
+      continue;
+    }
+    if (space || (char === ')' && !escapes[i])) bareEnd[i] = i;
+    else if (char === '(' && !escapes[i]) {
+      const close = bareEnd[i + 1];
+      bareEnd[i] = close >= 0 && text[close] === ')' && !escapes[close] ? bareEnd[close + 1] : -1;
+    } else bareEnd[i] = bareEnd[i + 1];
+    angleEnd[i] = char === '>' && !escapes[i] ? i
+      : char === '\n' || (char === '<' && !escapes[i]) ? -1 : angleEnd[i + 1];
+  }
+  return { bareEnd, angleEnd, nextText, titleEnd };
+}
+
+function parseDestination(text, start, hidden, index) {
+  let cursor = index.nextText[start];
   const angle = text[cursor] === '<';
   if (angle) cursor++;
   const targetStart = cursor;
-  let depth = 0;
-  while (cursor < text.length) {
-    if (hidden[cursor]) return null;
-    const char = text[cursor];
-    if ('()<>'.includes(char) && escaped(text, cursor)) { cursor++; continue; }
-    if (angle) {
-      if (char === '>') break;
-      if (char === '\n' || char === '<') return null;
-    } else {
-      if (/\s/.test(char)) break;
-      if (char === '(') depth++;
-      if (char === ')') { if (depth === 0) break; depth--; }
-    }
-    cursor++;
-  }
-  const targetEnd = cursor;
-  if (targetEnd === targetStart || depth !== 0 || cursor === text.length) return null;
-  if (angle && text[cursor++] !== '>') return null;
+  const targetEnd = (angle ? index.angleEnd : index.bareEnd)[cursor];
+  if (targetEnd === undefined || targetEnd < 0 || targetEnd === targetStart) return null;
+  cursor = targetEnd + (angle ? 1 : 0);
   const beforeSpace = cursor;
-  while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
+  cursor = index.nextText[cursor];
   // A title is distinct from the destination. Preserve it byte-for-byte.
   if (cursor > beforeSpace && ['"', "'", '('].includes(text[cursor])) {
-    const endQuote = text[cursor] === '(' ? ')' : text[cursor];
-    cursor++;
-    while (cursor < text.length && (text[cursor] !== endQuote || escaped(text, cursor))) cursor++;
-    if (cursor === text.length) return null;
-    cursor++;
-    while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
+    const close = index.titleEnd[cursor];
+    if (close < 0) return null;
+    cursor = index.nextText[close + 1];
   }
   if (text[cursor] !== ')' || hidden[cursor]) return null;
   return { targetStart, targetEnd, end: cursor + 1 };
@@ -119,12 +148,20 @@ function codeMask(text) {
     }
     offset += line.length;
   }
+  const spanEnds = codeSpanEnds(text, mask);
+  const htmlStart = /<(pre|code|script|style)(?=\s|>)/iy;
+  let nextAngle = -1;
   for (let i = 0; i < text.length; i++) {
     if (mask[i]) continue;
-    const literalHtml = text[i] === '<' && text.slice(i).match(/^<(pre|code|script|style)(?:\s[^>]*|)>/i);
-    if (literalHtml) {
+    htmlStart.lastIndex = i;
+    const literalHtml = text[i] === '<' && htmlStart.exec(text);
+    if (literalHtml && nextAngle < i) {
+      const found = text.indexOf('>', i + literalHtml[0].length);
+      nextAngle = found < 0 ? text.length : found;
+    }
+    if (literalHtml && nextAngle < text.length) {
       const closing = new RegExp(`</${literalHtml[1]}\\s*>`, 'ig');
-      closing.lastIndex = i + literalHtml[0].length;
+      closing.lastIndex = nextAngle + 1;
       const found = closing.exec(text);
       const end = found ? closing.lastIndex : text.length;
       mask.fill(1, i, end);
@@ -141,18 +178,36 @@ function codeMask(text) {
     if (text[i] !== '`' || escaped(text, i)) continue;
     let length = 1;
     while (text[i + length] === '`') length++;
-    let cursor = i + length;
-    let end = -1;
-    while (cursor < text.length) {
-      if (mask[cursor]) break; // A code span cannot cross a fenced block.
-      if (text[cursor] !== '`') { cursor++; continue; }
-      let run = 1;
-      while (text[cursor + run] === '`') run++;
-      if (run === length) { end = cursor + run; break; }
-      cursor += run;
-    }
+    const end = spanEnds.get(i) ?? -1;
     if (end !== -1) { mask.fill(1, i, end); i = end - 1; }
     else i += length - 1; // Unmatched ticks are literal Markdown text.
   }
   return mask;
+}
+
+// Pair full backtick runs backwards within each unmasked block. An unmatched
+// delimiter consults one lookup instead of rescanning all later runs. An
+// escaped first tick can still leave the suffix as an opener (the established
+// parser contract), but closing runs always count their complete length.
+function codeSpanEnds(text, mask) {
+  const runs = [];
+  let segment = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (mask[i]) { segment++; continue; }
+    if (text[i] !== '`') continue;
+    const start = i;
+    while (text[i + 1] === '`') i++;
+    runs.push({ start, end: i + 1, length: i + 1 - start, segment });
+  }
+  const next = new Map();
+  const ends = new Map();
+  let currentSegment = -1;
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const run = runs[i];
+    if (run.segment !== currentSegment) { next.clear(); currentSegment = run.segment; }
+    if (next.has(run.length)) ends.set(run.start, next.get(run.length));
+    if (run.length > 1 && escaped(text, run.start) && next.has(run.length - 1)) ends.set(run.start + 1, next.get(run.length - 1));
+    next.set(run.length, run.end);
+  }
+  return ends;
 }

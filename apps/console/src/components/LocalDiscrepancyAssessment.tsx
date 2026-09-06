@@ -15,10 +15,17 @@ export function LocalDiscrepancyAssessment({ conflict }: { conflict: Conflict })
   const [unavailable, setUnavailable] = useState(false)
   const [assessment, setAssessment] = useState<Assessment | null>(null)
   const request = useRef<AbortController | null>(null)
-  useEffect(() => () => { request.current?.abort(); request.current = null }, [])
+  // Discrepancy revisions fingerprint text/levels, but advice also relies on
+  // authored dates and coverage. Retire both pending and completed advice.
+  const evidenceKey = JSON.stringify([conflict.id, conflict.revision, conflict.contributions, conflict.sourceHealth, conflict.coverageComplete, conflict.ruleConflict])
+  useEffect(() => {
+    request.current?.abort(); request.current = null
+    setAssessment(null); setError(''); setBusy(false)
+    return () => { request.current?.abort(); request.current = null }
+  }, [evidenceKey])
   const model = models?.find((item) => item.digest === modelDigest)
   const checkModels = async () => {
-    setBusy(true); setError('')
+    setBusy(true); setError(''); setAssessment(null)
     const controller = new AbortController(); request.current = controller
     try {
       const response = await apiFetch('/api/discrepancy-assessment/models', { signal: controller.signal })

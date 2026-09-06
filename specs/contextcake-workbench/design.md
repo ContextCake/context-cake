@@ -6,7 +6,7 @@ and maintenance controls gives those activities too little room.
 
 ## Information architecture
 
-- Workspace: one search entry, indexed context and available authored update dates,
+- Workspace: one search entry, indexed context and available section update dates,
   source health, and the next useful action.
 - Library: full-width contextual search and filters above a document navigator and
   reading surface. Original search excerpts stay distinguished from resolved content.

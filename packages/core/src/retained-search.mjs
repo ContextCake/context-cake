@@ -21,6 +21,7 @@ export function createRetainedSearch(sources, { idleEvictMs = 60_000, sourceBudg
   let eviction = null;
   let generation = 0;
   let closed = false;
+  let activeSearches = 0;
 
   async function readSource(source, previous) {
     const signal = AbortSignal.timeout(sourceBudgetMs);
@@ -83,18 +84,27 @@ export function createRetainedSearch(sources, { idleEvictMs = 60_000, sourceBudg
       if (typeof options?.query !== "string" || !tokenizeQuery(options.query).length) {
         throw new Error("search requires a non-empty query string with at least one searchable token");
       }
-      const views = await refresh();
-      if (closed) throw new Error("Retrieval index is closed");
-      const hits = index.search(views, options);
-      clearTimeout(eviction);
-      eviction = setTimeout(() => {
-        // Drop BOTH parsed content and analysis after idle. Retention is one
-        // selected corpus, never an unbounded history of queries/generations.
-        snapshots = [];
-        index.close();
-      }, idleEvictMs);
-      eviction.unref?.();
-      return { hits, sources: views };
+      activeSearches++;
+      try {
+        const views = await refresh();
+        if (closed) throw new Error("Retrieval index is closed");
+        const hits = index.search(views, options);
+        return { hits, sources: views };
+      } finally {
+        activeSearches--;
+        // A failed refresh cleared the old idle timer too. Rearm after the
+        // last caller settles, successful or not, or the previous parsed
+        // corpus stays retained forever after a timeout/unreadable listing.
+        // Another active caller must finish before its idle period begins.
+        if (!closed && activeSearches === 0) {
+          clearTimeout(eviction);
+          eviction = setTimeout(() => {
+            snapshots = [];
+            index.close();
+          }, idleEvictMs);
+          eviction.unref?.();
+        }
+      }
     },
     close() {
       closed = true;

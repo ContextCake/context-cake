@@ -4,7 +4,7 @@ Approved direction: September 6, 2026. This implementation delivers exact source
 
 ## Behavior and authority
 
-In Review → Automatic context resolution, the developer chooses one exact concept, section and contributing source. Enabling that policy selects the existing contribution now and after future changes to that section, once all sources have settled. Original files remain unchanged. Original dissent stays visible to humans and MCP clients. Selection by policy is distinguished from verified factual correctness.
+In Trust → Automation → Automatic context resolution, the developer chooses one exact concept, section and contributing source. Enabling that policy selects the existing contribution now and after future changes to that section, once all sources have settled. Original files remain unchanged. Original dissent stays visible to humans and MCP clients. Selection by policy is distinguished from verified factual correctness.
 
 Policies and decisions live in `.contextcake/profiles/<id>/context-resolutions.json` beside the manifest. The schema records policy version, profile, exact concept/section/source, selected manifest fingerprint, current contributor evidence fingerprint, and timestamps. Atomic replacement under the manifest lock makes each policy and decision durable together. There are no source writes or live-layer git operations on this path.
 

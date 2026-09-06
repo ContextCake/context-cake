@@ -119,3 +119,23 @@ describe('structured and bounded reading', () => {
     expect(container.textContent).not.toContain('Unique migration evidence')
   })
 })
+
+it('visits every matching section in order, including matches on the same page, then wraps', async () => {
+  const doc = concept()
+  doc.sections = Array.from({ length: 23 }, (_, index) => ({ ...doc.sections[0], name: `Section ${index}`, key: `s${index}`, value: [0, 1, 20, 21].includes(index) ? 'Migration evidence' : 'Ordinary note', dissents: [] }))
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })
+  try {
+    await act(async () => root.render(<ConceptDetail concept={doc} matchQuery="migration" />))
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    const jump = [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.startsWith('Jump to matching section'))!
+    // Record scheduled focus after the page render, as browsers do.
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length })
+    for (const index of [0, 1, 20, 21, 0]) {
+      await act(async () => jump.click())
+      frames.splice(0).forEach((frame) => frame(0))
+      expect((focus.mock.instances[focus.mock.instances.length - 1] as HTMLElement | undefined)?.getAttribute('data-section')).toBe(String(index))
+    }
+    focus.mockRestore()
+  } finally { vi.unstubAllGlobals() }
+})

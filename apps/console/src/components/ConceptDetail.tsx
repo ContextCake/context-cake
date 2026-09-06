@@ -93,6 +93,7 @@ export function ConceptDetail({ concept, matchQuery = '' }: { concept: Concept; 
   const PAGE_SIZE = 20
   const [page, setPage] = useState(0)
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+  const lastMatch = useRef(-1)
   const reader = useRef<HTMLDivElement>(null)
   const pages = Math.max(1, Math.ceil(concept.sections.length / PAGE_SIZE))
   const currentPage = Math.min(page, pages - 1)
@@ -100,8 +101,10 @@ export function ConceptDetail({ concept, matchQuery = '' }: { concept: Concept; 
     const words = matchQuery.toLowerCase().split(/\s+/).filter(Boolean)
     return concept.sections.flatMap((section, index) => words.length && words.some((word) => `${section.name} ${section.value}`.toLowerCase().includes(word)) ? [index] : [])
   }, [concept.sections, matchQuery])
+  useEffect(() => { lastMatch.current = -1 }, [concept.id, concept.sections, matchQuery])
   useEffect(() => { setPage(0); setCollapsed(new Set()) }, [concept.id])
   const jump = (index: number) => {
+    lastMatch.current = index
     setPage(Math.floor(index / PAGE_SIZE))
     setCollapsed((prev) => { const next = new Set(prev); next.delete(index); return next })
     requestAnimationFrame(() => reader.current?.querySelector<HTMLButtonElement>(`[data-section="${index}"]`)?.focus())
@@ -118,7 +121,7 @@ export function ConceptDetail({ concept, matchQuery = '' }: { concept: Concept; 
       <div className="cc-reader-origin"><span>Resolved from</span><strong>{(concept.contributorLayers ?? concept.layers).join(' · ')}</strong><span>{concept.sections.length} sections</span></div>
       {concept.sections.length > 1 && <nav className="cc-section-nav" aria-label="Document sections">
         <select aria-label="Jump to section" value="" onChange={(event) => jump(Number(event.target.value))}><option value="" disabled>Jump to section…</option>{concept.sections.map((section, index) => <option key={index} value={index}>{index + 1}. {section.name}</option>)}</select>
-        {matches.length > 0 && <button type="button" onClick={() => jump(matches.find((index) => index >= (currentPage + 1) * PAGE_SIZE) ?? matches[0])}>Jump to matching section ({matches.length})</button>}
+        {matches.length > 0 && <button type="button" onClick={() => jump(matches.find((index) => index > lastMatch.current) ?? matches[0])}>Jump to matching section ({matches.length})</button>}
         <button type="button" onClick={() => setCollapsed((prev) => prev.size ? new Set() : new Set(concept.sections.map((_, i) => i)))}>{collapsed.size ? 'Expand sections' : 'Collapse sections'}</button>
         {pages > 1 && <><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous sections</button><span role="status">{currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, concept.sections.length)} of {concept.sections.length}</span><button type="button" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)}>Next sections</button></>}
       </nav>}

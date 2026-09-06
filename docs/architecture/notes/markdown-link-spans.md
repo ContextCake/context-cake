@@ -2,8 +2,19 @@
 
 `markdown-links.mjs` returns source offsets for supported inline Markdown links
 and wiki links. Discrepancy extraction, rewrite/unlink actions, and MCP graph
-links consume this parser. A repair changes those exact offsets, from right to
-left; it never scans the replacement text again during the same edit.
+links consume this parser. A repair assembles untouched original spans and
+replacement text in one pass and joins them once; it never scans replacement
+text again or copies the entire document for each match during the same edit.
+
+Delimiter boundaries are indexed in linear passes. Destination parsing reuses
+suffix boundaries for balanced parentheses, angle destinations, whitespace,
+and titles, so repeated unfinished link prefixes cannot repeatedly scan the
+remaining document. Valid long destinations retain their original spans.
+Wiki alias searches are confined to each link's own span; a sequence of plain
+wiki links never searches the remaining document for an absent alias.
+Literal HTML opening tags reuse the next closing angle bracket, including an
+absent bracket. Backtick runs pair by length within each unfenced block in a
+backwards pass, keeping unmatched runs literal without repeated suffix scans.
 
 Backtick spans (including multiline and variable-length delimiters), fenced
 code, indented examples, HTML comments, and literal HTML pre/code/script/style

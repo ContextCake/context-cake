@@ -54,7 +54,7 @@ observations, not production percentiles or a measurement of the packaged app.
 
 ## Recorded context resolutions
 
-`read_file` applies source-preserving decisions only to its fresh resolved result,
+`read_file` and `get_links` outgoing traversal apply source-preserving decisions only to their fresh resolved result,
 never to a retained source snapshot. It reads the profile's current decision state
 and compares the selected layers and settings with the process's original binding.
 Changes to an inactive profile do not invalidate that binding.
@@ -67,3 +67,6 @@ stop application; unrelated rules and a single recommendation do not. This is
 the existing pure rule matcher, not a second discrepancy projection. Before
 applying a recorded choice, stdio also checks source-listing coverage: truncated,
 skipped and unreadable documents require abstention even when the adapter is up.
+Cache wrappers preserve these coverage notes on both fresh and cached listings.
+`get_links` incoming references remain original source evidence, labeled with
+their source layer; they can include a reference from a losing contribution.

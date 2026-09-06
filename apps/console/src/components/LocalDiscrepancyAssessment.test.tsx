@@ -41,3 +41,33 @@ it('keeps local runtime unavailability separate from an assessment result', asyn
   expect(container.textContent).toContain('requires the desktop app and a running local model runtime')
   expect(container.querySelector('.cc-local-assessment-result')).toBeNull()
 })
+
+it.each(['date', 'coverage'] as const)('discards advisory results after a %s change with the same discrepancy revision', async (change) => {
+  const original = { ...conflict, contributions: [{ layer: 'personal' as const, sourceLayer: 'project', value: 'SQLite is only used for local tests.', updated: '2026-01-01' }], coverageComplete: true }
+  mocks.apiFetch.mockImplementation(async (url) => new Response(JSON.stringify(url.endsWith('/models') ? { available: true, models: [{ name: 'local-test', digest: 'abc', size: 1e9 }] } : { assessment })))
+  await act(async () => root.render(<LocalDiscrepancyAssessment conflict={original} />))
+  await act(async () => button('Check local models').click())
+  const select = container.querySelector('select')!
+  await act(async () => { select.value = 'abc'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  await act(async () => button('Assess locally').click())
+  expect(container.querySelector('.cc-local-assessment-result')).not.toBeNull()
+  const next = change === 'date' ? { ...original, contributions: [{ ...original.contributions[0], updated: '2026-09-06' }] } : { ...original, coverageComplete: false }
+  await act(async () => root.render(<LocalDiscrepancyAssessment conflict={next} />))
+  expect(container.querySelector('.cc-local-assessment-result')).toBeNull()
+  expect(mocks.apiFetch).toHaveBeenCalledTimes(2)
+})
+
+it('aborts pending advice when coverage changes and ignores its eventual result', async () => {
+  let finish!: (response: Response) => void
+  mocks.apiFetch.mockImplementation((url) => url.endsWith('/models') ? Promise.resolve(new Response(JSON.stringify({ available: true, models: [{ name: 'local-test', digest: 'abc', size: 1e9 }] }))) : new Promise<Response>((resolve) => { finish = resolve }))
+  await act(async () => root.render(<LocalDiscrepancyAssessment conflict={{ ...conflict, coverageComplete: true }} />))
+  await act(async () => button('Check local models').click())
+  const select = container.querySelector('select')!
+  await act(async () => { select.value = 'abc'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  await act(async () => button('Assess locally').click())
+  const signal = mocks.apiFetch.mock.calls[1][1].signal as AbortSignal
+  await act(async () => root.render(<LocalDiscrepancyAssessment conflict={{ ...conflict, coverageComplete: false }} />))
+  expect(signal.aborted).toBe(true)
+  await act(async () => finish(new Response(JSON.stringify({ assessment }))))
+  expect(container.querySelector('.cc-local-assessment-result')).toBeNull()
+})

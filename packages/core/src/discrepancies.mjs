@@ -305,14 +305,17 @@ function editLinks(value, target, replacement) {
   const edits = markdownLinkSpans(text)
     .filter((link) => localTarget(link.target) && cleanTarget(link.target) === target)
     .map(replacement);
-  // Apply from right to left so original offsets remain valid, even when a
-  // replacement changes length or the section contains both link syntaxes.
-  let out = text;
-  for (let i = edits.length - 1; i >= 0; i--) {
-    const edit = edits[i];
-    out = out.slice(0, edit.start) + edit.value + out.slice(edit.end);
+  // Spans are ordered and disjoint. Read each untouched interval from the
+  // original once; changing replacement lengths never shifts those offsets.
+  // Joining once avoids copying the full document for every matching link.
+  const pieces = [];
+  let cursor = 0;
+  for (const edit of edits) {
+    pieces.push(text.slice(cursor, edit.start), edit.value);
+    cursor = edit.end;
   }
-  return { text: out, replaced: edits.length };
+  pieces.push(text.slice(cursor));
+  return { text: pieces.join(''), replaced: edits.length };
 }
 
 function localTarget(target) { return !/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(String(target).trim()); }

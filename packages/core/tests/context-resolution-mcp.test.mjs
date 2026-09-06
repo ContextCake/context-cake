@@ -15,11 +15,13 @@ test("MCP applies a recorded source-preserving decision; Undo, edits, policies a
   const root = await mkdtemp(path.join(tmpdir(), "cc-overlay-mcp-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   for (const dir of ["personal", "team"]) await mkdir(path.join(root, dir));
-  const personalText = "# Database\n\n## Engine\n\nUse MySQL.\n";
-  const teamText = "# Database\n\n## Engine\n\nUse Postgres.\n";
+  const personalText = "# Database\n\n## Engine\n\nUse [[mysql]].\n";
+  const teamText = "# Database\n\n## Engine\n\nUse [[postgres]].\n";
   const personalFile = path.join(root, "personal/database.md");
   const teamFile = path.join(root, "team/database.md");
   await writeFile(personalFile, personalText); await writeFile(teamFile, teamText);
+  await writeFile(path.join(root, "team/referrer.md"), "# Referrer\n\nSee [[database]].\n");
+  await writeFile(path.join(root, "personal/referrer.md"), "# Referrer\n\nNo link in the winning source.\n");
   const manifest = { settings: { maxDocFiles: 100 }, layers: [
     { name: "personal", source: "files", path: "personal", level: 3 },
     { name: "team", source: "files", path: "team", level: 1 },
@@ -44,10 +46,10 @@ test("MCP applies a recorded source-preserving decision; Undo, edits, policies a
   const pending = new Map();
   let sequence = 0;
   lines.on("line", line => { const message = JSON.parse(line); pending.get(message.id)?.(message); pending.delete(message.id); });
-  async function read() {
+  async function read(tool = "read_file") {
     const result = await Promise.race([new Promise(resolve => {
       const id = ++sequence; pending.set(id, resolve);
-      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "read_file", arguments: { concept_id: "database" } } }) + "\n");
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: tool, arguments: { concept_id: "database" } } }) + "\n");
     }), sleep(3000, null, { ref: false }).then(() => { throw new Error(stderr || "MCP timeout"); })]);
     assert.equal(result.error, undefined, JSON.stringify(result));
     return JSON.parse(result.result.content[0].text);
@@ -58,10 +60,14 @@ test("MCP applies a recorded source-preserving decision; Undo, edits, policies a
   assert.equal(engine(applied).contextResolution.status, "applied");
   assert.equal(engine(applied).conflicts[0].layer, "personal");
   assert.match(applied.markdown, /resolution applied/);
+  const links = await read("get_links");
+  assert.deepEqual(links.outgoing.map(link => link.id), ["postgres"], "outgoing traversal agrees with the source policy read_file serves");
+  assert.deepEqual(links.incoming, [{ id: "referrer", layer: "team", raw: "[[database]]" }], "incoming remains source-labeled original evidence, including losing contributions");
   assert.equal(await readFile(personalFile, "utf8"), personalText);
   assert.equal(await readFile(teamFile, "utf8"), teamText);
   await store.update(state => { state.decisions[0].undoneAt = new Date().toISOString(); });
   assert.equal(engine(await read()).sourceLayer, "personal");
+  assert.deepEqual((await read("get_links")).outgoing.map(link => link.id), ["mysql"], "undo restores outgoing cascade links");
   await store.update(state => { delete state.decisions[0].undoneAt; state.policies[0].enabled = false; });
   assert.equal(engine(await read()).contextResolution.status, "stale");
   await store.update(state => { state.policies[0].enabled = true; });
@@ -71,6 +77,7 @@ test("MCP applies a recorded source-preserving decision; Undo, edits, policies a
   assert.equal(engine(await read()).contextResolution.status, "applied", "one recommendation does not compete with an enabled exact policy");
   await rules.patch(rule.id, { mode: "automatic" });
   assert.equal(engine(await read()).contextResolution.status, "stale", "legacy rules block independently selected overlays");
+  assert.deepEqual((await read("get_links")).outgoing.map(link => link.id), ["mysql"], "stale policies cannot alter outgoing traversal");
   await rules.patch(rule.id, { enabled: false });
   assert.equal(engine(await read()).contextResolution.status, "applied");
   const extras = Array.from({ length: 100 }, (_, i) => path.join(root, "personal", `extra-${i}.md`));
@@ -88,4 +95,51 @@ test("MCP applies a recorded source-preserving decision; Undo, edits, policies a
   assert.equal(engine(await read()).contextResolution.status, "stale");
   child.stdin.end();
   await new Promise(resolve => child.once("exit", resolve));
+});
+
+test('MCP abstains when a cached local source has reached its document cap, including repeated cached reads', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'cc-overlay-mcp-cached-cap-'));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  for (const name of ['personal', 'team']) await mkdir(path.join(root, name));
+  await writeFile(path.join(root, 'personal/database.md'), '# Database\n\n## Engine\n\nUse MySQL.\n');
+  await writeFile(path.join(root, 'team/database.md'), '# Database\n\n## Engine\n\nUse Postgres.\n');
+  const manifest = { settings: { maxDocFiles: 100 }, layers: [
+    { name: 'personal', source: 'files', path: 'personal', level: 3, cache: { ttlSeconds: 60 } },
+    { name: 'team', source: 'files', path: 'team', level: 1 },
+  ] };
+  const manifestPath = path.join(root, 'layers.json');
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const sources = buildSources(manifest, root);
+  const raw = await resolveConcept('database', sources);
+  for (const source of sources) await source.close?.();
+  const evidence = sectionEvidence(raw, 'engine');
+  const fingerprint = contextManifestFingerprint(manifest);
+  const store = createContextResolutionStore(manifestPath);
+  await store.update(state => {
+    state.policies.push({ id: 'p', version: 1, enabled: true, manifestFingerprint: fingerprint, conceptId: 'database', key: 'engine', selectedSource: 'team' });
+    state.decisions.push({ id: 'd', conceptId: 'database', key: 'engine', profileId: 'default', policyId: 'p', policyVersion: 1,
+      manifestFingerprint: fingerprint, method: 'exact_policy', createdAt: new Date().toISOString(), evidenceFingerprint: evidence.fingerprint, selectedSource: 'team' });
+  });
+  // Evidence was complete when approved; the same unchanged concept now sits
+  // in an incomplete corpus. Caching the listing must not hide that change.
+  await Promise.all(Array.from({ length: 100 }, (_, i) => writeFile(path.join(root, 'personal', `extra-${i}.md`), '# Extra\n\nUnrelated.')));
+  const child = spawn(process.execPath, ['mcp-server.mjs', '--manifest', manifestPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  let stderr = ''; child.stderr.on('data', value => { stderr += value; });
+  const lines = readline.createInterface({ input: child.stdout });
+  const pending = new Map();
+  lines.on('line', line => { const message = JSON.parse(line); pending.get(message.id)?.(message); pending.delete(message.id); });
+  for (const id of [1, 2]) {
+    const response = await Promise.race([new Promise(resolve => {
+      pending.set(id, resolve);
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'read_file', arguments: { concept_id: 'database' } } }) + '\n');
+    }), sleep(3000, null, { ref: false }).then(() => { throw new Error(stderr || 'MCP timeout'); })]);
+    assert.equal(response.error, undefined, JSON.stringify(response));
+    const concept = JSON.parse(response.result.content[0].text);
+    const section = concept.sections.find(row => row.key === 'engine');
+    assert.equal(section.contextResolution.status, 'stale', `read ${id}: capped cached source must not claim complete coverage`);
+    assert.equal(section.sourceLayer, 'personal');
+  }
+  child.stdin.end();
+  await new Promise(resolve => child.once('exit', resolve));
 });

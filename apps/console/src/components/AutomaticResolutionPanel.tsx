@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { LocalDiscrepancyAssessment } from './LocalDiscrepancyAssessment'
 import { apiFetch } from '../api'
 import type { Conflict } from '../data'
@@ -15,7 +15,7 @@ interface ResolutionState { version: number; revision: number; policies: Policy[
 
 /** Exact source authority is a standing policy, not a model's confidence score. */
 export function AutomaticResolutionPanel({ conflict, defaultExpanded = false }: { conflict: Conflict | null; defaultExpanded?: boolean }) {
-  const { reload, reloadKey } = useStoreData()
+  const { reload, reloadKey, conflicts } = useStoreData()
   const [state, setState] = useState<ResolutionState | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -23,15 +23,30 @@ export function AutomaticResolutionPanel({ conflict, defaultExpanded = false }: 
   const [selectedSource, setSelectedSource] = useState('')
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [unavailable, setUnavailable] = useState(false)
+  const reading = useRef<AbortController | null>(null)
   const refresh = useCallback(async () => {
-    const response = await apiFetch('/api/context-resolutions')
-    if (response.status === 404) { setUnavailable(true); return }
-    if (!response.ok) throw new Error('Could not read automatic resolution policies. Try again.')
-    const next = await response.json() as ResolutionState
-    if (!Array.isArray(next.policies) || !Array.isArray(next.decisions)) throw new Error('The engine returned an incomplete policy response.')
-    setState(next); setUnavailable(false)
+    reading.current?.abort()
+    const controller = new AbortController()
+    reading.current = controller
+    try {
+      const response = await apiFetch('/api/context-resolutions', { signal: controller.signal })
+      if (reading.current !== controller || controller.signal.aborted) return
+      if (response.status === 404) { setUnavailable(true); return }
+      if (!response.ok) throw new Error('Could not read automatic resolution policies. Try again.')
+      const next = await response.json() as ResolutionState
+      if (reading.current !== controller || controller.signal.aborted) return
+      if (!Array.isArray(next.policies) || !Array.isArray(next.decisions)) throw new Error('The engine returned an incomplete policy response.')
+      setState(next); setUnavailable(false); setError('')
+    } catch (err) {
+      if (reading.current === controller && !controller.signal.aborted) throw err
+    }
   }, [])
-  useEffect(() => { let active = true; void refresh().catch((err) => { if (active) setError(String(err.message ?? err)) }); return () => { active = false } }, [refresh, reloadKey])
+  // The store replaces this list on content/policy changes, not UI keystrokes.
+  useEffect(() => {
+    let active = true
+    void refresh().catch((err) => { if (active) setError(String(err.message ?? err)) })
+    return () => { active = false; reading.current?.abort(); reading.current = null }
+  }, [refresh, reloadKey, conflicts])
   useEffect(() => { setSelectedSource(''); setNotice('') }, [conflict?.id])
 
   const eligible = conflict && (conflict.originalKind ?? conflict.kind) === 'section_content' && conflict.revision && conflict.detailLoaded !== false

@@ -743,3 +743,48 @@ test('adversarial backslash runs and invalid nested wiki syntax stay bounded', (
   assert.deepEqual(extractLinks('['.repeat(100_000) + '`literal`' + ']'.repeat(100_000)), []);
   assert.ok(performance.now() - started < 2000, 'link parsing must not scan a backslash or hidden span repeatedly');
 });
+
+test('unfinished destination prefixes use bounded work without losing later links or long balanced targets', () => {
+  const started = performance.now();
+  const unfinished = '[x]('.repeat(25_000);
+  const text = unfinished + '[Keep](valid/path "Exact title")';
+  assert.deepEqual(extractLinks(text), ['valid/path']);
+  assert.equal(rewriteLinkTarget(text, 'valid/path', 'next/path').text, unfinished + '[Keep](next/path "Exact title")');
+  assert.equal(removeLink(text, 'valid/path').text, unfinished + 'Keep');
+  // A length/depth cutoff would avoid the attack by silently dropping this
+  // valid link. The suffix index must instead jump balanced parentheses.
+  const target = 'part('.repeat(25_000) + 'leaf' + ')'.repeat(25_000);
+  assert.deepEqual(extractLinks(`[Long](${target})`), [target]);
+  assert.ok(performance.now() - started < 2000, 'each candidate must reuse destination boundaries instead of rescanning the suffix');
+});
+
+test('many plain wiki links search for aliases only inside their own spans', () => {
+  const started = performance.now();
+  const text = '[[target]] '.repeat(100_000) + '[[other|Visible alias]]';
+  assert.deepEqual(extractLinks(text), ['target', 'other']);
+  const rewritten = rewriteLinkTarget(text, 'other', 'next');
+  assert.equal(rewritten.replaced, 1);
+  assert.equal(rewritten.text, '[[target]] '.repeat(100_000) + '[[next|Visible alias]]');
+  assert.ok(performance.now() - started < 2000, 'plain wiki links must not repeatedly search the remaining document for an alias');
+});
+
+test('unfinished literal HTML and unmatched unequal backtick runs retain real links with bounded work', () => {
+  const started = performance.now();
+  assert.deepEqual(extractLinks('<pre '.repeat(100_000) + '[Visible](real/path)'), ['real/path']);
+  const unmatchedTicks = 'text ' + Array.from({ length: 1500 }, (_, index) => '`'.repeat(index + 1) + 'x').join('');
+  assert.deepEqual(extractLinks(unmatchedTicks + '[Visible](real/path)'), ['real/path']);
+  assert.ok(performance.now() - started < 2000, 'unmatched literal delimiters must reuse indexed boundaries');
+});
+
+test('large mixed-link repairs assemble original spans once and preserve literal examples', () => {
+  const started = performance.now();
+  const block = '[[target|Alias]] [Label](./target.md#anchor "Title") `[[target]]` ![Image](target)\n';
+  const text = block.repeat(50_000);
+  const rewritten = rewriteLinkTarget(text, 'target', 'longer/destination');
+  assert.equal(rewritten.replaced, 100_000);
+  assert.equal(rewritten.text, '[[longer/destination|Alias]] [Label](./longer/destination.md#anchor "Title") `[[target]]` ![Image](target)\n'.repeat(50_000));
+  const unlinked = removeLink(text, 'target');
+  assert.equal(unlinked.replaced, 100_000);
+  assert.equal(unlinked.text, 'Alias Label `[[target]]` ![Image](target)\n'.repeat(50_000));
+  assert.ok(performance.now() - started < 10000, 'repairs must not copy the entire section for each match');
+});

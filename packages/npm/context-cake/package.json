@@ -1,6 +1,6 @@
 {
   "name": "context-cake",
-  "version": "0.7.5",
+  "version": "0.8.0",
   "description": "Compatibility pointer for the ContextCake CLI. Install contextcake instead.",
   "license": "MIT",
   "repository": {

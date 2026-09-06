@@ -39,3 +39,13 @@ Private knowledge excerpts and screenshots are intentionally excluded from this 
 The corrected installed build preserved Home form, quick-search and Ask queries when opening Knowledge. The same `build and test` query that previously returned zero when scoped to the specifications source now returned 20 scoped results. Result excerpts explicitly identify original source text; selecting a result shows rendered Markdown and section navigation. Settings now reports updates unavailable for the local development build while preserving the automatic-update preference.
 
 The final source state is two healthy sources, 255 concepts, zero actionable discrepancies and 17 preserved acknowledgements. Automated verification: 58/58 engine suites, 42/746 console tests with typecheck/build, and 128 desktop tests on Node 22.
+
+## Second UI revision
+
+After the user's follow-up, Home was reorganized around one prominent search field, small inline totals, a compact attention state and a source-health list. Cascade details use a disclosure, and agent connection is a secondary action. This removes repeated source rows and the competing colored banner.
+
+Knowledge uses a wider result rail, flatter rows with less repeated metadata, wrapping 15px titles and 15px Markdown at a bounded reading measure. The native system font remains consistent across controls and content. Row heights account for excerpts, identifiers and longer titles while retaining windowing and keyboard navigation.
+
+Review omits zero-count tiles and irrelevant filters in the default all-clear view. History tabs remain available; selecting a historical status restores filtering. Empty results no longer occupy a tall bordered card or direct an already-selected Needs review tab back to itself.
+
+Installed checks covered real sources, light/dark appearance, narrower native windows, two-pane to single-pane reader behavior and focus restoration on Close. The original dark appearance was restored. All 746 console tests, typecheck and packaged live build passed. No engine, model transport, policy or source-data behavior changed in this UI revision.

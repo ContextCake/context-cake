@@ -206,7 +206,7 @@ describe('Knowledge search (live mode)', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(250) })
     expect(rows()[0].querySelector('.cc-result-excerpt-label')?.textContent).toBe('Original source excerpt')
     expect(rows()[0].querySelector('.cc-result-snippet')?.textContent).toBe('Use PostgreSQL.')
-    expect(container.textContent).toContain('open a result for the current resolved context')
+    expect(container.textContent).toContain('Open a result for the current resolved answer')
     await act(async () => rows()[0].click())
     const reader = container.querySelector('[aria-label="Primary database concept detail"]')!
     expect(reader.textContent).toContain('Use SQLite.')

@@ -154,13 +154,13 @@ function ConflictsInner() {
   const filtersAtDefault = (Object.keys(DEFAULT_FILTERS) as (keyof ConflictFilters)[]).every((key) => filters[key] === DEFAULT_FILTERS[key])
   const emptyState = normalizedQuery
     ? <div className="cc-conflict-empty"><strong>No matches for &quot;{query.trim()}&quot; in this status.</strong><p>The search keeps filtering across status tabs until cleared.</p><button type="button" onClick={() => setQuery('')}>Clear search</button></div>
-    : <div className="cc-conflict-empty"><strong>No discrepancies in this view</strong><p>Adjust the filters or return to Needs review.</p>{!filtersAtDefault && <button type="button" onClick={() => setFilters(DEFAULT_FILTERS)}>Reset filters</button>}</div>
+    : <div className="cc-conflict-empty"><strong>No discrepancies in this view</strong><p>{filtersAtDefault && summary.actionable === 0 ? 'Nothing needs review. Your recorded decisions are available in Acknowledged and Resolved.' : 'Adjust the filters or return to Needs review.'}</p>{!filtersAtDefault && <button type="button" onClick={() => setFilters(DEFAULT_FILTERS)}>Reset filters</button>}</div>
 
   return (
     <div className="cc-conflicts cc-discrepancy-center">
       <header className="cc-discrepancy-header">
         <div><h2>Discrepancy Center</h2><p>{plural(summary.actionable, 'actionable item')}. Structural evidence only—no model-inferred contradictions.</p></div>
-        <span className="cc-actionable-count">{summary.actionable}</span>
+        {summary.actionable > 0 && <span className="cc-actionable-count">{summary.actionable}</span>}
         <OneTimeHint id="discrepancy-workflow" title="Resolve differences one at a time, or many at once">
           <ol>
             <li><span>1</span>Review the evidence</li>
@@ -181,7 +181,7 @@ function ConflictsInner() {
         owners={owners}
         sources={sources}
       />
-      <div ref={detail.containerRef} className="cc-conflict-layout cc-navigator-detail">
+      <div ref={detail.containerRef} className="cc-conflict-layout cc-navigator-detail" data-empty={groups.length === 0 || undefined}>
         <div ref={listRef} className="cc-conflict-column">
           {selectedItems.length > 0 && <BulkBar items={selectedItems} hiddenBySearch={hiddenBySearch} onClear={clearSelection} onOutcome={onBulkOutcome} />}
           <GroupedList

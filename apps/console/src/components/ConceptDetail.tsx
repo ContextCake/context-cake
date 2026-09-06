@@ -112,9 +112,9 @@ export function ConceptDetail({ concept, matchQuery = '' }: { concept: Concept; 
     <div ref={reader} className="cc-concept-reader">
       <div style={css('display:flex; align-items:center; gap:10px;')}>
         <span style={conceptTypeStyle(concept.type)}>{concept.type}</span>
-        <code style={css(`font-family:${MONO}; font-size:12px; color:#57564F;`)}>{concept.id}</code>
+        <code style={css(`font-family:${MONO}; font-size:12px; color:${C.caption};`)}>{concept.id}</code>
       </div>
-      <h2 style={css('margin:13px 0 12px; font-size:22px; font-weight:600; letter-spacing:-0.01em;')}>{concept.title}</h2>
+      <h2 style={css('margin:13px 0 12px; font-size:26px; font-weight:600; letter-spacing:-0.01em;')}>{concept.title}</h2>
       <div className="cc-reader-origin"><span>Resolved from</span><strong>{(concept.contributorLayers ?? concept.layers).join(' · ')}</strong><span>{concept.sections.length} sections</span></div>
       {concept.sections.length > 1 && <nav className="cc-section-nav" aria-label="Document sections">
         <select aria-label="Jump to section" value="" onChange={(event) => jump(Number(event.target.value))}><option value="" disabled>Jump to section…</option>{concept.sections.map((section, index) => <option key={index} value={index}>{index + 1}. {section.name}</option>)}</select>

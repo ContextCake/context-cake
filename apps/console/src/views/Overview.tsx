@@ -52,35 +52,28 @@ function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
   return (
     <div className="cc-home">
       <section className="cc-workspace-section cc-home-search" aria-labelledby="cc-find-context">
-        <div className="cc-section-heading"><div><h2 id="cc-find-context">Find the context for your next task</h2><p>Search decisions, instructions, and notes across your sources. Open a result to inspect its evidence.</p></div></div>
+        <div className="cc-section-heading"><div><h2 id="cc-find-context">Your project context</h2><p>Find the decisions, instructions, and notes behind your next change.</p></div></div>
         <form onSubmit={(event) => { event.preventDefault(); openConceptSearch(question) }}><input aria-label="Search your project context" placeholder="Build commands, database choices, release process…" value={question} onChange={(event) => setQuestion(event.target.value)} /><Button type="submit" variant="primary">Search context</Button></form>
         <div className="cc-home-shortcuts">{['build and test', 'architecture', 'release process'].map((query) => <button type="button" key={query} onClick={() => { openConceptSearch(query) }}>{query}</button>)}</div>
-      </section>
-      {onConnectAgent && (
-        <section className="cc-workspace-section cc-connect-cta" aria-labelledby="cc-connect-agent">
-          <div className="cc-section-heading">
-            <div>
-              <h2 id="cc-connect-agent">Connect an AI agent</h2>
-              <p>Use your sources from Claude, Copilot, Cursor, or another coding agent. Choose your client, then verify an answer with its supporting source.</p>
-            </div>
-            <AgentIcon size={20} />
-          </div>
-          <Button type="button" variant="primary" onClick={onConnectAgent}>Connect an agent</Button>
-        </section>
-      )}
-
-      <section className="cc-workspace-section" aria-labelledby="cc-needs-attention">
-        <div className="cc-section-heading"><div><h2 id="cc-needs-attention">Needs Attention</h2><p>Work that may need a decision or recovery.</p></div>{attention.length > 0 && <StatusBadge tone="attention">{attention.length}</StatusBadge>}</div>
-        {attention.length === 0 ? <EmptyState title="Nothing needs review">Your cascade is resolving cleanly.</EmptyState> : (
-          <div className="cc-attention-list">{attention.map((item) => <button key={item.key} type="button" onClick={() => setView(item.view)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><span aria-hidden="true">›</span></button>)}</div>
-        )}
       </section>
 
       <nav className="cc-metric-strip" aria-label="Workspace totals">
         {metrics.map((metric) => <button key={metric.label} type="button" onClick={() => setView(metric.view)}><strong>{metric.value}</strong><span>{metric.label}</span>{'detail' in metric && metric.detail ? <small className="cc-metric-detail">{metric.detail}</small> : null}</button>)}
       </nav>
 
-      <section className="cc-workspace-section" aria-labelledby="cc-cascade-order">
+      <section className={`cc-workspace-section cc-home-attention${attention.length ? "" : " cc-home-attention--clear"}`} aria-labelledby="cc-needs-attention">
+        <div className="cc-section-heading"><div><h2 id="cc-needs-attention">Needs Attention</h2><p>Work that may need a decision or recovery.</p></div>{attention.length > 0 && <StatusBadge tone="attention">{attention.length}</StatusBadge>}</div>
+        {attention.length === 0 ? <EmptyState title="Nothing needs review">Your cascade is resolving cleanly.</EmptyState> : (
+          <div className="cc-attention-list">{attention.map((item) => <button key={item.key} type="button" onClick={() => setView(item.view)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><span aria-hidden="true">›</span></button>)}</div>
+        )}
+      </section>
+
+      <section className="cc-workspace-section" aria-labelledby="cc-source-health">
+        <div className="cc-section-heading"><div><h2 id="cc-source-health">Source health</h2><p>Current engine status for every layer feeding the cascade.</p></div><button type="button" onClick={() => setView('sources')}>Manage Sources</button></div>
+        {sources.length === 0 ? <EmptyState title="No sources yet">Add a folder, repository, or MCP server to begin.</EmptyState> : <div className="cc-health-list">{sources.map((source) => <button key={source.name} type="button" onClick={() => setView('sources')}><span className={`cc-health-indicator cc-health-indicator--${source.status}`} aria-hidden="true" /><strong>{source.name}</strong><span>{layerName(source.layer)} · {source.status === 'indexing' ? progressLabel(source.indexing) : `${source.conceptCount} concept${source.conceptCount === 1 ? '' : 's'}`}{source.status !== 'indexing' && source.indexing?.refreshing ? ' · refreshing' : ''}</span><StatusBadge tone={source.status === 'serving' || source.status === 'synced' ? 'success' : source.status === 'error' || source.status === 'degraded' ? 'attention' : source.status === 'indexing' ? 'info' : 'neutral'}>{source.status === 'indexing' ? `indexing${progressPercent(source.indexing) == null ? '' : ` ${progressPercent(source.indexing)}%`}` : source.status}</StatusBadge></button>)}</div>}
+      </section>
+
+      <details className="cc-workspace-section cc-home-precedence"><summary>How your sources resolve</summary>
         <div className="cc-section-heading"><div><h2 id="cc-cascade-order">Cascade order</h2><p>Position 1 wins wherever it speaks; everything else is inherited from the layers below.</p></div><button type="button" onClick={() => setView('sources')}>{mode === 'live' ? 'Reorder in Sources' : 'Open Sources'}</button></div>
         {cascade.length === 0 ? <EmptyState title={sources.length ? 'No working sources' : 'No sources yet'}>{sources.length ? 'Every entry in the manifest is invalid — open Sources to remove them.' : 'Add a folder, repository, or MCP server to begin.'}</EmptyState> : (
           <ol className="cc-cascade-order" aria-label="Cascade order">{cascade.map((entry) => {
@@ -97,12 +90,20 @@ function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
             )
           })}</ol>
         )}
-      </section>
+      </details>
 
-      <section className="cc-workspace-section" aria-labelledby="cc-source-health">
-        <div className="cc-section-heading"><div><h2 id="cc-source-health">Source health</h2><p>Current engine status for every layer feeding the cascade.</p></div><button type="button" onClick={() => setView('sources')}>Manage Sources</button></div>
-        {sources.length === 0 ? <EmptyState title="No sources yet">Add a folder, repository, or MCP server to begin.</EmptyState> : <div className="cc-health-list">{sources.map((source) => <button key={source.name} type="button" onClick={() => setView('sources')}><span className={`cc-health-indicator cc-health-indicator--${source.status}`} aria-hidden="true" /><strong>{source.name}</strong><span>{layerName(source.layer)} · {source.status === 'indexing' ? progressLabel(source.indexing) : `${source.conceptCount} concept${source.conceptCount === 1 ? '' : 's'}`}{source.status !== 'indexing' && source.indexing?.refreshing ? ' · refreshing' : ''}</span><StatusBadge tone={source.status === 'serving' || source.status === 'synced' ? 'success' : source.status === 'error' || source.status === 'degraded' ? 'attention' : source.status === 'indexing' ? 'info' : 'neutral'}>{source.status === 'indexing' ? `indexing${progressPercent(source.indexing) == null ? '' : ` ${progressPercent(source.indexing)}%`}` : source.status}</StatusBadge></button>)}</div>}
-      </section>
+      {onConnectAgent && (
+        <section className="cc-workspace-section cc-connect-cta" aria-labelledby="cc-connect-agent">
+          <div className="cc-section-heading">
+            <div>
+              <h2 id="cc-connect-agent">Connect an AI agent</h2>
+              <p>Bring this context into Claude, Copilot, Cursor, or your preferred coding agent.</p>
+            </div>
+            <AgentIcon size={20} />
+          </div>
+          <Button type="button" onClick={onConnectAgent}>Connect an agent</Button>
+        </section>
+      )}
 
       {mode === 'demo' && activity.length > 0 && <section className="cc-workspace-section" aria-labelledby="cc-recent-activity"><div className="cc-section-heading"><div><h2 id="cc-recent-activity">Recent activity</h2><p>Illustrative demo events.</p></div></div><div className="cc-activity-list">{activity.map((item, index) => <div key={`${item.time}-${index}`}><LayerChip id={item.layer} /><span>{item.pre}<strong>{item.strong}</strong>{item.post}</span><time>{item.time}</time></div>)}</div></section>}
     </div>

@@ -43,7 +43,7 @@ export function OverviewHeader({ summary, actionableKinds, filters, onFilters, g
 
   return (
     <>
-      <div className="cc-dc-tiles" role="group" aria-label="What needs attention">
+      {summary.actionable > 0 ? <div className="cc-dc-tiles" role="group" aria-label="What needs attention">
         <button type="button" className="cc-dc-tile cc-dc-tile--total" aria-pressed={allActive} onClick={() => onFilters(DEFAULT_FILTERS)}>
           <strong>{summary.actionable}</strong>
           <span>actionable</span>
@@ -68,6 +68,7 @@ export function OverviewHeader({ summary, actionableKinds, filters, onFilters, g
           </button>
         </div>
       </div>
+      : null}
       <nav className="cc-status-tabs" aria-label="Discrepancy status">
         {STATUS_TABS.map((tab) => {
           const count = tabCount(summary, tab.value)
@@ -78,7 +79,7 @@ export function OverviewHeader({ summary, actionableKinds, filters, onFilters, g
           )
         })}
       </nav>
-      <div className="cc-discrepancy-filters" aria-label="Discrepancy filters">
+      {(summary.actionable > 0 || filters.status !== 'actionable' || !allActive || filters.owner !== 'all' || filters.source !== 'all' || filters.priority !== 'all' || filters.newerOnly) && <div className="cc-discrepancy-filters" aria-label="Discrepancy filters">
         <SegmentedControl<GroupBy> label="Group by" value={groupBy} options={GROUP_OPTIONS} onChange={onGroupBy} />
         <select aria-label="Kind" value={filters.kind} onChange={(event) => set({ kind: event.target.value as ConflictFilters['kind'], fixable: false })}><option value="all">All kinds</option>{DISCREPANCY_KINDS.map((value) => <option key={value} value={value}>{KIND_LABEL[value]}</option>)}</select>
         <select aria-label="Owner" value={filters.owner} onChange={(event) => set({ owner: event.target.value })}><option value="all">All owners</option>{owners.map((value) => <option key={value}>{value}</option>)}</select>
@@ -86,7 +87,7 @@ export function OverviewHeader({ summary, actionableKinds, filters, onFilters, g
         <select aria-label="Priority" value={filters.priority} onChange={(event) => set({ priority: event.target.value })}><option value="all">All priorities</option><option value="unassigned">Unassigned</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
         <label className="cc-filter-check"><input type="checkbox" checked={filters.newerOnly} onChange={(event) => set({ newerOnly: event.target.checked })} /> Newer dissent</label>
         {filters.fixable && <label className="cc-filter-check"><input type="checkbox" checked onChange={() => set({ fixable: false })} /> Has a suggested fix</label>}
-      </div>
+      </div>}
     </>
   )
 }

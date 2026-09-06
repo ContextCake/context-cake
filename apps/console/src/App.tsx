@@ -1,25 +1,26 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStoreData, useStoreNav } from './store'
 import { C, css, MONO } from './theme'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
-import { Canvas } from './views/Canvas'
 import { Overview } from './views/Overview'
 import { Sources } from './views/Sources'
 import { Triage } from './views/Triage'
-import { Conflicts } from './views/Conflicts'
 import { Concepts } from './views/Concepts'
 import { Files } from './views/Files'
 import { ChatPanel } from './components/ChatPanel'
 import { EngineBanner } from './components/EngineBanner'
 import { EngineMemoryBanner } from './components/EngineMemoryBanner'
 import { SetupWizard } from './components/SetupWizard'
-import { ConnectAgentDialog } from './components/ConnectAgentDialog'
-import { SettingsView } from './components/SettingsView'
 import type { LiveErrorKind } from './api'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { useOpenerFocus } from './components/useOpenerFocus'
 import { readBrowserGroupedViews, SEARCHABLE_VIEWS, viewForDestination } from './shell-navigation'
+
+const Canvas = lazy(() => import('./views/Canvas').then((module) => ({ default: module.Canvas })))
+const Conflicts = lazy(() => import('./views/Conflicts').then((module) => ({ default: module.Conflicts })))
+const ConnectAgentDialog = lazy(() => import('./components/ConnectAgentDialog').then((module) => ({ default: module.ConnectAgentDialog })))
+const SettingsView = lazy(() => import('./components/SettingsView').then((module) => ({ default: module.SettingsView })))
 
 // Stable across renders (useOpenerFocus's `restore` keys off this array's
 // identity) — must live outside the component, not be re-literaled inline.
@@ -416,14 +417,14 @@ export function App() {
             )}
             {view === 'canvas' ? (
               <main className="cc-main cc-main-canvas">
-                <Canvas keyboardSuspended={settingsOpen || paletteOpen || chatOpen || drawerOpen} />
+                <Suspense fallback={<div className="cc-ui-empty" role="status">Opening cascade…</div>}><Canvas keyboardSuspended={settingsOpen || paletteOpen || chatOpen || drawerOpen} /></Suspense>
               </main>
             ) : (
               <main className="cc-main">
                 {view === 'overview' && <Overview onConnectAgent={isDesktop ? openConnect : undefined} />}
                 {view === 'sources' && <Sources onAddSource={mode === 'live' ? reopenWizard : undefined} />}
                 {view === 'triage' && <Triage />}
-                {view === 'conflicts' && <Conflicts />}
+                {view === 'conflicts' && <Suspense fallback={<div className="cc-ui-empty" role="status">Opening review…</div>}><Conflicts /></Suspense>}
                 {view === 'concepts' && <Concepts />}
                 {view === 'files' && <Files />}
               </main>
@@ -438,7 +439,7 @@ export function App() {
   return (
     <>
       <div className="cc-app-layer" aria-hidden={(settingsOpen || paletteOpen || showWizard) || undefined} inert={(settingsOpen || paletteOpen || showWizard) || undefined}>{body}</div>
-      {settingsOpen && <SettingsView appMode={mode} onClose={closeSettings} onIndexingChange={reload} />}
+      {settingsOpen && <Suspense fallback={<div className="cc-secondary-loading" role="status">Opening settings…</div>}><SettingsView appMode={mode} onClose={closeSettings} onIndexingChange={reload} /></Suspense>}
       {paletteOpen && <CommandPalette commands={paletteCommands} onClose={closePalette} />}
       {showWizard && <SetupWizard addingSource={sources.length > 0} onClose={closeWizard} onConnectAgent={isDesktop ? () => {
         setSourceSetupComplete(true)
@@ -446,11 +447,11 @@ export function App() {
         setConnectOpen(true)
       } : undefined} />}
       {connectOpen && (
-        <ConnectAgentDialog
+        <Suspense fallback={<div className="cc-secondary-loading" role="status">Opening connection setup…</div>}><ConnectAgentDialog
           hasSources={sources.length > 0 || sourceSetupComplete}
           onClose={() => setConnectOpen(false)}
           onOpenSetup={reopenWizard}
-        />
+        /></Suspense>
       )}
     </>
   )

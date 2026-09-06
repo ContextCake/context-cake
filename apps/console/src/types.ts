@@ -20,8 +20,13 @@ export interface SectionConflict {
   content: string
 }
 
+export interface ContextResolutionDecision { id: string; policyId: string; conceptId: string; key: string; selectedSource: string; createdAt: string; undoneAt?: string; currentStatus?: 'applied' | 'stale' | 'undone'; currentRevision?: string | null }
+
+export interface ContextResolution { decisionId: string; policyId: string; status: 'applied' | 'stale' | 'undone'; selectedSource: string }
+
 /** One resolved section: the winning value plus provenance and any dissent. */
 export interface ResolvedSection {
+  contextResolution?: ContextResolution
   key: string
   /** Null for a document with no heading at all — a plain note in a files layer. */
   heading: string | null

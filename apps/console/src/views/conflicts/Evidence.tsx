@@ -70,12 +70,12 @@ export function Diff({ effective, value }: { effective: string; value: string })
     : <p className="cc-word-diff" aria-label="Word comparison">{wordDiff(effective, value)}</p>
 }
 
-export function SourceAnswer({ choice, effective, isEffective }: { choice: Contribution; effective: string; isEffective: boolean }) {
+export function SourceAnswer({ choice, effective, isEffective, label }: { choice: Contribution; effective: string; isEffective: boolean; label?: string }) {
   return (
     <article className="cc-discrepancy-answer" data-effective={isEffective || undefined}>
       <header>
         <strong>{choice.sourceLayer}</strong>
-        <span>{isEffective ? 'Effective now' : choice.fresherDissent ? 'Newer dissent' : 'Alternative'}</span>
+        <span>{label ?? (isEffective ? 'Effective now' : choice.fresherDissent ? 'Newer dissent' : 'Alternative')}</span>
       </header>
       <div className="cc-discrepancy-meta">Updated {formatDate(choice.updated)}</div>
       {!isEffective && <Diff effective={effective} value={choice.value} />}

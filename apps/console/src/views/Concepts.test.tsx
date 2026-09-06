@@ -97,7 +97,7 @@ describe('a concept with no sections', () => {
     mocks.useStore.mockReturnValue(storeWith([populated(), empty()], 'decisions/primary-db'))
     await act(async () => root.render(<Concepts />))
 
-    const rows = Array.from(container.querySelectorAll('.cc-navigator-detail > div > button'))
+    const rows = Array.from(container.querySelectorAll('.cc-concept-result'))
     const emptyRow = rows.find((row) => row.textContent?.includes('Empty note'))
     const populatedRow = rows.find((row) => row.textContent?.includes('Primary database'))
     expect(emptyRow?.textContent).toContain('empty')
@@ -110,7 +110,7 @@ describe('a concept with no sections', () => {
     mocks.useStore.mockReturnValue(storeWith([compact()], 'decisions/pending-note'))
     await act(async () => root.render(<Concepts />))
 
-    const rows = Array.from(container.querySelectorAll('.cc-navigator-detail > div > button'))
+    const rows = Array.from(container.querySelectorAll('.cc-concept-result'))
     const pending = rows.find((row) => row.textContent?.includes('Pending note'))
     expect(pending).toBeTruthy()
     expect(pending?.textContent).not.toContain('empty')
@@ -130,7 +130,7 @@ describe('Knowledge search (live mode)', () => {
   }
 
   function rows(): HTMLButtonElement[] {
-    return Array.from(container.querySelectorAll('.cc-navigator-detail > div > button'))
+    return Array.from(container.querySelectorAll('.cc-concept-result'))
   }
 
   beforeEach(() => { vi.useFakeTimers() })
@@ -171,7 +171,7 @@ describe('Knowledge search (live mode)', () => {
     expect(container.textContent).toContain('No matches in titles or content.')
   })
 
-  it('falls back to the substring filter silently when the engine call fails', async () => {
+  it('labels title-only results when the engine call fails', async () => {
     // The store's search() action never throws — a failed engine call
     // resolves to null, which is exactly what this exercises.
     const search = vi.fn().mockResolvedValue(null)
@@ -182,6 +182,7 @@ describe('Knowledge search (live mode)', () => {
     // Substring match on the title still renders; no error, no empty state.
     expect(rows()).toHaveLength(1)
     expect(container.textContent).toContain('Primary database')
+    expect(container.textContent).toContain('Content search unavailable')
   })
 
   it('never calls the engine search in demo mode', async () => {
@@ -331,5 +332,34 @@ describe('Knowledge search (live mode)', () => {
       expect(container.textContent).not.toContain('Top matches')
       expect(container.textContent).not.toContain('Also contains')
     })
+  })
+})
+
+describe('bounded, evidence-rich search', () => {
+  it('mounts a bounded set of 10,000 results and keeps keyboard navigation available', async () => {
+    const many = Array.from({ length: 10_000 }, (_, i) => ({ ...populated(), id: `notes/${i}`, title: `Note ${i}` }))
+    mocks.useStore.mockReturnValue(storeWith(many, ''))
+    await act(async () => root.render(<Concepts />))
+    expect(container.querySelectorAll('.cc-concept-result').length).toBeLessThan(30)
+    const first = container.querySelector<HTMLButtonElement>('.cc-concept-result')!
+    await act(async () => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
+    expect(container.querySelector('[data-result-index="9999"]')).toBeTruthy()
+    expect(container.querySelectorAll('.cc-concept-result').length).toBeLessThan(30)
+  })
+
+  it('does not declare an empty result before the delayed content search completes', async () => {
+    vi.useFakeTimers()
+    try {
+      let finish!: (hits: SearchHit[]) => void
+      const search = vi.fn(() => new Promise<SearchHit[]>((resolve) => { finish = resolve }))
+      mocks.useStore.mockReturnValue({ ...storeWith([populated()], ''), mode: 'live', query: 'htap', search })
+      await act(async () => root.render(<Concepts />))
+      expect(container.textContent).toContain('Searching your sources')
+      expect(container.textContent).not.toContain('No matching concepts')
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(async () => finish([{ id: populated().id, title: null, score: 4, layers: ['engineering-notes'], snippet: 'SingleStore supports HTAP workloads.' }]))
+      expect(container.textContent).toContain('SingleStore supports HTAP workloads.')
+      expect(container.textContent).toContain('engineering-notes')
+    } finally { vi.useRealTimers() }
   })
 })

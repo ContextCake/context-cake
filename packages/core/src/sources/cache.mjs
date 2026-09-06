@@ -118,8 +118,9 @@ export function withCache(source, { ttlMs = 300000, cacheDir = null, namespace =
     name: source.name,
     level: source.level,
     lastSynced: null,
-    async loadConcept(id) {
-      return cached(`concept:${id}`, () => source.loadConcept(id));
+    async loadConcept(id, options = {}) {
+      options.signal?.throwIfAborted();
+      return cached(`concept:${id}`, () => source.loadConcept(id, options));
     },
     /**
      * Every argument goes through, and what the walk could not read comes back

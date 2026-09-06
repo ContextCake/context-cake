@@ -38,10 +38,11 @@ export function withGitSync(source, { root, pullTtlMs = 90000, retentionDays = 1
     name: source.name,
     level: source.level,
     lastSynced: null,
-    async loadConcept(id) {
+    async loadConcept(id, options = {}) {
+      options.signal?.throwIfAborted();
       await maybePull();
       // Archived (decayed) captures stay readable by direct id.
-      return source.loadConcept(id);
+      return source.loadConcept(id, options);
     },
     async listConceptIds(options = {}) {
       await maybePull();

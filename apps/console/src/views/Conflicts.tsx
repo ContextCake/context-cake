@@ -8,6 +8,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Conflict } from '../data'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import { useDetailSurface } from '../components/useDetailSurface'
+import { AutomaticResolutionPanel } from '../components/AutomaticResolutionPanel'
 import { OneTimeHint } from '../components/OneTimeHint'
 import { actionableByKind, buildHaystack, describeItems, groupConflicts, isBrokenLink, partitionBatchResults, suggestionForBatch, summarizeConflicts, type GroupBy } from '../discrepancy-summary'
 import { OverviewHeader } from './conflicts/OverviewHeader'
@@ -169,6 +170,7 @@ function ConflictsInner() {
         </OneTimeHint>
       </header>
       {conflicts.some((item) => item.coverageComplete === false) && <div className="cc-coverage-warning" role="status">Coverage is incomplete while sources index or recover. Broken-link findings are paused.</div>}
+      {mode === 'live' && <AutomaticResolutionPanel conflict={selected} />}
       <OverviewHeader
         summary={summary}
         actionableKinds={actionableKinds}
@@ -230,6 +232,7 @@ function Detail({ conflict, panelRef, panelProps, open, onClose, onApplied, mode
   onApplied: (applied: AppliedDecision) => void
   mode: string
 }) {
+  const selectedByPolicy = conflict.contextResolution?.status === 'applied'
   const decided = ['resolved', 'acknowledged'].includes(conflict.discrepancyStatus ?? '')
   const loading = conflict.detailLoaded === false
   const effectiveValue = conflict.contributions.find((item) => item.sourceLayer === conflict.effectiveSource)?.value ?? conflict.contributions[0]?.value ?? ''
@@ -238,8 +241,8 @@ function Detail({ conflict, panelRef, panelProps, open, onClose, onApplied, mode
       <button type="button" className="cc-detail-close" onClick={onClose}>Close</button>
       <div className="cc-discrepancy-path"><code>{conflict.concept}</code><span>{conflict.section}</span></div>
       <div className="cc-discrepancy-title">
-        <div><span className="cc-kind-pill">{KIND_LABEL[conflict.kind ?? 'section_content']}</span><h2>Why this needs attention</h2></div>
-        <span className="cc-status-large">{STATUS_LABEL[conflict.discrepancyStatus ?? 'needs_review']}</span>
+        <div><span className="cc-kind-pill">{KIND_LABEL[conflict.kind ?? 'section_content']}</span><h2>{selectedByPolicy ? 'Context selected by source policy' : 'Why this needs attention'}</h2></div>
+        <span className="cc-status-large">{selectedByPolicy ? 'Selected by policy' : STATUS_LABEL[conflict.discrepancyStatus ?? 'needs_review']}</span>
       </div>
       <p className="cc-discrepancy-explanation">{conflict.kind === 'changed_after_decision' && isBrokenLink(conflict) ? `The link to ${conflict.target} changed after the previous decision, so it reopened automatically.` : conflict.kind === 'broken_link' ? `The effective content links to ${conflict.target}, but no settled source currently provides that concept.` : conflict.kind === 'frontmatter_value' ? `Multiple contributors author different values for “${conflict.section}”.` : conflict.kind === 'changed_after_decision' ? 'A contributor changed after the previous decision, so the discrepancy reopened automatically.' : `Multiple contributors give materially different answers for “${conflict.section}”.`}</p>
       {conflict.ruleConflict && <div className="cc-conflict-error" role="alert"><strong>Rule conflict.</strong> Matching rules disagree, so no automatic action will run.</div>}
@@ -263,7 +266,7 @@ function Detail({ conflict, panelRef, panelProps, open, onClose, onApplied, mode
       ) : (
         <>
           <div className="cc-evidence-grid">
-            <div><span>Effective source</span><strong>{conflict.effectiveSource ?? 'None'}</strong></div>
+            <div><span>{selectedByPolicy ? 'Selected by policy' : 'Effective source'}</span><strong>{conflict.effectiveSource ?? 'None'}</strong></div>
             <div><span>Why it won</span><strong>{conflict.winnerReason}</strong></div>
             <div><span>Owner</span><strong>{conflict.owner ?? 'Unassigned'}</strong></div>
             <div><span>Source health</span><strong>{conflict.sourceHealth?.every((item) => item?.status === 'ok') ? 'All healthy' : 'Needs attention'}</strong></div>
@@ -272,17 +275,17 @@ function Detail({ conflict, panelRef, panelProps, open, onClose, onApplied, mode
             <h3>Compare every answer</h3>
             {loading
               ? <Skeleton lines={5} label="Loading every answer" />
-              : <div className="cc-answer-stack">{conflict.contributions.map((choice) => <SourceAnswer key={choice.sourceLayer} choice={choice} effective={effectiveValue} isEffective={choice.sourceLayer === conflict.effectiveSource} />)}</div>}
+              : <div className="cc-answer-stack">{conflict.contributions.map((choice) => <SourceAnswer key={choice.sourceLayer} label={selectedByPolicy ? choice.sourceLayer === conflict.effectiveSource ? 'Selected by policy' : choice.sourceLayer === conflict.originalEffectiveSource ? 'Original cascade' : 'Alternative' : undefined} choice={choice} effective={effectiveValue} isEffective={choice.sourceLayer === conflict.effectiveSource} />)}</div>}
           </section>
           {!decided && <DecisionPanel conflict={conflict} onApplied={onApplied} />}
         </>
       )}
       <section>
-        <h3>Decision history</h3>
+        <h3>{selectedByPolicy ? 'Source decision history' : 'Decision history'}</h3>
         {mode === 'demo' && <p className="cc-muted">Simulation history resets on reload.</p>}
         {loading
           ? (conflict.historyCount ? <Skeleton lines={2} label={`Loading ${plural(conflict.historyCount, 'decision')}`} /> : <p className="cc-muted">No previous decisions.</p>)
-          : <History conflict={conflict} />}
+          : selectedByPolicy && !conflict.history.length ? <p className="cc-muted">No source decisions recorded. The source policy is recorded in Automatic context resolution above.</p> : <History conflict={conflict} />}
       </section>
     </section>
   )

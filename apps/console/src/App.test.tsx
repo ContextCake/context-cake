@@ -202,7 +202,7 @@ describe('Mac-first application shell', () => {
     settings.focus()
     await act(async () => settings.click())
 
-    expect(container.querySelector('.cc-settings-screen')).toBeTruthy()
+    await vi.waitFor(async () => { await act(async () => {}); expect(container.querySelector('.cc-settings-screen')).toBeTruthy() })
     expect(container.querySelector('.cc-app-shell')).toBe(shell)
     expect(container.querySelector('.cc-app-layer')?.hasAttribute('inert')).toBe(true)
 
@@ -235,7 +235,7 @@ describe('Mac-first application shell', () => {
     opener.focus()
 
     await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true, bubbles: true })))
-    expect(container.querySelector('.cc-settings-screen')).toBeTruthy()
+    await vi.waitFor(async () => { await act(async () => {}); expect(container.querySelector('.cc-settings-screen')).toBeTruthy() })
 
     await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
@@ -263,12 +263,12 @@ describe('Mac-first application shell', () => {
 
     await act(async () => button('Sources').click())
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Connect Agent"]')?.click())
-    expect(container.querySelector('.cc-connect-dialog')).toBeTruthy()
+    await vi.waitFor(async () => { await act(async () => {}); expect(container.querySelector('.cc-connect-dialog')).toBeTruthy() })
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true, bubbles: true }))
     })
-    expect(container.querySelector('.cc-connect-dialog')).toBeTruthy()
+    await vi.waitFor(async () => { await act(async () => {}); expect(container.querySelector('.cc-connect-dialog')).toBeTruthy() })
     expect(container.querySelector('.cc-settings-screen')).toBeNull()
   })
 

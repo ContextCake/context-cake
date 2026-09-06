@@ -10,9 +10,10 @@ import {
   computeSourceBuckets, createDataSource, LiveDataError, mergeSourceStatus, runSequentially,
   type CascadeOrderResult, type IndexingActivity, type IndexingControlAction, type Mode,
 } from './api'
+import { withContextResolutionDecisions } from './context-resolution-view'
 import { isActionable, NO_SUMMARY, summarizeConflicts } from './discrepancy-summary'
 import type {
-  DiscrepancyBatchRequest, DiscrepancyBatchResponse, DiscrepancyDecisionRequest, DiscrepancyRule,
+  ContextResolutionDecision, DiscrepancyBatchRequest, DiscrepancyBatchResponse, DiscrepancyDecisionRequest, DiscrepancyRule,
   DiscrepancyRuleSuggestion, DiscrepancySummary, GraphSummary, SearchHit, SourceStatus, StatusSummary,
 } from './types'
 import type { LayerId, RouteId } from './theme'
@@ -413,6 +414,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [concepts, setConcepts] = useState<Concept[]>([])
   const [sources, setSources] = useState<Source[]>([])
   const [conflicts, setConflicts] = useState<Conflict[]>([])
+  const [contextDecisions, setContextDecisions] = useState<ContextResolutionDecision[]>([])
   const [conflictSummary, setConflictSummary] = useState<DiscrepancySummary>(NO_SUMMARY)
   const [loadErrors, setLoadErrors] = useState<{ concept: string; error: string }[]>([])
   const [resolvingConflict, setResolvingConflict] = useState<string | null>(null)
@@ -743,10 +745,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // bootstrap and content move, against a 60s deadline: the "timeout" and
       // the white-window half of the large-vault failure. Full documents now
       // arrive one concept at a time on selection (loadConceptDetail below).
-      const [resolutionHistory, discrepancyPayload, rulePayload] = await Promise.all([
+      const [resolutionHistory, discrepancyPayload, rulePayload, contextDecisionPayload] = await Promise.all([
         source.conflictResolutions(),
         source.discrepancies ? source.discrepancies() : Promise.resolve(null),
         source.discrepancyRules ? source.discrepancyRules().catch(() => ({ rules: [], suggestions: [] })) : Promise.resolve({ rules: [], suggestions: [] }),
+        source.contextResolutionDecisions ? source.contextResolutionDecisions() : Promise.resolve([]),
       ])
       if (cancelled) return false
       // Capability is judged by the ANSWER, not only by the method: a live
@@ -820,6 +823,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       coverageRef.current = discrepancyPayload?.coverageComplete ?? true
       setConcepts(compact)
       setConflicts(derivedConflicts)
+      setContextDecisions(contextDecisionPayload)
       setConflictSummary(summary)
       setDiscrepancyRules(rulePayload.rules)
       setDiscrepancyRuleSuggestions(rulePayload.suggestions)
@@ -1493,9 +1497,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [loading, conceptsLoading, indexingSources, tasks, refreshError, lastRefreshAt],
   )
 
+  const presentedConflicts = useMemo(() => withContextResolutionDecisions(conflicts, contextDecisions), [conflicts, contextDecisions])
+  const presentedSummary = useMemo(() => presentedConflicts === conflicts ? conflictSummary : summarizeConflicts(presentedConflicts), [presentedConflicts, conflicts, conflictSummary])
+
   const data = useMemo<StoreData>(() => ({
     mode, loading, load, error,
-    concepts, sources, signals, conflicts, conflictSummary, activity, loadErrors, resolvingConflict, resolutionError,
+    concepts, sources, signals, conflicts: presentedConflicts, conflictSummary: presentedSummary, activity, loadErrors, resolvingConflict, resolutionError,
     discrepancyRules, discrepancyRuleSuggestions,
     setView, setTriageTab, setSelSignal, setSelConflict, setSelConcept, setQuery, search,
     setFilesScope, setFilesPath, openFilesScope, openConcept,
@@ -1504,7 +1511,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,
     send, reload, reloadKey,
     fetchIndexingActivity, indexingControl, canControlIndexing, reorderSources,
-  }), [mode, loading, load, error, concepts, sources, signals, conflicts, conflictSummary, activity, loadErrors,
+  }), [mode, loading, load, error, concepts, sources, signals, presentedConflicts, presentedSummary, activity, loadErrors,
     resolvingConflict, resolutionError, discrepancyRules, discrepancyRuleSuggestions,
     retryNow, route, resolveConflict, resolveSafeConflicts, decideDiscrepancy, decideDiscrepancies, loadDiscrepancyDetail,
     approveRuleSuggestion, updateDiscrepancyRule, promoteDiscrepancyRule, setDiscrepancyPriority,

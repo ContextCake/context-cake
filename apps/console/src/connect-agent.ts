@@ -34,7 +34,7 @@ export function mcpServerJson(command: string): string {
 
 export const MCP_SERVER_JSON = mcpServerJson(DEFAULT_COMMAND)
 
-const FIRST_PROMPT = 'Use ContextCake to list the concepts available to you. Briefly describe the contributing layers, then tell me which project-specific questions you can answer from this context.'
+const FIRST_PROMPT = 'Use ContextCake to find how this project is built and tested. Read the relevant sources, give me the commands and any prerequisites, and cite the source for each. Surface conflicting instructions or missing evidence; do not guess.'
 
 const BEHAVIOR = `After connecting, verify that the server is available and call list_concepts. Use ContextCake before answering project-specific questions. Respect source provenance and surface conflicts with their contributing layers and dates instead of silently reconciling them. ContextCake's tools are read-only and run locally.`
 

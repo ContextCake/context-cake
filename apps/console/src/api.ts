@@ -13,7 +13,7 @@
 
 import demoBundleRaw from './generated/demo-cascade.json'
 import type {
-  ConflictResolutionRecord, DemoBundle, DiscrepanciesResponse, DiscrepancyBatchRequest, DiscrepancyBatchResponse,
+  ContextResolutionDecision, ConflictResolutionRecord, DemoBundle, DiscrepanciesResponse, DiscrepancyBatchRequest, DiscrepancyBatchResponse,
   DiscrepancyBatchResult, DiscrepancyDecisionRequest, DiscrepancyDetailResponse, DiscrepancyRecord,
   DiscrepancyRule, DiscrepancyRuleSuggestion, GraphConcept, GraphSummary, GraphSource, ResolveConflictRequest,
   ResolvedConcept, ResolvedSection, SearchHit, SourceStatus, StatusSummary,
@@ -64,6 +64,7 @@ export interface ResolveAllResult {
 }
 
 export interface DataSource {
+  contextResolutionDecisions?(): Promise<ContextResolutionDecision[]>
   readonly mode: Mode
   graph(): Promise<GraphSummary>
   resolve(id: string): Promise<ResolvedConcept>
@@ -450,6 +451,17 @@ class LiveSource implements DataSource {
       throw error
     }
   }
+  async contextResolutionDecisions(): Promise<ContextResolutionDecision[]> {
+    try {
+      const result = await this.get<{ decisions: ContextResolutionDecision[] }>('/api/context-resolutions')
+      if (!Array.isArray(result.decisions)) throw new LiveDataError('bad-shape', 'Context resolution history was incomplete.')
+      return result.decisions
+    }
+    catch (error) {
+      if (error instanceof LiveDataError && error.status === 404) return []
+      throw error
+    }
+  }
   async search(query: string, limit = 20): Promise<SearchHit[] | null> {
     try {
       return (await this.get<{ hits: SearchHit[] }>(`/api/search?q=${encodeURIComponent(query)}&limit=${limit}`)).hits
@@ -793,6 +805,7 @@ function adaptSection(s: ResolvedSection, levels: Map<string, number>, buckets: 
     winner,
     sourceLayer: s.sourceLayer,
     value: s.content,
+    ...(s.contextResolution ? { contextResolution: s.contextResolution } : {}),
     updated: s.sourceUpdated,
     suppressed: s.suppressed === true,
     dissents,

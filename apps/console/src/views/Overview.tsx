@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { progressLabel, progressPercent } from '../api'
 import { computeCascadeOrder, rankLabel, winsOverHint } from '../cascade-order'
 import { layerName } from '../data'
@@ -21,7 +21,8 @@ function kindSubtitle(byKind: Record<string, number>): string {
 }
 
 function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
-  const { mode, setView, signals, conflicts, conflictSummary, sources, concepts, activity, loadErrors } = useStoreData()
+  const [question, setQuestion] = useState('')
+  const { mode, setView, setQuery, signals, conflicts, conflictSummary, sources, concepts, activity, loadErrors } = useStoreData()
   // The real cascade, in the order it resolves: position 1 wins. Both modes
   // read the sources the store holds — the demo bundle's trio is a real
   // cascade too, not a static blurb to fall back to. A quarantined entry is
@@ -50,12 +51,17 @@ function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
 
   return (
     <div className="cc-home">
+      <section className="cc-workspace-section cc-home-search" aria-labelledby="cc-find-context">
+        <div className="cc-section-heading"><div><h2 id="cc-find-context">Find the context for your next task</h2><p>Search decisions, instructions, and notes across your sources. Open a result to inspect its evidence.</p></div></div>
+        <form onSubmit={(event) => { event.preventDefault(); setQuery(question); setView('concepts') }}><input aria-label="Search your project context" placeholder="Build commands, database choices, release process…" value={question} onChange={(event) => setQuestion(event.target.value)} /><Button type="submit" variant="primary">Search context</Button></form>
+        <div className="cc-home-shortcuts">{['build and test', 'architecture', 'release process'].map((query) => <button type="button" key={query} onClick={() => { setQuery(query); setView('concepts') }}>{query}</button>)}</div>
+      </section>
       {onConnectAgent && (
         <section className="cc-workspace-section cc-connect-cta" aria-labelledby="cc-connect-agent">
           <div className="cc-section-heading">
             <div>
               <h2 id="cc-connect-agent">Connect an AI agent</h2>
-              <p>Give Claude, Copilot, Cursor, or any other MCP-aware tool one governed view of this cascade — pick your tool and we'll walk you through it.</p>
+              <p>Use your sources from Claude, Copilot, Cursor, or another coding agent. Choose your client, then verify an answer with its supporting source.</p>
             </div>
             <AgentIcon size={20} />
           </div>

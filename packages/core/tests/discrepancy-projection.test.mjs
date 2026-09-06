@@ -256,3 +256,28 @@ test("the routes answer compact rows, a summary, and full detail from one projec
     assert.equal(afterDetail.body.discrepancy.history[0].id, decided.body.decision.id);
   } finally { await cleanup(); }
 });
+
+test('partial-source warnings invalidate cached complete coverage without a content generation change', async () => {
+  const { ops, state, cleanup } = await opsFixture();
+  try {
+    const complete = await ops.project();
+    assert.equal(complete.coverageComplete, true);
+    state.sources[0].warnings = 1;
+    const partial = await ops.project();
+    assert.equal(partial.coverageComplete, false);
+    assert.notEqual(partial.revision, complete.revision);
+    assert.equal(state.resolves, 2);
+    assert.equal(partial.discrepancies.some(row => row.kind === 'broken_link'), false);
+    state.sources[0].warnings = 0;
+    const restored = await ops.project();
+    assert.equal(restored.coverageComplete, true);
+    assert.equal(state.resolves, 3);
+    state.sources[0].evidenceHealthy = false;
+    assert.equal((await ops.project()).coverageComplete, false, 'content failures also invalidate evidence completeness');
+    state.sources[0].evidenceHealthy = true;
+    state.sources[0].refreshing = true;
+    assert.equal((await ops.project()).coverageComplete, false, 'a moving snapshot cannot authorize new automatic decisions');
+    state.sources[0].refreshing = false;
+    assert.equal((await ops.project()).coverageComplete, true);
+  } finally { await cleanup(); }
+});

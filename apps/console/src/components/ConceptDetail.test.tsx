@@ -89,3 +89,33 @@ describe('ConceptDetail provenance', () => {
     expect(container.textContent).not.toContain('Team says')
   })
 })
+
+describe('structured and bounded reading', () => {
+  it('renders safe Markdown, including code and lists, for effective and alternate values', async () => {
+    const doc = concept()
+    doc.sections[0].value = 'Use **the build**:\n\n- Check sources\n\n```sh\nnpm test\n```\n\n<script>alert(1)</script>'
+    doc.sections[0].dissents![0].value = 'Try `npm run check`.'
+    await act(async () => root.render(<ConceptDetail concept={doc} />))
+    expect(container.querySelector('strong')?.textContent).toBeTruthy()
+    expect(container.querySelector('li')?.textContent).toBe('Check sources')
+    expect(container.querySelector('pre code')?.textContent).toContain('npm test')
+    expect(container.querySelector('script')).toBeNull()
+    expect([...container.querySelectorAll('code')].some((code) => code.textContent === 'npm run check')).toBe(true)
+  })
+
+  it('bounds a 438-section document and jumps directly to evidence outside its first page', async () => {
+    const doc = concept()
+    doc.sections = Array.from({ length: 438 }, (_, index) => ({ ...doc.sections[0], name: `Section ${index}`, key: `s${index}`, value: index === 420 ? 'Unique migration evidence' : 'Ordinary note', dissents: [] }))
+    await act(async () => root.render(<ConceptDetail concept={doc} matchQuery="migration" />))
+    expect(container.querySelectorAll('.cc-concept-reader .cc-md').length).toBe(20)
+    expect(container.textContent).not.toContain('Unique migration evidence')
+    const jump = [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.startsWith('Jump to matching section'))!
+    await act(async () => jump.click())
+    expect(container.textContent).toContain('Unique migration evidence')
+    expect(container.querySelectorAll('.cc-concept-reader .cc-md').length).toBe(18)
+    const collapse = container.querySelector<HTMLButtonElement>('[data-section="420"]')!
+    await act(async () => collapse.click())
+    expect(collapse.getAttribute('aria-expanded')).toBe('false')
+    expect(container.textContent).not.toContain('Unique migration evidence')
+  })
+})

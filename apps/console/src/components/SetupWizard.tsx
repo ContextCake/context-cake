@@ -696,7 +696,7 @@ export function SetupWizard({
   onConnectAgent?: () => void
   addingSource?: boolean
 }) {
-  const { reload, sources } = useStoreData()
+  const { reload, sources, openConcept } = useStoreData()
   // The cascade a new source is being placed into (add mode). `?? []`
   // because the older test mocks of the store hand back no `sources` at all;
   // a quarantined entry has no position and is not in the list.
@@ -874,22 +874,32 @@ export function SetupWizard({
   const completeSetup = () => {
     reload()
     goNext()
-    setSuccessBusy(true)
-    void (async () => {
-      try {
-        const res = await apiFetch('/api/graph', {
-          headers: { accept: 'application/json' },
-          signal: AbortSignal.timeout(20_000),
-        })
-        if (res.ok) {
-          const graph = (await res.json()) as GraphSummary
-          setSuccessConcept(graph.concepts[0]?.id ?? null)
-          setSuccessIndexing(Boolean(graph.indexing))
-        }
-      } catch { /* the live status cards below report what actually happened */ }
-      setSuccessBusy(false)
-    })()
   }
+
+  // Only an indexed concept contributed by this addition is evidence of success.
+  useEffect(() => {
+    if (step !== 'success' || !added.length) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const names = new Set(added.map((source) => source.name))
+    const inspect = async () => {
+      setSuccessBusy(true)
+      try {
+        const res = await apiFetch('/api/graph', { signal: AbortSignal.timeout(20_000) })
+        if (!res.ok) throw new Error('Graph unavailable')
+        const graph = await res.json() as GraphSummary
+        if (cancelled) return
+        const sample = graph.concepts.find((concept) => concept.contributors?.some((name) => names.has(name)))
+        setSuccessConcept(sample?.id ?? null)
+        const indexing = (graph.sources ?? []).some((source) => names.has(source.name) && (source.status === 'indexing' || source.indexing?.refreshing)) || graph.indexingSources?.some((name) => names.has(name)) || (graph.indexing && !graph.indexingSources && !graph.sources?.length)
+        setSuccessIndexing(Boolean(indexing))
+        if (!sample && indexing) timer = setTimeout(() => void inspect(), 900)
+      } catch { /* The source status cards retain their independent recovery state. */ }
+      finally { if (!cancelled) setSuccessBusy(false) }
+    }
+    void inspect()
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
+  }, [step, added])
 
   const submitAdd = async () => {
     if (addDraft.kind === 'mcp' && !addDraft.trusted) return
@@ -1235,7 +1245,7 @@ export function SetupWizard({
             stepIndex={steps.length - 1}
             stepCount={steps.length}
             title={isAdding ? 'Source added' : "You're set up"}
-            subtitle={isAdding ? 'It joins the cascade as it indexes.' : 'Your cascade is live.'}
+            subtitle={isAdding ? 'It joins the cascade as it indexes.' : 'Sources saved. Indexing status is shown below.'}
             footer={(
               <div style={css('display:flex; justify-content:flex-end; gap:8px; width:100%;')}>
                 <button type="button" style={btnGhost()} onClick={onClose}>Done</button>
@@ -1261,14 +1271,14 @@ export function SetupWizard({
             )}
             {successConcept ? (
               <div style={css(`padding:12px 14px; border-radius:10px; background:${C.tealFill}; border:1px solid ${C.tealStroke}; font-size:13px; color:${C.tealText};`)}>
-                Your agent can now read: <strong style={css(`font-family:${MONO};`)}>{successConcept}</strong>
+                Indexed from your new source: <strong style={css(`font-family:${MONO};`)}>{successConcept}</strong><button type="button" style={btnGhost()} onClick={() => { openConcept(successConcept); onClose() }}>Open this result</button>
               </div>
             ) : successBusy ? (
-              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Reading the cascade — you can close this any time.</p>
+              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Checking your new source — you can close this any time.</p>
             ) : successIndexing ? (
               <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Setup complete — your sources are still indexing in the background. Concepts will appear here automatically.</p>
             ) : (
-              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>Setup complete — no concepts resolved yet. Add content to a layer and reload.</p>
+              <p style={css(`margin:0; font-size:13px; color:${C.caption};`)}>No indexed result from your new source yet. Check its status above.</p>
             )}
           </StepShell>
         )}

@@ -1,4 +1,4 @@
-import { StrictMode } from 'react'
+import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/500.css'
@@ -9,7 +9,7 @@ import './themes/index.css'
 import { App } from './App'
 import { StoreProvider } from './store'
 import { ThemeModeProvider, applyInitialAppearance } from './theme-mode'
-import { SettingsView } from './components/SettingsView'
+const SettingsView = lazy(() => import('./components/SettingsView').then((module) => ({ default: module.SettingsView })))
 
 // Apply the persisted theme before the first paint.
 applyInitialAppearance()
@@ -19,7 +19,7 @@ const settingsSurface = new URLSearchParams(window.location.search).get('surface
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeModeProvider>
-      {settingsSurface ? <SettingsView appMode="live" surface="window" /> : <StoreProvider><App /></StoreProvider>}
+      {settingsSurface ? <Suspense fallback={<div className="cc-secondary-loading" role="status">Opening settings…</div>}><SettingsView appMode="live" surface="window" /></Suspense> : <StoreProvider><App /></StoreProvider>}
     </ThemeModeProvider>
   </StrictMode>,
 )

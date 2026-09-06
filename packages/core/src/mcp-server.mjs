@@ -9,13 +9,20 @@
 //   node mcp-server.mjs --personal <dir> --shared <dir>   # legacy 2-layer stack
 
 import path from "node:path";
+import fsp from "node:fs/promises";
 import readline from "node:readline";
+import { markdownLinkSpans } from "./markdown-links.mjs";
 import { sectionText } from "./sections.mjs";
 import { isNewerDay } from "./conflict-policy.mjs";
 import { resolveConcept } from "./resolver.mjs";
 import { createConflictResolutionLog } from "./conflict-resolutions.mjs";
-import { fingerprint } from "./discrepancies.mjs";
-import { searchConcepts, searchCaptures } from "./search.mjs";
+import { fingerprint, blockedContextResolutionKeys } from "./discrepancies.mjs";
+import { searchCaptures } from "./search.mjs";
+import { createRetainedSearch } from "./retained-search.mjs";
+import { resolveSettings } from "./settings.mjs";
+import { readContextManifest, manifestRevision } from "./manifest.mjs";
+import { applyContextResolutions, createContextResolutionStore, contextManifestFingerprint } from "./context-resolutions.mjs";
+import { createDiscrepancyRuleStore, parseRuleDocument } from "./discrepancy-rules.mjs";
 import { buildSources } from "./sources/index.mjs";
 import { isTraversal } from "./sources/okf-local.mjs";
 import { commitPaths, push } from "./sources/git-core.mjs";
@@ -62,9 +69,16 @@ if ((args.capture || args.telemetry) && !liveLayer) {
 }
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
+const retrieval = createRetainedSearch(layers, {
+  sourceBudgetMs: resolveSettings(runtime?.runtimeManifest ?? {}).sourceBudgetMs,
+});
 const discrepancyDecisions = runtime
   ? createConflictResolutionLog(runtime.manifestPath, { profileId: selection.profileId })
   : null;
+const contextResolutionStore = runtime
+  ? createContextResolutionStore(runtime.manifestPath, { profileId: selection.profileId }) : null;
+const legacyRuleStore = runtime
+  ? createDiscrepancyRuleStore(runtime.manifestPath, { profileId: selection.profileId }) : null;
 const releaseVersion = /^\d+\.\d+\.\d+$/.test(process.env.CONTEXTCAKE_RELEASE_VERSION ?? "")
   ? process.env.CONTEXTCAKE_RELEASE_VERSION
   : "0.5.0";
@@ -313,6 +327,7 @@ async function processLine(line) {
 async function shutdown() {
   if (!shutdownPromise) {
     shutdownPromise = (async () => {
+      retrieval.close();
       if (args.telemetry) await commitAndPushTelemetry();
       await Promise.allSettled(layers.map((layer) => Promise.resolve().then(() => layer.close?.())));
     })();
@@ -453,8 +468,8 @@ async function confirmCaptureTool({ token }) {
 // ---- tools ----------------------------------------------------------------
 
 async function search({ query, limit = 10 }) {
-  const hits = await searchConcepts(layers, { query, limit });
-  await annotateContested(hits);
+  const { hits, sources } = await retrieval.search({ query, limit });
+  await annotateContested(hits, sources);
   return hits;
 }
 
@@ -467,11 +482,11 @@ async function search({ query, limit = 10 }) {
 // fail or slow a search.
 const CONTESTED_RESOLVE_CAP = 5;
 
-async function annotateContested(hits) {
+async function annotateContested(hits, sources) {
   const candidates = hits.filter((hit) => hit.layers.length > 1).slice(0, CONTESTED_RESOLVE_CAP);
   await Promise.all(candidates.map(async (hit) => {
     try {
-      const resolved = await resolveConcept(hit.id, layers);
+      const resolved = await resolveConcept(hit.id, sources);
       const conflictSections = resolved?.sections.filter((s) => s.conflicts?.length).length ?? 0;
       if (conflictSections > 0) {
         hit.contested = true;
@@ -494,11 +509,61 @@ async function readFileTool({ concept_id, layer }) {
     return { id, layer, raw: true, ...entry };
   }
 
-  const resolved = await resolveConcept(id, layers);
+  let resolved = await resolveConcept(id, layers);
   if (!resolved) throw new Error(`Concept not found in any layer: ${id}`);
   await decorateDiscrepancyDisposition(resolved);
+  resolved = await applyRecordedContextResolution(resolved);
   emitTelemetry({ event: "read", concept: id, layer: resolved.contributors[0]?.layer ?? null });
   return { ...resolved, markdown: assembleMarkdown(resolved) };
+}
+
+async function applyRecordedContextResolution(resolved) {
+  if (!contextResolutionStore) return resolved;
+  const state = await contextResolutionStore.read();
+  if (!state.decisions.length) return resolved;
+  // Selection stays immutable for this process; a changed manifest must never
+  // make old adapters serve a newly approved policy for a different stack.
+  const fresh = loadProfileRuntime(runtime.manifestPath, { requestedProfile: selection.profileId });
+  const stored = readContextManifest(runtime.manifestPath, { allowMissing: false });
+  const manifest = { ...stored, layers: fresh.selection.layers };
+  let coverageComplete = contextManifestFingerprint(fresh.runtimeManifest) === contextManifestFingerprint(runtime.runtimeManifest)
+    && manifestRevision(stored) === fresh.revision
+    && !layers.some(source => source.health?.()?.lastError);
+  for (const layer of fresh.selection.layers) {
+    if (!["okf-local", "files"].includes(layer.source ?? "okf-local")) continue;
+    try { coverageComplete &&= (await fsp.stat(path.resolve(runtime.manifestDir, layer.path))).isDirectory(); }
+    catch { coverageComplete = false; }
+  }
+  // A source can be healthy while its configured walk cap omits documents.
+  // Before applying a recorded choice, verify coverage through the adapters'
+  // own notes contract. Listing does not load the corpus, and only reads with
+  // recorded decisions pay this additional validation.
+  if (coverageComplete) {
+    const signal = AbortSignal.timeout(Math.min(resolveSettings(runtime.runtimeManifest).sourceBudgetMs, 30_000));
+    for (const source of layers) {
+      const notes = { skipped: [], unreadable: [], hidden: 0 };
+      try {
+        await source.listConceptIds({ signal, notes });
+        if (notes.truncated || notes.skipped.length || notes.unreadable.length || source.health?.()?.lastError) {
+          coverageComplete = false;
+        }
+      } catch { coverageComplete = false; }
+      if (!coverageComplete) break;
+    }
+  }
+  const localRules = await legacyRuleStore.list();
+  let teamRules = [];
+  if (liveLayer) {
+    try { teamRules = parseRuleDocument(await fsp.readFile(path.join(liveLayer.root, ".contextcake/discrepancy-rules.json"), "utf8")); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+  const localById = new Map(localRules.map(rule => [rule.id, rule]));
+  const effectiveRules = [...teamRules.map(rule => localById.get(rule.id) ?? rule),
+    ...localRules.filter(rule => !teamRules.some(team => team.id === rule.id))];
+  return applyContextResolutions(resolved, state, {
+    profileId: selection.profileId, manifestFingerprint: contextManifestFingerprint(manifest), coverageComplete,
+    blockedKeys: blockedContextResolutionKeys([resolved], effectiveRules),
+  });
 }
 
 async function decorateDiscrepancyDisposition(resolved) {
@@ -647,15 +712,9 @@ function normalizeId(value) {
 }
 
 function extractLinks(body) {
-  const links = [];
-  for (const match of body.matchAll(/!?\[[^\]]*]\(([^)]+)\)/g)) {
-    if (match[0].startsWith("!")) continue;
-    links.push({ raw: match[0], target: match[1] });
-  }
-  for (const match of body.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?]]/g)) {
-    links.push({ raw: match[0], target: match[1] });
-  }
-  return links.filter((link) => link.target && !isExternal(stripDecoration(link.target)));
+  return markdownLinkSpans(body)
+    .map(({ raw, target }) => ({ raw, target }))
+    .filter((link) => link.target && !isExternal(stripDecoration(link.target)));
 }
 
 function dedupeIncoming(rows) {
@@ -683,7 +742,9 @@ function assembleMarkdown(resolved) {
       const note = `_(suppressed by ${s.sourceLayer})_`;
       return s.heading ? `${s.heading}\n\n${note}` : note;
     }
-    const head = s.heading ? `${s.heading}\n\n${s.content}` : s.content;
+    const resolutionNote = s.contextResolution
+      ? `\n\n> ContextCake resolution ${s.contextResolution.status}: policy ${s.contextResolution.policyId}; selected source ${s.contextResolution.selectedSource}. Original source documents are preserved.` : "";
+    const head = (s.heading ? `${s.heading}\n\n${s.content}` : s.content) + resolutionNote;
     if (!s.conflicts || s.conflicts.length === 0) return head;
     const notes = s.conflicts.map((c) => renderDissent(c, s.sourceUpdated)).join("\n\n");
     return `${head}\n\n${notes}`;

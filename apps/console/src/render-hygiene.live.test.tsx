@@ -140,7 +140,7 @@ describe('the render budget holds in live mode too', () => {
     expect(composer, 'the chat panel rendered no composer').toBeTruthy()
     const search = container.querySelector<HTMLInputElement>('input[data-context-search]')
     expect(search, 'the toolbar rendered no search field').toBeTruthy()
-    const conceptId = container.querySelector('.cc-navigator-detail > div > button.cc-h-bd-strong code')?.textContent
+    const conceptId = container.querySelector('.cc-concept-result code')?.textContent
     expect(conceptId, 'the view rendered no concept rows — live mode served nothing').toBeTruthy()
 
     const viewBefore = renders.Concepts ?? 0

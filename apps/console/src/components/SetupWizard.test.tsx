@@ -7,6 +7,7 @@ import { deriveSourceName, parseCommandLine, SetupWizard } from './SetupWizard'
 const mocks = vi.hoisted(() => ({
   apiFetch: vi.fn(),
   reload: vi.fn(),
+  openConcept: vi.fn(),
   /** The cascade the wizard is adding into (add mode reads `sources` for the position picker). */
   sources: [] as Array<{ name: string; level: number }>,
 }))
@@ -16,7 +17,7 @@ vi.mock('../api', async (importOriginal) => ({
   apiFetch: mocks.apiFetch,
 }))
 vi.mock('../store', () => {
-  const store = () => ({ reload: mocks.reload, sources: mocks.sources })
+  const store = () => ({ reload: mocks.reload, sources: mocks.sources, openConcept: mocks.openConcept })
   return { useStore: store, useStoreData: store, useStoreNav: store, useStoreInput: store, useStoreChat: store }
 })
 
@@ -835,4 +836,22 @@ describe('parseCommandLine', () => {
   it('rejects unfinished quoting instead of changing command meaning', () => {
     expect(() => parseCommandLine('npx "unfinished')).toThrow(/unfinished quote or escape/)
   })
+})
+
+
+it('shows indexed evidence from the source just added, never an existing first graph row', async () => {
+  mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(JSON.stringify(url === '/api/sources' && init?.method === 'POST'
+    ? { ok: true, added: 'new-project' }
+    : url === '/api/graph' ? { concepts: [{ id: 'old/CHANGELOG', contributors: ['old-vault'] }, { id: 'new/README', contributors: ['new-project'] }], sources: [], indexing: false } : {})))
+  await act(async () => root.render(<SetupWizard onClose={vi.fn()} />))
+  await act(async () => button('Get started').click())
+  await enter('#wiz-personal-path', '/tmp/new-project')
+  await act(async () => button('Next').click())
+  await act(async () => button('Skip').click())
+  await act(async () => button('Skip for now').click())
+  await act(async () => button('Finish').click())
+  expect(container.textContent).toContain('new/README')
+  expect(container.textContent).not.toContain('old/CHANGELOG')
+  await act(async () => button('Open this result').click())
+  expect(mocks.openConcept).toHaveBeenCalledWith('new/README')
 })

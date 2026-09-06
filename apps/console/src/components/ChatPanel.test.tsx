@@ -35,7 +35,7 @@ describe('Ask ContextCake capability states', () => {
   it('does not offer canned answers or a fake config command in unconnected live mode', async () => {
     await renderMode('live')
 
-    expect(container.textContent).toContain('Connect an agent for live answers')
+    expect(container.textContent).toContain('Ask in your connected coding agent')
     expect(container.textContent).toContain('Open the connection guide')
     expect(container.querySelector('textarea')).toBeNull()
     expect(container.textContent).not.toContain('What database do we use?')

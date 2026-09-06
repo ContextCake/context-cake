@@ -22,7 +22,7 @@ function kindSubtitle(byKind: Record<string, number>): string {
 
 function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
   const [question, setQuestion] = useState('')
-  const { mode, setView, setQuery, signals, conflicts, conflictSummary, sources, concepts, activity, loadErrors } = useStoreData()
+  const { mode, setView, openConceptSearch, signals, conflicts, conflictSummary, sources, concepts, activity, loadErrors } = useStoreData()
   // The real cascade, in the order it resolves: position 1 wins. Both modes
   // read the sources the store holds — the demo bundle's trio is a real
   // cascade too, not a static blurb to fall back to. A quarantined entry is
@@ -53,8 +53,8 @@ function OverviewInner({ onConnectAgent }: { onConnectAgent?: () => void }) {
     <div className="cc-home">
       <section className="cc-workspace-section cc-home-search" aria-labelledby="cc-find-context">
         <div className="cc-section-heading"><div><h2 id="cc-find-context">Find the context for your next task</h2><p>Search decisions, instructions, and notes across your sources. Open a result to inspect its evidence.</p></div></div>
-        <form onSubmit={(event) => { event.preventDefault(); setQuery(question); setView('concepts') }}><input aria-label="Search your project context" placeholder="Build commands, database choices, release process…" value={question} onChange={(event) => setQuestion(event.target.value)} /><Button type="submit" variant="primary">Search context</Button></form>
-        <div className="cc-home-shortcuts">{['build and test', 'architecture', 'release process'].map((query) => <button type="button" key={query} onClick={() => { setQuery(query); setView('concepts') }}>{query}</button>)}</div>
+        <form onSubmit={(event) => { event.preventDefault(); openConceptSearch(question) }}><input aria-label="Search your project context" placeholder="Build commands, database choices, release process…" value={question} onChange={(event) => setQuestion(event.target.value)} /><Button type="submit" variant="primary">Search context</Button></form>
+        <div className="cc-home-shortcuts">{['build and test', 'architecture', 'release process'].map((query) => <button type="button" key={query} onClick={() => { openConceptSearch(query) }}>{query}</button>)}</div>
       </section>
       {onConnectAgent && (
         <section className="cc-workspace-section cc-connect-cta" aria-labelledby="cc-connect-agent">

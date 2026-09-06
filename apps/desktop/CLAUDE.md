@@ -245,6 +245,11 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   test asserts `userData=ContextCake`.
 - **Known gaps tracked as follow-ups** (not blocking merge): the updater reads the
   repo-wide GitHub "latest" release (see the comment in `updater.mjs`).
+- **A local `npm run pack` app may have no release update feed.** The updater
+  reports `unsupported` when `Resources/app-update.yml` is absent, for both
+  automatic and manual checks. It leaves the update preference unchanged;
+  published builds with metadata retain the normal updater behavior. Do not
+  generate fake release metadata to make a local validation build check updates.
 - **Builds ship without accounts.** `npm run pack`/`npm run dist` write
   `build/supabase-config.json` as `{"accounts":"disabled"}` and need no
   credentials; the packaged app has no sign-in and `loadSupabaseConfig` treats

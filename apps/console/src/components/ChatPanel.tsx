@@ -6,7 +6,7 @@ const SUGGESTIONS = ['What database do we use?', 'How do we handle on-call?']
 const CONNECT_GUIDE_URL = 'https://contextcake.com/docs/getting-started/connect-an-agent'
 
 function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: { keyboardSuspended?: boolean; onConnectAgent?: () => void; onClose: () => void }) {
-  const { mode, setChatInput, send, setView, setQuery } = useStoreData()
+  const { mode, setChatInput, send, openConceptSearch } = useStoreData()
   const { chatMessages, chatBusy, chatInput } = useStoreChat()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -105,7 +105,7 @@ function ChatPanelInner({ keyboardSuspended = false, onConnectAgent, onClose }: 
               <label className="cc-handoff-label">Your question<input aria-label="Question for your agent" value={handoff} onChange={(event) => { setHandoff(event.target.value); setCopyStatus('') }} /></label>
               <button type="button" className="cc-handoff-action" disabled={!handoff.trim()} onClick={async () => { try { await navigator.clipboard.writeText(`Use ContextCake to answer: ${handoff.trim()} Read the relevant sources, cite the evidence, and surface conflicts or missing information.`); setCopyStatus('Question copied. Paste it into your connected agent.') } catch { setCopyStatus('Clipboard unavailable. Select and copy your question above.') } }}>Copy question for agent</button>
               <span role="status">{copyStatus}</span>
-              <button type="button" className="cc-handoff-action" onClick={() => { setView('concepts'); setQuery(handoff); onClose() }}>Search these sources instead</button>
+              <button type="button" className="cc-handoff-action" onClick={() => { if (openConceptSearch(handoff)) onClose() }}>Search these sources instead</button>
               {onConnectAgent ? (
                 <button ref={emptyButtonRef} type="button" className="cc-h-tealdark" onClick={connectAgent} style={css('min-height:40px; padding:0 15px; border:0; border-radius:8px; background:#1E6B64; color:var(--cc-on-teal); font:inherit; font-size:12px; font-weight:600; cursor:pointer;')}>Connect an agent</button>
               ) : (

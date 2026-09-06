@@ -16,7 +16,7 @@ import type {
   ContextResolutionDecision, ConflictResolutionRecord, DemoBundle, DiscrepanciesResponse, DiscrepancyBatchRequest, DiscrepancyBatchResponse,
   DiscrepancyBatchResult, DiscrepancyDecisionRequest, DiscrepancyDetailResponse, DiscrepancyRecord,
   DiscrepancyRule, DiscrepancyRuleSuggestion, GraphConcept, GraphSummary, GraphSource, ResolveConflictRequest,
-  ResolvedConcept, ResolvedSection, SearchHit, SourceStatus, StatusSummary,
+  ResolvedConcept, ResolvedSection, SearchHit, SearchOptions, SourceStatus, StatusSummary,
 } from './types'
 import type { Concept, ConceptSection, Conflict, Dissent, Source } from './data'
 import type { LayerId } from './theme'
@@ -84,7 +84,7 @@ export interface DataSource {
    * it has no engine behind it — so `DemoSource` answers `null` unconditionally
    * rather than reading its own bundle.
    */
-  search(query: string, limit?: number): Promise<SearchHit[] | null>
+  search(query: string, limit?: number, options?: SearchOptions): Promise<SearchHit[] | null>
   conflictResolutions(): Promise<ConflictResolutionRecord[]>
   resolveConflict(request: ResolveConflictRequest): Promise<ConflictResolutionRecord>
   /**
@@ -462,9 +462,9 @@ class LiveSource implements DataSource {
       throw error
     }
   }
-  async search(query: string, limit = 20): Promise<SearchHit[] | null> {
+  async search(query: string, limit = 20, options?: SearchOptions): Promise<SearchHit[] | null> {
     try {
-      return (await this.get<{ hits: SearchHit[] }>(`/api/search?q=${encodeURIComponent(query)}&limit=${limit}`)).hits
+      return (await this.get<{ hits: SearchHit[] }>(`/api/search?q=${encodeURIComponent(query)}&limit=${limit}${options?.source ? `&source=${encodeURIComponent(options.source)}` : ''}${options?.type ? `&type=${encodeURIComponent(options.type)}` : ''}`)).hits
     } catch (error) {
       // Same older-engine idiom as status() above: a 404 means this engine has
       // no /api/search route, and the caller falls back to the substring

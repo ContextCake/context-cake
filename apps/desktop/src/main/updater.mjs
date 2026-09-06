@@ -5,6 +5,8 @@
 import { app, dialog } from 'electron'
 import electronUpdater from 'electron-updater'
 import { readSettings } from './settings.mjs'
+import { statSync } from 'node:fs'
+import path from 'node:path'
 
 const { autoUpdater } = electronUpdater
 const SIX_HOURS = 6 * 60 * 60 * 1000
@@ -28,6 +30,19 @@ function setStatus(next) {
   return status
 }
 
+function unsupportedBuildStatus() {
+  if (!app.isPackaged) return { state: 'unsupported', reason: 'development-build' }
+  // electron-builder --dir produces a runnable local .app without a release
+  // feed. isPackaged alone doesn't mean electron-updater can check it. Only
+  // missing metadata is unsupported; malformed/unreadable release metadata
+  // must still surface the updater's real error rather than hiding it.
+  try { statSync(path.join(process.resourcesPath, 'app-update.yml')) }
+  catch (error) {
+    if (error.code === 'ENOENT') return { state: 'unsupported', reason: 'missing-update-metadata' }
+  }
+  return null
+}
+
 export function initUpdater() {
   // KNOWN CONSTRAINT (tracked): electron-updater's GitHub provider reads
   // github.com/ContextCake/context-cake/releases/latest for the WHOLE repo. If
@@ -36,8 +51,13 @@ export function initUpdater() {
   // dedicated update channel/feed lands, only app-release.yml may publish full
   // GitHub Releases; other release notes must be drafts or prereleases.
   //
-  // Unsigned dev builds can't apply updates; don't even check.
-  if (!app.isPackaged) return
+  const unsupported = unsupportedBuildStatus()
+  if (unsupported) {
+    if (timer) clearInterval(timer)
+    timer = null
+    setStatus(unsupported)
+    return
+  }
   if (!readSettings().updateCheck) {
     if (timer) clearInterval(timer)
     timer = null
@@ -64,10 +84,13 @@ export function initUpdater() {
 
 /** Menu-driven "Check for Updates…" with explicit result dialogs. */
 export async function checkInteractive(win) {
-  if (!app.isPackaged) {
+  const unsupported = unsupportedBuildStatus()
+  if (unsupported) {
+    setStatus(unsupported)
     await dialog.showMessageBox(win, {
       type: 'info',
-      message: 'Updates are unavailable in development builds.',
+      message: 'Updates are unavailable in this local build.',
+      detail: 'Install a published ContextCake release to receive app updates.',
     })
     return
   }
@@ -106,12 +129,13 @@ export async function checkInteractive(win) {
  * Wire autoUpdater's events into `status` and push each change to every
  * trusted renderer via `notifyFn` (main.mjs's `sendToRenderer`). Idempotent
  * and safe to call more than once — only the first call in a packaged app
- * attaches listeners; unpackaged builds stay `unsupported` forever, since
- * unsigned dev builds can't apply an update anyway (see initUpdater above).
+ * attaches listeners; local builds without a release feed stay `unsupported`.
  */
 export function registerRendererUpdates(notifyFn) {
   notify = notifyFn
-  if (rendererListenersRegistered || !app.isPackaged) return
+  const unsupported = unsupportedBuildStatus()
+  if (unsupported) { setStatus(unsupported); return }
+  if (rendererListenersRegistered) return
   rendererListenersRegistered = true
   status = { state: 'idle' }
   autoUpdater.on('checking-for-update', () => setStatus({ state: 'checking' }))
@@ -124,7 +148,7 @@ export function registerRendererUpdates(notifyFn) {
 
 /** Current status for a renderer that just opened Settings and missed earlier events. */
 export function getUpdateStatus() {
-  return app.isPackaged ? status : { state: 'unsupported' }
+  return unsupportedBuildStatus() ?? status
 }
 
 /**
@@ -133,7 +157,8 @@ export function getUpdateStatus() {
  * manual check is a distinct action from the periodic background one.
  */
 export async function checkForUpdatesFromRenderer() {
-  if (!app.isPackaged) return setStatus({ state: 'unsupported' })
+  const unsupported = unsupportedBuildStatus()
+  if (unsupported) return setStatus(unsupported)
   setStatus({ state: 'checking' })
   try {
     await autoUpdater.checkForUpdates()
@@ -152,7 +177,7 @@ export async function checkForUpdatesFromRenderer() {
  * unconfirmed way to force the app to quit.
  */
 export async function installNow(win) {
-  if (status.state !== 'downloaded') return { installed: false }
+  if (unsupportedBuildStatus() || status.state !== 'downloaded') return { installed: false }
   const { response } = await dialog.showMessageBox(win, {
     type: 'info',
     message: `ContextCake ${status.version ? `${status.version} ` : ''}is ready to install.`,

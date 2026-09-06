@@ -107,6 +107,9 @@ export interface StatusSummary {
  * the matched terms, so the console never has to re-tokenize the body.
  * Hits arrive pre-sorted by score, highest first.
  */
+/** Filters apply to the searchable corpus before ranking and limiting. */
+export interface SearchOptions { source?: string; type?: string }
+
 export interface SearchHit {
   id: string
   title: string | null

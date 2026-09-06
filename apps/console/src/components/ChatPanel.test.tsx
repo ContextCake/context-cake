@@ -4,14 +4,14 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPanel } from './ChatPanel'
 
-const mocks = vi.hoisted(() => ({ useStoreData: vi.fn(), useStoreChat: vi.fn() }))
+const mocks = vi.hoisted(() => ({ useStoreData: vi.fn(), useStoreChat: vi.fn(), openConceptSearch: vi.fn() }))
 vi.mock('../store', () => ({ useStoreData: mocks.useStoreData, useStoreChat: mocks.useStoreChat }))
 
 let container: HTMLDivElement
 let root: Root
 
 function renderMode(mode: 'demo' | 'live', onConnectAgent?: () => void, onClose = vi.fn()) {
-  mocks.useStoreData.mockReturnValue({ mode, setChatInput: vi.fn(), send: vi.fn() })
+  mocks.useStoreData.mockReturnValue({ mode, openConceptSearch: mocks.openConceptSearch, setChatInput: vi.fn(), send: vi.fn() })
   mocks.useStoreChat.mockReturnValue({ chatMessages: [], chatBusy: false, chatInput: '' })
   return act(async () => root.render(<ChatPanel onClose={onClose} onConnectAgent={onConnectAgent} />))
 }
@@ -41,6 +41,20 @@ describe('Ask ContextCake capability states', () => {
     expect(container.textContent).not.toContain('What database do we use?')
     expect(container.textContent).not.toContain('Copy MCP config')
     expect(document.activeElement?.textContent).toBe('Open the connection guide')
+  })
+
+  it.each([true, false])('hands the question to Knowledge and closes only when navigation succeeds (%s)', async (allowed) => {
+    const onClose = vi.fn()
+    mocks.openConceptSearch.mockReset().mockReturnValue(allowed)
+    await renderMode('live', undefined, onClose)
+    const input = container.querySelector<HTMLInputElement>('[aria-label="Question for your agent"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'release process')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Search these sources instead')!.click())
+    expect(mocks.openConceptSearch).toHaveBeenCalledWith('release process')
+    expect(onClose).toHaveBeenCalledTimes(allowed ? 1 : 0)
   })
 
   it('labels demo answers as samples and keeps the sample composer available', async () => {

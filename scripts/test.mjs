@@ -51,6 +51,7 @@ const SUITES = [
   { group: "unit", name: "layer-files", ...node("layer-files.test.mjs") },
   { group: "unit", name: "search", ...node("search.test.mjs") },
   { group: "unit", name: "search-index", ...node("search-index.test.mjs") },
+  { group: "integration", name: "search-filters-service", ...node("search-filters-service.test.mjs") },
   { group: "unit", name: "retained-search", ...node("retained-search.test.mjs") },
   { group: "unit", name: "remote-cancellation", ...node("remote-cancellation.test.mjs") },
   { group: "unit", name: "github-author-date", ...node("github-author-date.test.mjs") },

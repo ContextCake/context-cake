@@ -178,7 +178,7 @@ function describeFolder(path: string, result: AddResult): string {
   if (result.hasDocuments === false && result.scanComplete) {
     return `${path} · no documents found — check this is the right folder`
   }
-  return `${path} · indexing in the background`
+  return path
 }
 
 /** Split a user-provided command without invoking a shell. */

@@ -16,23 +16,24 @@ function ConceptsInner() {
   const q = query.trim().toLowerCase()
   const substringList = concepts.filter((c) => !q || `${c.title} ${c.id}`.toLowerCase().includes(q))
 
-  const [answer, setAnswer] = useState<{ query: string; sourceVersion: string; hits: SearchHit[] | null; failed: boolean } | null>(null)
+  const [answer, setAnswer] = useState<{ query: string; scope: string; sourceVersion: string; hits: SearchHit[] | null; failed: boolean } | null>(null)
   const [retry, setRetry] = useState(0)
   const [sourceFilter, setSourceFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+  const scope = JSON.stringify([sourceFilter, typeFilter])
   const liveQuery = mode === 'live' && Boolean(q)
   const sourceVersion = JSON.stringify(sources.map((source) => [source.name, source.conceptCount, source.status, source.lastSuccessAt, source.indexing?.refreshing]))
-  const pending = liveQuery && (answer?.query !== q || answer?.sourceVersion !== sourceVersion)
+  const pending = liveQuery && (answer?.query !== q || answer?.scope !== scope || answer?.sourceVersion !== sourceVersion)
   useEffect(() => {
     if (!liveQuery) return
     let cancelled = false
     const timer = setTimeout(() => {
-      const settle = (hits: SearchHit[] | null) => { if (!cancelled) setAnswer((previous) => ({ query: q, sourceVersion, hits: hits ?? (previous?.query === q ? previous.hits : null), failed: hits === null })) }
-      void search(q).then(settle).catch(() => settle(null))
+      const settle = (hits: SearchHit[] | null) => { if (!cancelled) setAnswer((previous) => ({ query: q, scope, sourceVersion, hits: hits ?? (previous?.query === q && previous.scope === scope ? previous.hits : null), failed: hits === null })) }
+      void (sourceFilter || typeFilter ? search(q, 20, { source: sourceFilter || undefined, type: typeFilter || undefined }) : search(q)).then(settle).catch(() => settle(null))
     }, SEARCH_DEBOUNCE_MS)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [liveQuery, q, sourceVersion, search, retry])
-  const engineHits = answer?.query === q ? answer.hits : null
+  }, [liveQuery, q, scope, sourceFilter, typeFilter, sourceVersion, search, retry])
+  const engineHits = answer?.query === q && answer.scope === scope ? answer.hits : null
   const usingEngine = liveQuery && engineHits !== null
   const failed = liveQuery && !pending && answer?.failed === true
   const partial = sources.some((source) => source.status === 'indexing' || source.status === 'error' || source.status === 'degraded' || source.indexing?.refreshing || Boolean(source.warnings))
@@ -46,7 +47,7 @@ function ConceptsInner() {
   const showMatchDivider = rankedCount > 0 && rankedCount < list.length
   const [activeId, setActiveId] = useState(selConcept)
   const activeIndex = Math.max(0, list.findIndex((c) => c.id === activeId))
-  const rowSizes = list.map((c) => hitsById.get(c.id)?.snippet ? 190 : 142).join(',')
+  const rowSizes = list.map((c) => hitsById.get(c.id)?.snippet ? 208 : 142).join(',')
   const heights = useMemo(() => rowSizes ? rowSizes.split(',').map(Number) : [], [rowSizes])
   const virtual = useVirtualWindow(heights, { activeIndex })
   useEffect(() => { virtual.scrollRef.current?.scrollTo?.(0, 0) }, [q, sourceFilter, typeFilter])
@@ -82,7 +83,7 @@ function ConceptsInner() {
           {pending ? (usingEngine ? 'Refreshing content matches… Showing the last search result.' : 'Searching content… Title matches shown while you wait.') : failed ? (usingEngine ? 'Content search unavailable. Showing the last successful results.' : 'Content search unavailable. Showing title matches only.') : `${list.length} result${list.length === 1 ? '' : 's'}${usingEngine ? ' · relevance first, then title matches' : ''}`}
           {failed && <button type="button" onClick={() => { setAnswer(null); setRetry((n) => n + 1) }}>Retry search</button>}
           {partial && <span>Sources are still indexing or unavailable; results may be incomplete.</span>}
-          {usingEngine && <span>Up to 20 ranked content matches. Narrow your query for more specific results.</span>}
+          {usingEngine && <span>Up to 20 ranked content matches. Excerpts show original source text; open a result for the current resolved context.</span>}
         </div>
         {list.length === 0 && <div className="cc-ui-empty"><strong>{pending ? 'Searching your sources…' : failed ? 'No title matches' : partial ? 'No matches in available context' : 'No matching concepts'}</strong><p>{pending ? 'Content results will appear here.' : usingEngine ? 'No matches in titles or content.' : 'Try a title, concept ID, or type.'}</p></div>}
         <div ref={virtual.scrollRef} onScroll={virtual.onScroll} className="cc-concept-window" aria-label="Concept results" aria-busy={pending}>
@@ -122,7 +123,7 @@ function ConceptsInner() {
               </div>
               <div className="cc-result-title">{c.title}</div>
               <code className="cc-result-id">{c.id}</code>
-              {hit?.snippet && <p className="cc-result-snippet">{hit.snippet}</p>}
+              {hit?.snippet && <><span className="cc-result-excerpt-label">Original source excerpt</span><p className="cc-result-snippet">{hit.snippet.replace(/<!--[\s\S]*?(?:-->|$)/g, '').replace(/\s+/g, ' ').trim()}</p></>}
               <div className="cc-result-sources">{(hit?.layers ?? c.contributorLayers ?? c.layers).join(' · ')}</div>
               {c.sections[0]?.updated && <time className="cc-result-date">Section updated {c.sections[0].updated}</time>}
             </button>
@@ -131,6 +132,12 @@ function ConceptsInner() {
         </div></div>
       </div>
 
+      {!selCpt && list.length > 0 && (
+        <section className="cc-navigator-detail-panel cc-ui-empty" aria-label="Concept reader" style={{ paddingTop: 80 }}>
+          <strong>Choose a result</strong>
+          <p>Inspect its current answer, sources, and alternatives.</p>
+        </section>
+      )}
       {selCpt && (
         <section ref={detail.panelRef} {...detail.panelProps} aria-label={`${selCpt.title} concept detail`} className="cc-navigator-detail-panel" data-open={detailOpen || undefined} style={css(`background:${C.surface}; border:1px solid ${C.line}; border-radius:10px; padding:24px; min-width:0;`)}>
           <button type="button" className="cc-detail-close" onClick={() => { setDetailOpen(false); requestAnimationFrame(() => selectedButton.current?.focus({ preventScroll: true })) }}>Close</button>

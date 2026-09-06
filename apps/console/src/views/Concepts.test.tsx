@@ -67,6 +67,17 @@ afterEach(async () => {
   container.remove()
 })
 
+it('guides the reader to choose a result without selecting or fetching one', async () => {
+  mocks.useLayerFiles.mockClear()
+  const store = storeWith([populated()], '')
+  mocks.useStore.mockReturnValue(store)
+  await act(async () => root.render(<Concepts />))
+  expect(container.querySelector('[aria-label="Concept reader"]')?.textContent).toContain('Choose a result')
+  expect(container.textContent).toContain('Inspect its current answer, sources, and alternatives.')
+  expect(store.setSelConcept).not.toHaveBeenCalled()
+  expect(mocks.useLayerFiles).not.toHaveBeenCalled()
+})
+
 describe('a concept with no sections', () => {
   it('shows a quiet note and an Open file affordance instead of an empty panel', async () => {
     mocks.useStore.mockReturnValue(storeWith([empty()], 'decisions/empty-note'))
@@ -147,6 +158,59 @@ describe('Knowledge search (live mode)', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1) })
     expect(search).toHaveBeenCalledTimes(1)
     expect(search).toHaveBeenCalledWith('singlestore')
+  })
+
+  it('searches each source/type scope before accepting content matches and clears the previous scope immediately', async () => {
+    const a = populated()
+    const b = { ...empty(), contributorLayers: ['specs'] }
+    const hit = (c: Concept) => ({ id: c.id, title: c.title, score: 5, layers: c.contributorLayers, snippet: '<!-- source: auto -->Use <b>build and test</b> commands.' })
+    const search = vi.fn().mockResolvedValueOnce([hit(a)]).mockResolvedValueOnce([hit(b)]).mockResolvedValueOnce([])
+    mocks.useStore.mockReturnValue({ ...liveStoreWith([a, b], 'build and test', search), sources: [{ name: 'personal' }, { name: 'specs' }] })
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(rows()).toHaveLength(1)
+    const source = container.querySelector<HTMLSelectElement>('[aria-label="Filter concepts by source"]')!
+    await act(async () => { source.value = 'specs'; source.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.textContent).toContain('Searching content')
+    expect(container.textContent).not.toContain('No matches in titles or content.')
+    expect(rows()).toHaveLength(0)
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(search).toHaveBeenLastCalledWith('build and test', 20, { source: 'specs', type: undefined })
+    expect(rows()[0].textContent).toContain(b.title)
+    expect(container.querySelector('.cc-result-snippet')?.textContent).toBe('Use <b>build and test</b> commands.')
+    const type = container.querySelector<HTMLSelectElement>('[aria-label="Filter concepts by type"]')!
+    await act(async () => { type.value = 'decision'; type.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.textContent).toContain('Searching content')
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(search).toHaveBeenLastCalledWith('build and test', 20, { source: 'specs', type: 'decision' })
+    expect(rows()).toHaveLength(0)
+  })
+
+  it('preserves code generics and command placeholders while removing metadata comments from excerpts', async () => {
+    const concept = populated()
+    const snippet = '<!-- source: auto --> Return Promise<Result> from load<T>() and --config <file>.'
+    const search = vi.fn().mockResolvedValue([{ id: concept.id, title: concept.title, score: 5, layers: ['personal'], snippet }])
+    mocks.useStore.mockReturnValue(liveStoreWith([concept], 'load', search))
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(rows()[0].querySelector('.cc-result-snippet')?.textContent).toBe('Return Promise<Result> from load<T>() and --config <file>.')
+    expect(rows()[0].querySelector('.cc-result-snippet result')).toBeNull()
+  })
+
+  it('distinguishes the original search excerpt from the policy-selected resolved answer', async () => {
+    const concept = populated()
+    concept.sections[0] = { ...concept.sections[0], sourceLayer: 'team', winner: 'team', value: 'Use SQLite.', contextResolution: { decisionId: 'decision-1', policyId: 'policy-1', status: 'applied', selectedSource: 'team' } }
+    const search = vi.fn().mockResolvedValue([{ id: concept.id, title: concept.title, score: 5, layers: ['personal'], snippet: 'Use PostgreSQL.' }])
+    mocks.useStore.mockReturnValue(liveStoreWith([concept], 'database', search))
+    await act(async () => root.render(<Concepts />))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(rows()[0].querySelector('.cc-result-excerpt-label')?.textContent).toBe('Original source excerpt')
+    expect(rows()[0].querySelector('.cc-result-snippet')?.textContent).toBe('Use PostgreSQL.')
+    expect(container.textContent).toContain('open a result for the current resolved context')
+    await act(async () => rows()[0].click())
+    const reader = container.querySelector('[aria-label="Primary database concept detail"]')!
+    expect(reader.textContent).toContain('Use SQLite.')
+    expect(reader.textContent).toContain('Source policy applied: team.')
   })
 
   it('narrows and reorders the list to the engine hits once they land', async () => {

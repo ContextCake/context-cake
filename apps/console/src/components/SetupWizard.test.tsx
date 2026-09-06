@@ -458,6 +458,7 @@ describe('SetupWizard first run', () => {
     // Two more 900ms ticks: the blip, then the answer that was waiting behind it.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)) })
     expect(container.textContent).toContain('Ready · 3000 concepts')
+    expect(container.textContent).not.toContain('/tmp/vault · indexing in the background')
   })
 
   it('surfaces server-side folder validation inline at the add step', async () => {
@@ -498,7 +499,7 @@ describe('SetupWizard first run', () => {
     expect(container.textContent).toContain('no documents found')
   })
 
-  it('says indexing continues in the background rather than blocking setup', async () => {
+  it('keeps source details free of a stale indexing label', async () => {
     mocks.apiFetch.mockImplementation(async (url: string, init?: RequestInit) => new Response(
       JSON.stringify(url === '/api/sources' && init?.method === 'POST'
         ? { ok: true, added: 'work-vault', indexing: true, hasDocuments: true, scanComplete: true }
@@ -513,7 +514,8 @@ describe('SetupWizard first run', () => {
     await act(async () => button('Skip').click())
     await act(async () => button('Skip for now').click())
 
-    expect(container.textContent).toContain('indexing in the background')
+    expect(container.textContent).toContain('/tmp/work-vault')
+    expect(container.textContent).not.toContain('indexing in the background')
   })
 
   it('keeps advanced MCP fields hidden until the user chooses to connect a server', async () => {

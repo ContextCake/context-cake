@@ -3162,6 +3162,7 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .cc-search-state span { display: block; }
 .cc-result-title { font-weight: 600; font-size: 13.5px; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-result-id, .cc-result-sources { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--cc-caption); margin-top: 4px; }
+.cc-result-excerpt-label { display: block; margin-top: 7px; font-size: 10px; color: var(--cc-caption); }
 .cc-result-snippet { margin: 7px 0; font-size: 12px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--cc-body); }
 .cc-result-date, .cc-result-group { display: block; font-size: 10px; color: var(--cc-caption); }
 .cc-result-group { margin-bottom: 4px; font-weight: 600; }

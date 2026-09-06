@@ -2360,14 +2360,14 @@ export function createEngineService({
   // (or MCP graph) and rebuilt a BM25 index over the whole corpus on every
   // keystroke the console debounced through here — the same shape of cost the
   // engine already refuses to pay per request for /api/graph and countTokens.
-  // search.mjs is still the only ranking module the retrieval eval scores, so
-  // this route never reimplements any part of it: it hands searchConcepts an
-  // adapter-shaped view over already-loaded snapshot concepts (searchSnapshotView)
-  // instead of the live sources array, which is the one substitution that
-  // keeps the ranking byte-identical while removing the disk/MCP reads.
+  // The retained index uses search.mjs's scorer over loaded snapshots.
+  // Optional source/type facets select concepts before top-k, retaining the
+  // full corpus statistics so narrowing a search never changes its scores.
   async function searchApi(url, waitMs = 0) {
     const query = url.searchParams.get("q");
     if (typeof query !== "string" || !query.trim()) throw httpError(400, "Provide ?q=<query>");
+    const source = url.searchParams.get("source") || undefined;
+    const type = url.searchParams.get("type") || undefined;
     let limit = 10;
     const rawLimit = url.searchParams.get("limit");
     if (rawLimit !== null) {
@@ -2396,7 +2396,7 @@ export function createEngineService({
     if (tokenizeQuery(query).length === 0) return { hits: [], indexing, indexingSources: pending };
     const key = contributingKey(contributing);
     if (!searchMemo || searchMemo.key !== key) searchMemo = { key, hits: new Map() };
-    const cacheKey = `${query}\u0000${limit}`;
+    const cacheKey = JSON.stringify([query, limit, source, type]);
     let promise = searchMemo.hits.get(cacheKey);
     if (!promise) {
       // The incremental index replaces the per-query corpus rebuild
@@ -2405,7 +2405,7 @@ export function createEngineService({
       const snapshots = contributing.map((p) => ({
         name: p.source.name, level: p.source.level, gen: p.snap.gen, ids: p.snap.ids, concepts: p.snap.concepts,
       }));
-      promise = (async () => searchIndex.search(snapshots, { query, limit }))().catch((err) => {
+      promise = (async () => searchIndex.search(snapshots, { query, limit, source, type }))().catch((err) => {
         if (searchMemo?.hits.get(cacheKey) === promise) searchMemo.hits.delete(cacheKey);
         throw err;
       });

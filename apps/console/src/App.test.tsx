@@ -51,6 +51,39 @@ describe('Mac-first application shell', () => {
     expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('')
   })
 
+  it.each(['form', 'shortcut'] as const)('carries the Home %s query into Knowledge', async (entry) => {
+    window.history.replaceState(null, '', '/?mode=demo#/overview')
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    const query = entry === 'form' ? 'build and test' : 'architecture'
+    if (entry === 'form') {
+      const input = container.querySelector<HTMLInputElement>('[aria-label="Search your project context"]')!
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, query)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      await act(async () => input.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    } else {
+      await act(async () => button(query).click())
+    }
+    expect(window.location.hash).toBe('#/concepts')
+    expect(container.querySelector<HTMLInputElement>('input[data-context-search]')?.value).toBe(query)
+    expect(container.querySelectorAll('.cc-concept-result')).toHaveLength(0)
+  })
+
+  it('leaves the destination query untouched when a Home search is blocked by the navigation guard', async () => {
+    window.history.replaceState(null, '', '/?mode=demo#/overview')
+    await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
+    const guard = vi.fn((event: Event) => event.preventDefault())
+    window.addEventListener('contextcake:before-navigate', guard)
+    try {
+      await act(async () => button('architecture').click())
+      expect(guard).toHaveBeenCalledOnce()
+      expect(window.location.hash).toBe('#/overview')
+    } finally { window.removeEventListener('contextcake:before-navigate', guard) }
+    await act(async () => button('Knowledge').click())
+    expect(container.querySelector<HTMLInputElement>('input[data-context-search]')?.value).toBe('')
+  })
+
   it('opens the command palette with Command-K and restores focus after Escape', async () => {
     await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })

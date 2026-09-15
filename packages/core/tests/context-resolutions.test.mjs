@@ -127,6 +127,10 @@ test('pause and undo are durable, stop unattended decisions, and refuse undo acr
   const second = await f.ops.enable(await f.body());
   await assert.rejects(f.ops.undo(first.decision.id), { code: 'NEWER_DECISION' });
   await f.ops.undo(second.decision.id);
+  const observations = [];
+  await f.apply({ observe: event => observations.push(event) });
+  await f.apply({ observe: event => observations.push(event), coverageComplete: false });
+  assert.deepEqual(observations, [], 'intentionally undone decisions do not create attention events');
   assert.equal((await f.apply()).sections[0].contextResolution.status, 'undone');
   assert.equal((await f.apply()).sections[0].content, f.state.resolved.sections[0].content);
   assert.equal((await f.ops.undo(second.decision.id)).unchanged, true);

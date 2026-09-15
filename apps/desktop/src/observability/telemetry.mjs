@@ -50,7 +50,12 @@ export function createTelemetry({
     gauges = new Map(),
     delivered = new Set()
   const instanceId = randomBytes(8).toString('hex')
-  const bounds = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 30000]
+  // Cover the engine's two-hour maximum indexing budget, including deadline
+  // overhead. Otherwise a multi-minute index quantile silently clamps to 30s.
+  const bounds = [
+    1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 30000, 60000, 120000, 300000,
+    600000, 1800000, 3600000, 7200000, 10800000,
+  ]
   const subscription = channel(CHANNEL)
   // Events come from the core's closed schema. Independently allowlist at export.
   const accept = (event) => {

@@ -10,12 +10,13 @@ copies; the developer's normal app configuration and knowledge folders were not 
 - Engine: 59/59 suites pass, including the unchanged retrieval evaluation.
   Golden set: 38 questions; recall@1 0.895, recall@5 1.000, MRR 0.947,
   conflict coverage 1.000. New diagnostics and policy tests also pass after fixes.
-- Desktop: 141/141 tests pass, covering lifecycle/ownership, CLI dispatch, bounded export and trust-boundary tests.
+- Desktop: 143/143 tests pass, covering lifecycle/ownership, CLI dispatch, bounded export and trust-boundary tests.
   A real nonresponding HTTP collector verifies two-second export deadlines and a
   10,000-event burst remains bounded at the configured queue capacity.
-- Console: 767/767 tests across 43 files pass, including diagnostics empty data, nullable failed-source totals, percentile samples,
+- Console: 769/769 tests across 43 files pass, including diagnostics empty data, nullable failed-source totals, percentile samples,
   frame URL restrictions, demo isolation and paused/unmounted polling have regression
-  coverage. Full console tests, typecheck and build pass.
+  coverage. Activity bins, unavailable observations, same-instant samples and accessible
+  interval counts are also covered. Full console tests, typecheck and build pass.
 - Site: 41-page build plus existing install/commerce gates pass. No public deployment performed.
 
 ## Real stack and Mac app
@@ -44,6 +45,30 @@ Verified with the pinned image and app-owned loopback bindings:
 - Runtime inspection confirms dynamic 127.0.0.1 bindings, the owned data volume and
   read-only provisioning mounts; no knowledge folder or Docker socket is mounted.
   Trusted-window tests reject Grafana and same-origin subframes for native IPC.
+
+## Overview design
+
+The native Overview follows the dashboard hierarchy recommended in
+[Grafana's dashboard best practices](https://grafana.com/docs/grafana/latest/visualizations/dashboards/build-dashboards/best-practices/):
+retrieval volume, errors and duration first, then source coverage and operation
+inspection, followed by resource and local-stack controls. The activity chart
+reports retained observation counts rather than implying a complete request rate.
+Search and read duration remain separate; P95 requires 20 samples for each.
+
+Summary cells share a baseline and use tabular numbers. Activity and performance
+panels sit together at wider sizes and stack in narrower windows; source and
+operation tables use the full content width. Color distinguishes series and
+attention states, with labels and an accessible interval table providing the
+same information without color or pointer hover. Native light/dark themes,
+compact/comfortable rows and pause controls remain available.
+
+## Review corrections
+
+Independent review prompted three fixes: quitting still stops the owned container
+when saving preferences fails; histogram bounds cover supported long index passes;
+and undone policies do not emit stale/blocked diagnostic events. Regression tests
+cover each. CI also prompted a compatible js-yaml security patch and strict
+allowlisting/encoding of embedded-dashboard time range and theme parameters.
 
 ## Incremental walkthrough
 

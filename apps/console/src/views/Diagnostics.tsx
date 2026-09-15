@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '../api'
 import type { SourceStatus } from '../types'
+import { DiagnosticActivity } from './DiagnosticActivity'
 import { useStoreData } from '../store'
 import { useThemeMode } from '../theme-mode'
 import {
@@ -87,6 +88,11 @@ export function grafanaUrl(
   trace?: string,
 ): string | null {
   if (!origin) return null
+  if (
+    !['light', 'dark'].includes(theme) ||
+    !['now-15m', 'now-1h', 'now-24h'].includes(range)
+  )
+    return null
   try {
     const base = new URL(origin)
     if (
@@ -101,9 +107,9 @@ export function grafanaUrl(
     )
       return null
     if (trace && /^[a-f0-9]{32}$/.test(trace)) {
-      return `${base.origin}/d/contextcake-trace/trace?kiosk&theme=${theme}&var-traceId=${trace}&from=${range}&to=now`
+      return `${base.origin}/d/contextcake-trace/trace?kiosk&theme=${encodeURIComponent(theme)}&var-traceId=${encodeURIComponent(trace)}&from=${encodeURIComponent(range)}&to=now`
     }
-    return `${base.origin}/d/contextcake/contextcake?kiosk&theme=${theme}&from=${range}&to=now&refresh=5s`
+    return `${base.origin}/d/contextcake/contextcake?kiosk&theme=${encodeURIComponent(theme)}&from=${encodeURIComponent(range)}&to=now&refresh=5s`
   } catch {
     return null
   }
@@ -234,6 +240,16 @@ function DiagnosticsInner() {
         </EmptyState>
       </section>
     )
+
+  const searches = retrievalSummary(report?.operations ?? [], 'search')
+  const reads = retrievalSummary(report?.operations ?? [], 'read')
+  const retrievalCount = searches.samples + reads.samples
+  const retrievalErrors = searches.errors + reads.errors
+  const workingSources =
+    report?.health.sources.filter(
+      (s) =>
+        s.refreshing || ['queued', 'scanning', 'loading'].includes(s.phase),
+    ).length ?? 0
 
   const stackControls = (
     <section className="cc-diag-stack" aria-labelledby="local-grafana-title">
@@ -432,11 +448,84 @@ function DiagnosticsInner() {
               {paused ? 'Resume updates' : 'Pause updates'}
             </Button>
           </div>
+          <div className="cc-diag-statusline">
+            <div>
+              <StatusBadge tone={sourceAttention ? 'attention' : 'neutral'}>
+                {!report
+                  ? 'Checking source health'
+                  : !report.health.sources.length
+                    ? 'No sources configured'
+                    : sourceAttention
+                      ? `${sourceAttention} ${sourceAttention === 1 ? 'source needs' : 'sources need'} attention`
+                      : 'Sources available'}
+              </StatusBadge>
+              <span>
+                {report
+                  ? `${report.health.sources.length} configured · ${workingSources ? `${workingSources} indexing` : 'No index pass in progress'}`
+                  : 'Waiting for the engine'}
+              </span>
+            </div>
+            <Button
+              variant="quiet"
+              onClick={() =>
+                document
+                  .getElementById('diagnostic-sources')
+                  ?.scrollIntoView({ block: 'start' })
+              }
+            >
+              Inspect sources ↓
+            </Button>
+          </div>
+          <div className="cc-diag-metrics" aria-label="Retrieval summary">
+            <div>
+              <span>Observed retrievals</span>
+              <strong>{report ? retrievalCount.toLocaleString() : '—'}</strong>
+              <small>
+                {report
+                  ? `${searches.samples} ${searches.samples === 1 ? 'search' : 'searches'} · ${reads.samples} ${reads.samples === 1 ? 'read' : 'reads'}`
+                  : 'Waiting for observations'}
+              </small>
+            </div>
+            <div className={retrievalErrors ? 'has-errors' : ''}>
+              <span>Failed retrievals</span>
+              <strong>
+                {retrievalCount ? retrievalErrors.toLocaleString() : '—'}
+              </strong>
+              <small>
+                {retrievalCount
+                  ? `${((retrievalErrors / retrievalCount) * 100).toFixed(1)}% of observed retrievals`
+                  : 'No retrieval samples'}
+              </small>
+            </div>
+            <div>
+              <span>Search duration · median</span>
+              <strong>{duration(searches.median)}</strong>
+              <small>
+                {searches.samples
+                  ? `${searches.samples} measured ${searches.samples === 1 ? 'search' : 'searches'}`
+                  : 'No search samples'}
+              </small>
+            </div>
+            <div>
+              <span>Read duration · median</span>
+              <strong>{duration(reads.median)}</strong>
+              <small>
+                {reads.samples
+                  ? `${reads.samples} measured ${reads.samples === 1 ? 'read' : 'reads'}`
+                  : 'No read samples'}
+              </small>
+            </div>
+          </div>
           <div className="cc-diag-layout">
             <div className="cc-diag-primary">
-              <section className="cc-diag-section">
+              <DiagnosticActivity
+                rows={report?.operations ?? []}
+                from={report?.observedFrom ?? 0}
+                to={report?.observedTo ?? 0}
+              />
+              <section className="cc-diag-section cc-diag-panel cc-diag-latency">
                 <header className="cc-diag-section-heading">
-                  <h3>Retrieval</h3>
+                  <h3>Retrieval performance</h3>
                   <span className="cc-diag-note">
                     {report
                       ? `${report.sampleCount} ${report.sampleCount === 1 ? 'observation' : 'observations'}`
@@ -491,9 +580,12 @@ function DiagnosticsInner() {
                   insufficient data.
                 </p>
               </section>
-              <section className="cc-diag-section">
+              <section
+                className="cc-diag-section cc-diag-sources-panel"
+                id="diagnostic-sources"
+              >
                 <header className="cc-diag-section-heading">
-                  <h3>Source health</h3>
+                  <h3>Source health & indexing</h3>
                   {report && (
                     <StatusBadge
                       tone={sourceAttention ? 'attention' : 'neutral'}
@@ -505,37 +597,81 @@ function DiagnosticsInner() {
                   )}
                 </header>
                 {report?.health.sources.length ? (
-                  <div className="cc-diag-source-list">
-                    {report.health.sources.map((s) => (
-                      <div className="cc-diag-source" key={s.name}>
-                        <div className="cc-diag-source-name">
-                          <strong title={s.name}>{s.name}</strong>
-                          <span>
-                            {s.refreshing ? 'Refreshing' : words(s.phase)}
-                            {s.warnings
-                              ? ` · ${s.warnings} ${s.warnings === 1 ? 'warning' : 'warnings'}`
-                              : ''}
-                          </span>
-                        </div>
-                        <div className="cc-diag-source-progress">
-                          <span>
-                            {s.total == null
-                              ? 'Document total unknown'
-                              : `${s.loaded.toLocaleString()} / ${s.total.toLocaleString()} documents`}
-                          </span>
-                          <StatusBadge
-                            tone={
-                              s.warnings ||
-                              ['error', 'degraded'].includes(s.status)
-                                ? 'attention'
-                                : 'neutral'
-                            }
-                          >
-                            {words(s.status)}
-                          </StatusBadge>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="cc-diag-table cc-diag-source-table">
+                    <table>
+                      <caption className="sr-only">
+                        Source health and indexing progress
+                      </caption>
+                      <thead>
+                        <tr>
+                          <th>Source</th>
+                          <th>Coverage</th>
+                          <th>Indexing</th>
+                          <th className="is-number">Documents</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...report.health.sources]
+                          .sort(
+                            (a, b) =>
+                              Number(
+                                !['ok', 'ready'].includes(b.status) ||
+                                  b.warnings > 0,
+                              ) -
+                              Number(
+                                !['ok', 'ready'].includes(a.status) ||
+                                  a.warnings > 0,
+                              ),
+                          )
+                          .map((s) => (
+                            <tr key={s.name}>
+                              <th scope="row" title={s.name}>
+                                {s.name}
+                                {s.error && (
+                                  <span
+                                    className="cc-diag-source-error"
+                                    title={s.error}
+                                  >
+                                    {s.error}
+                                  </span>
+                                )}
+                              </th>
+                              <td>
+                                <StatusBadge
+                                  tone={
+                                    s.warnings ||
+                                    ['error', 'degraded'].includes(s.status)
+                                      ? 'attention'
+                                      : 'neutral'
+                                  }
+                                >
+                                  {s.status === 'ok'
+                                    ? 'Available'
+                                    : words(s.status)}
+                                </StatusBadge>
+                                {s.warnings > 0 && (
+                                  <span className="cc-diag-work">
+                                    {s.warnings}{' '}
+                                    {s.warnings === 1 ? 'warning' : 'warnings'}
+                                  </span>
+                                )}
+                              </td>
+                              <td>
+                                {s.refreshing
+                                  ? 'Refreshing'
+                                  : s.phase === 'ready'
+                                    ? 'Up to date'
+                                    : words(s.phase)}
+                              </td>
+                              <td className="is-number">
+                                {s.total == null
+                                  ? 'Document total unknown'
+                                  : `${s.loaded.toLocaleString()} / ${s.total.toLocaleString()}`}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
                   </div>
                 ) : (
                   <EmptyState
@@ -551,9 +687,14 @@ function DiagnosticsInner() {
                   </EmptyState>
                 )}
               </section>
-              <section className="cc-diag-section">
+              <section className="cc-diag-section cc-diag-operations-panel">
                 <header className="cc-diag-section-heading">
-                  <h3>Recent operations</h3>
+                  <div>
+                    <h3>Recent operations</h3>
+                    <p className="cc-diag-note">
+                      Inspect an operation, then follow its trace.
+                    </p>
+                  </div>
                   <div className="cc-diag-actions">
                     <label>
                       <span className="sr-only">Filter operations</span>

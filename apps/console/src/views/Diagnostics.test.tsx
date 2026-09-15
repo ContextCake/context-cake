@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Diagnostics, grafanaUrl, retrievalSummary } from './Diagnostics'
+import { DiagnosticActivity } from './DiagnosticActivity'
 
 const state = vi.hoisted(() => ({ mode: 'demo' }))
 vi.mock('../store', () => ({ useStoreData: () => state }))
@@ -22,6 +23,42 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+it('distinguishes unavailable activity and makes interval counts accessible', async () => {
+  const container = document.createElement('div'),
+    root = createRoot(container)
+  await act(async () =>
+    root.render(<DiagnosticActivity rows={[]} from={0} to={0} />),
+  )
+  expect(container.textContent).toContain('Waiting for the engine')
+  expect(container.textContent).not.toContain('0 observed')
+  await act(async () =>
+    root.render(<DiagnosticActivity rows={[]} from={100} to={200} />),
+  )
+  expect(container.textContent).toContain('No retrieval activity yet')
+  await act(async () =>
+    root.render(
+      <DiagnosticActivity
+        rows={[
+          { at: 100, operation: 'search', outcome: 'error', durationMs: 1 },
+        ]}
+        from={100}
+        to={100}
+      />,
+    ),
+  )
+  expect(container.querySelector('svg')).not.toBeNull()
+  expect(container.querySelector('details summary')?.textContent).toBe(
+    'View interval counts',
+  )
+  expect(container.querySelectorAll('tbody tr')).toHaveLength(12)
+  expect(
+    [...container.querySelectorAll('tbody tr:first-child td')].map(
+      (cell) => cell.textContent,
+    ),
+  ).toEqual(['1', '0', '1'])
+  await act(async () => root.unmount())
+})
+
 it('never contacts localhost or instantiates a frame in the public demo', async () => {
   ;(
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -38,6 +75,10 @@ it('never contacts localhost or instantiates a frame in the public demo', async 
 })
 
 it('refuses non-local frame origins and encodes trace navigation', () => {
+  expect(
+    grafanaUrl('http://127.0.0.1:3000', 'light', 'now-1h&theme=dark'),
+  ).toBeNull()
+  expect(grafanaUrl('http://127.0.0.1:3000', 'system', 'now-1h')).toBeNull()
   for (const origin of [
     'https://grafana.com',
     'http://localhost:3000',
@@ -118,4 +159,21 @@ it('renders failed sources with unknown totals and stops polling when paused or 
   await act(async () => root.unmount())
   await act(async () => vi.advanceTimersByTimeAsync(15000))
   expect(fetch).toHaveBeenCalledTimes(requests)
+})
+
+it('activity counts only observed retrievals and preserves failures at window boundaries', async () => {
+  const { activityBuckets } = await import('./DiagnosticActivity')
+  const bins = activityBuckets(
+    [
+      { at: 100, operation: 'search', outcome: 'ok', durationMs: 1 },
+      { at: 1200, operation: 'read', outcome: 'error', durationMs: 2 },
+      { at: 50, operation: 'search', outcome: 'ok', durationMs: 1 },
+      { at: 500, operation: 'index', outcome: 'error', durationMs: 2 },
+    ],
+    100,
+    1200,
+  )
+  expect(bins[0].search).toBe(1)
+  expect(bins[bins.length - 1]).toEqual({ search: 0, read: 1, errors: 1 })
+  expect(bins.reduce((sum, b) => sum + b.search + b.read, 0)).toBe(2)
 })

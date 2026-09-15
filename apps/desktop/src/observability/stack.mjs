@@ -131,6 +131,7 @@ export function createLocalGrafana({
       enabled = saved.version === 1 && saved.enabled === true
     } catch {}
     state = enabled ? 'stopped' : 'disabled'
+    failure = null
     return status()
   }
   async function start({ enable = false } = {}) {
@@ -331,10 +332,18 @@ export function createLocalGrafana({
     ++epoch
     pulling?.abort()
     state = enabled ? 'stopped' : 'disabled'
+    failure = null
     origin = null
     endpoint = null
     stopping = (async () => {
-      await save()
+      // A full disk must not prevent shutting down the owned container. Report
+      // persistence failure, but still complete the independent Docker cleanup.
+      try {
+        await save()
+      } catch {
+        failure = 'CONFIG_WRITE_FAILED'
+        state = 'failed'
+      }
       // Creates finish before inspection, while a potentially long pull is cancelled.
       await pending
       if (!wasActive) return status()

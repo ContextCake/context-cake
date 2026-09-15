@@ -356,3 +356,57 @@ test('an unresponsive collector has bounded queues and request deadlines', async
   assert.equal(telemetry.status().dropped, 10000)
   assert.equal(telemetry.status().state, 'unavailable')
 })
+
+test('configuration write failure never prevents owned container cleanup', async (t) => {
+  const directory = await temp(t),
+    docker = fakeDocker(directory)
+  const stack = createLocalGrafana({
+    directory,
+    run: docker.run,
+    fetcher: async () => ({ ok: true }),
+  })
+  await stack.start({ enable: true })
+  await fs.mkdir(`${stack.configPath}.tmp`)
+  await stack.stop()
+  assert.equal(stack.status().state, 'failed')
+  assert.equal(stack.status().failure, 'CONFIG_WRITE_FAILED')
+  assert.ok(docker.calls.some((args) => args[0] === 'stop'))
+  assert.equal(docker.volume, true)
+})
+
+test('duration histograms represent multi-minute and maximum-budget indexes', async (t) => {
+  const directory = await temp(t),
+    configPath = path.join(directory, 'config')
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({ enabled: true, endpoint: 'http://127.0.0.1:4318' }),
+  )
+  let metrics
+  const telemetry = createTelemetry({
+    configPath,
+    fetcher: async (url, options) => {
+      if (url.endsWith('/metrics'))
+        metrics = JSON.parse(options.body).resourceMetrics[0].scopeMetrics[0]
+          .metrics
+      return { ok: true, json: async () => ({}) }
+    },
+  })
+  t.after(() => telemetry.close())
+  channel('contextcake.diagnostics.v1').publish({
+    ...event,
+    operation: 'index',
+    durationMs: 60000,
+  })
+  channel('contextcake.diagnostics.v1').publish({
+    ...event,
+    operation: 'index',
+    durationMs: 7200000,
+  })
+  await telemetry.flush()
+  const point = metrics.find((m) => m.name === 'contextcake.duration').histogram
+    .dataPoints[0]
+  assert.ok(point.explicitBounds.at(-1) > 7200000)
+  assert.equal(point.bucketCounts[point.explicitBounds.indexOf(60000)], '1')
+  assert.equal(point.bucketCounts[point.explicitBounds.indexOf(7200000)], '1')
+  assert.equal(point.bucketCounts.at(-1), '0')
+})

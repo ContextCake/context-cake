@@ -15,6 +15,7 @@ import {
   createSourceOperations,
   parseLevel,
   syncPackAssignmentLevel,
+  trimSlashes,
 } from "../src/control/sources.mjs";
 import { readContextManifest, readContextManifestQuarantined } from "../src/manifest.mjs";
 
@@ -455,4 +456,26 @@ test("patchSource on a Pack layer moves the assignment instead of dying on pack-
   const manifest = readContextManifest(manifestPath, { allowMissing: false });
   assert.equal(manifest.layers.find((layer) => layer.name === "pack-demo").level, 5);
   assert.equal(manifest.packs.demo.assignments[0].level, 5);
+});
+
+test("subdir slashes trim exactly as the regex they replaced, in linear time", () => {
+  // The old regex, as the specification. It rescanned an inner slash run from
+  // each slash in it (ReDoS); subdir arrives in the add-source request body.
+  const EDGE_SLASHES = /^\/+|\/+$/g;
+  assert.equal(trimSlashes("//docs/guides/"), "docs/guides");
+  const pieces = ["/", "//", "a", ".", " ", "\n"];
+  let state = 13;
+  const next = () => (state = (Math.imul(state, 1103515245) + 12345) >>> 0) >>> 16;
+  for (let i = 0; i < 50_000; i += 1) {
+    let value = "";
+    for (let length = next() % 12; length > 0; length -= 1) value += pieces[next() % pieces.length];
+    assert.equal(trimSlashes(value), value.replace(EDGE_SLASHES, ""), JSON.stringify(value));
+  }
+
+  const hostile = `x${"/".repeat(200_000)}x`;
+  const started = performance.now();
+  assert.equal(trimSlashes(hostile), hostile);
+  assert.equal(trimSlashes("/".repeat(200_000)), "");
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 5_000, `a hostile subdir took ${Math.round(elapsed)} ms`);
 });

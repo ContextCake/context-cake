@@ -28,8 +28,44 @@ const GIT_OPTS = {
 };
 
 // Remote URLs (which may embed credentials) never surface to agents or logs.
-function scrub(text) {
-  return String(text ?? "").replace(/[a-z][a-z0-9+.-]*:\/\/\S+|git@\S+/gi, "<remote>");
+// Same result as .replace(/[a-z][a-z0-9+.-]*:\/\/\S+|git@\S+/gi, "<remote>"), in
+// one pass: that regex rescanned a run of scheme characters from every letter in
+// it, and git's stderr carries whatever a remote chooses to print.
+export function scrub(text) {
+  const value = String(text ?? "");
+  let out = "";
+  let copied = 0;
+  let i = 0;
+  while (i < value.length) {
+    if (!/[a-z0-9+.-]/i.test(value[i])) {
+      i += 1;
+      continue;
+    }
+    // Every match starts inside a run of scheme characters, and every start in
+    // one run reaches the same end: "://" or "@" has to come right there.
+    let end = i;
+    while (end < value.length && /[a-z0-9+.-]/i.test(value[end])) end += 1;
+    let start = -1;
+    if (value.startsWith("://", end) && end + 3 < value.length && /\S/.test(value[end + 3])) {
+      // The leftmost letter in the run; a run of digits and punctuation has none.
+      for (let at = i; at < end; at += 1) {
+        if (/[a-z]/i.test(value[at])) { start = at; break; }
+      }
+    } else if (value[end] === "@" && end - i >= 3 && value.slice(end - 3, end).toLowerCase() === "git"
+      && end + 1 < value.length && /\S/.test(value[end + 1])) {
+      start = end - 3;
+    }
+    if (start === -1) {
+      i = end;
+      continue;
+    }
+    let stop = end;
+    while (stop < value.length && /\S/.test(value[stop])) stop += 1;
+    out += `${value.slice(copied, start)}<remote>`;
+    copied = stop;
+    i = stop;
+  }
+  return out + value.slice(copied);
 }
 
 export async function runGit(root, args, { allowFailure = false } = {}) {

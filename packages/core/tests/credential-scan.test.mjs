@@ -1,12 +1,13 @@
-// The capture scanner's JWT check replaced a regex that rescanned a long token
-// run from every "eyJ" inside it (polynomial ReDoS). The regex stays here as
-// the specification: the check must reject exactly what it rejected.
+// Capture's JWT check and its frontmatter line-break flattening replaced
+// regexes that backtracked polynomially on long runs (ReDoS). The regexes stay
+// here as the specification: the replacements must answer exactly as they did.
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { scanForCredentials } from "../src/capture.mjs";
+import { renderCapture, scanForCredentials } from "../src/capture.mjs";
 
 const JWT = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/;
+const LINE_BREAK_RUN = /\s*[\r\n]+\s*/g;
 
 test("the capture JWT check rejects exactly what its old regex did, in linear time", () => {
   // Seeded near-misses around the ten-character minimums and the "eyJ"
@@ -32,4 +33,34 @@ test("the capture JWT check rejects exactly what its old regex did, in linear ti
   assert.equal(scanForCredentials("eyJ".repeat(300_000)), false);
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 5_000, `a hostile capture field took ${Math.round(elapsed)} ms`);
+});
+
+test("capture frontmatter flattens line breaks exactly as its old regex did, in linear time", () => {
+  const flat = (text) => text.replace(LINE_BREAK_RUN, " ");
+  // fmValue's quoting, unchanged, so the rendered line can be compared whole.
+  const frontmatter = (text) => {
+    const value = flat(text).trim();
+    return /[:#]|^['"\s]|['"\s]$/.test(value) ? `"${value}"` : value;
+  };
+  // Seeded. Every kind of blank, with and without a line break in the run.
+  const pieces = [" ", "\t", "\r", "\n", "\v", String.fromCharCode(0x2028), String.fromCharCode(0xa0), String.fromCharCode(0xfeff), "a", ":", "'"];
+  let state = 7;
+  const next = () => (state = (Math.imul(state, 1103515245) + 12345) >>> 0) >>> 16;
+  for (let i = 0; i < 50_000; i += 1) {
+    let value = "";
+    for (let length = next() % 16; length > 0; length -= 1) value += pieces[next() % pieces.length];
+    const lines = renderCapture({ kind: "gotcha", title: value, sections: {} }, { author: value, capturedAt: "t" }).split("\n");
+    assert.deepEqual(
+      [lines[2], lines[3], lines[8]],
+      [`title: ${frontmatter(value)}`, `author: ${frontmatter(value)}`, `# ${flat(value)}`],
+      JSON.stringify(value),
+    );
+  }
+
+  const started = performance.now();
+  // A blank run with no line break is what the old pattern rescanned.
+  const rendered = renderCapture({ kind: "gotcha", title: `${"\t".repeat(200_000)}x`, sections: {} }, { author: `a${" ".repeat(200_000)}b`, capturedAt: "t" });
+  const elapsed = performance.now() - started;
+  assert.ok(rendered.includes("title: x"));
+  assert.ok(elapsed < 5_000, `a hostile capture title took ${Math.round(elapsed)} ms`);
 });

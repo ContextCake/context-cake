@@ -130,6 +130,16 @@ export function normalizeRepo(repo) {
 
 function slugify(s) { return s.replace(/[^\w.-]+/g, "__"); }
 
+// What .replace(/^\/+|\/+$/g, "") did, without rescanning an inner slash run
+// from each slash in it.
+export function trimSlashes(text) {
+  let start = 0;
+  while (start < text.length && text[start] === "/") start += 1;
+  let end = text.length;
+  while (end > start && text[end - 1] === "/") end -= 1;
+  return text.slice(start, end);
+}
+
 // A pasted "~/notes" reaches the manifest verbatim otherwise, and buildSources
 // then resolves a literal "~" directory that doesn't exist.
 export function expandHome(p) {
@@ -341,7 +351,7 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
       const { url, slug } = normalizeRepo(String(b.repo ?? ""));
       const dir = path.join(CACHE_DIR, slug);
       await gitCloneOrPull(url, dir, b.ref ? String(b.ref) : null);
-      const sub = b.subdir ? String(b.subdir).replace(/^\/+|\/+$/g, "") : "";
+      const sub = b.subdir ? trimSlashes(String(b.subdir)) : "";
       // The sub-directory must stay inside the clone — otherwise this field would
       // set a new sandbox root (layer.path) pointing anywhere on disk.
       let abs = dir;

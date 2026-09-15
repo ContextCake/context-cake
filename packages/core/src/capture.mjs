@@ -173,9 +173,16 @@ const SECTION_ORDER = {
 // parseFrontmatter is line-based: values must be single-line, and values with
 // ":" / "#" / quotes get wrapped so parseYamlScalar unwraps back to the original.
 function fmValue(value) {
-  const flat = String(value).replace(/\s*[\r\n]+\s*/g, " ").trim();
+  const flat = flattenLineBreaks(String(value)).trim();
   if (/[:#]|^['"\s]|['"\s]$/.test(flat)) return `"${flat}"`;
   return flat;
+}
+
+// What .replace(/\s*[\r\n]+\s*/g, " ") did: each whitespace run holding a line
+// break becomes one space. `\s+` matches a whole run once; the old pattern
+// rescanned a run with no line break from every blank in it.
+function flattenLineBreaks(text) {
+  return text.replace(/\s+/g, (run) => (run.includes("\n") || run.includes("\r") ? " " : run));
 }
 
 export function renderCapture(capture, { author, capturedAt }) {
@@ -192,7 +199,7 @@ export function renderCapture(capture, { author, capturedAt }) {
   // frontmatter-breaking characters so a link can never inject a new key.
   const safeLinks = (capture.links ?? []).map((l) => String(l).replace(/[\r\n\[\],]/g, " ").trim()).filter(Boolean);
   if (safeLinks.length > 0) lines.push(`links: [${safeLinks.join(", ")}]`);
-  lines.push("---", "", `# ${String(capture.title).replace(/\s*[\r\n]+\s*/g, " ")}`, "");
+  lines.push("---", "", `# ${flattenLineBreaks(String(capture.title))}`, "");
   // Canonical order first, then any extra sections the caller supplied.
   const ordered = SECTION_ORDER[capture.kind] ?? [];
   const sectionKeys = [...ordered, ...Object.keys(capture.sections ?? {}).filter((k) => !ordered.includes(k))];

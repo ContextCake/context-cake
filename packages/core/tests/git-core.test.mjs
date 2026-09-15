@@ -11,7 +11,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { commitPathsWithMutation } from "../src/sources/git-core.mjs";
+import { commitPathsWithMutation, scrub } from "../src/sources/git-core.mjs";
 
 async function repo() {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-git-core-"));
@@ -73,4 +73,37 @@ test("a mutation that throws halfway is rolled back under the repo lock, litter 
     assert.equal(execFileSync("git", ["-C", root, "show", "--name-only", "--format=", "HEAD"], { env, encoding: "utf8" }).trim(), "a.md");
     assert.equal(execFileSync("git", ["-C", root, "status", "--porcelain"], { env, encoding: "utf8" }).replace(/\n$/, ""), " M b.md", "the unnamed file stays dirty, not swept in");
   } finally { await cleanup(); }
+});
+
+test("scrub hides exactly what its old regex did, in linear time", () => {
+  // The old regex, as the specification. It rescanned a run of scheme
+  // characters from every letter in it (ReDoS), and git's stderr carries
+  // whatever a remote prints.
+  const REMOTE = /[a-z][a-z0-9+.-]*:\/\/\S+|git@\S+/gi;
+  assert.equal(
+    scrub("fatal: unable to access 'https://user:tok@github.com/o/r.git/': error: 403"),
+    "fatal: unable to access '<remote> error: 403",
+  );
+  assert.equal(scrub("Permission denied for git@github.com:org/repo.git"), "Permission denied for <remote>");
+  // Seeded, around the edges: runs with and without a letter, "://" and "git@"
+  // followed by a blank or nothing, and case-folding lookalikes that [a-z]/i
+  // does not match (Kelvin sign, long s).
+  const pieces = ["a", "Z", "1", "+", ".", "-", ":", "/", "://", "@", "git", "GIT", " ", "\n", "https", String.fromCharCode(0x212a), String.fromCharCode(0x17f), String.fromCharCode(0xa0)];
+  let state = 17;
+  const next = () => (state = (Math.imul(state, 1103515245) + 12345) >>> 0) >>> 16;
+  let changed = 0;
+  for (let i = 0; i < 50_000; i += 1) {
+    let value = "";
+    for (let length = next() % 12; length > 0; length -= 1) value += pieces[next() % pieces.length];
+    const expected = value.replace(REMOTE, "<remote>");
+    assert.equal(scrub(value), expected, JSON.stringify(value));
+    if (expected !== value) changed += 1;
+  }
+  assert.ok(changed > 2_000, `too few URLs sampled: ${changed}`);
+
+  const started = performance.now();
+  assert.equal(scrub("a".repeat(300_000)), "a".repeat(300_000));
+  assert.equal(scrub(`${"a".repeat(300_000)}:/`), `${"a".repeat(300_000)}:/`);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 5_000, `hostile git output took ${Math.round(elapsed)} ms`);
 });

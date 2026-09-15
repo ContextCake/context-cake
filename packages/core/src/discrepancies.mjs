@@ -281,7 +281,7 @@ export function rewriteLinkTarget(text, oldTarget, newTarget) {
   return editLinks(text, oldTarget, (link) => {
     const raw = link.target;
     const lead = raw.match(/^\s*/)[0];
-    const trail = raw.match(/\s*$/)[0];
+    const trail = raw.slice(raw.trimEnd().length);
     const trimmed = raw.trim();
     const hash = trimmed.indexOf("#");
     const before = hash === -1 ? trimmed : trimmed.slice(0, hash);
@@ -654,7 +654,19 @@ export function filterDiscrepancies(list, { status, kind, conceptId, target, sou
     return true;
   });
 }
-function headingText(value) { return String(value ?? "").replace(/^#+\s*/, "").replace(/\s*\{#.*\}\s*$/, "").trim(); }
+// Same result as stripping /\s*\{#.*\}\s*$/, without rescanning to the end
+// from every "{#": the group must close on the last non-blank character, and
+// `.*` could not cross a line terminator, so it opens at the first "{#" after one.
+function headingText(value) {
+  const text = String(value ?? "").replace(/^#+\s*/, "");
+  const end = text.trimEnd().length;
+  if (text[end - 1] !== "}") return text.trim();
+  let from = end - 1;
+  while (from > 0 && !isLineTerminator(text.charCodeAt(from - 1))) from -= 1;
+  const open = text.indexOf("{#", from);
+  return (open !== -1 && open <= end - 3 ? text.slice(0, open) : text).trim();
+}
+function isLineTerminator(code) { return code === 0x0a || code === 0x0d || code === 0x2028 || code === 0x2029; }
 function healthSummary(source) { return source ? { source: source.name, status: source.status, error: source.error ?? null } : null; }
 function newestDate(values) {
   return values.filter(Boolean).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;

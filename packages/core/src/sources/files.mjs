@@ -10,7 +10,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import {
   parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading,
-  walkDocs, walkDocEntries, withDocumentDate, localDate, MAX_DOC_BYTES,
+  matchHeadingLine, stripAttrGroups, walkDocs, walkDocEntries, withDocumentDate, localDate, MAX_DOC_BYTES,
 } from "./okf-local.mjs";
 
 // loadConcept resolution order on id collision (e.g. notes.md + notes.txt).
@@ -128,17 +128,16 @@ function parsePlainMarkdown(content, stem, mtime) {
   const sections = [];
   let current = { key: "overview", heading: null, level: 0, lines: [], updated: mtime, override: null };
   for (const line of content.split(/\r?\n/)) {
-    const h1 = line.match(/^#\s+(.+?)\s*$/);
-    if (h1 && title === null) {
-      title = stripAttrs(h1[1]);
+    const heading = matchHeadingLine(line);
+    if (heading?.level === 1 && title === null) {
+      title = stripAttrGroups(heading.text).trim();
       continue;
     }
-    const h2 = line.match(/^##\s+(.+?)\s*$/);
-    if (h2) {
+    if (heading?.level === 2) {
       pushPlainSection(sections, current);
-      const attrs = parseHeadingAttrs(h2[1]);
+      const attrs = parseHeadingAttrs(heading.text);
       current = {
-        key: attrs.key ?? normalizeHeading(h2[1]),
+        key: attrs.key ?? normalizeHeading(heading.text),
         heading: line,
         level: 2,
         lines: [],
@@ -168,10 +167,6 @@ function pushPlainSection(sections, section) {
   if (section.heading === null && !hasContent) return;
   const { lines, ...rest } = section;
   sections.push({ ...rest, text: lines.join("\n") });
-}
-
-function stripAttrs(text) {
-  return text.replace(/\{[^}]*\}/g, "").trim();
 }
 
 function toPosix(value) {

@@ -197,7 +197,8 @@ export function slugify(value) {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    // One dash is enough: the line above already collapsed every run.
+    .replace(/^-|-$/g, "")
     .slice(0, 80) || "context";
 }
 

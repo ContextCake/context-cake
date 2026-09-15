@@ -144,7 +144,7 @@ async function hasIdentity(root) {
 }
 
 function identityArgs(author) {
-  const slug = String(author ?? "contextcake").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "contextcake";
+  const slug = String(author ?? "contextcake").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "contextcake";
   return ["-c", `user.name=${author ?? "ContextCake"}`, "-c", `user.email=${slug}@users.noreply.contextcake.local`];
 }
 

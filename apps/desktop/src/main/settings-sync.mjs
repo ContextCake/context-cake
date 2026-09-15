@@ -10,9 +10,9 @@ const SYNC_FIELDS = ['theme', 'palette', 'density', 'updateCheck', 'profiles', '
 const SCRUBBED = new Set(['execution', 'path', 'secret'])
 const SECRET_KEY = /(?:^|_)(?:password|passwd|secret|token|api_?key|authorization|cookie|credential)(?:$|_)/i
 const CONTEXT_KEY = /^(?:content|contents|body|document|documents|knowledge|markdown|payload|raw|resolved|sections|text)$/i
-const CREDENTIAL_VALUE = /(?:^Bearer\s+|\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bglpat-[A-Za-z0-9_-]{20,}\b|\bnpm_[A-Za-z0-9]{20,}\b|\bxox[baprs]-[A-Za-z0-9-]{20,}\b|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b)/
+const CREDENTIAL_VALUE = /(?:^Bearer\s+|\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bglpat-[A-Za-z0-9_-]{20,}\b|\bnpm_[A-Za-z0-9]{20,}\b|\bxox[baprs]-[A-Za-z0-9-]{20,}\b|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bsk-[A-Za-z0-9_-]{20,}\b)/
 const SECRET_ASSIGNMENT = /(?:^|[\s?&#:_'"-])(?:access[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|secret|password|credential|authorization|signature|sig)\s*(?:=|:)/i
-const EMAIL_VALUE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
+const EMAIL_DOMAIN = /[A-Z0-9.-]+\.[A-Z]{2,}\b/iy
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
 const MAX_SYNC_JSON = 1_000_000
@@ -96,7 +96,7 @@ function containsAbsolutePath(value) {
       return false
     }
   } catch { /* not a standalone network URL */ }
-  if (/file:\/\//i.test(value) || /(?:^|[^A-Za-z0-9])~[^/\\\s]*[/\\]/.test(value)) return true
+  if (/file:\/\//i.test(value) || containsHomePath(value)) return true
   if (/(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]/.test(value)) return true
   const withoutNetworkUrls = value.replace(/https?:\/\/[^\s"'<>]+/gi, '')
   return withoutNetworkUrls
@@ -291,6 +291,64 @@ export function selectManifestProfiles(
   return profiles
 }
 
+function isCredentialValue(text) {
+  return CREDENTIAL_VALUE.test(text) || containsJwtShape(text)
+}
+
+// Same matches as /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/, in
+// one pass: as a regex it rescanned a long token run from every "eyJ" after a
+// dash. The first "eyJ" sits at a word boundary in the token run that ends at a
+// dot; the last segment's token run needs a word character to end on.
+function containsJwtShape(text) {
+  const parts = text.split('.')
+  for (let i = 0; i + 2 < parts.length; i += 1) {
+    if (!/^eyJ[A-Za-z0-9_-]+$/.test(parts[i + 1]) || !/^[A-Za-z0-9_-]*\w/.test(parts[i + 2])) continue
+    let start = parts[i].length
+    while (start > 0 && /[A-Za-z0-9_-]/.test(parts[i][start - 1])) start -= 1
+    for (let at = parts[i].indexOf('eyJ', start); at !== -1 && at + 3 < parts[i].length; at = parts[i].indexOf('eyJ', at + 1)) {
+      if (at === start || parts[i][at - 1] === '-') return true
+    }
+  }
+  return false
+}
+
+// Same matches as /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i, which rescanned
+// the local part from every word boundary inside it. A local part ends at an
+// "@", so each "@" is checked once: a word boundary in the token run before it,
+// then the domain from just after it.
+function containsEmail(text) {
+  for (let at = text.indexOf('@'); at !== -1; at = text.indexOf('@', at + 1)) {
+    let start = at
+    while (start > 0 && /[A-Za-z0-9._%+-]/.test(text[start - 1])) start -= 1
+    let boundary = false
+    for (let i = start; i < at && !boundary; i += 1) boundary = isWordChar(text[i - 1]) !== isWordChar(text[i])
+    if (!boundary) continue
+    EMAIL_DOMAIN.lastIndex = at + 1
+    if (EMAIL_DOMAIN.test(text)) return true
+  }
+  return false
+}
+
+function isWordChar(ch) {
+  return ch !== undefined && /\w/.test(ch)
+}
+
+// Same matches as /(?:^|[^A-Za-z0-9])~[^/\\\s]*[/\\]/, in one pass: every "~" in
+// a run stops at the same first slash or whitespace, so a failed run is skipped.
+function containsHomePath(text) {
+  let at = text.indexOf('~')
+  while (at !== -1) {
+    if (at === 0 || !/[A-Za-z0-9]/.test(text[at - 1])) {
+      let stop = at + 1
+      while (stop < text.length && !/[/\\\s]/.test(text[stop])) stop += 1
+      if (text[stop] === '/' || text[stop] === '\\') return true
+      at = stop
+    }
+    at = text.indexOf('~', at + 1)
+  }
+  return false
+}
+
 /** Reject anything suspicious that survived deterministic scrubbing. */
 export function assertSafeSyncPayload(value, key = '') {
   if (isMarker(value)) return
@@ -299,9 +357,9 @@ export function assertSafeSyncPayload(value, key = '') {
   if (typeof value === 'string') {
     const gitSshUrl = /^git@[\w.-]+:/.test(value)
     const decoded = decodeUrlComponent(value)
-    if (CREDENTIAL_VALUE.test(value) || CREDENTIAL_VALUE.test(decoded)
+    if (isCredentialValue(value) || isCredentialValue(decoded)
       || SECRET_ASSIGNMENT.test(value) || SECRET_ASSIGNMENT.test(decoded)
-      || containsUrlCredential(value) || (!gitSshUrl && (EMAIL_VALUE.test(value) || EMAIL_VALUE.test(decoded)))) {
+      || containsUrlCredential(value) || (!gitSshUrl && (containsEmail(value) || containsEmail(decoded)))) {
       throw new Error('Settings sync rejected a possible credential, personal identifier, or context value.')
     }
     return
@@ -331,9 +389,9 @@ export function assertSafeLocalSettings(value, key = '') {
     const gitSshUrl = /^git@[\w.-]+:/.test(value)
     const decoded = decodeUrlComponent(value)
     if (isSecretKey(key) || CONTEXT_KEY.test(key)
-      || CREDENTIAL_VALUE.test(value) || CREDENTIAL_VALUE.test(decoded)
+      || isCredentialValue(value) || isCredentialValue(decoded)
       || SECRET_ASSIGNMENT.test(value) || SECRET_ASSIGNMENT.test(decoded)
-      || containsUrlCredential(value) || (!gitSshUrl && (EMAIL_VALUE.test(value) || EMAIL_VALUE.test(decoded)))) {
+      || containsUrlCredential(value) || (!gitSshUrl && (containsEmail(value) || containsEmail(decoded)))) {
       throw new Error('Local settings rejected a possible plaintext credential, personal identifier, or context value.')
     }
     return

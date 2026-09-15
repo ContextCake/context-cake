@@ -90,7 +90,9 @@ const CREDENTIAL_PATTERNS = [
   { name: "slack-token", regex: /xox[baprs]-/ },
   { name: "stripe-key", regex: /[sr]k_live_[A-Za-z0-9]{16,}/ },
   { name: "google-api-key", regex: /AIza[0-9A-Za-z_-]{35}/ },
-  { name: "jwt", regex: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
+  // Not a RegExp — the equivalent regex rescanned a long token run from every
+  // "eyJ" inside it. Callers only use .test().
+  { name: "jwt", regex: { test: looksLikeJwt } },
   { name: "bearer-token", regex: /bearer\s+[A-Za-z0-9._-]{20,}/i },
   { name: "private-key", regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
   // Env/assignment style, quoted OR unquoted: quoted needs 12+ chars; unquoted
@@ -98,6 +100,21 @@ const CREDENTIAL_PATTERNS = [
   // doesn't trip it.
   { name: "generic-secret", regex: /(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*(['"][^'"]{12,}|[A-Za-z0-9+/_=-]{20,})/i },
 ];
+
+// Same matches as /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/:
+// the middle segment is a whole dot-delimited part, and the "eyJ" sits in the
+// token run that ends at the first dot, ten or more characters before it.
+function looksLikeJwt(text) {
+  const parts = text.split(".");
+  for (let i = 0; i + 2 < parts.length; i += 1) {
+    if (!/^[A-Za-z0-9_-]{10,}$/.test(parts[i + 1]) || !/^[A-Za-z0-9_-]{10}/.test(parts[i + 2])) continue;
+    let start = parts[i].length;
+    while (start > 0 && /[A-Za-z0-9_-]/.test(parts[i][start - 1])) start -= 1;
+    const at = parts[i].indexOf("eyJ", start);
+    if (at !== -1 && parts[i].length - at - 3 >= 10) return true;
+  }
+  return false;
+}
 
 export function scanForCredentials(text) {
   return CREDENTIAL_PATTERNS.some((p) => p.regex.test(String(text ?? "")));

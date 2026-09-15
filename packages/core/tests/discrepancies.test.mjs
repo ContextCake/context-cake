@@ -670,6 +670,19 @@ test("rewriteLinkTarget preserves ./, .md, #anchor, whitespace, and wikilink ali
   assert.deepEqual(rewriteLinkTarget("[x](a)", "b", "c"), { text: "[x](a)", replaced: 0 });
 });
 
+test("hostile headings and link destinations are handled in linear time", () => {
+  // Each input took seconds or more under the regexes these helpers replaced:
+  // the heading's anchor strip rescanned from every "{#", the destination's
+  // trailing-whitespace match from every leading space.
+  const started = performance.now();
+  const hostile = { ...concept, sections: [{ ...concept.sections[0], heading: `## {#k} x${"{#".repeat(100_000)}` }] };
+  assert.ok(buildDiscrepancies([hostile], { coverageComplete: true }).discrepancies.length > 0);
+  const destination = `[y](${" ".repeat(200_000)}runbooks/missing)`;
+  assert.equal(rewriteLinkTarget(destination, "runbooks/missing", "runbooks/found").replaced, 1);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 5_000, `hostile inputs took ${Math.round(elapsed)} ms`);
+});
+
 test("removeLink turns links into their label, alias, or basename; images and other targets survive", () => {
   const text = "See [the runbook](./runbooks/missing.md#setup), [[runbooks/missing|Alias]], [[runbooks/missing]], ![img](runbooks/missing), [z](runbooks/other).";
   const { text: out, replaced } = removeLink(text, "runbooks/missing");

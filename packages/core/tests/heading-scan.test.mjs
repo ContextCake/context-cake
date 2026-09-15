@@ -60,6 +60,8 @@ test("hostile heading lines parse in linear time", () => {
   parseDocument({ content: text, stem: "hostile", updated: null });
   readSectionBody(text, "target");
   assert.equal(replaceSection(text, "target", `${spaces}x`).replaced, true);
+  // Refreshing `updated=` looks for the attr group on the matched heading.
+  assert.equal(replaceSection(text, "{".repeat(200_000), "x", { refreshUpdatedTo: "2026-01-01" }).replaced, true);
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 5_000, `hostile headings took ${Math.round(elapsed)} ms`);
 });

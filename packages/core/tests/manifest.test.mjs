@@ -671,11 +671,16 @@ test("manifest mutation locking preserves concurrent updates and times out safel
   assert.throws(() => withManifestLock(manifestPath, () => {}, { timeoutMs: 25, staleMs: 60_000 }), /Timed out acquiring/);
   fs.rmSync(`${manifestPath}.lock`);
 
-  fs.writeFileSync(`${manifestPath}.lock`, JSON.stringify({ pid: 999_999, createdAt: 1, token: "stale" }), { mode: 0o600 });
+  // Plant the pid of a process that just exited: a fixed pid could belong to a
+  // live process on the runner, and a live owner's lock is never stale.
+  const deadPid = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["-e", ""]);
+    child.on("error", reject).on("exit", () => resolve(child.pid));
+  });
+  fs.writeFileSync(`${manifestPath}.lock`, JSON.stringify({ pid: deadPid, createdAt: 1, token: "stale" }), { mode: 0o600 });
   // The winner holds the lock until the loser has timed out. A fixed 180 ms
   // hold let a contender that started late on a busy runner arrive after the
-  // release and win as well. staleMs sits far above the race's length, so only
-  // the planted lock is stale — never the winner's, even read mid-write.
+  // release and win as well.
   const busyMarker = `${manifestPath}.busy`;
   const staleRaceScript = `
     import fs from "node:fs";

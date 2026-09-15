@@ -20,10 +20,17 @@ export function equivalent(a, b) {
   return normalizeFormatting(a) === normalizeFormatting(b);
 }
 
+// What /[ \t]+$/ stripped, without rescanning a run of blanks from each blank in it.
+function trimTrailingBlanks(line) {
+  let end = line.length;
+  while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) end -= 1;
+  return line.slice(0, end);
+}
+
 function normalizeFormatting(text) {
   const lines = String(text)
     .split("\n")
-    .map((line) => line.replace(/[ \t]+$/, "").replace(/^( {0,3})[*+](?= )/, "$1-"));
+    .map((line) => trimTrailingBlanks(line).replace(/^( {0,3})[*+](?= )/, "$1-"));
 
   const collapsed = [];
   for (const line of lines) {

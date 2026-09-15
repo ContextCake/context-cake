@@ -794,3 +794,39 @@ test('a device-local change made during a slow pull is not reverted by it', asyn
   assert.equal(persisted.uiState.sidebar.width, 300, 'the local change must survive the pull')
   assert.equal(persisted.theme, 'dark', 'and the remote value must still be applied')
 })
+
+test('JWT-shaped sync values are rejected exactly as the old pattern did, in linear time', () => {
+  // The pattern this replaced. As a regex branch it rescanned a long token run
+  // from every "eyJ" after a dash (polynomial ReDoS); the linear check must
+  // reject exactly what it rejected.
+  const OLD_JWT = /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/
+  const rejected = (value) => {
+    try {
+      assertSafeSyncPayload(value)
+      return false
+    } catch {
+      return true
+    }
+  }
+  // No other check can fire on these pieces, so the payload guard answers for
+  // the JWT check alone.
+  let state = 7
+  const next = () => (state = (Math.imul(state, 1103515245) + 12345) >>> 0) >>> 16
+  const pick = (list) => list[next() % list.length]
+  const segments = ['', 'a', '_', '-', 'eyJ', 'eyJa', 'a-eyJa', 'aeyJa', 'eyJ-', '-a-', 'e!eyJ_']
+  const joins = ['.', '.', '.', '-', '!', ' ']
+  const seen = { true: 0, false: 0 }
+  for (let i = 0; i < 50_000; i += 1) {
+    let value = pick(segments)
+    for (let parts = 1 + (next() % 4); parts > 0; parts -= 1) value += pick(joins) + pick(segments)
+    const expected = OLD_JWT.test(value)
+    assert.equal(rejected(value), expected, JSON.stringify(value))
+    seen[expected] += 1
+  }
+  assert.ok(seen.true > 1_000 && seen.false > 1_000, `unbalanced sample: ${JSON.stringify(seen)}`)
+
+  const started = performance.now()
+  assert.equal(rejected('eyJ-'.repeat(250_000)), false)
+  const elapsed = performance.now() - started
+  assert.ok(elapsed < 5_000, `a hostile value took ${Math.round(elapsed)} ms`)
+})

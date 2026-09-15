@@ -51,6 +51,7 @@ const SUITES = [
   { group: "unit", name: "cache-source", ...node("cache-source.test.mjs") },
   { group: "unit", name: "layer-files", ...node("layer-files.test.mjs") },
   { group: "unit", name: "heading-scan", ...node("heading-scan.test.mjs") },
+  { group: "unit", name: "credential-scan", ...node("credential-scan.test.mjs") },
   { group: "unit", name: "search", ...node("search.test.mjs") },
   { group: "unit", name: "search-index", ...node("search-index.test.mjs") },
   { group: "integration", name: "search-filters-service", ...node("search-filters-service.test.mjs") },

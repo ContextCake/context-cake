@@ -47,6 +47,7 @@ export function buildMenu(getWindow, openSettings) {
         // the same chord so the browser build behaves identically.
         { label: 'Go to Files', accelerator: 'CmdOrCtrl+Shift+F', click: () => invoke('view:files') },
         { label: 'Go to Sources', accelerator: 'CmdOrCtrl+4', click: () => invoke('destination:4') },
+        { label: 'Go to Diagnostics', accelerator: 'CmdOrCtrl+6', click: () => invoke('destination:6') },
         { label: 'Go to Trust', accelerator: 'CmdOrCtrl+5', click: () => invoke('destination:5') },
         { type: 'separator' },
         { label: 'Command Palette…', accelerator: 'CmdOrCtrl+K', click: () => invoke('command-palette') },

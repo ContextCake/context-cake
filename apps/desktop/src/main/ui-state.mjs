@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 
-const VIEWS = new Set(['canvas', 'overview', 'sources', 'triage', 'conflicts', 'concepts', 'files'])
+const VIEWS = new Set(['canvas', 'overview', 'sources', 'triage', 'conflicts', 'concepts', 'files', 'diagnostics'])
 const KNOWLEDGE_VIEWS = new Set(['concepts', 'files'])
 const REVIEW_VIEWS = new Set(['triage', 'conflicts'])
 const SETTINGS_PANES = new Set(['general', 'indexing', 'integrations', 'account', 'privacy'])

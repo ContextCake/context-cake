@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createDiagnostics } from './diagnostics.mjs';
+const diagnostics = createDiagnostics({ role: 'mcp' });
 
 // Dependency-free stdio MCP server exposing a cascade of knowledge sources as one
 // effective, read-time OKF graph. Reads resolve through the section/field merge in
@@ -410,8 +412,8 @@ async function handleMessage(message) {
 }
 
 async function callTool(name, toolArgs) {
-  if (name === "search") return await search(toolArgs);
-  if (name === "read_file") return await readFileTool(toolArgs);
+  if (name === "search") return await diagnostics.measure("search", () => search(toolArgs));
+  if (name === "read_file") return await diagnostics.measure("read", () => readFileTool(toolArgs));
   if (name === "list_concepts") return await listConcepts(toolArgs);
   if (name === "get_links") return await getLinks(toolArgs);
   if (name === "find_captures") return await findCaptures(toolArgs);
@@ -586,7 +588,7 @@ async function applyRecordedContextResolution(resolved) {
   const effectiveRules = [...teamRules.map(rule => localById.get(rule.id) ?? rule),
     ...localRules.filter(rule => !teamRules.some(team => team.id === rule.id))];
   return applyContextResolutions(resolved, state, {
-    profileId: selection.profileId, manifestFingerprint: contextManifestFingerprint(manifest), coverageComplete,
+    observe: diagnostics.record, profileId: selection.profileId, manifestFingerprint: contextManifestFingerprint(manifest), coverageComplete,
     blockedKeys: blockedContextResolutionKeys([resolved], effectiveRules),
   });
 }

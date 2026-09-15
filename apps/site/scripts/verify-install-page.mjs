@@ -5,6 +5,8 @@ const html = await readFile(new URL('../dist/install/index.html', import.meta.ur
 const homeHtml = await readFile(new URL('../dist/index.html', import.meta.url), 'utf8')
 const pricingHtml = await readFile(new URL('../dist/pricing/index.html', import.meta.url), 'utf8')
 const demoHtml = await readFile(new URL('../dist/demo/index.html', import.meta.url), 'utf8')
+const installationDocsHtml = await readFile(new URL('../dist/docs/getting-started/installation/index.html', import.meta.url), 'utf8')
+const diagnosticsDocsHtml = await readFile(new URL('../dist/docs/guides/diagnostics/index.html', import.meta.url), 'utf8')
 const appRelease = JSON.parse(await readFile(new URL('../src/data/app-release.json', import.meta.url), 'utf8'))
 const sourceRelease = JSON.parse(await readFile(new URL('../src/data/source-release.json', import.meta.url), 'utf8'))
 const redirects = await readFile(new URL('../dist/_redirects', import.meta.url), 'utf8')
@@ -35,6 +37,31 @@ requireText('href="/install" aria-current="page"', 'Install navigation must expo
 requireText('Show source installation', 'Versioned source installation must remain available')
 requireText(`app-v${sourceRelease.version}`, 'Source installation must use an app release tag')
 requireText(sourceRelease.sha256, 'Archive checksum must remain visible in the generated page')
+requireText('apps/playground/manifest.json', 'Source install must use the current monorepo demo path')
+if (!installationDocsHtml.includes(`app-v${sourceRelease.version}`)) {
+  throw new Error('Installation docs must identify the verified source release')
+}
+if (!installationDocsHtml.includes(sourceRelease.sha256)) {
+  throw new Error('Installation docs must include the verified source archive checksum')
+}
+if (!installationDocsHtml.includes('apps/playground/manifest.json')) {
+  throw new Error('Installation docs must use the current monorepo demo path')
+}
+
+for (const [label, page] of [['home', homeHtml], ['diagnostics docs', diagnosticsDocsHtml]]) {
+  if (page.includes('until that signed download appears')) {
+    throw new Error(`${label} must not describe shipped diagnostics as unreleased`)
+  }
+}
+
+const appParts = appRelease.version.split('.').map(Number)
+const sourceParts = sourceRelease.version.split('.').map(Number)
+if (appParts.length !== 3 || sourceParts.length !== 3 || [...appParts, ...sourceParts].some((part) => !Number.isSafeInteger(part) || part < 0)) {
+  throw new Error('App and source releases must use numeric X.Y.Z versions')
+}
+if (sourceParts[0] !== appParts[0] || sourceParts[1] < appParts[1] - 1 || sourceParts[1] > appParts[1] || (sourceParts[1] === appParts[1] && sourceParts[2] > appParts[2])) {
+  throw new Error(`Verified source release ${sourceRelease.version} has drifted from app release ${appRelease.version}`)
+}
 
 requireOrder([
   'Choose a folder with Markdown files',
@@ -107,6 +134,21 @@ if (demoHtml.includes('/demo-app/')) {
 }
 if (!demoHtml.includes('sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"')) {
   throw new Error('The cross-origin Web Demo embed must retain its iframe sandbox')
+}
+
+const [appMajor = 0, appMinor = 0] = appRelease.version.split('.').map(Number)
+const releaseHasDiagnosticsDemo = appMajor > 0 || appMinor >= 9
+const diagnosticsDemoCues = [
+  'choose Diagnostics to inspect',
+  'Diagnostics are explicitly labeled sample data',
+  'Inspect engine diagnostics',
+]
+for (const cue of diagnosticsDemoCues) {
+  if (demoHtml.includes(cue) !== releaseHasDiagnosticsDemo) {
+    throw new Error(
+      `Demo copy must ${releaseHasDiagnosticsDemo ? 'describe' : 'withhold'} the diagnostics experience for app release ${appRelease.version}: ${cue}`,
+    )
+  }
 }
 
 console.log(`install page verification passed (published Mac release + source fallback; commerce ${commerceVisible ? 'visible' : 'hidden'})`)

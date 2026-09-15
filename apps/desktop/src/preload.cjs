@@ -29,6 +29,17 @@ function setUiState(patch) {
 }
 
 contextBridge.exposeInMainWorld('__CC_DESKTOP', {
+  observability: {
+    status: () => ipcRenderer.invoke('observability:status'),
+    setup: () => ipcRenderer.invoke('observability:setup'),
+    start: () => ipcRenderer.invoke('observability:start'),
+    stop: () => ipcRenderer.invoke('observability:stop'),
+    restart: () => ipcRenderer.invoke('observability:restart'),
+    disable: () => ipcRenderer.invoke('observability:disable'),
+    clear: () => ipcRenderer.invoke('observability:clear'),
+    open: (options) => ipcRenderer.invoke('observability:open', options),
+    docker: () => ipcRenderer.invoke('observability:docker'),
+  },
   windowRole: arg('cc-window-role') === 'settings' ? 'settings' : 'main',
   // Per-launch bearer token the local engine service requires on /api/*. It is
   // fetched through trusted IPC, never renderer argv (visible through `ps`).

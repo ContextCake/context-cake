@@ -13,6 +13,13 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
+// Optional benchmark-only measurement and local export; the corpus is unchanged.
+const observing = process.argv.includes('--observe');
+const configAt = process.argv.indexOf('--telemetry-config');
+const { createDiagnostics } = await import('../src/diagnostics.mjs');
+const observations = createDiagnostics();
+const telemetry = observing && configAt >= 0
+  ? (await import('../../../apps/desktop/src/observability/telemetry.mjs')).createTelemetry({configPath:process.argv[configAt+1]}) : null;
 const count = Number(process.argv[2] ?? 3000);
 if (!Number.isInteger(count) || count < 1 || count > 25_000) throw new Error("Document count must be 1..25000");
 const root = await mkdtemp(path.join(tmpdir(), "cc-retrieval-bench-"));
@@ -65,7 +72,7 @@ function client(manifest) {
 async function measure(label, fn) {
   const startReads = reads;
   const started = performance.now();
-  const result = await fn();
+  const result = await (observing ? observations.measure('search', fn) : fn());
   timings.push({ label, milliseconds: +(performance.now() - started).toFixed(2), documentsRead: label.includes("stdio") ? null : reads - startReads });
   return result;
 }
@@ -115,11 +122,14 @@ try {
   const restartedCold = await measure("retained cold after restart", () => retained.search(query));
   assert.deepEqual(restartedCold.hits, changed.hits);
 
+  await telemetry?.flush();
   console.log(JSON.stringify({
+    instrumentation: observing, observationSamples: observations.snapshot().sampleCount, telemetry: telemetry?.status() ?? null,
     documents: count, corpusBytes, node: process.version, rankingEquivalent: true, peakRssBytes, timings,
   }, null, 2));
 } finally {
   clearInterval(rssTimer);
+  telemetry?.close();
   for (const child of children) child.kill();
   retained.close();
   await rm(root, { recursive: true, force: true });

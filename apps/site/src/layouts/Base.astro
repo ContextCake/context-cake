@@ -31,7 +31,12 @@ const commerceRoutes = new Set(['/pricing', '/creators']);
 function visibleLinks<T extends { href: string }>(links: T[]): T[] {
 	return links.filter((link) => COMMERCE_VISIBLE || !commerceRoutes.has(link.href));
 }
-const mainNavLinks = visibleLinks([
+const mainNavLinks = isHome ? [
+	{ label: 'How it works', href: '#how-it-works' },
+	{ label: 'Docs', href: '/docs/' },
+	{ label: 'GitHub', href: 'https://github.com/ContextCake/context-cake' },
+	{ label: 'Install', href: '/install/' },
+] : visibleLinks([
 	{ label: 'Packs', href: '/packs' },
 	{ label: 'Pricing', href: '/pricing' },
 	{ label: 'Docs', href: '/docs' },
@@ -69,6 +74,7 @@ const footerColumns = [
 			{ label: 'Overview', href: '/docs' },
 			{ label: 'Installation', href: '/docs/getting-started/installation' },
 			{ label: 'Your first cascade', href: '/docs/getting-started/first-cascade' },
+			{ label: 'Diagnostics', href: '/docs/guides/diagnostics' },
 			{ label: 'MCP tools', href: '/docs/reference/mcp-tools' },
 		],
 	},
@@ -105,7 +111,7 @@ const footerColumns = [
 			<meta name="twitter:description" content={description} />
 			<meta name="twitter:image" content={ogImage} />
 	</head>
-	<body class="theme-dark" data-default-theme={initialTheme}>
+	<body class:list={['theme-dark', { 'marketing-home': isHome }]} data-default-theme={initialTheme}>
 		<script is:inline>
 			const themeStorageKey = 'contextcake-site-theme';
 			const siteBody = document.body;
@@ -123,12 +129,14 @@ const footerColumns = [
 			siteBody.classList.toggle('theme-paper', initialSiteTheme === 'light');
 			siteBody.classList.toggle('theme-dark', initialSiteTheme === 'dark');
 		</script>
+		{isHome && <a class="skip-link" href="#main-content">Skip to content</a>}
 		<header class:list={['nav', { 'nav--home': isHome }]}>
 			<a href="/" class="brand" aria-label="ContextCake home">
 				<img class="brand-mark" src={appIconUrl} alt="" width={isHome ? 50 : 42} height={isHome ? 50 : 42} />
 				<span>ContextCake</span>
 			</a>
-			<nav aria-label="Main">
+			{isHome && <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="main-navigation">Menu</button>}
+			<nav aria-label="Main" id="main-navigation">
 				{mainNavLinks.map((link) => (
 					<a href={link.href} aria-current={isCurrentRoute(link.href) ? 'page' : undefined}>
 						{link.label}
@@ -163,6 +171,24 @@ const footerColumns = [
 			themeToggle?.addEventListener('click', () => {
 				applySiteTheme(document.documentElement.dataset.ccTheme === 'dark' ? 'light' : 'dark', true);
 			});
+			const menuToggle = document.querySelector('.menu-toggle');
+			const navigation = document.querySelector('#main-navigation');
+			if (menuToggle && navigation) {
+				document.documentElement.setAttribute('data-menu-ready', '');
+				const closeMenu = () => menuToggle.setAttribute('aria-expanded', 'false');
+				menuToggle.addEventListener('click', () => {
+					menuToggle.setAttribute('aria-expanded', String(menuToggle.getAttribute('aria-expanded') !== 'true'));
+				});
+				navigation.addEventListener('click', (event) => {
+					if (event.target.closest('a')) closeMenu();
+				});
+				document.addEventListener('keydown', (event) => {
+					if (event.key === 'Escape' && menuToggle.getAttribute('aria-expanded') === 'true') {
+						closeMenu();
+						menuToggle.focus();
+					}
+				});
+			}
 		</script>
 		<slot />
 		<footer class="footer">
@@ -174,8 +200,8 @@ const footerColumns = [
 							<span>ContextCake</span>
 						</a>
 						<p class="footer-tagline">
-							ContextCake combines company rules, team decisions, and personal notes when an
-							AI tool needs them. Each section keeps its source and any available date.
+							Project knowledge for your coding agent. Connect your sources, set their
+							priority, and keep the context behind every decision.
 						</p>
 						<a class="footer-repo" href={repoUrl} rel="noreferrer">
 							<Icon name="github" size={17} strokeWidth={2} />
@@ -206,6 +232,34 @@ const footerColumns = [
 </html>
 
 <style>
+	/* The homepage gives the explanation and product evidence the full stage. */
+	:global(body.marketing-home) { background: var(--cc-canvas); }
+	:global(body.marketing-home::before) { display: none; }
+	:global(body.marketing-home) .nav--home {
+		max-width: 1200px; margin: 0 auto; padding: 18px 40px;
+		border: 0; border-bottom: 1px solid var(--cc-border); border-radius: 0;
+		background: transparent; box-shadow: none; backdrop-filter: none;
+		gap: 16px; flex-wrap: nowrap;
+	}
+	:global(body.marketing-home) .nav--home .brand { font-size: 18px; }
+	:global(body.marketing-home) .nav--home .brand-mark { width: 34px; height: 34px; box-shadow: none; border-radius: 8px; }
+	:global(body.marketing-home) .nav--home nav { margin-left: auto; padding: 0; background: transparent; gap: 10px; }
+	:global(body.marketing-home) .nav--home nav a { border-radius: 5px; font-size: 14px; min-height: 44px; padding-inline: 10px; font-weight: 500; }
+	:global(body.marketing-home) .nav--home .theme-toggle { border: 0; background: transparent; }
+	:global(body.marketing-home) .footer { margin-top: 0; background: var(--cc-surface-soft); }
+	:global(body.marketing-home) :is(.footer-tagline, .footer-heading, .footer-bottom) { color: var(--cc-text-muted); }
+	.menu-toggle { display: none; }
+	.skip-link { position: absolute; top: -100px; left: 20px; padding: 10px 18px; background: var(--cc-cta); color: var(--cc-on-cta); z-index: 2; border-radius: 5px; }
+	.skip-link:focus { top: 10px; }
+	@media (max-width: 760px) {
+		:global(body.marketing-home) .nav--home { padding: 14px 24px; flex-wrap: wrap; gap: 10px; }
+		:global(body.marketing-home) .nav--home .brand { margin-right: auto; }
+		:global(body.marketing-home) .nav--home nav { width: 100%; order: 4; margin: 0; border-radius: 0; }
+		:global(body.marketing-home) .nav--home nav a { display: inline-flex; }
+		:global(html[data-menu-ready]) .menu-toggle { display: block; background: transparent; border: 1px solid var(--cc-border-strong); border-radius: 5px; padding: 10px 12px; min-height: 44px; font: 14px var(--cc-font-body); color: var(--cc-text); cursor: pointer; }
+		:global(html[data-menu-ready]) .menu-toggle[aria-expanded='false'] + nav { display: none; }
+	}
+	@media (max-width: 380px) { :global(body.marketing-home) .nav--home { padding-inline: 18px; } }
 	:global(body) {
 		margin: 0;
 		min-height: 100vh;
@@ -621,8 +675,8 @@ const footerColumns = [
 		   commerce is visible); Demo and GitHub are reachable from the page and
 		   footer. Named, not positional, so hiding a nav item never shifts which
 		   others disappear. */
-		.theme-paper .nav nav a[href='/demo'],
-		.theme-paper .nav nav a[href^='https://github.com/'] {
+		:global(body.theme-paper:not(.marketing-home)) .nav nav a[href='/demo'],
+		:global(body.theme-paper:not(.marketing-home)) .nav nav a[href^='https://github.com/'] {
 			display: none;
 		}
 	}

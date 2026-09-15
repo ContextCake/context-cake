@@ -77,12 +77,16 @@ import {
 } from "./search.mjs";
 import { sectionText } from "./sections.mjs";
 import { conceptLinkTargets } from "./markdown-links.mjs";
-import { mergeConcepts, orderContributors } from "./resolver.mjs";
+import { effectiveType } from "./resolver.mjs";
 
 // Bumped for the segmented posting-blob layout: a store built under an
 // earlier FORMAT_VERSION has row-per-posting tables this code cannot read, so
 // any pre-existing file rebuilds from scratch.
-const FORMAT_VERSION = 4;
+// v5 adds docs.type/updated/override columns (extracted from frontmatter at
+// insert time) so a `type` filter reads three indexed columns per candidate
+// instead of parsing frontmatter JSON and running a full mergeConcepts per
+// candidate — see typeOf() below.
+const FORMAT_VERSION = 5;
 // Documents per segment. Bigger segments mean fewer blobs to read per query
 // term and a better compression ratio for the per-term header cost; smaller
 // segments mean less bytes copied when the open segment's blob is appended
@@ -307,6 +311,11 @@ export function createSearchStore({ file, idleEvictMs, segmentDocs = DEFAULT_SEG
       -- without a row-per-(doc, term) table, and seclens its per-section
       -- term lengths as packed u32 — read at query time instead of a
       -- 6-rows-per-document join.
+      -- type/updated/override mirror the same-named frontmatter keys (null
+      -- when absent), extracted once at insert time so typeOf() can resolve
+      -- the effective type for a candidate by reading these columns off the
+      -- UNIQUE(layer, id) index instead of parsing frontmatter JSON and
+      -- running a full mergeConcepts per candidate.
       CREATE TABLE docs(
         doc INTEGER PRIMARY KEY AUTOINCREMENT,
         layer TEXT NOT NULL,
@@ -315,6 +324,9 @@ export function createSearchStore({ file, idleEvictMs, segmentDocs = DEFAULT_SEG
         fp TEXT NOT NULL,
         title TEXT,
         frontmatter TEXT NOT NULL,
+        type TEXT,
+        updated TEXT,
+        override TEXT,
         len0 INTEGER, len1 INTEGER, len2 INTEGER, len3 INTEGER,
         seg INTEGER NOT NULL,
         nrec INTEGER NOT NULL,
@@ -445,8 +457,8 @@ export function createSearchStore({ file, idleEvictMs, segmentDocs = DEFAULT_SEG
     deleteDoc: db.prepare("DELETE FROM docs WHERE doc = ?"),
     updateDocOrd: db.prepare("UPDATE docs SET ord = ? WHERE doc = ?"),
     insertDoc: db.prepare(
-      "INSERT INTO docs(layer, id, ord, fp, title, frontmatter, len0, len1, len2, len3, seg, nrec, dterms, seclens) "
-      + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO docs(layer, id, ord, fp, title, frontmatter, type, updated, override, len0, len1, len2, len3, seg, nrec, dterms, seclens) "
+      + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ),
     insertSection: db.prepare(
       "INSERT INTO sections(doc, idx, key, heading, text, length) VALUES (?, ?, ?, ?, ?, ?)",
@@ -477,7 +489,7 @@ export function createSearchStore({ file, idleEvictMs, segmentDocs = DEFAULT_SEG
     updatePosting: db.prepare("UPDATE postings SET data = ? WHERE term = ? AND seg = ?"),
     deletePosting: db.prepare("DELETE FROM postings WHERE term = ? AND seg = ?"),
     postingsForTerm: db.prepare("SELECT data FROM postings WHERE term = ? ORDER BY seg"),
-    docByLayerId: db.prepare("SELECT frontmatter FROM docs WHERE layer = ? AND id = ?"),
+    docTypeByLayerId: db.prepare("SELECT type, updated, override FROM docs WHERE layer = ? AND id = ?"),
     sectionTextsForDoc: db.prepare("SELECT text FROM sections WHERE doc = ? ORDER BY idx"),
     sectionByDocIdx: db.prepare("SELECT key, heading, text FROM sections WHERE doc = ? AND idx = ?"),
     insertLink: db.prepare("INSERT INTO links(doc, ord, target) VALUES (?, ?, ?)"),
@@ -726,6 +738,9 @@ export function createSearchStore({ file, idleEvictMs, segmentDocs = DEFAULT_SEG
       layerName, id, ord, fp,
       concept.frontmatter?.title ?? null,
       JSON.stringify(concept.frontmatter ?? {}),
+      concept.frontmatter?.type ?? null,
+      concept.frontmatter?.updated ?? null,
+      concept.frontmatter?.override ?? null,
       lens[0] ?? 0, lens[1] ?? 0, lens[2] ?? 0, lens[3] ?? 0,
       seg, nrec, [...distinct].join("\n"),
       Buffer.from(seclens.buffer, seclens.byteOffset, seclens.byteLength),
@@ -1169,12 +1184,11 @@ export function createSearchStore({ file, idleEvictMs, segmentDocs = DEFAULT_SEG
   function typeOf(contributing, id) {
     const contributors = [];
     for (const view of contributing) {
-      const row = stmts.docByLayerId.get(view.name, id);
+      const row = stmts.docTypeByLayerId.get(view.name, id);
       if (!row) continue;
-      const frontmatter = JSON.parse(row.frontmatter);
-      contributors.push({ layer: view.name, level: view.level, updated: frontmatter.updated ?? null, frontmatter, sections: [] });
+      contributors.push({ level: view.level, updated: row.updated, type: row.type, override: row.override });
     }
-    return mergeConcepts(orderContributors(contributors)).frontmatter.type ?? "concept";
+    return effectiveType(contributors);
   }
 
   function storeBytes() {

@@ -41,6 +41,15 @@ node packages/core/eval/run.mjs --record --label "why"    # accept a new number
 | Substring occurrence counting | 38 | 0.263 | 0.500 | 0.348 | 1.000 |
 | BM25F over Porter-stemmed tokens | 38 | 0.895 | 1.000 | 0.947 | 1.000 |
 | BM25F, + graph-prior/section-depth/paraphrase probes | 51 | 0.745 | 0.902 | 0.809 | 1.000 |
+| BM25F, + static inbound-link prior (weight 0.1) | 51 | 0.745 | 0.902 | 0.806 | 1.000 |
+
+The link prior (`LINK_PRIOR_WEIGHT` in `search.mjs`) is deliberately small.
+At 0.1 it moves q40 from rank 3 to rank 2, leaves every original question
+where it was, and drops q46 (a section-depth probe) from rank 3 to 5. A
+weight of 0.3 flipped q39 and q41 to rank 1 but cost q06 its top rank and
+would give a real fifty-inbound hub a 2.2× multiplier. The eval corpus has one
+six-link hub, so the aggregate here is close to neutral by construction. See
+`docs/architecture/notes/link-prior.md` for the weight sweep and the reasoning.
 
 The old scorer counted `indexOf` hits with fixed field weights. Three things
 were wrong with it, and the eval separated them:

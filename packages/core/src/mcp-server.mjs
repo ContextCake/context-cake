@@ -12,7 +12,10 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import fsSync from "node:fs";
 import readline from "node:readline";
-import { markdownLinkSpans } from "./markdown-links.mjs";
+import {
+  extractLinks, resolveLinkTarget as resolveLinkTargetPure, normalizeId as normalizeIdPure,
+  safeId as safeIdPure,
+} from "./markdown-links.mjs";
 import { sectionText } from "./sections.mjs";
 import { isNewerDay } from "./conflict-policy.mjs";
 import { resolveConcept } from "./resolver.mjs";
@@ -26,7 +29,6 @@ import { applyContextResolutions, createContextResolutionStore, contextManifestF
 import { createDiscrepancyRuleStore, parseRuleDocument } from "./discrepancy-rules.mjs";
 import { buildSources } from "./sources/index.mjs";
 import { layerIdentity } from "./index-keys.mjs";
-import { isTraversal } from "./sources/okf-local.mjs";
 import { commitPaths, push } from "./sources/git-core.mjs";
 import { appendFileInRoot, stageCapture, confirmCapture, resolveAuthor } from "./capture.mjs";
 import { slugify } from "./classify-context.mjs";
@@ -71,6 +73,7 @@ if ((args.capture || args.telemetry) && !liveLayer) {
 }
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
+const layerNameSet = new Set(layerByName.keys());
 // Same content-identity computation service.mjs uses (index-keys.mjs):
 // what a layer READS, name/level left out. Lets the retained search's SQLite
 // store (search.v1.<profile>.sqlite, beside the manifest) tell a genuine
@@ -128,7 +131,7 @@ const readOnlyAnnotations = {
 const tools = [
   {
     name: "search",
-    description: "Search the layer cascade. Returns one entry per concept ID with the layers that contribute and a snippet. A hit whose layers disagree carries `contested: true` and `conflictSections` (how many resolved sections have dissent) — treat such a hit as unsettled and read the resolved concept before answering from the snippet.",
+    description: "Search the layer cascade. Returns one entry per concept ID with the layers that contribute and a snippet. Every hit carries `inbound` (how many distinct other concepts link to it — ranking already favors a well-linked hub over a lexically similar unlinked page, so a high `inbound` is a hint this is a canonical answer, not just a keyword match). The top 3 hits also carry `linksTo` (up to 5 of its own outgoing links that exist in the corpus) so you can see its immediate neighborhood without a second get_links call. A hit whose layers disagree carries `contested: true` and `conflictSections` (how many resolved sections have dissent) — treat such a hit as unsettled and read the resolved concept before answering from the snippet.",
     inputSchema: {
       type: "object",
       properties: {
@@ -705,40 +708,20 @@ function orderLayerNames(names) {
   return unique.sort((a, b) => (layerByName.get(b)?.level ?? 0) - (layerByName.get(a)?.level ?? 0));
 }
 
+// Thin wrappers over the shared pure resolution in markdown-links.mjs — kept
+// under these names because they're called throughout this file, and so this
+// module's own get_links stays the reference implementation extractLinks and
+// friends are proven against.
 function resolveLinkTarget(sourceId, target) {
-  const clean = stripDecoration(target);
-  if (!clean || isExternal(clean)) return null;
-
-  const prefix = clean.indexOf(":");
-  if (prefix !== -1) {
-    const name = clean.slice(0, prefix);
-    if (layerByName.has(name)) return safeId(clean.slice(prefix + 1));
-  }
-
-  const base = path.posix.dirname(sourceId);
-  const joined = clean.startsWith("/") ? clean.slice(1) : path.posix.join(base, clean);
-  return safeId(joined);
+  return resolveLinkTargetPure(sourceId, target, layerNameSet);
 }
 
 function safeId(value) {
-  try {
-    return normalizeId(value);
-  } catch {
-    return null;
-  }
+  return safeIdPure(value);
 }
 
 function normalizeId(value) {
-  if (!value || typeof value !== "string") throw new Error("concept_id is required");
-  const normalized = path.posix.normalize(stripDecoration(value).replace(/\\/g, "/").replace(/\.md$/i, ""));
-  if (isTraversal(normalized)) throw new Error(`Invalid concept ID: ${value}`);
-  return normalized;
-}
-
-function extractLinks(body) {
-  return markdownLinkSpans(body)
-    .map(({ raw, target }) => ({ raw, target }))
-    .filter((link) => link.target && !isExternal(stripDecoration(link.target)));
+  return normalizeIdPure(value);
 }
 
 function dedupeIncoming(rows) {
@@ -787,14 +770,6 @@ function renderDissent(dissent, sourceUpdated) {
   const newer = isNewerDay(dissent.updated, sourceUpdated) ? " — ⚠ newer than the effective value" : "";
   const body = dissent.content.split("\n").map((line) => (line ? `> ${line}` : ">")).join("\n");
   return `> ⚠ ${dissent.layer} disagrees (updated ${updated})${newer}:\n${body}`;
-}
-
-function stripDecoration(value) {
-  return value.split("#")[0].split("?")[0].trim();
-}
-
-function isExternal(value) {
-  return /^[a-z][a-z0-9+.-]*:/i.test(value) && !layerByName.has(value.slice(0, value.indexOf(":")));
 }
 
 function parseArgs(argv) {

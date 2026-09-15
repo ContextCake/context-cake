@@ -12,6 +12,7 @@
 
 import { stem } from "./stem.mjs";
 import { sectionText } from "./sections.mjs";
+import { conceptLinkTargets } from "./markdown-links.mjs";
 
 const DAY_MS = 86400000;
 const WORD = /[a-z0-9_-]+/g;
@@ -197,13 +198,71 @@ function layerOrderer(layers) {
   return (names) => [...new Set(names)].sort((a, b) => (levelByName.get(b) ?? 0) - (levelByName.get(a) ?? 0));
 }
 
+// ---- inbound-link prior -----------------------------------------------------
+//
+// A static hub-vs-leaf signal: a concept six other concepts link to should not
+// lose to a lexically similar concept nothing links to. Weight is log-damped
+// (Math.log1p) on purpose — a concept with 50 inbound links must not run away
+// from one with 6; the prior nudges a close lexical race, it does not decide
+// questions BM25F already answers decisively. Tuned against eval questions
+// q39-q42 (packages/core/eval/questions.json) — see docs/architecture/notes/
+// link-prior.md for the weight sweep and why 0.3 (the top of the allowed
+// [0.05, 0.3] range) was kept: q39/q41 need it to overtake the leaf, and the
+// eval's aggregate numbers do not regress at this weight.
+export const LINK_PRIOR_WEIGHT = 0.1;
+
+/** The exact multiplier applied to a concept's bm25f score. Exported so the
+ * incremental index and the SQLite store apply IDENTICAL arithmetic in the
+ * identical operand order — Object.is equality depends on it. */
+export function linkPriorMultiplier(inbound) {
+  return 1 + LINK_PRIOR_WEIGHT * Math.log1p(inbound);
+}
+
+/**
+ * distinctInboundCounts(docs, layerNames) -> { inbound: Map<id, number>, targetsByDoc: Map<doc, string[]> }
+ *
+ * `inbound.get(id)` is the number of DISTINCT concept ids (across all
+ * contributing layers, any layer's body) whose body links to `id`. Self-links
+ * never count, and a link to an id outside the corpus counts for nothing (no
+ * document to boost). `targetsByDoc.get(doc)` is that doc's own deduped,
+ * normalized, corpus-existing outgoing targets, in document order — reused
+ * for a hit's `linksTo` so the neighborhood is computed once per search, not
+ * twice.
+ */
+function distinctInboundCounts(docs, layerNames) {
+  const corpusIds = new Set(docs.map((doc) => doc.id));
+  const targetsByDoc = new Map();
+  const sourcesByTarget = new Map(); // target id -> Set of distinct source concept ids
+  for (const doc of docs) {
+    const targets = conceptLinkTargets(doc.body, doc.id, layerNames)
+      .filter((target) => target !== doc.id && corpusIds.has(target));
+    targetsByDoc.set(doc, targets);
+    for (const target of targets) {
+      let sources = sourcesByTarget.get(target);
+      if (!sources) {
+        sources = new Set();
+        sourcesByTarget.set(target, sources);
+      }
+      sources.add(doc.id);
+    }
+  }
+  const inbound = new Map();
+  for (const [target, sources] of sourcesByTarget) inbound.set(target, sources.size);
+  return { inbound, targetsByDoc };
+}
+
+const LINKS_TO_CAP = 3; // hits beyond this rank omit linksTo
+const LINKS_TO_MAX = 5; // linksTo is capped at this many targets
+
 export async function searchConcepts(layers, { query, limit = 10 }) {
   const rawTokens = requireTokens(query, "search");
   const terms = [...new Set(analyze(query))];
   const orderLayerNames = layerOrderer(layers);
+  const layerNames = new Set(layers.map((layer) => layer.name));
 
   const docs = await collectDocuments(layers);
   const index = buildIndex(docs, conceptFields);
+  const { inbound, targetsByDoc } = distinctInboundCounts(docs, layerNames);
 
   const byId = new Map();
   for (const entry of index.entries) {
@@ -219,6 +278,7 @@ export async function searchConcepts(layers, { query, limit = 10 }) {
         score,
         layers: [doc.layer],
         snippet: makeSnippet(doc.body, rawTokens),
+        winningDoc: doc,
       });
     } else {
       // Best layer wins rather than the sum. Summing made a concept that three
@@ -228,16 +288,31 @@ export async function searchConcepts(layers, { query, limit = 10 }) {
       if (score > existing.score) {
         existing.score = score;
         existing.snippet = makeSnippet(doc.body, rawTokens);
+        existing.winningDoc = doc;
       }
       existing.layers.push(doc.layer);
       if (!existing.title) existing.title = doc.frontmatter.title ?? null;
     }
   }
 
+  // The prior is per CONCEPT, not per layer contribution — applied once here,
+  // after the best-layer merge, before the sort.
+  for (const entry of byId.values()) {
+    entry.inbound = inbound.get(entry.id) ?? 0;
+    entry.score *= linkPriorMultiplier(entry.inbound);
+  }
+
   return [...byId.values()]
     .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
     .slice(0, Number(limit) || 10)
-    .map((entry) => ({ ...entry, layers: orderLayerNames(entry.layers) }));
+    .map((entry, rank) => {
+      const { winningDoc, ...hit } = entry;
+      const result = { ...hit, layers: orderLayerNames(entry.layers) };
+      if (rank < LINKS_TO_CAP) {
+        result.linksTo = (targetsByDoc.get(winningDoc) ?? []).slice(0, LINKS_TO_MAX);
+      }
+      return result;
+    });
 }
 
 export async function searchCaptures(layers, { query, kinds = null, limit = 10, now = Date.now() }) {

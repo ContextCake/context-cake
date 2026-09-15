@@ -41,10 +41,17 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import {
   analyze, analyzeConceptFields, conceptBody, makeSnippet, scoreEntry, tokenizeQuery, FIELD_COUNT,
+  linkPriorMultiplier,
 } from "./search.mjs";
+import { conceptLinkTargets } from "./markdown-links.mjs";
 import { mergeConcepts, orderContributors } from "./resolver.mjs";
 
-const FORMAT_VERSION = 1;
+// Bumped for the `links` table (inbound-link prior): a store built under
+// FORMAT_VERSION 1 has no postings for it, so any pre-existing file rebuilds
+// from scratch rather than silently answering with inbound = 0 everywhere.
+const FORMAT_VERSION = 2;
+const LINKS_TO_CAP = 3;
+const LINKS_TO_MAX = 5;
 
 // node:sqlite is a recent built-in (Node >= 22.13; present in Node 26 here and
 // in Electron 43's Node 24) and this engine otherwise supports older
@@ -125,6 +132,7 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       DROP TABLE IF EXISTS docs;
       DROP TABLE IF EXISTS postings;
       DROP TABLE IF EXISTS terms;
+      DROP TABLE IF EXISTS links;
 
       CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
       CREATE TABLE layers(
@@ -155,6 +163,13 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       ) WITHOUT ROWID;
       CREATE INDEX postings_doc ON postings(doc);
       CREATE TABLE terms(term TEXT PRIMARY KEY, df INTEGER NOT NULL);
+      CREATE TABLE links(
+        doc INTEGER NOT NULL,
+        ord INTEGER NOT NULL,
+        target TEXT NOT NULL
+      );
+      CREATE INDEX links_target ON links(target);
+      CREATE INDEX links_doc ON links(doc);
     `);
     db.prepare("INSERT INTO meta(key, value) VALUES ('format', ?)").run(String(FORMAT_VERSION));
   }
@@ -213,6 +228,10 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     docRow: db.prepare("SELECT doc, layer, id, ord, title, frontmatter, body, len0, len1, len2, len3, len4 FROM docs WHERE doc = ?"),
     docByLayerId: db.prepare("SELECT frontmatter FROM docs WHERE layer = ? AND id = ?"),
     bodyForDoc: db.prepare("SELECT body FROM docs WHERE doc = ?"),
+    insertLink: db.prepare("INSERT INTO links(doc, ord, target) VALUES (?, ?, ?)"),
+    deleteLinksForDoc: db.prepare("DELETE FROM links WHERE doc = ?"),
+    linksForDoc: db.prepare("SELECT target FROM links WHERE doc = ? ORDER BY ord"),
+    docExists: db.prepare("SELECT 1 FROM docs WHERE id = ? LIMIT 1"),
   };
 
   // SQLite's default host-parameter ceiling (SQLITE_MAX_VARIABLE_NUMBER) is
@@ -255,10 +274,11 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       stmts.deleteZeroTerm.run(term);
     }
     stmts.deletePostingsForDoc.run(doc);
+    stmts.deleteLinksForDoc.run(doc);
     stmts.deleteDoc.run(doc);
   }
 
-  function insertDocWithPostings(layerName, id, ord, fp, concept) {
+  function insertDocWithPostings(layerName, id, ord, fp, concept, layerNames) {
     const fields = analyzeConceptFields(id, concept);
     analyzedCount += 1;
     const lens = fields.map((f) => f.length);
@@ -278,10 +298,18 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       }
     }
     for (const term of seen) stmts.bumpTermUp.run(term);
+
+    // Self-excluded, deduped, normalized outgoing targets — document order
+    // preserved via `ord` so a later linksTo read reproduces it exactly.
+    // Corpus existence is NOT filtered here (it can change on every sync
+    // without this document being re-read); linksTo checks it at read time.
+    const targets = conceptLinkTargets(conceptBody(concept), id, layerNames).filter((target) => target !== id);
+    targets.forEach((target, index) => stmts.insertLink.run(doc, index, target));
+
     return doc;
   }
 
-  function syncLayer(view) {
+  function syncLayer(view, layerNames) {
     const identity = view.identity ?? null;
     const existingLayer = stmts.getLayer.get(view.name);
     if (
@@ -334,7 +362,7 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       }
       seen.add(id);
       if (existing) removeDoc(existing.doc);
-      insertDocWithPostings(view.name, id, ord, fp, concept);
+      insertDocWithPostings(view.name, id, ord, fp, concept, layerNames);
       ord += 1;
     }
     for (const [id, existing] of existingDocs) {
@@ -348,7 +376,7 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     db.exec("BEGIN");
     try {
       const wanted = new Set(contributing.map((view) => view.name));
-      for (const view of contributing) syncLayer(view);
+      for (const view of contributing) syncLayer(view, wanted);
       for (const { name } of stmts.allLayerNames.all()) {
         if (!wanted.has(name)) {
           for (const row of stmts.docsForLayer.all(name)) removeDoc(row.doc);
@@ -392,6 +420,43 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       }
     }
     return candidates;
+  }
+
+  /**
+   * inbound(id) for each of `ids`: the number of DISTINCT concept ids (across
+   * all contributing layers, any layer's body — hence COUNT(DISTINCT
+   * docs.id), not COUNT(*)) with a stored link row targeting `id`. Self-links
+   * were never stored (insertDocWithPostings excludes them); a target outside
+   * `ids` was never asked for. Ids with zero inbound rows are simply absent
+   * from the returned Map — callers read it with `?? 0`.
+   */
+  function inboundCounts(ids) {
+    const arr = [...ids];
+    const counts = new Map();
+    for (let i = 0; i < arr.length; i += IN_CHUNK) {
+      const chunk = arr.slice(i, i + IN_CHUNK);
+      const placeholders = chunk.map(() => "?").join(",");
+      const stmt = db.prepare(
+        `SELECT links.target AS target, COUNT(DISTINCT docs.id) AS n `
+        + `FROM links JOIN docs ON links.doc = docs.doc `
+        + `WHERE links.target IN (${placeholders}) GROUP BY links.target`,
+      );
+      for (const row of stmt.all(...chunk)) counts.set(row.target, row.n);
+    }
+    return counts;
+  }
+
+  /** Up to LINKS_TO_MAX outgoing targets of `doc` that exist in the corpus
+   * right now, in document order. Corpus existence is checked here (not at
+   * insert time) because it can change without this document being re-read. */
+  function linksToFor(doc) {
+    const targets = stmts.linksForDoc.all(doc).map((row) => row.target);
+    const out = [];
+    for (const target of targets) {
+      if (out.length >= LINKS_TO_MAX) break;
+      if (stmts.docExists.get(target)) out.push(target);
+    }
+    return out;
   }
 
   function levelOrderer(contributing) {
@@ -518,6 +583,14 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
         }
       }
 
+      // The prior is per CONCEPT, not per layer contribution — applied once
+      // here, after the best-layer merge, before the type filter and sort.
+      const inbound = inboundCounts(byId.keys());
+      for (const hit of byId.values()) {
+        hit.inbound = inbound.get(hit.id) ?? 0;
+        hit.score *= linkPriorMultiplier(hit.inbound);
+      }
+
       let hits = [...byId.values()];
       if (type) hits = hits.filter((hit) => typeOf(contributing, hit.id) === type);
 
@@ -526,14 +599,16 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       return hits
         .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
         .slice(0, Number(limit) || 10)
-        .map(({ doc, ...hit }) => {
+        .map(({ doc, ...hit }, rank) => {
           const { body } = stmts.bodyForDoc.get(doc);
           bodyReadCount += 1;
-          return {
+          const result = {
             ...hit,
             snippet: makeSnippet(body, rawTokens),
             layers: orderLayerNames(hit.layers),
           };
+          if (rank < LINKS_TO_CAP) result.linksTo = linksToFor(doc);
+          return result;
         });
     },
 

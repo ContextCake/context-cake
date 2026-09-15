@@ -1,11 +1,27 @@
 {
-  "label": "add graph-prior, section-depth, and paraphrase probes ahead of ranking changes",
+  "label": "inbound-link prior (weight 0.1; 0.3 rejected: regresses q06, over-boosts real hubs)",
   "questions": 51,
   "recall@1": 0.745,
   "recall@5": 0.902,
-  "mrr": 0.809,
+  "mrr": 0.806,
   "conflict": 1,
   "history": [
+    {
+      "label": "inbound-link prior (weight 0.3)",
+      "questions": 51,
+      "recall@1": 0.745,
+      "recall@5": 0.902,
+      "mrr": 0.811,
+      "conflict": 1
+    },
+    {
+      "label": "add graph-prior, section-depth, and paraphrase probes ahead of ranking changes",
+      "questions": 51,
+      "recall@1": 0.745,
+      "recall@5": 0.902,
+      "mrr": 0.809,
+      "conflict": 1
+    },
     {
       "label": "BM25F over Porter-stemmed tokens; best-layer aggregation",
       "questions": 38,

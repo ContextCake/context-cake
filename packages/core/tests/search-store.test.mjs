@@ -30,7 +30,21 @@ const VOCAB = [
   "schema", "migration", "search", "ranking", "snapshot", "conflict",
 ];
 
-function makeConcept(rand, seed) {
+// Same discipline as search-index.test.mjs: a handful of markdown links to
+// OTHER generated ids (some will exist, some won't as the mutation sequence
+// runs — the dangling case), plus an occasional self-link, so the store's
+// `links` table and inbound query are exercised, not just postings.
+function randomLinks(rand, id) {
+  const count = Math.floor(rand() * 3); // 0, 1, or 2 links
+  const parts = [];
+  for (let i = 0; i < count; i += 1) {
+    const target = rand() < 0.15 ? id : `concept-${Math.floor(rand() * 90)}`;
+    parts.push(`[link ${i}](${target}.md)`);
+  }
+  return parts.join(" ");
+}
+
+function makeConcept(rand, seed, id) {
   const words = (count) => Array.from({ length: count }, () => VOCAB[Math.floor(rand() * VOCAB.length)]);
   return {
     frontmatter: {
@@ -39,7 +53,7 @@ function makeConcept(rand, seed) {
       tags: rand() < 0.4 ? words(2).join(",") : undefined,
     },
     sections: [
-      { key: "body", heading: "## Body {#body}", text: words(30 + Math.floor(rand() * 40)).join(" ") + ` marker-${seed}` },
+      { key: "body", heading: "## Body {#body}", text: `${words(30 + Math.floor(rand() * 40)).join(" ")} marker-${seed} ${randomLinks(rand, id)}` },
       ...(rand() < 0.5 ? [{ key: "notes", heading: "## Notes {#notes}", text: words(15).join(" ") }] : []),
     ],
   };
@@ -102,8 +116,8 @@ for (const mode of ["file", "memory"]) {
 
     let seq = 0;
     const layerDocs = {
-      personal: new Map(Array.from({ length: 40 }, (_, i) => [`concept-${i}`, makeConcept(rand, seq++)])),
-      team: new Map(Array.from({ length: 25 }, (_, i) => [`concept-${i * 2}`, makeConcept(rand, seq++)])),
+      personal: new Map(Array.from({ length: 40 }, (_, i) => [`concept-${i}`, makeConcept(rand, seq++, `concept-${i}`)])),
+      team: new Map(Array.from({ length: 25 }, (_, i) => [`concept-${i * 2}`, makeConcept(rand, seq++, `concept-${i * 2}`)])),
     };
     let layers = [
       { name: "personal", level: 3, snap: makeSnapshot([...layerDocs.personal]) },
@@ -127,12 +141,16 @@ for (const mode of ["file", "memory"]) {
             assert.equal(viaStore[i].snippet, viaIndex[i].snippet, `${label} · "${query}" · ${JSON.stringify(extra)} · hit ${i} snippet`);
             assert.deepEqual(viaStore[i].layers, viaIndex[i].layers, `${label} · "${query}" · ${JSON.stringify(extra)} · hit ${i} layers`);
             assert.equal(viaStore[i].title, viaIndex[i].title, `${label} · "${query}" · ${JSON.stringify(extra)} · hit ${i} title`);
+            assert.equal(viaStore[i].inbound, viaIndex[i].inbound, `${label} · "${query}" · ${JSON.stringify(extra)} · hit ${i} inbound`);
+            assert.deepEqual(viaStore[i].linksTo, viaIndex[i].linksTo, `${label} · "${query}" · ${JSON.stringify(extra)} · hit ${i} linksTo`);
           }
           if (!extra.source && !extra.type) {
             assert.equal(reference.length, viaStore.length, `${label} · "${query}" · vs searchConcepts · hit count`);
             for (let i = 0; i < reference.length; i += 1) {
               assert.equal(viaStore[i].id, reference[i].id, `${label} · "${query}" · vs searchConcepts · hit ${i} id`);
               assert.ok(Object.is(viaStore[i].score, reference[i].score), `${label} · "${query}" · vs searchConcepts · hit ${i} score`);
+              assert.equal(viaStore[i].inbound, reference[i].inbound, `${label} · "${query}" · vs searchConcepts · hit ${i} inbound`);
+              assert.deepEqual(viaStore[i].linksTo, reference[i].linksTo, `${label} · "${query}" · vs searchConcepts · hit ${i} linksTo`);
             }
           }
         }
@@ -152,9 +170,10 @@ for (const mode of ["file", "memory"]) {
       if (roll < 0.45 && docs.size > 3) {
         const ids = [...docs.keys()];
         const id = ids[Math.floor(rand() * ids.length)];
-        docs.set(id, makeConcept(rand, seq++));
+        docs.set(id, makeConcept(rand, seq++, id));
       } else if (roll < 0.7) {
-        docs.set(`concept-new-${seq}`, makeConcept(rand, seq++));
+        const newId = `concept-new-${seq}`;
+        docs.set(newId, makeConcept(rand, seq++, newId));
       } else if (docs.size > 3) {
         const ids = [...docs.keys()];
         docs.delete(ids[Math.floor(rand() * ids.length)]);
@@ -166,7 +185,7 @@ for (const mode of ["file", "memory"]) {
     layers = layers.filter((l) => l.name !== "team");
     await compare("layer removed");
 
-    const company = new Map(Array.from({ length: 10 }, (_, i) => [`concept-${i * 3}`, makeConcept(rand, seq++)]));
+    const company = new Map(Array.from({ length: 10 }, (_, i) => [`concept-${i * 3}`, makeConcept(rand, seq++, `concept-${i * 3}`)]));
     layers = [...layers, { name: "company", level: 0, snap: makeSnapshot([...company]) }];
     await compare("layer added");
 

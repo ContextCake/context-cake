@@ -32,19 +32,36 @@
 
 import {
   FIELD_COUNT, analyzeConceptFields, conceptBody, makeSnippet, scoreEntry, tokenizeQuery, analyze,
+  linkPriorMultiplier,
 } from "./search.mjs";
+import { conceptLinkTargets } from "./markdown-links.mjs";
 import { mergeConcepts, orderContributors } from "./resolver.mjs";
 
 const IDLE_EVICT_MS = 30_000;
+const LINKS_TO_CAP = 3;
+const LINKS_TO_MAX = 5;
 
 export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
   // concept object -> analyzed fields. Survives index eviction on purpose:
   // it holds per-LIVE-SNAPSHOT work, and the snapshots own the lifetime.
   const analyzed = new WeakMap();
-  // layer name -> { gen, entries: Map<id, { id, concept, fields }> } —
-  // entries in snapshot id order (Map preserves insertion).
+  // concept object -> that concept's own deduped, normalized, self-excluded
+  // outgoing link targets (computed once per concept object, same lifetime
+  // discipline as `analyzed`). Recomputed if the contributing layer names
+  // change (a layer add/drop can change what a "layerName:path" prefix
+  // resolves to) — see targetsFor.
+  const linkTargets = new WeakMap();
+  // layer name -> { gen, entries: Map<id, { id, concept, fields, targets }> }
+  // — entries in snapshot id order (Map preserves insertion).
   let layers = null;
   let stats = null; // { total, fieldTotals: number[], documentFrequency: Map }
+  // target concept id -> Map<source concept id, refcount>. refcount is how
+  // many currently-indexed layer entries of that source concept link to the
+  // target — NOT how many links; a source in two layers linking to the same
+  // target is one distinct source (inbound counts DISTINCT concepts), and a
+  // source that stops linking (edit or removal) decrements rather than wipes.
+  let linkRefs = null;
+  let currentLayerNameSet = new Set();
   let evictTimer = null;
 
   function fieldsFor(id, concept) {
@@ -54,6 +71,55 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
       analyzed.set(concept, fields);
     }
     return fields;
+  }
+
+  function targetsFor(id, concept) {
+    let cached = linkTargets.get(concept);
+    if (!cached || cached.layerNameSet !== currentLayerNameSet) {
+      const targets = conceptLinkTargets(conceptBody(concept), id, currentLayerNameSet)
+        .filter((target) => target !== id);
+      cached = { layerNameSet: currentLayerNameSet, targets };
+      linkTargets.set(concept, cached);
+    }
+    return cached.targets;
+  }
+
+  function addLinkRefs(id, targets) {
+    for (const target of targets) {
+      let bySource = linkRefs.get(target);
+      if (!bySource) {
+        bySource = new Map();
+        linkRefs.set(target, bySource);
+      }
+      bySource.set(id, (bySource.get(id) ?? 0) + 1);
+    }
+  }
+
+  function removeLinkRefs(id, targets) {
+    for (const target of targets) {
+      const bySource = linkRefs.get(target);
+      if (!bySource) continue;
+      const next = (bySource.get(id) ?? 0) - 1;
+      if (next <= 0) bySource.delete(id);
+      else bySource.set(id, next);
+      if (bySource.size === 0) linkRefs.delete(target);
+    }
+  }
+
+  function inboundCount(id) {
+    return linkRefs.get(id)?.size ?? 0;
+  }
+
+  // linksTo shows targets "that exist in the corpus" (the brief's words):
+  // targetsFor only strips self-links (cheap, cacheable per concept object);
+  // corpus membership can change on every query without that concept being
+  // re-read, so it is checked here, at output time, against the layers this
+  // update() just settled on.
+  function corpusHas(id) {
+    for (const entry of layers.values()) {
+      if (entry.entries.has(id)) return true;
+    }
+    return false;
   }
 
   function addToStats(fields) {
@@ -87,9 +153,27 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
     for (const id of view.ids) {
       const concept = view.concepts.get(id);
       if (!concept) continue; // collectDocuments skips unloadable concepts
-      entries.set(id, { id, concept, fields: fieldsFor(id, concept) });
+      entries.set(id, { id, concept, fields: fieldsFor(id, concept), targets: targetsFor(id, concept) });
     }
     return entries;
+  }
+
+  let layerNameKey = null;
+
+  // Layer-prefixed links (`[[layerName:path]]`) resolve differently depending
+  // on which layer names currently exist, so the target cache key changes
+  // (a new Set object) only when the actual name SET changes — not on every
+  // call, which would defeat the point of caching. A layer joining/leaving
+  // therefore invalidates targetsFor for entries this update() rebuilds, but
+  // an entry kept via the "gen unchanged" fast path below is not re-resolved
+  // against the new set: an acceptable gap for a rare link form, traded for
+  // not forcing a full re-walk on every layer add/drop.
+  function syncLayerNames(contributing) {
+    const key = contributing.map((view) => view.name).sort().join(",");
+    if (key !== layerNameKey) {
+      layerNameKey = key;
+      currentLayerNameSet = new Set(contributing.map((view) => view.name));
+    }
   }
 
   /**
@@ -97,12 +181,17 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
    * `contributing`: [{ name, level, gen, ids, concepts }] in layer order.
    */
   function update(contributing) {
+    syncLayerNames(contributing);
     if (!layers || !stats) {
       layers = new Map();
       stats = { total: 0, fieldTotals: Array.from({ length: FIELD_COUNT }, () => 0), documentFrequency: new Map() };
+      linkRefs = new Map();
       for (const view of contributing) {
         const entries = buildLayerEntries(view);
-        for (const entry of entries.values()) addToStats(entry.fields);
+        for (const entry of entries.values()) {
+          addToStats(entry.fields);
+          addLinkRefs(entry.id, entry.targets);
+        }
         layers.set(view.name, { gen: view.gen, level: view.level, entries });
       }
       return;
@@ -125,18 +214,28 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
       for (const [id, entry] of entries) {
         const before = old.get(id);
         if (before && before.concept === entry.concept) continue; // untouched
-        if (before) removeFromStats(before.fields);
+        if (before) {
+          removeFromStats(before.fields);
+          removeLinkRefs(before.id, before.targets);
+        }
         addToStats(entry.fields);
+        addLinkRefs(entry.id, entry.targets);
       }
       for (const [id, before] of old) {
-        if (!entries.has(id)) removeFromStats(before.fields);
+        if (!entries.has(id)) {
+          removeFromStats(before.fields);
+          removeLinkRefs(before.id, before.targets);
+        }
       }
       if (previous) layers.delete(view.name);
       next.set(view.name, { gen: view.gen, level: view.level, entries });
     }
     // Layers that left the manifest: their documents leave the statistics.
     for (const [, gone] of layers) {
-      for (const entry of gone.entries.values()) removeFromStats(entry.fields);
+      for (const entry of gone.entries.values()) {
+        removeFromStats(entry.fields);
+        removeLinkRefs(entry.id, entry.targets);
+      }
     }
     layers = next;
   }
@@ -146,6 +245,7 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
     evictTimer = setTimeout(() => {
       layers = null;
       stats = null; // the WeakMap keeps per-concept analysis; only the corpus-scale assembly drops
+      linkRefs = null;
     }, idleEvictMs);
     evictTimer.unref?.();
   }
@@ -196,17 +296,27 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
               // Deferred: bodies are not retained by the index, and only hits
               // need one. Resolved to text after the cut below.
               snippetOf: entry.concept,
+              targetsOf: entry.targets,
             });
           } else {
             if (score > existing.score) {
               existing.score = score;
               existing.snippetOf = entry.concept;
+              existing.targetsOf = entry.targets;
             }
             existing.layers.push(view.name);
             if (!existing.title) existing.title = entry.concept.frontmatter.title ?? null;
           }
         }
       }
+
+      // The prior is per CONCEPT, not per layer contribution — applied once
+      // here, after the best-layer merge, before the type filter and sort.
+      for (const hit of byId.values()) {
+        hit.inbound = inboundCount(hit.id);
+        hit.score *= linkPriorMultiplier(hit.inbound);
+      }
+
       return [...byId.values()]
         .filter((hit) => {
           if (!type) return true;
@@ -221,16 +331,21 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
         })
         .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
         .slice(0, Number(limit) || 10)
-        .map(({ snippetOf, ...hit }) => ({
-          ...hit,
-          snippet: makeSnippet(conceptBody(snippetOf), rawTokens),
-          layers: orderLayerNames(hit.layers),
-        }));
+        .map(({ snippetOf, targetsOf, ...hit }, rank) => {
+          const result = {
+            ...hit,
+            snippet: makeSnippet(conceptBody(snippetOf), rawTokens),
+            layers: orderLayerNames(hit.layers),
+          };
+          if (rank < LINKS_TO_CAP) result.linksTo = targetsOf.filter(corpusHas).slice(0, LINKS_TO_MAX);
+          return result;
+        });
     },
     close() {
       clearTimeout(evictTimer);
       layers = null;
       stats = null;
+      linkRefs = null;
     },
   };
 }

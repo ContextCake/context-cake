@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stem } from "../src/stem.mjs";
-import { analyze, searchConcepts, searchCaptures } from "../src/search.mjs";
+import { analyze, searchConcepts, searchCaptures, linkPriorMultiplier, LINK_PRIOR_WEIGHT } from "../src/search.mjs";
 
 // A slice of Porter's own published vocabulary. If these drift, the stemmer has
 // stopped being Porter and the eval numbers are measuring something else.
@@ -217,4 +217,93 @@ test("only captures/ documents reach find_captures", async () => {
 
   const hits = await searchCaptures(layers, { query: "kafka lag", limit: 5 });
   assert.deepEqual(hits.map((hit) => hit.id), ["captures/a"]);
+});
+
+// ---- inbound-link prior -----------------------------------------------------
+
+test("inbound counts distinct concepts, not distinct layers or contributions", async () => {
+  // Two layers both link runbooks/a -> standards/hub: one distinct source.
+  const hubDoc = { frontmatter: { title: "Hub" }, body: "hub content about launches" };
+  const layers = [
+    layer("company", 0, {
+      "standards/hub": hubDoc,
+      "runbooks/a": { frontmatter: { title: "A" }, body: "see the [hub](../standards/hub.md) for launches" },
+    }),
+    layer("team", 2, {
+      "standards/hub": hubDoc,
+      "runbooks/a": { frontmatter: { title: "A" }, body: "see the [hub](../standards/hub.md) for launches" },
+      "runbooks/b": { frontmatter: { title: "B" }, body: "also see the [hub](../standards/hub.md) for launches" },
+    }),
+  ];
+
+  const hits = await searchConcepts(layers, { query: "hub launches", limit: 5 });
+  const hub = hits.find((hit) => hit.id === "standards/hub");
+  // runbooks/a (two layers, one concept) and runbooks/b: two distinct sources.
+  assert.equal(hub.inbound, 2);
+});
+
+test("a self-link does not inflate a concept's own inbound count", async () => {
+  const layers = [
+    layer("company", 0, {
+      "standards/hub": {
+        frontmatter: { title: "Hub" },
+        body: "this hub links to [itself](hub.md) and to nothing else about launches",
+      },
+    }),
+  ];
+
+  const hits = await searchConcepts(layers, { query: "hub launches", limit: 5 });
+  assert.equal(hits.find((hit) => hit.id === "standards/hub").inbound, 0);
+});
+
+test("a link to an id outside the corpus counts for nothing", async () => {
+  const layers = [
+    layer("company", 0, {
+      "runbooks/a": {
+        frontmatter: { title: "A" },
+        body: "launches: see the [missing doc](../standards/does-not-exist.md)",
+      },
+    }),
+  ];
+
+  const hits = await searchConcepts(layers, { query: "launches", limit: 5 });
+  assert.equal(hits.find((hit) => hit.id === "runbooks/a").inbound, 0);
+});
+
+test("the link-prior multiplier is monotone increasing in inbound count and never shrinks a score", () => {
+  assert.equal(linkPriorMultiplier(0), 1, "zero inbound links leaves the score unchanged");
+  const values = [0, 1, 2, 6, 20, 100].map(linkPriorMultiplier);
+  for (let i = 1; i < values.length; i += 1) {
+    assert.ok(values[i] > values[i - 1], `multiplier(${i}) should exceed multiplier(${i - 1})`);
+  }
+  // Log-damped: going from 6 to 100 inbound links must not multiply the boost
+  // by anywhere near as much as the raw count ratio (100/6 ≈ 16.7×).
+  const ratio = (linkPriorMultiplier(100) - 1) / (linkPriorMultiplier(6) - 1);
+  assert.ok(ratio < 3, `log damping should keep the 6→100 boost ratio small, got ${ratio}`);
+  assert.ok(LINK_PRIOR_WEIGHT >= 0.05 && LINK_PRIOR_WEIGHT <= 0.3, "weight must stay in the agreed range");
+});
+
+test("linksTo appears only on the top 3 hits and is capped at 5 targets, in document order", async () => {
+  const targets = ["a", "b", "c", "d", "e", "f", "g"];
+  const docs = {};
+  for (const t of targets) docs[`runbooks/${t}`] = { frontmatter: { title: t }, body: `unrelated ${t}` };
+  docs["runbooks/hub"] = {
+    // Title match (boost 5) guarantees rank 1 regardless of how much the
+    // outgoing link text lengthens the body field.
+    frontmatter: { title: "launch checklist" },
+    body: `launch launch launch ${targets.map((t) => `[${t}](${t}.md)`).join(" ")}`,
+  };
+  docs["runbooks/second"] = { frontmatter: { title: "Second" }, body: "launch launch launch launch" };
+  docs["runbooks/third"] = { frontmatter: { title: "Third" }, body: "launch launch launch" };
+  docs["runbooks/fourth"] = { frontmatter: { title: "Fourth" }, body: "launch" };
+
+  const layers = [layer("company", 0, docs)];
+  const hits = await searchConcepts(layers, { query: "launch", limit: 10 });
+  assert.equal(hits[0].id, "runbooks/hub");
+  assert.deepEqual(hits[0].linksTo, targets.slice(0, 5).map((t) => `runbooks/${t}`), "capped at 5, in document order");
+  assert.ok("linksTo" in hits[1], "rank 2 carries linksTo");
+  assert.ok("linksTo" in hits[2], "rank 3 carries linksTo");
+  for (let i = 3; i < hits.length; i += 1) {
+    assert.ok(!("linksTo" in hits[i]), `rank ${i + 1} must not carry linksTo`);
+  }
 });

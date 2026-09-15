@@ -37,19 +37,25 @@ test('HTTP source/type filters recover hits below the global top-k and use disti
     assert.deepEqual(body.indexingSources, []);
     return body.hits;
   };
+  // linksTo is rank-WITHIN-THIS-CALL-dependent by design (top 3 of whatever
+  // the filter selected): 'buried' sits far below rank 3 in the unfiltered
+  // 26-hit answer but is the ONLY hit — rank 0 — once a filter narrows to
+  // it, so it legitimately gains linksTo there. Strip it before comparing a
+  // filtered answer against a slice of the unfiltered one.
+  const withoutLinksTo = hits => hits.map(({ linksTo, ...hit }) => hit);
   const global = await search();
   assert.equal(global.length, 20);
   assert.equal(global.some(hit => hit.id === 'buried'), false);
   const full = await search({ limit: '50' });
   const expected = full.filter(hit => hit.id === 'buried');
   assert.equal(expected.length, 1);
-  assert.deepEqual(await search({ source: 'specs' }), expected);
-  assert.deepEqual(await search({ type: 'spec' }), expected);
-  assert.deepEqual(await search({ source: 'specs', type: 'spec' }), expected);
+  assert.deepEqual(withoutLinksTo(await search({ source: 'specs' })), withoutLinksTo(expected));
+  assert.deepEqual(withoutLinksTo(await search({ type: 'spec' })), withoutLinksTo(expected));
+  assert.deepEqual(withoutLinksTo(await search({ source: 'specs', type: 'spec' })), withoutLinksTo(expected));
   assert.deepEqual(await search({ source: 'specs', type: 'note' }), []);
   assert.deepEqual(await search({ source: 'missing' }), []);
   assert.deepEqual(await search({ type: 'missing' }), []);
   assert.deepEqual(await search({ source: 'personal' }), global);
   assert.deepEqual(await search(), global, 'filter cache entries must not replace the unfiltered answer');
-  assert.deepEqual(await search({ source: 'specs' }), expected, 'repeat scoped searches use their own retained answer');
+  assert.deepEqual(withoutLinksTo(await search({ source: 'specs' })), withoutLinksTo(expected), 'repeat scoped searches use their own retained answer');
 });

@@ -60,8 +60,9 @@ traces on your Mac. Native diagnostics need no Docker; optional Grafana does.
 Local Grafana telemetry stays local in this version, with bounded export queues
 and 24-hour backend retention policies. Only participating processes are observed.
 
-These features begin in ContextCake 0.9.0. Until that signed download appears,
-they are available from the current source build. [Diagnostics guide](apps/site/src/content/docs/docs/guides/diagnostics.md).
+These features are included in the signed Mac app beginning with ContextCake
+0.9.0. [Download the latest release](https://github.com/ContextCake/context-cake/releases/latest)
+or read the [Diagnostics guide](apps/site/src/content/docs/docs/guides/diagnostics.md).
 
 Authoritative source files stay in their configured locations. ContextCake also
 maintains indexes, optional disk caches, and repository clones. Source precedence

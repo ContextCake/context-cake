@@ -1,9 +1,9 @@
 # Local diagnostics verification
 
-Local verification on an Apple Silicon Mac, 2026-09-14. This is an unsigned local
-source build, not a signed release or public deployment. Docker Desktop 27.5.1;
-Node 22.22.2 for repository checks. The test profiles and sources are disposable
-copies; the developer's normal app configuration and knowledge folders were not used.
+Initial local verification ran on an Apple Silicon Mac on 2026-09-14, before the
+signed release and public deployment. Docker Desktop 27.5.1 and Node 22.22.2 were
+used for repository checks. The test profiles and sources were disposable copies;
+the developer's normal app configuration and knowledge folders were not used.
 
 ## Automated gates
 
@@ -17,7 +17,29 @@ copies; the developer's normal app configuration and knowledge folders were not 
   frame URL restrictions, demo isolation and paused/unmounted polling have regression
   coverage. Activity bins, unavailable observations, same-instant samples and accessible
   interval counts are also covered. Full console tests, typecheck and build pass.
-- Site: 41-page build plus existing install/commerce gates pass. No public deployment performed.
+- Initial site gate: 41-page build plus existing install/commerce checks passed
+  before deployment.
+
+## Signed release validation
+
+Signed release 0.9.1 was independently downloaded and checked on an Apple silicon
+Mac on 2026-09-15:
+
+- The downloaded DMG matched its published SHA-256 checksum. The mounted and
+  installed app passed strict code-signature validation, Gatekeeper assessment,
+  notarization-origin inspection, and stapler validation.
+- The installed app reported version 0.9.1. Packaged smoke returned authenticated
+  API 200 and unauthenticated 401 with no failed engine probes. `contextcake
+  doctor --json` returned a valid profile, effective limits, present sources, and
+  the expected disabled Local Grafana state before setup.
+- Native Diagnostics rendered real source coverage, index activity, memory use,
+  search/read counts, timings, and recent operations. A real search and read then
+  appeared in the embedded Grafana dashboard and opened the matching search trace.
+- Normal app quit stopped the owned container. Relaunch restarted it without a
+  duplicate, retained the earlier dashboard history, and resumed export for a new
+  retrieval. Telemetry dropped during backend warm-up remained bounded and visible.
+- The coordinated release workflow deployed the matching Web Demo and site from
+  the release commit and passed its production-provenance check.
 
 ## Real stack and Mac app
 
@@ -122,6 +144,6 @@ sent/queued/dropped counters describe the adapter-to-collector hop; Grafana also
 shows collector exporter failures. Backend outages cannot report themselves live
 through the unavailable backend. Recent native trace links can precede indexing.
 
-Full production hosting, Alloy/Cloud, warehouse access, dbt import, source/settings
-CLI administration, signed release, deployment and a long retention soak remain
-outside this increment. The dbt assessment is explicitly exploration-only.
+Full production telemetry hosting, Alloy/Cloud, warehouse access, dbt import,
+source/settings CLI administration, and a long retention soak remain outside this
+increment. The dbt assessment is explicitly exploration-only.

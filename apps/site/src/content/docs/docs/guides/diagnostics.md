@@ -4,9 +4,9 @@ description: Inspect source health and retrieval locally, with optional Docker-b
 ---
 
 **Availability:** beginning with version 0.9.0, the [Web Demo](/demo) includes a
-clearly labeled, read-only sample of the native overview. The live view and Local
-Grafana controls also begin in ContextCake 0.9.0 for Mac. Until that signed download appears on the
-[Install page](/install), use the current source build.
+clearly labeled, read-only sample of the native overview. The signed Mac app
+includes the live view and Local Grafana controls. [Download it from the Install
+page](/install).
 
 ## Native diagnostics
 

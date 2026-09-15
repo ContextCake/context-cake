@@ -1,25 +1,31 @@
 {
   "channel": "stable",
-  "version": "0.7.3",
-  "tag": "app-v0.7.3",
-  "publishedAt": "2026-08-12T20:35:33Z",
+  "version": "0.9.1",
+  "tag": "app-v0.9.1",
+  "publishedAt": "2026-09-15T05:50:13Z",
   "architectures": [
     "arm64"
   ],
-  "releaseUrl": "https://github.com/ContextCake/context-cake/releases/tag/app-v0.7.3",
-  "checksumsUrl": "https://github.com/ContextCake/context-cake/releases/download/app-v0.7.3/SHA256SUMS",
+  "releaseUrl": "https://github.com/ContextCake/context-cake/releases/tag/app-v0.9.1",
+  "checksumsUrl": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/SHA256SUMS",
   "artifacts": {
     "dmg": {
-      "name": "ContextCake-0.7.3-arm64.dmg",
-      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.7.3/ContextCake-0.7.3-arm64.dmg",
-      "sha256": "03cf345f4974e78bb1cddecdae2aae0c1a3e9ce8ecc84d46a5cf540c94bd5053",
-      "bytes": 124143902
+      "name": "ContextCake-0.9.1-arm64.dmg",
+      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/ContextCake-0.9.1-arm64.dmg",
+      "sha256": "e0fd78e20f5a9139188977b9f7999551a789c896af8962ebdc5901186b051e22",
+      "bytes": 124279138
     },
     "updaterZip": {
-      "name": "ContextCake-0.7.3-arm64-mac.zip",
-      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.7.3/ContextCake-0.7.3-arm64-mac.zip",
-      "sha256": "8cbaecd8b77be0380b8a4d858647e11d6c7481bd3f58f404515a09d7234a0b99",
-      "bytes": 123563332
+      "name": "ContextCake-0.9.1-arm64-mac.zip",
+      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/ContextCake-0.9.1-arm64-mac.zip",
+      "sha256": "da5b5a7f85a91520766375791dc6c2c5a93f6a9fe3d0f3b6007769fd4fc643d9",
+      "bytes": 123715639
+    },
+    "mcpb": {
+      "name": "ContextCake-0.9.1.mcpb",
+      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/ContextCake-0.9.1.mcpb",
+      "sha256": "99cf685fde0fb83968794f7dbfafcb75e7f4e87890b40818a9d31bb8994bde83",
+      "bytes": 1425307
     }
   }
 }

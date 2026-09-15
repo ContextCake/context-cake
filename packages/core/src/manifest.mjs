@@ -18,7 +18,11 @@ const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const RUNNABLE_SOURCE_KINDS = new Set(["okf-local", "files", "github", "mcp"]);
 const CREDENTIAL_PATTERN = /(?:github_pat_|gh[pousr]_|sk-[A-Za-z0-9]|bearer\s+[A-Za-z0-9._-])/i;
 const CREDENTIAL_KEY_PATTERN = /^(?:(?:[a-z0-9]+_)?token|access[_-]?token|refresh[_-]?token|password|passwd|secret|client[_-]?secret|private[_-]?key|api[_-]?key|credential|authorization|cookie)$/i;
-const CREDENTIAL_VALUE_PATTERN = /(?:github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|glpat-[A-Za-z0-9_-]{12,}|npm_[A-Za-z0-9]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|(?:AKIA|ASIA)[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{12,}|bearer\s+[A-Za-z0-9._-]{12,}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|https?:\/\/[^/@\s]+:[^/@\s]+@)/i;
+// Every branch must stay linear: manifests arrive over the service API. The URL
+// branch pins the userinfo's first `:` so a run of `!:` can't split two ways,
+// and JWT-shaped values go through containsJwtShape() because that branch
+// rescanned a long token run from every "eyJ" inside it.
+const CREDENTIAL_VALUE_PATTERN = /(?:github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|glpat-[A-Za-z0-9_-]{12,}|npm_[A-Za-z0-9]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|(?:AKIA|ASIA)[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{12,}|bearer\s+[A-Za-z0-9._-]{12,}|https?:\/\/[^/@\s][^/@\s:]*:[^/@\s]+@)/i;
 const CREDENTIAL_ASSIGNMENT_PATTERN = /(?:^|[\s?&#:_'"-])(?:access[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|secret|password|credential|authorization|signature|sig)\s*(?:=|:)/i;
 
 export function classifyManifest(manifest) {
@@ -450,7 +454,7 @@ export function createProfileId(label, existingIds = []) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    .replace(/^-|-$/g, "")
     .slice(0, 63)
     .replace(/-+$/g, "") || "profile";
   const occupied = new Set(existingIds);
@@ -1013,11 +1017,30 @@ function rejectCredentialFields(value, label) {
   }
 }
 
+// Matches what /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/i did, in
+// one pass: the second segment is a whole dot-delimited part, and the first
+// "eyJ" can only sit in the token run that ends right before its dot.
+function containsJwtShape(value) {
+  const parts = value.split(".");
+  for (let i = 0; i + 2 < parts.length; i += 1) {
+    if (/^eyJ[A-Za-z0-9_-]+$/i.test(parts[i + 1])
+      && /^[A-Za-z0-9_-]/.test(parts[i + 2])
+      && /eyJ[A-Za-z0-9_-]/i.test(trailingTokenRun(parts[i]))) return true;
+  }
+  return false;
+}
+
+function trailingTokenRun(text) {
+  let start = text.length;
+  while (start > 0 && /[A-Za-z0-9_-]/.test(text[start - 1])) start -= 1;
+  return text.slice(start);
+}
+
 function rejectCredentialValues(value, label, { allowScrubbed = false } = {}, key = "") {
   if (allowScrubbed && isScrubMarker(value)) return;
   if (typeof value === "string") {
     if (key === "auth" && value.startsWith("keychain:")) return;
-    if (CREDENTIAL_VALUE_PATTERN.test(value) || CREDENTIAL_ASSIGNMENT_PATTERN.test(value)) {
+    if (CREDENTIAL_VALUE_PATTERN.test(value) || containsJwtShape(value) || CREDENTIAL_ASSIGNMENT_PATTERN.test(value)) {
       throw new Error(`${label} contains a value that looks like a raw credential.`);
     }
     return;

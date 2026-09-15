@@ -24,7 +24,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { assertInsideRoot, httpError, json, parseJson, realpathLenient, MIME } from "./http-util.mjs";
-import { defaultWalkLimits, MAX_DOC_BYTES } from "./sources/okf-local.mjs";
+import { defaultWalkLimits, findAttrGroup, matchHeadingLine, MAX_DOC_BYTES, normalizeHeading } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 
 // Files the editor treats as editable text. SVG is text AND image: editable as
@@ -587,8 +587,8 @@ export function replaceSection(text, key, newBody, { refreshUpdatedTo = null } =
   for (let i = 0; i < lines.length; i += 1) {
     if (isFence(lines[i])) { inFence = !inFence; continue; }
     if (inFence) continue;
-    const m = lines[i].match(/^#{1,6}\s+(.+?)\s*$/);
-    if (m && headingKey(m[1]) === key) { start = i; break; }
+    const m = matchHeadingLine(lines[i]);
+    if (m && headingKey(m.text) === key) { start = i; break; }
   }
   if (start === -1) return { text, replaced: false };
 
@@ -603,7 +603,7 @@ export function replaceSection(text, key, newBody, { refreshUpdatedTo = null } =
     ...lines.slice(0, start),
     heading,
     "",
-    ...String(newBody).replace(/\s+$/, "").split("\n"),
+    ...String(newBody).trimEnd().split("\n"),
     "",
     ...lines.slice(end),
   ];
@@ -620,8 +620,8 @@ export function readSectionBody(text, key, { plainText = false } = {}) {
   for (let i = 0; i < lines.length; i += 1) {
     if (isFence(lines[i])) { inFence = !inFence; continue; }
     if (inFence) continue;
-    const match = lines[i].match(/^#{1,6}\s+(.+?)\s*$/);
-    if (match && headingKey(match[1]) === key) { start = i + 1; break; }
+    const match = matchHeadingLine(lines[i]);
+    if (match && headingKey(match.text) === key) { start = i + 1; break; }
   }
   if (start === -1) return null;
   let end = lines.length;
@@ -644,18 +644,21 @@ function replacePlainTextBody(text, key, newBody) {
 // style. Anchor and every other attr stay byte-identical; a heading with no
 // `updated=` token comes back untouched.
 function refreshHeadingUpdated(headingLine, today) {
-  return headingLine.replace(/\{[^}]*\}/, (attrs) => attrs.replace(
+  const group = findAttrGroup(headingLine);
+  if (!group) return headingLine;
+  const attrs = headingLine.slice(group.start, group.end).replace(
     /(^\{|\s)(updated=)(['"]?)[^\s'"}]*(['"]?)/,
     (m, pre, kw, open, close) => `${pre}${kw}${open}${today}${close}`,
-  ));
+  );
+  return headingLine.slice(0, group.start) + attrs + headingLine.slice(group.end);
 }
 
 function headingKey(headingText) {
-  const brace = headingText.match(/\{([^}]*)\}/);
+  const brace = findAttrGroup(headingText);
   if (brace) {
-    for (const tok of brace[1].trim().split(/\s+/)) if (tok.startsWith("#")) return tok.slice(1).toLowerCase();
+    for (const tok of brace.inner.trim().split(/\s+/)) if (tok.startsWith("#")) return tok.slice(1).toLowerCase();
   }
-  return headingText.replace(/\{[^}]*\}/g, "").trim().toLowerCase().replace(/\s+/g, " ");
+  return normalizeHeading(headingText);
 }
 
 function toPosix(v) { return v.split(path.sep).join("/"); }

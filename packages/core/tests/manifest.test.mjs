@@ -609,6 +609,46 @@ test("source fingerprints and cache namespaces isolate profile, auth, and ref id
   assert(fs.existsSync(path.join(cacheDir, "one-fingerprint")));
 });
 
+test("credential value detection rejects what the old pattern did, in linear time", () => {
+  // The pattern before the CodeQL js/polynomial-redos fix. The linear URL
+  // branch and containsJwtShape() must reject exactly what it rejected.
+  const OLD_VALUE = /(?:github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|glpat-[A-Za-z0-9_-]{12,}|npm_[A-Za-z0-9]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|(?:AKIA|ASIA)[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{12,}|bearer\s+[A-Za-z0-9._-]{12,}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|https?:\/\/[^/@\s]+:[^/@\s]+@)/i;
+  const ASSIGNMENT = /(?:^|[\s?&#:_'"-])(?:access[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|secret|password|credential|authorization|signature|sig)\s*(?:=|:)/i;
+  const rejected = (value) => {
+    try {
+      validateContextManifest({ profiles: { default: profile() }, metadata: { value } });
+      return false;
+    } catch (error) {
+      if (/looks like a raw credential/.test(error.message)) return true;
+      throw error;
+    }
+  };
+
+  // Seeded near-misses around both shapes: userinfo with extra colons, "eyJ"
+  // inside, at the end of, or missing from a token run.
+  let state = 3;
+  const next = () => (state = (Math.imul(state, 1103515245) + 12345) >>> 0) >>> 16;
+  const pick = (list) => list[next() % list.length];
+  const prefixes = ["", "http://", "https://", "see http://"];
+  const segments = ["", "a", "eyJ", "eyJa", "eyJa", "aeyJa", "a eyJa", "EYJ_", "eyj-9", "!", "a:b", "::"];
+  const joins = [".", ".", ".", ":", ":", "@", "@", "/", " "];
+  const seen = { true: 0, false: 0 };
+  for (let i = 0; i < 20_000; i += 1) {
+    let value = pick(prefixes) + pick(segments);
+    for (let parts = 1 + (next() % 4); parts > 0; parts -= 1) value += pick(joins) + pick(segments);
+    const expected = OLD_VALUE.test(value) || ASSIGNMENT.test(value);
+    assert.equal(rejected(value), expected, JSON.stringify(value));
+    seen[expected] += 1;
+  }
+  assert.ok(seen.true > 1_000 && seen.false > 1_000, `unbalanced sample: ${JSON.stringify(seen)}`);
+
+  const started = performance.now();
+  rejected(`http://${"!:".repeat(100_000)}`);
+  rejected("eyJ".repeat(100_000));
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 5_000, `hostile values took ${Math.round(elapsed)} ms`);
+});
+
 test("manifest mutation locking preserves concurrent updates and times out safely", async (t) => {
   const root = temporaryDirectory(t);
   const manifestPath = path.join(root, "manifest.json");
@@ -632,21 +672,35 @@ test("manifest mutation locking preserves concurrent updates and times out safel
   fs.rmSync(`${manifestPath}.lock`);
 
   fs.writeFileSync(`${manifestPath}.lock`, JSON.stringify({ pid: 999_999, createdAt: 1, token: "stale" }), { mode: 0o600 });
+  // The winner holds the lock until the loser has timed out. A fixed 180 ms
+  // hold let a contender that started late on a busy runner arrive after the
+  // release and win as well. staleMs sits far above the race's length, so only
+  // the planted lock is stale — never the winner's, even read mid-write.
+  const busyMarker = `${manifestPath}.busy`;
   const staleRaceScript = `
+    import fs from "node:fs";
     import { withManifestLock } from ${JSON.stringify(pathToFileURL(manifestModule).href)};
-    const [manifestPath] = process.argv.slice(1);
+    const [manifestPath, busyMarker] = process.argv.slice(1);
     try {
       withManifestLock(manifestPath, () => {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 180);
-      }, { timeoutMs: 75, staleMs: 1 });
+        const deadline = Date.now() + 10_000;
+        while (!fs.existsSync(busyMarker) && Date.now() < deadline) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+      }, { timeoutMs: 75, staleMs: 10_000 });
       process.stdout.write("WON");
     } catch (error) {
-      process.stdout.write(error.message.includes("Timed out") ? "BUSY" : "ERROR");
+      if (!error.message.includes("Timed out")) {
+        process.stdout.write("ERROR");
+      } else {
+        fs.writeFileSync(busyMarker, "");
+        process.stdout.write("BUSY");
+      }
     }
   `;
   const staleResults = await Promise.all([
-    runNodeOutput(staleRaceScript, [manifestPath]),
-    runNodeOutput(staleRaceScript, [manifestPath]),
+    runNodeOutput(staleRaceScript, [manifestPath, busyMarker]),
+    runNodeOutput(staleRaceScript, [manifestPath, busyMarker]),
   ]);
   assert.equal(staleResults.filter((result) => result === "WON").length, 1);
   assert.equal(staleResults.filter((result) => result === "BUSY").length, 1);

@@ -265,12 +265,12 @@ function parseSections(body) {
   const sections = [];
   let current = { key: "", heading: null, level: 0, lines: [], updated: null, override: null };
   for (const line of lines) {
-    const match = line.match(/^(#{1,6})\s+(.+?)\s*$/);
+    const match = matchHeadingLine(line);
     if (match) {
       pushSection(sections, current);
-      const attrs = parseHeadingAttrs(match[2]);
-      const key = attrs.key ?? normalizeHeading(match[2]);
-      current = { key, heading: line, level: match[1].length, lines: [], updated: attrs.updated, override: attrs.override };
+      const attrs = parseHeadingAttrs(match.text);
+      const key = attrs.key ?? normalizeHeading(match.text);
+      current = { key, heading: line, level: match.level, lines: [], updated: attrs.updated, override: attrs.override };
     } else {
       current.lines.push(line);
     }
@@ -282,12 +282,12 @@ function parseSections(body) {
 // Shared with other adapters (files.mjs). `key` is null when the heading has
 // no {#key} attr — callers pick their own fallback keying scheme.
 export function parseHeadingAttrs(headingText) {
-  const brace = headingText.match(/\{([^}]*)\}/);
+  const brace = findAttrGroup(headingText);
   let key = null;
   let updated = null;
   let override = null;
   if (brace) {
-    for (const token of brace[1].trim().split(/\s+/)) {
+    for (const token of brace.inner.trim().split(/\s+/)) {
       if (token.startsWith("#")) key = token.slice(1).toLowerCase();
       else if (token.startsWith("updated=")) updated = token.slice(8).replace(/^['"]|['"]$/g, "");
       else if (token.startsWith("override=")) override = token.slice(9).replace(/^['"]|['"]$/g, "");
@@ -309,7 +309,44 @@ function pushSection(sections, section) {
 // Shared with other adapters (files.mjs): section keys must derive identically
 // across adapters or same-heading sections stop merging between layer kinds.
 export function normalizeHeading(text) {
-  return text.replace(/\{[^}]*\}/g, "").trim().toLowerCase().replace(/\s+/g, " ");
+  return stripAttrGroups(text).trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Heading parsing runs on every line of every indexed document, so none of it
+// may backtrack. `/^(#{1,6})\s+(.+?)\s*$/` spent minutes on one line of spaces
+// ending in a lone `\r`, and `/\{[^}]*\}/` rescanned to the end of the line
+// from every unclosed `{`. These scanners return what those regexes matched;
+// tests/heading-scan.test.mjs holds them to it.
+
+/** `{ level, text }` for an ATX heading line, with `text` trimmed, or null. */
+export function matchHeadingLine(line) {
+  let level = 0;
+  while (level < 7 && line[level] === "#") level += 1;
+  if (level < 1 || level > 6 || !/\s/.test(line[level] ?? "")) return null;
+  const rest = line.slice(level);
+  const text = rest.trim();
+  // The regex's `.+?` never crossed a line terminator, and needed one
+  // character that wasn't one even when the heading was only whitespace.
+  if (text === "") return /[^\n\r\u2028\u2029]/.test(rest.slice(1)) ? { level, text } : null;
+  return /[\n\r\u2028\u2029]/.test(text) ? null : { level, text };
+}
+
+/** The first `{...}` group at or after `from` — its bounds and inner text — or null. */
+export function findAttrGroup(text, from = 0) {
+  const open = text.indexOf("{", from);
+  const close = open === -1 ? -1 : text.indexOf("}", open + 1);
+  return close === -1 ? null : { start: open, end: close + 1, inner: text.slice(open + 1, close) };
+}
+
+/** `text` with every `{...}` group removed. */
+export function stripAttrGroups(text) {
+  let out = "";
+  let from = 0;
+  for (let group = findAttrGroup(text); group; group = findAttrGroup(text, from)) {
+    out += text.slice(from, group.start);
+    from = group.end;
+  }
+  return out + text.slice(from);
 }
 
 function parseFrontmatter(content) {

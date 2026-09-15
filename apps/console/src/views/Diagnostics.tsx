@@ -28,6 +28,7 @@ export type Observation = {
   resultCount?: number
   documentsRead?: number
   documentsReused?: number
+  queueMs?: number
 }
 type Report = {
   observedFrom: number
@@ -145,16 +146,250 @@ const stackCopy: Record<string, string> = {
     'The local stack needs attention. Your context engine continues to work.',
 }
 
+function createDemoReport(now = Date.now()): Report {
+  const observedFrom = now - 15 * 60 * 1000
+  const searches: Observation[] = Array.from({ length: 24 }, (_, i) => ({
+    at: observedFrom + i * 36_000,
+    operation: 'search',
+    outcome: i === 17 ? 'error' : 'ok',
+    durationMs: 7 + ((i * 11) % 31),
+    resultCount: i === 17 ? 0 : 3 + (i % 6),
+    traceId: (i + 1).toString(16).padStart(32, '0'),
+  }))
+  const reads: Observation[] = Array.from({ length: 24 }, (_, i) => ({
+    at: observedFrom + 18_000 + i * 36_000,
+    operation: 'read',
+    outcome: 'ok',
+    durationMs: 3 + ((i * 7) % 18),
+    traceId: (i + 101).toString(16).padStart(32, '0'),
+  }))
+  const operations: Observation[] = [
+    ...searches,
+    ...reads,
+    {
+      at: now - 82_000,
+      operation: 'index',
+      outcome: 'error',
+      durationMs: 1_482,
+      documentsRead: 1,
+      documentsReused: 17,
+      queueMs: 184,
+      traceId: 'f'.repeat(32),
+    },
+    {
+      at: now - 7 * 60_000,
+      operation: 'coverage',
+      outcome: 'partial',
+      durationMs: 0,
+      traceId: 'e'.repeat(32),
+    },
+  ].sort((a, b) => b.at - a.at)
+
+  return {
+    observedFrom,
+    observedTo: now,
+    sampleCount: operations.length,
+    operations,
+    telemetry: {
+      state: 'ready',
+      historyGeneration: 0,
+      dropped: 0,
+      sent: operations.length,
+      queued: 0,
+      exportedTraceIds: operations.flatMap((row) =>
+        row.traceId ? [row.traceId] : [],
+      ),
+    },
+    health: {
+      memory: 'normal',
+      memoryDetail: { liveBytes: 86 * 1048576, totalBytes: 16 * 1073741824 },
+      sources: [
+        {
+          name: 'personal',
+          level: 3,
+          kind: 'okf-local',
+          status: 'ok',
+          phase: 'ready',
+          loaded: 7,
+          total: 7,
+          conceptCount: 7,
+          refreshing: false,
+          error: null,
+          warnings: 0,
+          evidenceHealthy: true,
+        },
+        {
+          name: 'team',
+          level: 2,
+          kind: 'okf-local',
+          status: 'degraded',
+          phase: 'error',
+          loaded: 18,
+          total: 18,
+          conceptCount: 18,
+          refreshing: false,
+          error: 'Latest refresh incomplete; serving the previous index.',
+          warnings: 1,
+          evidenceHealthy: false,
+        },
+        {
+          name: 'company',
+          level: 0,
+          kind: 'okf-local',
+          status: 'ok',
+          phase: 'ready',
+          loaded: 31,
+          total: 31,
+          conceptCount: 31,
+          refreshing: false,
+          error: null,
+          warnings: 0,
+          evidenceHealthy: true,
+        },
+      ],
+    },
+    indexing: {
+      events: [
+        {
+          at: now - 82_000,
+          line: 'Team refresh completed with partial source coverage.',
+        },
+        {
+          at: now - 94_000,
+          line: 'Read 1 changed document and reused 17 indexed documents.',
+        },
+      ],
+    },
+  }
+}
+
+function DemoGrafanaPreview({ report }: { report: Report }) {
+  const searches = retrievalSummary(report.operations, 'search')
+  const reads = retrievalSummary(report.operations, 'read')
+  const retrievals = searches.samples + reads.samples
+  const failures = searches.errors + reads.errors
+  const observedSeconds = Math.max(
+    1,
+    (report.observedTo - report.observedFrom) / 1000,
+  )
+  const failureRate = failures / observedSeconds
+  const index = report.operations.find((row) => row.operation === 'index')
+  const incompleteSources = report.health.sources.filter(
+    (source) =>
+      !['ready', 'ok'].includes(source.status) ||
+      source.warnings > 0 ||
+      source.evidenceHealthy === false,
+  ).length
+  return (
+    <section
+      className="cc-diag-grafana-preview"
+      aria-label="Sample Local Grafana dashboard"
+    >
+      <header>
+        <div>
+          <span className="cc-diag-scope">Sample dashboard summary</span>
+          <h3>ContextCake operations</h3>
+        </div>
+        <StatusBadge tone="info">Illustration</StatusBadge>
+      </header>
+      <div className="cc-diag-grafana-grid">
+        <section>
+          <span>Retrieval volume</span>
+          <strong>{retrievals}</strong>
+          <small>Search and read operations</small>
+        </section>
+        <section>
+          <span>Retrieval duration p95</span>
+          <strong>{duration(searches.p95)}</strong>
+          <small>Search · {duration(reads.p95)} read</small>
+        </section>
+        <section className={failures ? 'has-errors' : ''}>
+          <span>Failures per second</span>
+          <strong>{failureRate.toFixed(3)}</strong>
+          <small>{failures} in this sample window</small>
+        </section>
+        <section>
+          <span>Latest index duration</span>
+          <strong>{duration(index?.durationMs ?? null)}</strong>
+          <small>Most recent sample pass</small>
+        </section>
+        <section className={incompleteSources ? 'has-errors' : ''}>
+          <span>Incomplete sources</span>
+          <strong>{incompleteSources}</strong>
+          <small>Current source coverage</small>
+        </section>
+        <section>
+          <span>Documents read and reused · process totals</span>
+          <strong>
+            {index?.documentsRead ?? '—'} / {index?.documentsReused ?? '—'}
+          </strong>
+          <small>Sample desktop process</small>
+        </section>
+        <section>
+          <span>Latest index queue wait</span>
+          <strong>{duration(index?.queueMs ?? null)}</strong>
+          <small>Before the sample pass started</small>
+        </section>
+        <section>
+          <span>Telemetry delivery failures</span>
+          <strong>{report.telemetry?.dropped ?? '—'}</strong>
+          <small>Best-effort local export</small>
+        </section>
+      </div>
+      <div className="cc-diag-grafana-events">
+        <header className="cc-diag-section-heading">
+          <h3>Correlated events and traces</h3>
+          <span className="cc-diag-note">Desktop · sample</span>
+        </header>
+        <div className="cc-diag-table">
+          <table>
+            <caption className="sr-only">
+              Sample correlated events and traces
+            </caption>
+            <thead>
+              <tr>
+                <th>Operation</th>
+                <th>Outcome</th>
+                <th className="is-number">Duration</th>
+                <th>Process role</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.operations.slice(0, 4).map((row, index) => (
+                <tr key={`${row.operation}-${index}`}>
+                  <th scope="row">{words(row.operation)}</th>
+                  <td>{words(row.outcome)}</td>
+                  <td className="is-number">{duration(row.durationMs)}</td>
+                  <td>desktop</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <footer>
+        The installed Mac app replaces this illustration with the provisioned
+        Grafana dashboard and trace view. The Web Demo never creates a frame or
+        connects to a local service.
+      </footer>
+    </section>
+  )
+}
+
 function DiagnosticsInner() {
   const { mode } = useStoreData()
+  const isDemo = mode !== 'live'
   const { mode: theme, density, setDensity } = useThemeMode()
   const bridge =
     mode === 'live' ? window.__CC_DESKTOP?.observability : undefined
-  const [report, setReport] = useState<Report | null>(null)
-  const [stack, setStack] = useState<StackStatus>({
-    enabled: false,
-    state: 'disabled',
-  })
+  const [report, setReport] = useState<Report | null>(() =>
+    isDemo ? createDemoReport() : null,
+  )
+  const [stack, setStack] = useState<StackStatus>(() =>
+    isDemo
+      ? { enabled: true, state: 'ready', historyGeneration: 0 }
+      : { enabled: false, state: 'disabled' },
+  )
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<'overview' | 'grafana'>('overview')
@@ -246,16 +481,6 @@ function DiagnosticsInner() {
         s.warnings > 0 ||
         s.evidenceHealthy === false,
     ).length ?? 0
-  if (mode !== 'live')
-    return (
-      <section className="cc-diagnostics">
-        <EmptyState title="Your engine, in view">
-          Native diagnostics and optional Local Grafana are available in the Mac
-          app. This Web Demo never connects to your computer or starts a stack.
-        </EmptyState>
-      </section>
-    )
-
   const searches = retrievalSummary(report?.operations ?? [], 'search')
   const reads = retrievalSummary(report?.operations ?? [], 'read')
   const retrievalCount = searches.samples + reads.samples
@@ -275,19 +500,23 @@ function DiagnosticsInner() {
       <div className="cc-diag-stack-state">
         <StatusBadge
           tone={
-            stack.state === 'ready'
+            isDemo
+              ? 'info'
+              : stack.state === 'ready'
               ? 'success'
               : stack.state === 'failed'
                 ? 'attention'
                 : 'neutral'
           }
         >
-          {words(stack.state)}
+          {isDemo ? 'Sample ready state' : words(stack.state)}
         </StatusBadge>
       </div>
       <p>
-        {stackCopy[stack.state] ??
-          'Stack management requires a supported Mac app.'}
+        {isDemo
+          ? 'This preview represents the app-managed local stack after setup. The Web Demo does not start Docker or collect telemetry.'
+          : stackCopy[stack.state] ??
+            'Stack management requires a supported Mac app.'}
       </p>
       {stack.failure && (
         <p className="cc-diag-failure">Reference: {stack.failure}</p>
@@ -348,7 +577,7 @@ function DiagnosticsInner() {
           <dd>When enabled and Docker is running</dd>
         </div>
       </dl>
-      {stack.enabled && (
+      {stack.enabled && !isDemo && (
         <details className="cc-diag-management">
           <summary>Manage local history & setup</summary>
           <p>
@@ -377,7 +606,11 @@ function DiagnosticsInner() {
       <header className="cc-diag-heading">
         <div>
           <h2>Engine diagnostics</h2>
-          <p>Source health, retrieval, and indexing on this Mac.</p>
+          <p>
+            {isDemo
+              ? 'A sample of source health, retrieval, and indexing in the Mac app.'
+              : 'Source health, retrieval, and indexing on this Mac.'}
+          </p>
         </div>
         <SegmentedControl
           label="Diagnostics view"
@@ -389,23 +622,38 @@ function DiagnosticsInner() {
           onChange={setTab}
         />
       </header>
+      {isDemo && (
+        <InlineNotice>
+          <strong>Sample data.</strong> This read-only preview mirrors the native
+          diagnostics layout. It never connects to your computer, contacts
+          localhost, starts Docker, or creates a Grafana frame.
+        </InlineNotice>
+      )}
       {error && <InlineNotice tone="error">{error}</InlineNotice>}
       {tab === 'grafana' ? (
         <>
           <div className="cc-diag-toolbar">
-            <span className="cc-diag-scope">Local Grafana · Experimental</span>
+            <span className="cc-diag-scope">
+              {isDemo
+                ? 'Local Grafana · sample data'
+                : 'Local Grafana · Experimental'}
+            </span>
             <div className="cc-diag-actions">
-              <label>
-                Time range{' '}
-                <select
-                  value={range}
-                  onChange={(e) => setRange(e.target.value)}
-                >
-                  <option value="now-15m">Last 15 minutes</option>
-                  <option value="now-1h">Last hour</option>
-                  <option value="now-24h">Last 24 hours</option>
-                </select>
-              </label>
+              {isDemo ? (
+                <span className="cc-diag-note">Last 15 minutes · static preview</span>
+              ) : (
+                <label>
+                  Time range{' '}
+                  <select
+                    value={range}
+                    onChange={(e) => setRange(e.target.value)}
+                  >
+                    <option value="now-15m">Last 15 minutes</option>
+                    <option value="now-1h">Last hour</option>
+                    <option value="now-24h">Last 24 hours</option>
+                  </select>
+                </label>
+              )}
               {trace && (
                 <Button onClick={() => setTrace(undefined)}>
                   Back to dashboard
@@ -426,12 +674,15 @@ function DiagnosticsInner() {
               sandbox="allow-scripts allow-same-origin"
               referrerPolicy="no-referrer"
             />
+          ) : isDemo && report ? (
+            <DemoGrafanaPreview report={report} />
           ) : (
             <div className="cc-diag-grafana-setup">{stackControls}</div>
           )}
           <p className="cc-diag-note">
-            Includes participating desktop and MCP processes, distinguished by
-            role. Other clients are not observed.
+            {isDemo
+              ? 'The installed dashboard includes participating desktop and MCP processes, distinguished by role. Other clients are not observed.'
+              : 'Includes participating desktop and MCP processes, distinguished by role. Other clients are not observed.'}
           </p>
         </>
       ) : (
@@ -443,7 +694,9 @@ function DiagnosticsInner() {
                 aria-hidden="true"
               />
               <span>
-                {paused
+                {isDemo
+                  ? 'Sample desktop engine'
+                  : paused
                   ? 'Observation paused'
                   : error
                     ? 'Refresh unavailable'
@@ -455,13 +708,15 @@ function DiagnosticsInner() {
                 </span>
               )}
             </div>
-            <Button
-              variant="quiet"
-              aria-pressed={paused}
-              onClick={() => setPaused((p) => !p)}
-            >
-              {paused ? 'Resume updates' : 'Pause updates'}
-            </Button>
+            {!isDemo && (
+              <Button
+                variant="quiet"
+                aria-pressed={paused}
+                onClick={() => setPaused((p) => !p)}
+              >
+                {paused ? 'Resume updates' : 'Pause updates'}
+              </Button>
+            )}
           </div>
           <div className="cc-diag-statusline">
             <div>
@@ -539,7 +794,7 @@ function DiagnosticsInner() {
                   <h3>Retrieval performance</h3>
                   <span className="cc-diag-note">
                     {report
-                      ? `${report.sampleCount} ${report.sampleCount === 1 ? 'observation' : 'observations'}`
+                      ? `${retrievalCount} ${retrievalCount === 1 ? 'retrieval observation' : 'retrieval observations'}`
                       : 'Waiting for the engine'}
                   </span>
                 </header>
@@ -920,9 +1175,9 @@ function DiagnosticsInner() {
             </aside>
           </div>
           <footer className="cc-diag-footer">
-            Native observations cover this desktop engine only. Grafana combines
-            participating processes. Updates every 5 seconds while this view is
-            visible.
+            {isDemo
+              ? 'Sample observations use the bundled three-layer demo. In the Mac app, native observations cover the desktop engine and Local Grafana combines participating processes.'
+              : 'Native observations cover this desktop engine only. Grafana combines participating processes. Updates every 5 seconds while this view is visible.'}
           </footer>
         </>
       )}

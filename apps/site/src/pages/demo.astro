@@ -1,10 +1,13 @@
 ---
 import Base from '../layouts/Base.astro';
 import Icon from '../components/Icon.astro';
+import { appVersion } from '../data/app-release';
 
 // One canonical Web Demo is deployed from the same app-v* release commit as
 // the Mac app. The site embeds that deployment instead of rebuilding a copy.
 const demoUrl = 'https://contextcake-console.pages.dev/';
+const [appMajor = 0, appMinor = 0] = appVersion.split('.').map(Number);
+const hasDiagnosticsDemo = appMajor > 0 || appMinor >= 9;
 
 const narrativePoints = [
 	{
@@ -19,6 +22,10 @@ const narrativePoints = [
 		title: 'Open the original file',
 		body: 'Start with the combined result, then open the document that supplied any section.',
 	},
+	...(hasDiagnosticsDemo ? [{
+		title: 'Inspect engine diagnostics',
+		body: 'Open Diagnostics for a labeled sample of source health, retrieval performance, indexing work, and Local Grafana status.',
+	}] : []),
 ];
 ---
 
@@ -33,7 +40,7 @@ const narrativePoints = [
 				<h1>See which source supplies each part of an answer.</h1>
 				<p class="lede">
 					This example uses one company policy, one team decision, and one personal note.
-					Open the result to see how ContextCake combines them section by section.
+					Open the result to see how ContextCake combines them section by section{hasDiagnosticsDemo ? ", then choose Diagnostics to inspect the app's operational view" : ''}.
 				</p>
 				<div class="actions">
 					<a class="cta primary" href="#demo-stage">Explore the console</a>
@@ -43,7 +50,7 @@ const narrativePoints = [
 		</section>
 
 		<section class="frame-section">
-			<p class="simulation-note"><strong>Simulation—no files will change.</strong> Look for a source label and any alternate version. Actions and history reset on reload.</p>
+			<p class="simulation-note"><strong>Simulation—no files will change.</strong> Look for a source label and any alternate version. {hasDiagnosticsDemo ? 'Diagnostics are explicitly labeled sample data; the demo never contacts your localhost or starts Docker.' : 'The demo uses generated fixture data and does not connect to your Mac or local files.'} Actions and history reset on reload.</p>
 			<div class="stage" id="demo-stage" data-demo-stage>
 				<figure class="frame-wrap" data-demo-frame>
 					<div class="chrome">

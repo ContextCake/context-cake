@@ -3,8 +3,10 @@ title: Diagnostics and Local Grafana
 description: Inspect source health and retrieval locally, with optional Docker-backed dashboards and traces.
 ---
 
-**Availability:** implemented in the current source build; a signed Mac release
-and public deployment are separate. Existing release downloads may not include it.
+**Availability:** beginning with version 0.9.0, the [Web Demo](/demo) includes a
+clearly labeled, read-only sample of the native overview. The live view and Local
+Grafana controls also begin in ContextCake 0.9.0 for Mac. Until that signed download appears on the
+[Install page](/install), use the current source build.
 
 ## Native diagnostics
 
@@ -43,9 +45,9 @@ The volume persists until you explicitly clear it.
 
 ## Dashboards and traces
 
-**Diagnostics → Grafana** embeds the provisioned dashboard with time-range and
-light/dark appearance controls. **Open in browser** opens the managed loopback
-instance. Recent native operations offer **Trace** after export succeeds. Collector
+**Diagnostics → Grafana** embeds the provisioned dashboard with time-range controls
+and matches the app's light/dark appearance. **Open in browser** opens the managed
+loopback instance. Recent native operations offer **Trace** after export succeeds. Collector
 acceptance precedes backend indexing, so a trace may take a moment to appear.
 Native delivery counters measure collector acceptance, not durable backend storage;
 the dashboard also shows collector-to-backend delivery failures.
@@ -84,8 +86,9 @@ contextcake doctor --manifest ./layers.json --profile default
 
 This performs a **fresh configuration check**, reporting the selected profile,
 manifest revision, effective limits, folder availability, and local collector
-availability through the desktop launcher. Folder checks stop after 100 folders or five seconds and do not
-read the corpus. Unchecked folders are explicitly marked not probed. Remote and executable sources are explicitly not probed.
+availability through the desktop launcher. Checks are capped at the first 100 configured
+sources or five seconds and do not read the corpus. Unchecked local folders are explicitly
+marked not probed. Remote and executable sources are explicitly not probed.
 It does not read the running app's private observation history.
 
 Exit codes: `0` healthy check, `8` unhealthy sources, `2` invalid configuration or

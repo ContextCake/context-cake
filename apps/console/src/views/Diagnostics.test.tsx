@@ -70,7 +70,24 @@ it('never contacts localhost or instantiates a frame in the public demo', async 
   await act(async () => root.render(<Diagnostics />))
   expect(fetch).not.toHaveBeenCalled()
   expect(container.querySelector('iframe')).toBeNull()
+  expect(container.textContent).toContain('Sample data')
+  expect(container.textContent).toContain('Sample desktop engine')
+  expect(container.textContent).toContain('1 source needs attention')
   expect(container.textContent).toContain('never connects to your computer')
+  expect(container.textContent).not.toContain('Pause updates')
+  const grafana = [...container.querySelectorAll('button')].find(
+    (button) => button.textContent === 'Grafana',
+  )!
+  await act(async () => grafana.click())
+  expect(container.textContent).toContain('Sample dashboard summary')
+  expect(container.textContent).toContain('Retrieval duration p95')
+  expect(container.textContent).toContain('Failures per second')
+  expect(container.textContent).toContain('Latest index duration')
+  expect(container.textContent).toContain('Latest index queue wait')
+  expect(container.textContent).toContain('Documents read and reused · process totals')
+  expect(container.textContent).toContain('coverage')
+  expect(container.querySelector('iframe')).toBeNull()
+  expect(fetch).not.toHaveBeenCalled()
   await act(async () => root.unmount())
 })
 

@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: Flags and output shapes for resolver, Packs, ingest, write, promote, and mcp-server.
+description: Flags and output shapes for resolver, doctor, profiles, Packs, ingest, write, promote, and mcp-server.
 ---
 
 Every tool is a standalone Node.js script run with `node <tool>.mjs`. The engine is
@@ -220,17 +220,10 @@ Provide either `--event` or `--demo`.
 node classify-context.mjs --demo
 ```
 
-## Related
-
-- [layers.json manifest](/docs/reference/manifest) — the file every `--manifest` flag points at
-- [MCP tools](/docs/reference/mcp-tools) — what `mcp-server.mjs` exposes
-- [Override syntax](/docs/reference/override-syntax) — controlling the merge from frontmatter
-- [ContextCake Packs](/packs) — inspect the public catalog and complete file structures
-
 ## contextcake doctor
 
-The desktop CLI's focused diagnostic command is available in the current source
-build. It uses the app's default manifest unless `--manifest` is supplied:
+The desktop CLI's focused diagnostic command begins in ContextCake 0.9.0. It
+uses the app's default manifest unless `--manifest` is supplied:
 
 ```bash
 contextcake doctor [--manifest <file>] [--profile <id>] [--json]
@@ -244,3 +237,11 @@ observability as not checked. See [diagnostics](/docs/guides/diagnostics).
 
 The full source/settings administration and query command families remain planned
 control-plane increments. Existing resolve and MCP commands remain available.
+
+## Related
+
+- [layers.json manifest](/docs/reference/manifest) — the file every `--manifest` flag points at
+- [MCP tools](/docs/reference/mcp-tools) — what `mcp-server.mjs` exposes
+- [Diagnostics and Local Grafana](/docs/guides/diagnostics) — native observations, telemetry, and limits
+- [Override syntax](/docs/reference/override-syntax) — controlling the merge from frontmatter
+- [ContextCake Packs](/packs) — inspect the public catalog and complete file structures

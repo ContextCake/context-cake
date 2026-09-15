@@ -109,4 +109,19 @@ if (!demoHtml.includes('sandbox="allow-scripts allow-same-origin allow-forms all
   throw new Error('The cross-origin Web Demo embed must retain its iframe sandbox')
 }
 
+const [appMajor = 0, appMinor = 0] = appRelease.version.split('.').map(Number)
+const releaseHasDiagnosticsDemo = appMajor > 0 || appMinor >= 9
+const diagnosticsDemoCues = [
+  'choose Diagnostics to inspect',
+  'Diagnostics are explicitly labeled sample data',
+  'Inspect engine diagnostics',
+]
+for (const cue of diagnosticsDemoCues) {
+  if (demoHtml.includes(cue) !== releaseHasDiagnosticsDemo) {
+    throw new Error(
+      `Demo copy must ${releaseHasDiagnosticsDemo ? 'describe' : 'withhold'} the diagnostics experience for app release ${appRelease.version}: ${cue}`,
+    )
+  }
+}
+
 console.log(`install page verification passed (published Mac release + source fallback; commerce ${commerceVisible ? 'visible' : 'hidden'})`)

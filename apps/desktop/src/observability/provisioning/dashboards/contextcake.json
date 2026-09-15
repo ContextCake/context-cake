@@ -409,7 +409,7 @@
     },
     {
       "id": 9,
-      "title": "Events and traces",
+      "title": "Structured events",
       "type": "logs",
       "datasource": {
         "type": "loki",
@@ -430,7 +430,8 @@
       },
       "options": {
         "showTime": true
-      }
+      },
+      "description": "Event details include the same trace identifier as the operation. Open recent operation traces from the native Overview."
     }
   ],
   "timepicker": {

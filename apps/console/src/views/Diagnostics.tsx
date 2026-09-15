@@ -64,6 +64,20 @@ const duration = (n: number | null) =>
         ? `${(n / 1000).toFixed(2)} s`
         : `${n.toFixed(1)} ms`
 const words = (s: string) => s.replace(/[-_]/g, ' ')
+function scrollDiagnostics(id?: string) {
+  const view = document.querySelector('.cc-diagnostics')
+  const scroller = view?.closest('.cc-main')
+  if (!scroller) return
+  const target = id ? document.getElementById(id) : null
+  scroller.scrollTo?.({
+    top: target
+      ? scroller.scrollTop +
+        target.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top -
+        20
+      : 0,
+  })
+}
 export function retrievalSummary(rows: Observation[], operation: string) {
   const selected = rows.filter((r) => r.operation === operation)
   const durations = selected.map((r) => r.durationMs).sort((a, b) => a - b)
@@ -147,9 +161,7 @@ function DiagnosticsInner() {
   const [paused, setPaused] = useState(false)
   const [filter, setFilter] = useState('all')
   useEffect(() => {
-    document
-      .querySelector('.cc-diagnostics')
-      ?.scrollIntoView?.({ block: 'start' })
+    scrollDiagnostics()
   }, [tab])
   useEffect(() => {
     if (mode !== 'live' || paused) return
@@ -467,11 +479,7 @@ function DiagnosticsInner() {
             </div>
             <Button
               variant="quiet"
-              onClick={() =>
-                document
-                  .getElementById('diagnostic-sources')
-                  ?.scrollIntoView({ block: 'start' })
-              }
+              onClick={() => scrollDiagnostics('diagnostic-sources')}
             >
               Inspect sources ↓
             </Button>
@@ -616,11 +624,13 @@ function DiagnosticsInner() {
                             (a, b) =>
                               Number(
                                 !['ok', 'ready'].includes(b.status) ||
-                                  b.warnings > 0,
+                                  b.warnings > 0 ||
+                                  b.evidenceHealthy === false,
                               ) -
                               Number(
                                 !['ok', 'ready'].includes(a.status) ||
-                                  a.warnings > 0,
+                                  a.warnings > 0 ||
+                                  a.evidenceHealthy === false,
                               ),
                           )
                           .map((s) => (
@@ -640,13 +650,16 @@ function DiagnosticsInner() {
                                 <StatusBadge
                                   tone={
                                     s.warnings ||
+                                    s.evidenceHealthy === false ||
                                     ['error', 'degraded'].includes(s.status)
                                       ? 'attention'
                                       : 'neutral'
                                   }
                                 >
                                   {s.status === 'ok'
-                                    ? 'Available'
+                                    ? s.evidenceHealthy === false
+                                      ? 'Needs attention'
+                                      : 'Available'
                                     : words(s.status)}
                                 </StatusBadge>
                                 {s.warnings > 0 && (

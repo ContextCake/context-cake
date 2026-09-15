@@ -31,6 +31,9 @@ Verified with the pinned image and app-owned loopback bindings:
 - Anonymous Viewer dashboard and a dedicated read-only trace dashboard. The native
   trace action opens a real exported operation; it does not depend on Explore or
   administrator access. Failed index trace contains a stable error code.
+  Embedded log details preserve correlation IDs; trace navigation uses the native
+  operation action. Grafana's external derived links request a popup, so they are
+  omitted inside the sandbox rather than exposing a blocked action.
 - A temporary folder rename produces an index failure and coverage warning; restoring
   it returns the source to ready. A nullable document total initially exposed a render
   bug; the fix is covered by a live-mode component test and rechecked in the Mac app.

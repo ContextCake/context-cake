@@ -18,10 +18,3 @@ datasources:
     url: http://127.0.0.1:3100
     access: proxy
     editable: false
-    jsonData:
-      derivedFields:
-        - name: trace_id
-          matcherType: label
-          matcherRegex: trace_id
-          url: '/d/contextcake-trace/trace?var-traceId=$${__value.raw}&kiosk'
-          urlDisplayLabel: View trace

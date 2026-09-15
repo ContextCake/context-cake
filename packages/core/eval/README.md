@@ -19,7 +19,7 @@ node packages/core/eval/run.mjs --record --label "why"    # accept a new number
 | Path | Role |
 |------|------|
 | `corpus/` | Three committed OKF layers — company (0), team (2), personal (3) — with deliberate cross-layer overrides |
-| `questions.json` | 38 natural-language questions, each with the concept ids that answer it and a `probes` note saying why the question exists |
+| `questions.json` | 51 natural-language questions, each with the concept ids that answer it and a `probes` note saying why the question exists |
 | `manifest.json` | Points the engine at the corpus; also usable by hand with `resolver.mjs` or `mcp-server.mjs` |
 | `run.mjs` | Runner and regression gate |
 | `baseline.json` | Current metrics plus the history of every superseded number |
@@ -36,10 +36,11 @@ node packages/core/eval/run.mjs --record --label "why"    # accept a new number
 
 ## Results so far
 
-| Scorer | recall@1 | recall@5 | mrr | conflict |
-|---|---|---|---|---|
-| Substring occurrence counting | 0.263 | 0.500 | 0.348 | 1.000 |
-| BM25F over Porter-stemmed tokens | 0.895 | 1.000 | 0.947 | 1.000 |
+| Scorer | Questions | recall@1 | recall@5 | mrr | conflict |
+|---|---|---|---|---|---|
+| Substring occurrence counting | 38 | 0.263 | 0.500 | 0.348 | 1.000 |
+| BM25F over Porter-stemmed tokens | 38 | 0.895 | 1.000 | 0.947 | 1.000 |
+| BM25F, + graph-prior/section-depth/paraphrase probes | 51 | 0.745 | 0.902 | 0.809 | 1.000 |
 
 The old scorer counted `indexOf` hits with fixed field weights. Three things
 were wrong with it, and the eval separated them:
@@ -54,6 +55,18 @@ were wrong with it, and the eval separated them:
 `conflict` was already 1.000 before the rewrite. That is the honest read on the
 engine: the cascade and the conflict surfacing worked; retrieval was the broken
 half, and it was broken badly enough to hide the working half.
+
+The numbers dropped again on the third row for a different reason: 13 questions
+(q39-q51) were added *ahead of* three ranking changes — a graph prior, a
+section-level scorer, and (eventually) a hybrid/embedding pass — specifically to
+measure them before they exist. The original 38 questions are untouched and
+still resolve (recall@5 38/38, recall@1 actually improved slightly to 35/38 as
+a side effect of the larger corpus). The drop is entirely the new questions:
+4 probe a hub-vs-leaf graph prior the scorer doesn't have yet, 4 probe answers
+buried late in a long document that whole-document BM25 dilutes, and 5 are
+paraphrases with no shared stem between question and answer — those are
+expected lexical misses by design, not bugs. See `probes` on each of q39-q51
+for the current rank and what beats it.
 
 ## Adding questions
 

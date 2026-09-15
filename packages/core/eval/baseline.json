@@ -1,11 +1,19 @@
 {
-  "label": "BM25F over Porter-stemmed tokens; best-layer aggregation",
-  "questions": 38,
-  "recall@1": 0.895,
-  "recall@5": 1,
-  "mrr": 0.947,
+  "label": "add graph-prior, section-depth, and paraphrase probes ahead of ranking changes",
+  "questions": 51,
+  "recall@1": 0.745,
+  "recall@5": 0.902,
+  "mrr": 0.809,
   "conflict": 1,
   "history": [
+    {
+      "label": "BM25F over Porter-stemmed tokens; best-layer aggregation",
+      "questions": 38,
+      "recall@1": 0.895,
+      "recall@5": 1,
+      "mrr": 0.947,
+      "conflict": 1
+    },
     {
       "label": "substring occurrence counting (pre-BM25)",
       "questions": 38,

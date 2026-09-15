@@ -232,6 +232,84 @@
       "question": "why is my ClickHouse query slow?",
       "expect": ["notes/query-cheatsheet"],
       "probes": "query and slow both appear in the target; ClickHouse also appears in two team docs"
+    },
+    {
+      "id": "q39",
+      "question": "what should I check before shipping a new service?",
+      "expect": ["standards/production-readiness"],
+      "probes": "graph prior: production-readiness is a hub linked from six other concepts (new-service-onboarding, service-ownership, on-call-handoff, service-launch-approval, dashboard-conventions, service-decommission); pre-launch-checklist is a lexically similar leaf nothing links to. Today the leaf outranks the hub: rank 4, beaten by pre-launch-checklist, standards/code-review, decisions/data-storage. A graph prior should pull the six-times-linked hub back above the unlinked leaf."
+    },
+    {
+      "id": "q40",
+      "question": "is there a checklist to run through before launch?",
+      "expect": ["standards/production-readiness"],
+      "probes": "graph prior: same hub-vs-leaf pair as q39 with checklist-flavored phrasing that plays to the leaf's title and heading vocabulary. Today the hub is rank 3, beaten by pre-launch-checklist and service-launch-approval."
+    },
+    {
+      "id": "q41",
+      "question": "what do I need to confirm before a new service ships?",
+      "expect": ["standards/production-readiness"],
+      "probes": "graph prior: another generic pre-launch phrasing where the hub is right but the unlinked leaf's own 'confirm the X, confirm the Y' checklist wording matches more literally. Today the hub is rank 2, immediately behind pre-launch-checklist — a close race a graph signal should tip the hub's way."
+    },
+    {
+      "id": "q42",
+      "question": "when is the Tuesday Launch Review meeting?",
+      "expect": ["runbooks/pre-launch-checklist"],
+      "probes": "control question for the hub prior: the leaf is the genuinely correct answer here (the Tuesday Launch Review detail lives only in pre-launch-checklist, not the hub). Today this is rank 1 for the leaf, as it should be — a future graph-prior change must not blindly promote the six-times-linked hub over a leaf that is specifically right."
+    },
+    {
+      "id": "q43",
+      "question": "how long before a lock is killed and rolled back automatically?",
+      "expect": ["runbooks/database-migration-guide"],
+      "probes": "section-level retrieval: the answer (lock_timeout of 45 seconds, auto-rollback) sits in the 7th of 9 sections of a ~275-token runbook, more than 3x the corpus's average document length, so BM25's length normalization already discounts it. Today it still ranks 1st but by a thin margin (score 6.31) over runbooks/deploy-standard (5.16), whose Rollback section shares 'rolled back'/'automatically' vocabulary — a close race that a per-section scorer should widen rather than flip."
+    },
+    {
+      "id": "q44",
+      "question": "does a big change need someone else's approval before it merges?",
+      "expect": ["runbooks/database-migration-guide"],
+      "probes": "section-level retrieval: the sign-off-for-large-migrations answer is buried in section 6 of 9, and the question deliberately avoids 'migration'/'table' so only generic words carry the match. Today whole-document BM25 gets this wrong: standards/code-review (score 4.86, its own 'approving review' language) outranks the long runbook (4.45, rank 2) even though code-review's two-approver rule is scoped to auth/billing/data-deletion changes, not migrations — length dilution, not correctness, decides the top hit."
+    },
+    {
+      "id": "q45",
+      "question": "can I rename a column and change its type in one release?",
+      "expect": ["runbooks/database-migration-guide"],
+      "probes": "section-level retrieval: the specific answer (never rename and retype together; split into three releases) is in section 8 of 9. Today it still ranks 1st (score 5.89) but decisions/schema-evolution — a genuinely different concept about Avro field renames — trails closely at 5.50 on shared 'rename'/'type' vocabulary; length normalization has already eaten most of the long runbook's advantage."
+    },
+    {
+      "id": "q46",
+      "question": "what should I keep an eye on for the first hour after a risky deploy?",
+      "expect": ["runbooks/database-migration-guide"],
+      "probes": "section-level retrieval: the monitoring answer (replication lag, lock wait metrics for the first hour) is the final section of 9, and the question avoids 'migration'/'database' so it can't win on a title-field match. Today whole-document BM25 misses it entirely: it ranks 3rd (score 3.61) behind standards/code-review (4.52) and notes/query-cheatsheet (4.47), neither of which actually answers a post-migration monitoring question — the buried section never gets enough weight to surface the concept that has the real answer."
+    },
+    {
+      "id": "q47",
+      "question": "how do we stop passwords from ending up in git?",
+      "expect": ["policies/security-baseline"],
+      "probes": "paraphrase: the document never says password or git, only credential and repository — lexical search is expected to miss this entirely, and it does. Today it is not in the top 5 at all; the top hits (decisions/streaming-platform, gotchas/kafka-rebalance, decisions/service-stack...) share no real connection to secrets handling, they just match stray stopword-adjacent tokens. This documents a genuine synonym gap lexical ranking cannot close."
+    },
+    {
+      "id": "q48",
+      "question": "how many people have to sign off before a change ships?",
+      "expect": ["standards/code-review"],
+      "probes": "paraphrase: the document says approving review and approvals, never sign off or people — lexical search is expected to miss this, and it does. Today it is not in the top 5; runbooks/pre-launch-checklist, runbooks/database-migration-guide and runbooks/service-launch-approval rank above it purely because their own sign-off/approval language happens to overlap, not because they answer the question."
+    },
+    {
+      "id": "q49",
+      "question": "how quickly do we have to write up a bad outage?",
+      "expect": ["policies/incident-response"],
+      "probes": "paraphrase: the document says postmortem, Sev1/Sev2, and blameless, never write up or outage — lexical search is expected to miss this, and it does. Today it is not in the top 5 at all; nothing in the top hits (runbooks/database-migration-guide, decisions/streaming-platform, notes/local-dev...) is a real answer, which is the honest measure of what lexical ranking leaves on the table here."
+    },
+    {
+      "id": "q50",
+      "question": "what's our DB pick for new services?",
+      "expect": ["decisions/data-storage"],
+      "probes": "paraphrase: abbreviation (DB) vs the document's spelled-out database/PostgreSQL/datastore; also colloquial pick vs default — lexical search is expected to miss this, and it does. Today it is not in the top 5; decisions/service-stack and runbooks/new-service-onboarding rank above it purely on the literal words 'new service(s)', never touching what database to use."
+    },
+    {
+      "id": "q51",
+      "question": "who do I ask to get into prod for a bit?",
+      "expect": ["policies/access-control"],
+      "probes": "paraphrase: prod vs production (abbreviation), ask vs requested, for a bit vs time-boxed — no shared stems with the document's actual wording. Lexical search is expected to miss this, and it does: today it is not in the top 5, with runbooks/deploy-standard and runbooks/new-service-onboarding ranking above it on unrelated 'production'-adjacent words rather than access control."
     }
   ]
 }

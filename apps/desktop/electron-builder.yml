@@ -20,6 +20,8 @@ extraResources:
     to: engine/src
   - from: ../../packages/core/fixtures
     to: engine/fixtures
+  - from: src/observability
+    to: engine/observability
   - from: src/cli
     to: engine/cli
   - from: resources/bin

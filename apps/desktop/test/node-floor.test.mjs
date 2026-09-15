@@ -19,13 +19,17 @@ test('Electron-bundled Node satisfies the root engines floor', () => {
   assert.ok(Number.isInteger(floor), `root engines.node ("${range}") must state a ">=N" floor`)
 
   const electron = path.join(here, '..', 'node_modules', '.bin', 'electron')
-  const out = execFileSync(electron, ['-e', 'console.log(process.versions.node)'], {
+  const out = execFileSync(electron, ['-e', 'console.log("CONTEXTCAKE_NODE_VERSION=" + process.versions.node)'], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     encoding: 'utf8',
   }).trim()
-  const major = Number(out.split('.')[0])
+  // Electron's launcher may download its binary on first use and print a
+  // progress line. Read only the value emitted by the actual bundled runtime.
+  const version = out.match(/^CONTEXTCAKE_NODE_VERSION=(\d+\.\d+\.\d+)$/m)?.[1]
+  assert.ok(version, `Electron did not report its bundled Node version: ${out}`)
+  const major = Number(version.split('.')[0])
   assert.ok(
     major >= floor,
-    `Electron bundles Node ${out}, below the engines floor ${floor} from the root package.json`,
+    `Electron bundles Node ${version}, below the engines floor ${floor} from the root package.json`,
   )
 })

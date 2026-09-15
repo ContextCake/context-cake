@@ -1,0 +1,11 @@
+{
+  "uid": "contextcake-trace",
+  "title": "ContextCake — operation trace",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {"from": "now-15m", "to": "now"},
+  "timepicker": {"hidden": true},
+  "templating": {"list": [{"name": "traceId", "type": "textbox", "hide": 2, "current": {"text": "", "value": ""}}]},
+  "panels": [{"id": 1, "title": "Operation trace", "type": "traces", "datasource": {"type": "tempo", "uid": "tempo"}, "targets": [{"refId": "A", "queryType": "traceql", "query": "${traceId}", "tableType": "traces"}], "gridPos": {"x": 0, "y": 0, "w": 24, "h": 20}, "options": {}}]
+}

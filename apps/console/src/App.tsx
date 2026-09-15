@@ -17,6 +17,7 @@ import { CommandPalette, type PaletteCommand } from './components/CommandPalette
 import { useOpenerFocus } from './components/useOpenerFocus'
 import { readBrowserGroupedViews, SEARCHABLE_VIEWS, viewForDestination } from './shell-navigation'
 
+const Diagnostics = lazy(() => import('./views/Diagnostics').then(module => ({ default: module.Diagnostics })))
 const Canvas = lazy(() => import('./views/Canvas').then((module) => ({ default: module.Canvas })))
 const Conflicts = lazy(() => import('./views/Conflicts').then((module) => ({ default: module.Conflicts })))
 const ConnectAgentDialog = lazy(() => import('./components/ConnectAgentDialog').then((module) => ({ default: module.ConnectAgentDialog })))
@@ -195,6 +196,7 @@ export function App() {
     { id: 'cascade', label: 'Go to Map', keywords: 'canvas graph', shortcut: '⌘2', run: () => setView('canvas') },
     { id: 'concepts', label: 'Go to Library: Context', keywords: 'browse', run: () => setView('concepts') },
     { id: 'files', label: 'Go to Library: Files', keywords: 'markdown documents', shortcut: '⇧⌘F', run: () => setView('files') },
+    { id: 'diagnostics', label: 'Go to Diagnostics', shortcut: '⌘6', run: () => setView('diagnostics') },
     { id: 'sources', label: 'Go to Sources', shortcut: '⌘4', run: () => setView('sources') },
     { id: 'queue', label: 'Go to Trust: Captures', keywords: 'triage', run: () => setView('triage') },
     { id: 'conflicts', label: 'Go to Trust: Discrepancies', keywords: 'resolve align', run: () => setView('conflicts') },
@@ -297,9 +299,9 @@ export function App() {
       } else if (command && !e.shiftKey && e.key.toLowerCase() === 'f' && SEARCHABLE_VIEWS.has(view)) {
         e.preventDefault()
         window.dispatchEvent(new Event('contextcake:focus-search'))
-      } else if (command && !editing && !e.shiftKey && /^[1-5]$/.test(e.key)) {
+      } else if (command && !editing && !e.shiftKey && /^[1-6]$/.test(e.key)) {
         e.preventDefault()
-        const destinations = ['home', 'cascade', 'knowledge', 'sources', 'review'] as const
+        const destinations = ['home', 'cascade', 'knowledge', 'sources', 'review', 'diagnostics'] as const
         setView(viewForDestination(destinations[Number(e.key) - 1], knowledgeView.current, reviewView.current))
       } else if (command && e.key === ',') {
         e.preventDefault()
@@ -329,7 +331,7 @@ export function App() {
     else if (command === 'toggle-sidebar') toggleSidebar()
     else if (command.startsWith('destination:') && !editing && !modalOpen && !paletteOpen) {
       const number = Number(command.slice(-1))
-      const destinations = ['home', 'cascade', 'knowledge', 'sources', 'review'] as const
+      const destinations = ['home', 'cascade', 'knowledge', 'sources', 'review', 'diagnostics'] as const
       if (number >= 1 && number <= 5) setView(viewForDestination(destinations[number - 1], knowledgeView.current, reviewView.current))
     }
   }), [connectOpen, paletteOpen, setView, settingsOpen, showWizard, view])
@@ -421,6 +423,7 @@ export function App() {
               </main>
             ) : (
               <main className="cc-main">
+                {view === 'diagnostics' && <Suspense fallback={<div role="status">Opening diagnostics…</div>}><Diagnostics /></Suspense>}
                 {view === 'overview' && <Overview onConnectAgent={isDesktop ? openConnect : undefined} />}
                 {view === 'sources' && <Sources onAddSource={mode === 'live' ? reopenWizard : undefined} />}
                 {view === 'triage' && <Triage />}

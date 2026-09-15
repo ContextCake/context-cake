@@ -27,6 +27,7 @@ function groupsFor(appMode: Mode): ShortcutGroup[] {
         { keys: `${MOD}3`, label: 'Go to Knowledge' },
         { keys: `${MOD}4`, label: 'Go to Sources' },
         { keys: `${MOD}5`, label: 'Go to Review' },
+        { keys: `${MOD}6`, label: 'Go to Diagnostics' },
         { keys: `${SHIFT_MOD}F`, label: 'Go to Knowledge: Files' },
       ],
     },

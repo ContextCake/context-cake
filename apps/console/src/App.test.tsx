@@ -170,7 +170,7 @@ describe('Mac-first application shell', () => {
     window.removeEventListener('contextcake:before-navigate', guard)
   })
 
-  it('uses five destinations and supports the 88–300 px sidebar contract', async () => {
+  it('uses six destinations and supports the 88–300 px sidebar contract', async () => {
     await act(async () => root.render(
       <ThemeModeProvider>
         <StoreProvider><App /></StoreProvider>
@@ -183,7 +183,7 @@ describe('Mac-first application shell', () => {
     const separator = container.querySelector<HTMLElement>('.cc-sidebar-resizer')
     expect(brand?.querySelector('img')).toBeTruthy()
     expect(brand?.textContent).toBe('ContextCake')
-    expect(container.querySelectorAll('.cc-nav-button')).toHaveLength(5)
+    expect(container.querySelectorAll('.cc-nav-button')).toHaveLength(6)
     expect(sidebar?.dataset.collapsed).toBe('true')
     expect(sidebar?.style.width).toBe('88px')
     await act(async () => window.dispatchEvent(new Event('contextcake:toggle-sidebar')))

@@ -36,6 +36,7 @@ const NAV: Array<{ id: ShellDestination; label: string; icon: ReactNode }> = [
   { id: 'knowledge', label: 'Library', icon: <KnowledgeIcon /> },
   { id: 'review', label: 'Trust', icon: <ReviewIcon /> },
   { id: 'sources', label: 'Sources', icon: <SourcesIcon /> },
+  { id: 'diagnostics', label: 'Diagnostics', icon: <SettingsIcon /> },
   { id: 'cascade', label: 'Map', icon: <CascadeIcon /> },
 ]
 

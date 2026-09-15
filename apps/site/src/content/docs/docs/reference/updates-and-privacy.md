@@ -7,7 +7,7 @@ The engine itself — `resolver.mjs`, `mcp-server.mjs`, and every other CLI tool
 no network calls beyond what a layer's `source` requires (an `mcp` layer spawns the
 command you configured). The UI surfaces can check for releases, the Mac app has a
 native updater, and signed-in Mac users can opt into account and settings-sync traffic.
-Each path is described below.
+The optional desktop OTLP adapter also sends content-free telemetry to an app-managed loopback collector when Local Grafana is enabled. The dependency-free source-only engine does not load that adapter. Each path is described below.
 
 ## What it sends
 
@@ -206,3 +206,19 @@ path is scrubbed exactly like every other local source path.
 - [The trust boundary](/docs/concepts/trust-boundary) — the one place ContextCake
   does execute code you didn't write directly (an `mcp` layer's `command`)
 - [Playground tour](/docs/guides/playground-tour) — where the settings menu lives
+
+## Local diagnostics and telemetry
+
+Native diagnostics use bounded in-memory observations. Optional **Local Grafana —
+Experimental** stores telemetry on this Mac with 24-hour backend retention policies.
+It is disabled by default; setup downloads a pinned Docker image. No knowledge
+folders or Docker socket are mounted. Exported events contain timings, counts,
+closed labels, stable error codes, and opaque identifiers—not prompts, document
+contents, paths, credentials, or raw exceptions. Backend usage reporting and Cloud
+forwarding are disabled. Any local process can reach the loopback Viewer/collector
+ports; they are not exposed on the LAN. Preferences live in device-local
+`local-observability.json`, outside manifests and account sync.
+
+The Web Demo does not contact visitor localhost or manage a stack. See the
+[diagnostics guide](/docs/guides/diagnostics) for process coverage, retention,
+clearing history, and delivery limitations.

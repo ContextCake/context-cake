@@ -226,3 +226,21 @@ node classify-context.mjs --demo
 - [MCP tools](/docs/reference/mcp-tools) — what `mcp-server.mjs` exposes
 - [Override syntax](/docs/reference/override-syntax) — controlling the merge from frontmatter
 - [ContextCake Packs](/packs) — inspect the public catalog and complete file structures
+
+## contextcake doctor
+
+The desktop CLI's focused diagnostic command is available in the current source
+build. It uses the app's default manifest unless `--manifest` is supplied:
+
+```bash
+contextcake doctor [--manifest <file>] [--profile <id>] [--json]
+```
+
+Checks configuration, effective limits, local folder presence, and device-local
+collector availability. Remote/executable sources are marked not probed. This is a
+fresh run, not the app's private in-memory history. The dependency-free equivalent
+is `node packages/core/src/doctor.mjs --manifest <file> --json`; it reports local
+observability as not checked. See [diagnostics](/docs/guides/diagnostics).
+
+The full source/settings administration and query command families remain planned
+control-plane increments. Existing resolve and MCP commands remain available.

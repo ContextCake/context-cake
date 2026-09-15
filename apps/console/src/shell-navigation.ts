@@ -1,11 +1,12 @@
-export type ViewId = 'canvas' | 'overview' | 'sources' | 'triage' | 'conflicts' | 'concepts' | 'files'
-export type ShellDestination = 'home' | 'cascade' | 'knowledge' | 'sources' | 'review'
+export type ViewId = 'diagnostics' | 'canvas' | 'overview' | 'sources' | 'triage' | 'conflicts' | 'concepts' | 'files'
+export type ShellDestination = 'diagnostics' | 'home' | 'cascade' | 'knowledge' | 'sources' | 'review'
 export type KnowledgeSubview = 'concepts' | 'files'
 export type ReviewSubview = 'triage' | 'conflicts'
 
-export const VIEW_IDS: readonly ViewId[] = ['canvas', 'overview', 'sources', 'triage', 'conflicts', 'concepts', 'files']
+export const VIEW_IDS: readonly ViewId[] = ['diagnostics', 'canvas', 'overview', 'sources', 'triage', 'conflicts', 'concepts', 'files']
 
 export const DESTINATION_VIEWS: Record<ShellDestination, readonly ViewId[]> = {
+  diagnostics: ['diagnostics'],
   home: ['overview'],
   cascade: ['canvas'],
   knowledge: ['concepts', 'files'],
@@ -18,6 +19,7 @@ export function isViewId(value: unknown): value is ViewId {
 }
 
 export function destinationForView(view: ViewId): ShellDestination {
+  if (view === 'diagnostics') return 'diagnostics'
   if (view === 'overview') return 'home'
   if (view === 'canvas') return 'cascade'
   if (view === 'concepts' || view === 'files') return 'knowledge'
@@ -30,6 +32,7 @@ export function viewForDestination(
   knowledgeView: KnowledgeSubview = 'concepts',
   reviewView: ReviewSubview = 'triage',
 ): ViewId {
+  if (destination === 'diagnostics') return 'diagnostics'
   if (destination === 'home') return 'overview'
   if (destination === 'cascade') return 'canvas'
   if (destination === 'knowledge') return knowledgeView
@@ -99,6 +102,7 @@ export const SEARCHABLE_VIEWS = new Set<ViewId>(['concepts', 'files', 'sources',
 
 /** Per-view document title, same names the command palette's "Go to …" entries use. */
 export const VIEW_TITLES: Record<ViewId, string> = {
+  diagnostics: 'Diagnostics',
   overview: 'Workspace',
   canvas: 'Map',
   concepts: 'Library: Context',

@@ -21,6 +21,16 @@ function eventFor(window, frame = window.webContents.mainFrame) {
   return { sender: window.webContents, senderFrame: frame }
 }
 
+test('a managed Grafana subframe has no native capabilities', () => {
+  const registry = createTrustedWindowRegistry(() => 'http://127.0.0.1:4317')
+  const main = fakeWindow(1)
+  registry.register(main, 'main')
+  const frame = {url:'http://127.0.0.1:3000/d/contextcake'}
+  for (const channel of Object.keys(TRUSTED_IPC_ROLES)) {
+    assert.throws(() => registry.resolve(eventFor(main, frame), trustedRolesForChannel(channel)), /Untrusted IPC sender/, channel)
+  }
+})
+
 test('trusted windows require exact identity, origin, main frame, and an allowed role', () => {
   const registry = createTrustedWindowRegistry(() => 'http://127.0.0.1:4317')
   const main = fakeWindow(1)

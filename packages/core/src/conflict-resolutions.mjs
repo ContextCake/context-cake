@@ -27,10 +27,39 @@ export function trivialConflictReason(values) {
   return "The answers use the same words in the same order; only formatting differs.";
 }
 
+// Same answer as /```|~~~|`|!?\[[^\]]*\]\(|<\/?[a-z][^>]*>|https?:\/\/|\|[^\n]*\|/i,
+// in one pass: its link and tag branches rescanned to the end of the value from
+// every "[" or "<a" in a long run.
+function carriesMarkup(value) {
+  if (value.includes("`") || value.includes("~~~") || /https?:\/\//i.test(value)) return true;
+  // `[^>]*>` only needs some ">" after the tag's first letter.
+  const lastClose = value.lastIndexOf(">");
+  let bracketOpen = false; // a "[" since the last "]": that "]" closes it
+  let pipeOnLine = false; // a "|" since the last "\n"
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === "[") {
+      bracketOpen = true;
+    } else if (ch === "]") {
+      if (bracketOpen && value[i + 1] === "(") return true;
+      bracketOpen = false;
+    } else if (ch === "|") {
+      if (pipeOnLine) return true;
+      pipeOnLine = true;
+    } else if (ch === "\n") {
+      pipeOnLine = false;
+    } else if (ch === "<") {
+      const letter = value[i + 1] === "/" ? i + 2 : i + 1;
+      if (letter < lastClose && /[a-z]/i.test(value[letter])) return true;
+    }
+  }
+  return false;
+}
+
 function trivialSignature(value) {
   if (typeof value !== "string" || !value.trim()) return null;
   // Code, links, HTML, tables, and URLs carry meaning in their punctuation.
-  if (/```|~~~|`|!?\[[^\]]*\]\(|<\/?[a-z][^>]*>|https?:\/\/|\|[^\n]*\|/i.test(value)) return null;
+  if (carriesMarkup(value)) return null;
   const withoutEmphasis = value.normalize("NFKC").replace(/[*_~]/g, "").toLocaleLowerCase("en-US");
   const tokens = withoutEmphasis.match(/[\p{L}\p{N}]+/gu);
   return tokens?.length ? tokens.join("\u001f") : null;

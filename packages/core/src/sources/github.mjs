@@ -37,6 +37,14 @@ const REQUEST_TIMEOUT_MS = 10_000;
 // behavior when the thing that failed was a rate limit.
 const FAILURE_COOLDOWN_MS = 60_000;
 
+// What .replace(/\/+$/, "") did, without rescanning an inner slash run from
+// each slash in it.
+export function trimTrailingSlashes(text) {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "/") end -= 1;
+  return text.slice(0, end);
+}
+
 export function createGithubSource({
   name,
   level,
@@ -57,7 +65,7 @@ export function createGithubSource({
   // The selectors decide which trees are even requested, not just which entries
   // survive — see treeScopes.
   const scopes = treeScopes(selectors);
-  const base = String(apiBase).replace(/\/+$/, "");
+  const base = trimTrailingSlashes(String(apiBase));
 
   // The last index that loaded successfully. Deliberately kept past its TTL: if
   // a refresh fails, stale-but-labelled beats an empty layer (integrations spec

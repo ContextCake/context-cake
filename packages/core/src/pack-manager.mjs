@@ -497,12 +497,46 @@ function checksumEntries(root, entries) {
     let content = fs.readFileSync(path.join(root, entry.relative));
     if (entry.relative === MANIFEST_FILE) {
       // Normalize the declared tree checksum to avoid a self-referential hash.
-      content = Buffer.from(content.toString("utf8").replace(/(^\s*checksum:\s*).+$/m, "$1\"pending-release\""));
+      content = Buffer.from(blankDeclaredChecksum(content.toString("utf8")));
     }
     hashField(hash, content);
   }
   return `sha256:${hash.digest("hex")}`;
 }
+
+// Same result as .replace(/(^\s*checksum:\s*).+$/m, '$1"pending-release"'), in
+// one pass: that regex rescanned a long blank run from every line start inside
+// it, and PACK.yaml comes from whoever published the Pack (up to 5 MB).
+export function blankDeclaredChecksum(text) {
+  for (let at = text.indexOf("checksum:"); at !== -1; at = text.indexOf("checksum:", at + 1)) {
+    // `^\s*`: only blanks back to a line start. `\s` crosses line terminators,
+    // so any terminator in the run (or the start of the text) is a line start.
+    let start = at;
+    let lineStart = false;
+    while (start > 0 && /\s/.test(text[start - 1])) {
+      start -= 1;
+      if (isLineTerminator(text.charCodeAt(start))) lineStart = true;
+    }
+    if (start > 0 && !lineStart) continue;
+    // `\s*` gives back blanks until `.+` has a character to start on: the first
+    // non-blank, or, when only blanks remain, the last one that isn't a line
+    // terminator. `.+$` then runs to the end of that line.
+    const after = at + "checksum:".length;
+    let value = after;
+    while (value < text.length && /\s/.test(text[value])) value += 1;
+    if (value === text.length) {
+      while (value > after && isLineTerminator(text.charCodeAt(value - 1))) value -= 1;
+      if (value === after) continue;
+      value -= 1;
+    }
+    let end = value;
+    while (end < text.length && !isLineTerminator(text.charCodeAt(end))) end += 1;
+    return `${text.slice(0, value)}"pending-release"${text.slice(end)}`;
+  }
+  return text;
+}
+
+function isLineTerminator(code) { return code === 0x0a || code === 0x0d || code === 0x2028 || code === 0x2029; }
 
 function installImmutableVersion(sourceRoot, targetRoot, checksum) {
   ensureRealDirectory(path.dirname(path.dirname(targetRoot)), "Pack store");

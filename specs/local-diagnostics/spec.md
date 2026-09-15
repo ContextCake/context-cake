@@ -1,6 +1,6 @@
 # Local diagnostics and optional Grafana
 
-Status: implemented in the source build; release and deployment are separate.
+Status: shipped in the signed Mac app and public Web Demo beginning with 0.9.0.
 
 ## Product outcome
 

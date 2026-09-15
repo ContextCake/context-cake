@@ -37,7 +37,7 @@ const unpackCommand = `printf '%s  %s\\n' '${sourceArchiveSha256}' '${archiveNam
 mkdir contextcake &&
 tar -xzf ${archiveName} -C contextcake --strip-components=1 &&
 cd contextcake`;
-const resolveCommand = 'node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db';
+const resolveCommand = 'node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db';
 const testPrompt = 'Use ContextCake to list the available concepts. Name the sources each one uses and the project questions it can help answer.';
 
 const demoConceptId = 'decisions/primary-db';

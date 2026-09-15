@@ -44,7 +44,7 @@ contains the matching ZIP and checksums.
 
 ## Choose a route
 
-Every route below targets the same `app-v0.5.0` coordinated release tag. Use the archive
+Every route below targets the verified `app-v0.9.1` coordinated release tag. Use the archive
 when you want the smallest inspectable download, or a shallow Git checkout when
 you already work with source-control tools.
 
@@ -53,11 +53,11 @@ you already work with source-control tools.
 On macOS, Linux, or WSL:
 
 ```bash
-curl --fail --location https://github.com/ContextCake/context-cake/archive/refs/tags/app-v0.5.0.tar.gz \\
-  --output context-cake-app-v0.5.0.tar.gz
+curl --fail --location https://github.com/ContextCake/context-cake/archive/refs/tags/app-v0.9.1.tar.gz \\
+  --output context-cake-app-v0.9.1.tar.gz
 ```
 
-You can also [download the same archive in your browser](https://github.com/ContextCake/context-cake/archive/refs/tags/app-v0.5.0.tar.gz).
+You can also [download the same archive in your browser](https://github.com/ContextCake/context-cake/archive/refs/tags/app-v0.9.1.tar.gz).
 
 ### GitHub CLI
 
@@ -65,14 +65,14 @@ If you already use `gh`, create a shallow checkout at the same tag:
 
 ```bash
 gh repo clone ContextCake/context-cake contextcake -- \\
-  --branch app-v0.5.0 --depth 1
+  --branch app-v0.9.1 --depth 1
 cd contextcake
 ```
 
 ### Git
 
 ```bash
-git clone --branch app-v0.5.0 --depth 1 \\
+git clone --branch app-v0.9.1 --depth 1 \\
   https://github.com/ContextCake/context-cake.git contextcake
 cd contextcake
 ```
@@ -84,13 +84,13 @@ Git and GitHub CLI users can skip directly to [Verify the resolver](#verify-the-
 If you downloaded the archive with curl or your browser, verify it before unpacking:
 
 ```bash
-printf '%s  %s\n' 'c0f99cdbf3fb1b483d9324a471afff54a63457da79e17ba652231f0e1f99a984' 'context-cake-app-v0.5.0.tar.gz' | shasum -a 256 --check &&
+printf '%s  %s\n' 'f5538d20ed5cb5d0503e6624f0f3b94805524526634cc4b22e23b44bcc252201' 'context-cake-app-v0.9.1.tar.gz' | shasum -a 256 --check &&
 mkdir contextcake &&
-tar -xzf context-cake-app-v0.5.0.tar.gz -C contextcake --strip-components=1 &&
+tar -xzf context-cake-app-v0.9.1.tar.gz -C contextcake --strip-components=1 &&
 cd contextcake
 ```
 
-These commands target the `app-v0.5.0` release instead of following the
+These commands target the `app-v0.9.1` release instead of following the
 latest source checkout, and stop before extraction if the downloaded bytes do not
 match the published SHA-256.
 
@@ -100,7 +100,7 @@ Resolve a concept from the bundled three-layer demo, where the layers deliberate
 disagree:
 
 ```bash
-node resolver.mjs --manifest playground/manifest.json --concept decisions/primary-db
+node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db
 ```
 
 The JSON output shows the effective merge: `contributors` lists each layer with its
@@ -134,8 +134,8 @@ cd context-cake
 node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db
 ```
 
-The current source tree uses `apps/playground/manifest.json`; the versioned archive
-above predates the monorepo layout and uses `playground/manifest.json`.
+The versioned archive and the current source tree both use
+`apps/playground/manifest.json` for the bundled demo.
 
 ## Why a source archive?
 

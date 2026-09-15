@@ -9,8 +9,8 @@ test('CLI reads the desktop package version in a development checkout', () => {
   assert.equal(development, path.resolve('/repo/apps/desktop/package.json'))
   assert.equal(readCliVersion(here, (candidate) => {
     assert.equal(candidate, development)
-    return '{"version":"0.9.1"}'
-  }), '0.9.1')
+    return '{"version":"0.9.2"}'
+  }), '0.9.2')
 })
 
 test('CLI falls back to the packaged package.json inside app.asar', () => {
@@ -22,10 +22,10 @@ test('CLI falls back to the packaged package.json inside app.asar', () => {
   const version = readCliVersion(here, (candidate) => {
     reads.push(candidate)
     if (candidate === development) throw new Error('not present')
-    return '{"version":"0.9.1"}'
+    return '{"version":"0.9.2"}'
   })
 
-  assert.equal(version, '0.9.1')
+  assert.equal(version, '0.9.2')
   assert.deepEqual(reads, [development, packaged])
 })
 

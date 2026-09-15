@@ -15,6 +15,19 @@ const concept = () => ({
   { key: 'unrelated', heading: 'Other', content: 'Keep this byte-for-byte.', sourceLayer: 'personal', conflicts: [] }],
 });
 
+test('diagnostic policy outcomes separate applied, stale and blocked without content', async t => {
+  const f = await fixture(t);
+  await f.ops.enable(await f.body());
+  const events = [];
+  const observe = event => events.push(event);
+  await f.apply({ observe });
+  await f.apply({ observe, coverageComplete: false });
+  await f.apply({ observe, blockedKeys: new Set(['decisions/database::choice']) });
+  await f.apply({ observe, profileId: 'other' });
+  assert.deepEqual(events.map(e => e.outcome), ['applied', 'blocked', 'blocked', 'stale']);
+  assert.ok(events.every(e => Object.keys(e).sort().join(',') === 'operation,outcome'));
+});
+
 async function fixture(t, options = {}) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'context-resolutions-'));
   t.after(() => fsp.rm(root, { recursive: true, force: true }));

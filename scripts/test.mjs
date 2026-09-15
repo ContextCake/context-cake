@@ -29,6 +29,7 @@ const sh = (file) => ({ command: "bash", args: [`packages/core/tests/${file}`] }
 const node = (file) => ({ command: process.execPath, args: ["--test", `packages/core/tests/${file}`] });
 
 const SUITES = [
+  { group: "unit", name: "diagnostics", ...node("diagnostics.test.mjs") },
   // Broad shape checks. If the cascade itself is broken these fail first.
   { group: "integration", name: "smoke", ...sh("smoke-test.sh") },
   { group: "integration", name: "resolver", ...sh("resolver-test.sh") },

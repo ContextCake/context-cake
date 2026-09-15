@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron'
+import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, safeStorage, screen, session, shell } from 'electron'
 import {
   CRASH_WINDOW_MS,
   HEALTHY_RESET_MS,
@@ -37,6 +37,14 @@ import { manifestLayerCount, shouldDeferConsentPrompt } from './metrics-consent.
 import { PALETTE_ID, changedPreferencePatch } from './preferences.mjs'
 import { applyUiStatePatch, normalizeUiState } from './ui-state.mjs'
 import { restoreWindowState } from './window-state.mjs'
+
+import { createLocalGrafana } from '../observability/stack.mjs'
+import { grafanaLocation } from '../observability/locations.mjs'
+let localGrafana = null
+function exitAfterObservability(code) {
+  if (!localGrafana) return app.exit(code)
+  void localGrafana.stop().catch(() => {}).finally(() => app.exit(code))
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -76,7 +84,7 @@ function handleFatal(err) {
         + detail,
     )
   }
-  app.exit(1)
+  exitAfterObservability(1)
 }
 
 process.on('uncaughtException', handleFatal)
@@ -1039,6 +1047,22 @@ async function initializeAccounts() {
 // be structural rather than a coincidence of call order.
 registerIntegrationIpc()
 
+for (const action of ['status','setup','start','stop','restart','disable','clear','open','docker']) {
+  handleTrustedIpc(`observability:${action}`, async ({ window }, options) => {
+    if (!localGrafana) return { state: 'unavailable', enabled: false }
+    if (action === 'status') return localGrafana.refresh()
+    if (action === 'setup' || action === 'start') { void localGrafana.start({ enable: action === 'setup' }); return localGrafana.status() }
+    if (action === 'stop') return localGrafana.stop()
+    if (action === 'restart') { await localGrafana.stop(); void localGrafana.start(); return localGrafana.status() }
+    if (action === 'disable') return localGrafana.disable()
+    if (action === 'docker') { if (await shell.openPath('/Applications/Docker.app')) throw new Error('DOCKER_OPEN_FAILED'); return localGrafana.status() }
+    if (action === 'clear') {
+      const result = await dialog.showMessageBox(window, { type:'warning', message:'Clear local Grafana history?', detail:'Only ContextCake telemetry history will be removed. Your source files are not affected.', buttons:['Cancel','Clear history'], defaultId:0, cancelId:0 })
+      return result.response === 1 ? localGrafana.clear() : localGrafana.status()
+    }
+    if (action === 'open') { const status=await localGrafana.refresh(); if(status.origin) await shell.openExternal(grafanaLocation(status.origin, options)); return status }
+  })
+}
 handleTrustedIpc('contextcake:cli-status', () => getCliStatus())
 handleTrustedIpc('contextcake:cli-install', ({ window }) => installCli(window, { showSuccess: false }))
 
@@ -1307,9 +1331,13 @@ function protectWindowNavigation(window) {
       detail: 'Close the window and reopen it from the Dock. Your sources and settings are untouched.',
     }).catch(() => { /* the window went away mid-prompt */ })
   })
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    openExternalHttps(url)
+  window.webContents.setWindowOpenHandler(({ url, referrer }) => {
+    if (isEngineOrigin(referrer?.url, service?.origin)) openExternalHttps(url)
     return { action: 'deny' }
+  })
+  window.webContents.on('will-frame-navigate', (event) => {
+    if (event.isMainFrame) return
+    if (!localGrafana?.status().origin || !isEngineOrigin(event.url, localGrafana.status().origin)) event.preventDefault()
   })
   window.webContents.on('will-navigate', (event, url) => {
     // `service` is null for as long as an engine relaunch is in flight, and
@@ -1549,7 +1577,7 @@ async function smokeCheck() {
       )
       shutdownEngine()
       flushSettingsSync()
-      app.exit(0)
+      exitAfterObservability(0)
       return
     }
     // CC_SMOKE_QUIT=quit|close: prove the window's frame survives the exit.
@@ -1664,13 +1692,13 @@ async function smokeCheck() {
         console.error(`ENGINE LIFECYCLE FAIL ${failures.join(' | ')}`)
         shutdownEngine()
         flushSettingsSync()
-        app.exit(1)
+        exitAfterObservability(1)
         return
       }
       console.log('ENGINE LIFECYCLE OK teardown-race=closed navigation-guard=refused failed-restart=survived recovery=repointed')
       shutdownEngine()
       flushSettingsSync()
-      app.exit(0)
+      exitAfterObservability(0)
       return
     }
     const artifactDir = process.env.CC_SMOKE_ARTIFACT_DIR || ''
@@ -1885,7 +1913,7 @@ async function smokeCheck() {
       )
       shutdownEngine()
       flushSettingsSync()
-      app.exit(0)
+      exitAfterObservability(0)
     } else {
       console.error(
         `SMOKE FAIL api=${res.status} unauth=${unauth.status} userData=${userDataName}`
@@ -1893,13 +1921,13 @@ async function smokeCheck() {
       )
       shutdownEngine()
       flushSettingsSync()
-      app.exit(1)
+      exitAfterObservability(1)
     }
   } catch (err) {
     console.error('SMOKE FAIL', err?.message ?? err)
     shutdownEngine()
     flushSettingsSync()
-    app.exit(1)
+    exitAfterObservability(1)
   }
 }
 
@@ -1918,6 +1946,15 @@ app.on('open-url', (event, url) => {
 })
 
 app.whenReady().then(async () => {
+  // Also gate initial frame loads and redirects, which navigation events alone
+  // do not cover. The managed origin is read at request time after opt-in setup.
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    callback({ cancel: details.resourceType === 'subFrame'
+      && !isEngineOrigin(details.url, localGrafana?.status().origin) })
+  })
+  localGrafana = createLocalGrafana({ directory: configDir(), ...(app.isPackaged ? { provisioningPath: path.join(process.resourcesPath, 'engine', 'observability', 'provisioning') } : {}) })
+  await localGrafana.load()
+  void localGrafana.start()
   nativeTheme.on('updated', () => sendToRenderer('preferences:changed', desktopPreferencesSnapshot()))
   await initializeAccounts()
   await createWindow()
@@ -1975,7 +2012,14 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+let grafanaQuitSettled = false
+let grafanaQuitPending = null
+app.on('before-quit', (event) => {
+  if (localGrafana && !grafanaQuitSettled) {
+    event.preventDefault()
+    grafanaQuitPending ??= localGrafana.stop().catch(() => {}).finally(() => { grafanaQuitSettled = true; app.quit() })
+    return
+  }
   clearTimeout(settingsPushTimer)
   settingsPushTimer = null
   clearTimeout(windowStateTimer)

@@ -8,6 +8,16 @@ const BOTH_ROLES = Object.freeze(['main', 'settings'])
 // makes omissions reviewable and testable instead of relying on implicit
 // defaults spread through main.mjs.
 export const TRUSTED_IPC_ROLES = Object.freeze({
+  'observability:status': BOTH_ROLES,
+  'observability:setup': BOTH_ROLES,
+  'observability:start': BOTH_ROLES,
+  'observability:stop': BOTH_ROLES,
+  'observability:restart': BOTH_ROLES,
+  'observability:disable': BOTH_ROLES,
+  'observability:clear': BOTH_ROLES,
+  'observability:open': BOTH_ROLES,
+  'observability:docker': BOTH_ROLES,
+
   'auth:get-state': BOTH_ROLES,
   'auth:sign-in': BOTH_ROLES,
   'auth:cancel-sign-in': BOTH_ROLES,

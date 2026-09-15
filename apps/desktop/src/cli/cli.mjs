@@ -29,6 +29,7 @@ const CONFIG_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'Co
 const DEFAULT_MANIFEST = path.join(CONFIG_DIR, 'manifest.json')
 
 const COMMANDS = {
+  doctor: { entry: 'doctor.mjs', manifest: true, blurb: 'check profile configuration and source folders' },
   mcp: { entry: 'mcp-server.mjs', manifest: true, blurb: 'serve the resolved graph over stdio MCP' },
   resolve: { entry: 'resolver.mjs', manifest: true, blurb: 'resolve a concept across layers' },
   ingest: { entry: 'ingest.mjs', manifest: false, blurb: 'classify repo events into signals' },
@@ -75,7 +76,7 @@ if (!command) {
 const args = [...rest]
 const isHelp = args.some((arg) => ['help', '--help', '-h'].includes(arg))
 if (command.manifest && !isHelp && !args.includes('--manifest') && !args.includes('--personal') && !args.includes('--legacy-paths')) {
-  if (!fs.existsSync(DEFAULT_MANIFEST)) {
+  if (cmd !== 'doctor' && !fs.existsSync(DEFAULT_MANIFEST)) {
     console.error(`contextcake: no manifest at ${DEFAULT_MANIFEST}`)
     console.error('Open the ContextCake app to run first-time setup, or pass --manifest.')
     process.exit(1)
@@ -96,11 +97,9 @@ if (cmd === 'pack' && !['inspect', 'help', '--help', '-h'].includes(args[0]) && 
 // closed) but not free, and `contextcake mcp` is the long-lived case that
 // normally runs while the app is open. What actually contends:
 //
-//   - Reads. mcp-server.mjs has no background index: every list_concepts /
-//     search walks each layer root and loads every concept again. So both
-//     processes walk the same folders, sharing only the OS page cache — on a
-//     3,000-note vault that is a full re-walk per tool call beside an engine
-//     that had the answer indexed.
+//   - Reads. MCP owns a retained, profile-bound index. Warm searches recheck
+//     listings and fingerprints without rereading unchanged documents. Cold
+//     scans and the desktop's background index remain independent.
 //   - Foreign MCP layers. Each engine spawns its own child per "source":"mcp"
 //     layer, so one manifest entry becomes two running server processes.
 //   - Disk cache. Layers with a `cache` block share one directory. Writes are
@@ -114,7 +113,10 @@ if (cmd === 'pack' && !['inspect', 'help', '--help', '-h'].includes(args[0]) && 
 // service instead of forking. The blocker is the bearer — it is minted per
 // launch and travels up the engine message port precisely so it never lands in
 // argv, env, or a file the CLI could read, so that handoff needs designing.
-const child = spawn(process.execPath, [path.join(engineSrc(), command.entry), ...args], {
+const engineEntry = path.join(engineSrc(), command.entry)
+const observability = path.resolve(here, '..', 'observability', cmd === 'doctor' ? 'doctor-launcher.mjs' : 'mcp-launcher.mjs')
+const childArgs = ['mcp','doctor'].includes(cmd) ? [observability, engineEntry, path.join(CONFIG_DIR, 'local-observability.json'), ...args] : [engineEntry, ...args]
+const child = spawn(process.execPath, childArgs, {
   stdio: 'inherit',
   env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
 })

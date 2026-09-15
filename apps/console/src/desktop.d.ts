@@ -97,6 +97,7 @@ declare global {
 
   interface Window {
     __CC_DESKTOP?: {
+      observability?: Record<'status' | 'setup' | 'start' | 'stop' | 'restart' | 'disable' | 'clear' | 'docker', () => Promise<{ enabled: boolean; state: string; origin?: string | null; failure?: string | null; restartClients?: boolean }>> & { open: (options?: {traceId?: string; range?: string; theme?: string}) => Promise<{enabled: boolean; state: string; origin?: string | null; failure?: string | null}> }
       windowRole?: 'main' | 'settings'
       /** Fetch the per-launch engine bearer through the desktop's trusted IPC gate. */
       getApiToken: () => Promise<string>

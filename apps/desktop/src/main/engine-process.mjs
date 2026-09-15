@@ -26,6 +26,8 @@
 // port. Same reasoning, same guarantee — never argv, never the child's env.
 
 import http from 'node:http'
+import path from 'node:path'
+import { createTelemetry } from '../observability/telemetry.mjs'
 import crypto from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { createLocalContextAssessor } from './context-assessor.mjs'
@@ -48,12 +50,14 @@ async function start() {
   }
 
   const { createEngineService } = await import(pathToFileURL(serviceModule).href)
+  const telemetry = createTelemetry({ configPath: path.join(path.dirname(manifestPath), 'local-observability.json') });
   const token = crypto.randomBytes(32).toString('hex')
   const service = createEngineService({
     manifestPath,
     consoleDist: consoleDist || null,
     token,
     assessmentProvider: createLocalContextAssessor(),
+    telemetryStatus: telemetry.status,
   })
 
   const server = http.createServer((req, res) => {
@@ -102,6 +106,7 @@ async function start() {
       return
     }
     if (message.type === 'close') {
+      telemetry.close()
       try { service.close() } catch { /* already down */ }
       server.close()
       process.exit(0)

@@ -7,6 +7,7 @@ import { BackgroundActivity } from './BackgroundActivity'
 import { Button, IconButton, SearchField, SegmentedControl, StatusBadge } from './ui'
 
 const TITLES: Record<ViewId, string> = {
+  diagnostics: 'Diagnostics',
   overview: 'Workspace', canvas: 'Map', sources: 'Sources', triage: 'Trust',
   conflicts: 'Trust', concepts: 'Library', files: 'Library',
 }

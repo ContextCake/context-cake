@@ -35,7 +35,7 @@ function prepareContextResolutions(state) {
   return prepared;
 }
 
-export function applyContextResolutions(resolved, state, { profileId = 'default', manifestFingerprint, coverageComplete = true, blockedKeys = new Set() }) {
+export function applyContextResolutions(resolved, state, { profileId = 'default', manifestFingerprint, coverageComplete = true, blockedKeys = new Set(), observe }) {
   if (!resolved) return resolved;
   const result = structuredClone(resolved);
   const prepared = prepareContextResolutions(state);
@@ -51,6 +51,7 @@ export function applyContextResolutions(resolved, state, { profileId = 'default'
       && evidence?.fingerprint === decision.evidenceFingerprint;
     section.contextResolution = { decisionId: decision.id, policyId: decision.policyId,
       status: decision.undoneAt ? 'undone' : active ? 'applied' : 'stale', selectedSource: decision.selectedSource };
+    observe?.({ operation: 'policy', outcome: !coverageComplete || blockedKeys.has(`${result.id}::${section.key}`) ? 'blocked' : active ? 'applied' : 'stale' });
     if (!active) continue;
     const selected = evidence.contributions.find(row => row.source === decision.selectedSource);
     if (!selected) { section.contextResolution.status = 'stale'; continue; }

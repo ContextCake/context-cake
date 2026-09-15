@@ -1,3 +1,4 @@
+import { createDiagnostics } from './diagnostics.mjs';
 // ContextCake engine HTTP service — the embeddable half of the playground
 // server. createEngineService() wraps the cascade engine (sources + resolver)
 // in a framework-free request handler a host mounts inside its own node:http
@@ -492,9 +493,12 @@ export function createEngineService({
                          //   Injected by the caller that owns the OS keychain;
                          //   the engine never reads a keychain itself and never
                          //   returns these over HTTP. See setTokens().
+  telemetryStatus = () => null,
   assessmentProvider = null, // desktop-owned local transport; never gives a model write capabilities
 } = {}) {
   if (!manifestPath) throw new Error("createEngineService: manifestPath is required");
+  const diagnostics = createDiagnostics();
+  let coverageSignature = null;
   const MANIFEST = path.resolve(manifestPath);
   const MANIFEST_DIR = path.dirname(MANIFEST);
   const CONSOLE_DIR = consoleDist ? path.resolve(consoleDist) : null;
@@ -646,6 +650,7 @@ export function createEngineService({
   }
 
   function recordPass(name, record) {
+    diagnostics.record({ operation: 'index', outcome: record.outcome === 'ok' ? 'ok' : ['paused','cancelled'].includes(record.outcome) ? 'cancelled' : 'error', durationMs: Math.max(0, record.durationMs - (record.queueMs ?? 0)), errorCode: record.outcome === 'error' ? 'INDEX_FAILED' : undefined, documentsRead: record.read, documentsReused: record.carried, queueMs: record.queueMs });
     const list = passHistory.get(name) ?? [];
     list.push(record);
     if (list.length > PASS_HISTORY_LIMIT) list.splice(0, list.length - PASS_HISTORY_LIMIT);
@@ -1291,6 +1296,7 @@ export function createEngineService({
         // desktop app these land in ~/Library/Logs/ContextCake/engine.log,
         // which is what makes "which source was the engine reading when it
         // died" answerable after the fact.
+        entry.queueMs = Date.now() - entry.startedAt;
         console.error(`[index] ${source.name}: pass ${entry.passes} start${refreshing ? " (refresh)" : ""}`);
         return withDeadline(
           snapshotSource(source, entry, controller.signal, disableCarry ? null : previousSnap, tokenCache, carrySeed),
@@ -1324,7 +1330,7 @@ export function createEngineService({
         console.error(doneLine);
         pushEngineEvent(doneLine);
         recordPass(source.name, {
-          startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt, outcome: "ok",
+          queueMs: entry.queueMs, startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt, outcome: "ok",
           concepts: snap.ids.length, ...(entry.passStats ?? {}),
         });
       })
@@ -1347,7 +1353,7 @@ export function createEngineService({
           console.error(pausedLine);
           pushEngineEvent(pausedLine);
           recordPass(source.name, {
-            startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt,
+            queueMs: entry.queueMs, startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt,
             outcome: entry.userCancelled ? "cancelled" : "paused",
           });
           return;
@@ -1357,7 +1363,7 @@ export function createEngineService({
         console.error(failLine);
         pushEngineEvent(failLine);
         recordPass(source.name, {
-          startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt, outcome: "error", error: entry.error,
+          queueMs: entry.queueMs, startedAt: entry.startedAt, durationMs: Date.now() - entry.startedAt, outcome: "error", error: entry.error,
         });
         // A transient failure retries itself on a backoff instead of parking
         // until something happens to invalidate — a fresh vault whose first
@@ -1785,10 +1791,11 @@ export function createEngineService({
       }
 
       if (p === "/api/graph") { json(res, 200, await buildGraph(waitParam(url))); return true; }
+      if (p === "/api/diagnostics" && req.method === "GET") { json(res, 200, { ...diagnostics.snapshot(), telemetry: telemetryStatus(), health: statusApi(), indexing: indexingActivityApi() }); return true; }
       if (p === "/api/status") { json(res, 200, statusApi()); return true; }
-      if (p === "/api/resolve") { json(res, 200, await resolveOne(url.searchParams.get("concept"))); return true; }
+      if (p === "/api/resolve") { json(res, 200, await diagnostics.measure("read", () => resolveOne(url.searchParams.get("concept")))); return true; }
       if (p === "/api/resolve-all") { await streamResolveAll(res, await resolveAllApi(waitParam(url))); return true; }
-      if (p === "/api/search") { json(res, 200, await searchApi(url, waitParam(url))); return true; }
+      if (p === "/api/search") { json(res, 200, await diagnostics.measure("search", () => searchApi(url, waitParam(url)))); return true; }
       if (p === "/api/discrepancy-assessment/models" && req.method === 'GET') {
         json(res, 200, await assessmentOps.models()); return true;
       }
@@ -2311,6 +2318,13 @@ export function createEngineService({
     // nothing to wait for and no reason to hold a spinner up in front of it.
     const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
     const memory = memorySnapshot();
+    const incompleteSources = sources.filter(s => s.status !== 'ready' && s.status !== 'ok' || s.warnings > 0 || !s.evidenceHealthy).length;
+    const observedCoverage = sources.map(s => [s.status, s.warnings, s.evidenceHealthy]);
+    const nextCoverageSignature = JSON.stringify(observedCoverage);
+    if (coverageSignature !== nextCoverageSignature) {
+      coverageSignature = nextCoverageSignature;
+      diagnostics.record({ operation: 'coverage', outcome: incompleteSources ? 'partial' : 'ok', sourceCount: sources.length, incompleteSources });
+    }
     return {
       generation: bumpGeneration(pinned),
       indexing: pending.length > 0,
@@ -2349,7 +2363,7 @@ export function createEngineService({
     decorateResolvedDispositions(resolved, await conflictResolutionLog.list());
     const status = statusApi();
     return applyContextResolutions(resolved, await contextResolutionStore.read(), {
-      profileId: SERVICE_PROFILE_ID, manifestFingerprint: contextManifestFingerprint(manifest),
+      observe: diagnostics.record, profileId: SERVICE_PROFILE_ID, manifestFingerprint: contextManifestFingerprint(manifest),
       coverageComplete: !status.indexing && status.sources.every(completeResolutionSource) && !sources.some(source => source.health?.()?.lastError),
       blockedKeys: await blockedContextResolutionKeys([resolved]),
     });

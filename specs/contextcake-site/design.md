@@ -103,15 +103,24 @@ equivalent.
 
 ## 4. Homepage — section order
 
-1. **Hero** — plain value proposition, Mac download, live-demo and install-option links,
-   plus a static resolved-concept visual generated from real resolver output.
-2. **Problem** — one direct statement about company, team, and personal sources differing.
-3. **How it works** — three section-level merge rules with concrete examples.
-4. **App and AI tools** — what the Mac app does, what MCP connects, and the six read-only tools.
-5. **Packs** — short teaser and one route to the dedicated Packs page.
-6. **Details** — compact capability grid covering sources, conflicts, source kinds, review,
-   the MCP surface, and the dependency-free core.
-7. **Closing** — one Mac download action and one route to the other install options.
+1. **Hero** — identify the product as a local app for project knowledge, with Mac download,
+   demo, and other-install links. Show actual resolved text, source labels, available dates,
+   and the differing version. The compact result is an excerpt, not a simulated chat answer.
+2. **Compatibility** — name supported coding tools and link to MCP setup.
+3. **Problem and workflow** — explain scattered project decisions, then connect sources,
+   set priority, and retrieve through MCP. Introduce “cascade” after explaining inheritance.
+4. **Inspection** — a substantial screenshot of the actual Library using the public demo
+   fixture, with links to try it. Explain conflict visibility and linked knowledge.
+5. **Control** — local retrieval, the dependency-free core, preview-before-share captures,
+   and trusted foreign MCP sources.
+6. **Practical details** — FAQs cover existing instruction files, matching paths and section
+   keys, data handling, the six MCP tools, and optional Packs.
+7. **Closing** — Mac download, demo, and other install options.
+
+The homepage uses a flat canvas and a simple header within the existing brand tokens.
+On mobile, prioritize the definition and actions, then present the same readable result
+below them. No content is hidden to force the entire explanation into one viewport.
+Research rationale and product-image provenance: `apps/site/landing-page-notes.md`.
 
 ## 5. Docs information architecture
 
@@ -322,9 +331,9 @@ hand-author a result. Shape (verified):
 
 ### 11.5 Hero visual and `/demo` constraints
 
-Band anatomy: a leading layer-colored **swatch** (a small rounded square) before the
-section heading — not a side-stripe border; mono section heading; provenance visible;
-conflict state present when the resolved fixture contains one.
+The compact homepage excerpt uses a layer-colored side stripe per section, readable
+prose, and a separate source/date label. Monospace is reserved for concept IDs and
+provenance metadata. Show the differing text when the resolved fixture contains it.
 
 The homepage uses the generated static composite. `/demo` embeds the canonical released
 Web Demo at `contextcake-console.pages.dev`; the site never builds another renderer copy.

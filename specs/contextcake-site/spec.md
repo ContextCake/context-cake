@@ -32,9 +32,11 @@ technical documentation close to the claims they support.
 
 ### Homepage (`/`)
 
-- [ ] WHEN a visitor loads `/` THE SYSTEM SHALL render, above the fold at 375–1440 px wide:
-      the value proposition, a Mac download action, routes to the live demo and other install
-      options, and a real resolved-concept visual — with no horizontal scroll.
+- [ ] WHEN a visitor loads `/` THE SYSTEM SHALL render the product definition and Mac
+      download, demo, and other-install routes first, followed by a real resolved-concept
+      visual. Desktop places the definition and visual side by side; narrow screens put
+      the readable visual directly below the definition rather than shrinking it to fit
+      one viewport. There SHALL be no horizontal scroll at 320–1440 px wide.
 - [ ] WHEN the hero renders THE SYSTEM SHALL show the cascade resolve visual with per-band
       source provenance visible by default and available source dates beside the result.
 - [ ] WHEN `prefers-reduced-motion` is set THE SYSTEM SHALL replace all animation with

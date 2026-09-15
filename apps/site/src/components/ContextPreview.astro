@@ -1,0 +1,173 @@
+---
+// A readable excerpt of actual resolver output, not a simulated app or AI reply.
+import demo from '../data/demo-cascade.json';
+const concept = demo.concepts.find((item) => item.id === 'decisions/primary-db');
+if (!concept) throw new Error('Homepage requires demo concept decisions/primary-db');
+const sections = ['choice', 'analytics', 'ownership'].map((key) => {
+  const section = concept.sections.find((item) => item.key === key && !item.suppressed);
+  if (!section?.content.trim()) throw new Error(`Homepage demo section ${key} is missing`);
+  return section;
+});
+const labels = { choice: 'Database choice', analytics: 'Analytics store', ownership: 'Ownership' };
+const names = { personal: 'Personal', team: 'Team', company: 'Company' };
+const sentence = (text: string) => text.replace(/\s+/g, ' ').trim().match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() ?? text;
+const conflict = sections[0].conflicts?.[0];
+---
+<figure class="context-preview">
+  <div class="preview-top"><span class="preview-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>ContextCake</span><span class="example-label">Example context</span></div>
+  <div class="preview-heading"><h2>Which database should I use?</h2><code>{concept.id}</code></div>
+  <div class="preview-sections">
+    {sections.map((section) => (
+      <div class="context-section" style={`--source-color: var(--cc-layer-${section.sourceLayer})`}>
+        <div class="section-meta"><h3>{labels[section.key]}</h3><span>{names[section.sourceLayer]} {section.sourceUpdated && <time datetime={section.sourceUpdated}>· {section.sourceUpdated}</time>}</span></div>
+        <p>{section.key === 'choice' ? section.content : sentence(section.content)}</p>
+      </div>
+    ))}
+  </div>
+  {conflict && <div class="context-conflict"><div><span aria-hidden="true">↳</span><strong>Another source differs</strong><span>{names[conflict.layer]} · {conflict.updated && <time datetime={conflict.updated}>{conflict.updated}</time>}</span></div><p>{conflict.content}</p></div>}
+  <figcaption>Real resolver output, excerpted from the bundled demo.<br />Each section keeps its source. Conflicts travel with it.</figcaption>
+</figure>
+<style>
+	.context-preview {
+		margin: 0;
+		border: 1px solid var(--cc-border-strong);
+		border-radius: 12px;
+		background: var(--cc-surface-solid);
+		color: var(--cc-text-body);
+		overflow: clip;
+	}
+	.preview-top {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 14px 22px;
+		border-bottom: 1px solid var(--cc-border);
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--cc-text);
+	}
+	.preview-mark {
+		display: grid;
+		gap: 2px;
+		width: 19px;
+		justify-items: center;
+	}
+	.preview-mark i {
+		height: 3px;
+		width: 19px;
+		background: var(--cc-layer-company);
+		border-radius: 2px;
+	}
+	.preview-mark i:first-child {
+		width: 11px;
+		background: var(--cc-layer-personal);
+	}
+	.preview-mark i:nth-child(2) {
+		width: 15px;
+		background: var(--cc-layer-team);
+	}
+	.example-label {
+		margin-left: auto;
+		color: var(--cc-text-muted);
+		font-size: 12px;
+		font-weight: 400;
+	}
+	.preview-heading {
+		padding: 22px 24px 14px;
+	}
+	.preview-heading h2 {
+		margin: 0 0 5px;
+		font-size: 22px;
+		letter-spacing: -.02em;
+		font-weight: 600;
+		line-height: 1.25;
+	}
+	code {
+		font: 11px/1.5 var(--cc-font-mono);
+		color: var(--cc-text-muted);
+	}
+	.preview-sections {
+		padding: 0 24px;
+	}
+	.context-section {
+		padding: 12px 0 12px 15px;
+		border-left: 3px solid var(--source-color);
+		margin: 9px 0;
+	}
+	.section-meta {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		flex-wrap: wrap;
+		gap: 3px 8px;
+	}
+	h3 {
+		margin: 0;
+		font-size: 13px;
+		font-weight: 600;
+	}
+	.section-meta > span {
+		font: 11px/1.6 var(--cc-font-mono);
+		color: var(--cc-text-muted);
+	}
+	.context-section p {
+		margin: 5px 0 0;
+		font-size: 14px;
+		line-height: 1.55;
+		text-wrap: pretty;
+	}
+	.context-conflict {
+		margin: 16px 24px 20px;
+		padding: 12px 14px;
+		border: 1px solid color-mix(in srgb, var(--cc-conflict) 45%, var(--cc-border));
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--cc-conflict) 7%, var(--cc-surface-solid));
+	}
+	.context-conflict > div {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 4px 8px;
+		font-size: 12px;
+		color: var(--cc-text);
+	}
+	.context-conflict > div > span:last-child {
+		color: var(--cc-text-muted);
+		font: 11px/1.5 var(--cc-font-mono);
+	}
+	.context-conflict p {
+		font-size: 13px;
+		line-height: 1.5;
+		margin: 5px 0 0;
+	}
+	figcaption {
+		padding: 12px 24px;
+		border-top: 1px solid var(--cc-border);
+		color: var(--cc-text-muted);
+		font-size: 11px;
+		line-height: 1.6;
+	}
+	@media (max-width: 480px) {
+		.preview-top {
+			padding-inline: 17px;
+		}
+		.preview-heading {
+			padding-inline: 18px;
+		}
+		.preview-heading h2 {
+			font-size: 21px;
+		}
+		.preview-sections {
+			padding-inline: 18px;
+		}
+		.context-section {
+			padding-left: 11px;
+		}
+		.context-conflict {
+			margin-inline: 18px;
+		}
+		figcaption {
+			padding-inline: 18px;
+		}
+	}
+</style>

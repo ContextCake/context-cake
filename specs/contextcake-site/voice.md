@@ -1,8 +1,10 @@
 # ContextCake public-site voice
 
-ContextCake should sound like a knowledgeable coworker explaining a technical product to
-someone who works in technology. The reader may lead a team, manage operations, write docs,
-or choose software without writing code.
+ContextCake should sound like a knowledgeable coworker explaining a technical product.
+The landing page speaks first to developers using coding agents and technical leads
+maintaining project knowledge. Name the tools and files they recognize. Documentation
+and other product pages should remain accessible to people who manage or write knowledge
+without writing code.
 
 ## The voice
 
@@ -18,8 +20,9 @@ The tone is calm and direct. It is not cute, grand, breathless, or self-congratu
 
 ## Writing rules
 
-1. **Say what it does first.** Start with files, sources, answers, and AI tools. Introduce
-   the architecture after the reader has a concrete picture.
+1. **Say what it does first.** Identify ContextCake as a local app that connects project
+   knowledge to coding agents. Start with files, sources, and AI tools. Introduce the
+   architecture after the reader has a concrete picture.
 2. **Use specific nouns and verbs.** Prefer "ContextCake reads a Markdown folder" to
    "bring your knowledge into one powerful workspace."
 3. **Keep one main idea in each sentence.** Short paragraphs are easier to scan, but do not
@@ -29,8 +32,9 @@ The tone is calm and direct. It is not cute, grand, breathless, or self-congratu
    "MCP-ready."
 5. **Earn every claim.** Use the exact fact: signed and notarized, six read-only tools, no
    runtime packages, a source on every section, and a date when the source provides one.
-6. **Use the same name for the same thing.** On marketing pages, say "AI tool" by default.
-   Use "client" or "agent" only when it is the exact product or interface term.
+6. **Use the same name for the same thing.** The homepage uses "coding agent" for its
+   audience's workflow and "AI tool" for the application they connect. Use "MCP client"
+   when protocol compatibility matters; avoid rotating between terms for variety.
 7. **Make headings informative.** A reader scanning only the headings should understand the
    page. Buttons should name the action: "Download for Mac," "Open the demo," "See all
    install options."
@@ -85,3 +89,8 @@ shared order: state the job, name the object, show the action, then supply techn
 - [GitBook](https://www.gitbook.com/): uses a specific product problem, then explains the system that addresses it.
 
 These are references for information order and clarity, not voices to imitate.
+
+The September 2026 landing-page revision adds developer-product references and explicit
+copy boundaries in `apps/site/landing-page-notes.md`. In particular, distinguish retrieved
+context from generated answers, source priority from correctness, and local processing
+from the connected AI tool's data handling.

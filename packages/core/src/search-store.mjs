@@ -40,16 +40,28 @@
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import {
-  analyze, analyzeConceptFields, conceptBody, makeSnippet, scoreEntry, tokenizeQuery, FIELD_COUNT,
+  analyze, analyzeConceptFields, conceptBody, makeSnippet, scoreEntry, tokenizeQuery, FIXED_FIELD_COUNT,
   linkPriorMultiplier,
 } from "./search.mjs";
+import { sectionText } from "./sections.mjs";
 import { conceptLinkTargets } from "./markdown-links.mjs";
 import { mergeConcepts, orderContributors } from "./resolver.mjs";
 
-// Bumped for the `links` table (inbound-link prior): a store built under
-// FORMAT_VERSION 1 has no postings for it, so any pre-existing file rebuilds
-// from scratch rather than silently answering with inbound = 0 everywhere.
-const FORMAT_VERSION = 2;
+// Bumped for the `sections`/`section_postings` tables (section-level body
+// scoring, mirroring search.mjs's scoreConceptSections): a store built under
+// an earlier FORMAT_VERSION has no per-section postings, so any pre-existing
+// file rebuilds from scratch rather than silently scoring the whole body as
+// section 0.
+const FORMAT_VERSION = 3;
+// A section field's contribution to scoreEntry when a section has no query
+// term matches at all: {frequencies: empty, length: irrelevant} — the SAME
+// object works for any unmatched section because an empty frequency map
+// contributes 0 regardless of `length` (scoreEntry only reads `length` when
+// `frequencies.get(term)` is truthy). This is what lets buildCandidates skip
+// enumerating a document's non-matching sections entirely: their score is
+// this baseline, provably true for every candidate document (see the header
+// comment on scoreBestSection).
+const EMPTY_SECTION_FIELD = { frequencies: new Map(), length: 0 };
 const LINKS_TO_CAP = 3;
 const LINKS_TO_MAX = 5;
 
@@ -115,10 +127,38 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
 
   const { DatabaseSync } = sqliteModule;
   const db = new DatabaseSync(file ?? ":memory:");
-  db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA temp_store = MEMORY");
+
+  // Two processes cold-starting on the same brand-new store file can both
+  // reach schema creation at once; WAL's busy_timeout does not cover DDL lock
+  // contention on a file that has no WAL mode yet. Bounded retry with a
+  // synchronous sleep (Atomics.wait — this API is synchronous end to end, so
+  // there is no async ceremony available) turns "one process throws and
+  // permanently falls back to the in-memory index" into "one process waits a
+  // few tens of milliseconds for the other's DDL transaction to commit."
+  function sleepSync(ms) {
+    const sab = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(sab, 0, 0, ms);
+  }
+
+  function isBusyError(error) {
+    return /database is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(error?.message ?? "");
+  }
+
+  function withBusyRetry(fn) {
+    const MAX_ATTEMPTS = 10;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return fn();
+      } catch (error) {
+        if (!isBusyError(error) || attempt === MAX_ATTEMPTS) throw error;
+        sleepSync(Math.min(20 * attempt, 200));
+      }
+    }
+    return undefined; // unreachable — the loop above always returns or throws
+  }
 
   function tablesExist() {
     const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
@@ -130,7 +170,9 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       DROP TABLE IF EXISTS meta;
       DROP TABLE IF EXISTS layers;
       DROP TABLE IF EXISTS docs;
+      DROP TABLE IF EXISTS sections;
       DROP TABLE IF EXISTS postings;
+      DROP TABLE IF EXISTS section_postings;
       DROP TABLE IF EXISTS terms;
       DROP TABLE IF EXISTS links;
 
@@ -151,9 +193,26 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
         title TEXT,
         frontmatter TEXT NOT NULL,
         body TEXT NOT NULL,
-        len0 INTEGER, len1 INTEGER, len2 INTEGER, len3 INTEGER, len4 INTEGER,
+        len0 INTEGER, len1 INTEGER, len2 INTEGER, len3 INTEGER,
         UNIQUE(layer, id)
       );
+      -- One row per concept.sections element (or one synthetic empty section
+      -- for a zero-section concept, matching analyzeConceptFields exactly).
+      -- text is the raw section text, kept ONLY so a winning section's
+      -- snippet can be built without re-reading the whole document.
+      CREATE TABLE sections(
+        doc INTEGER NOT NULL,
+        idx INTEGER NOT NULL,
+        key TEXT,
+        heading TEXT,
+        text TEXT NOT NULL,
+        length INTEGER NOT NULL,
+        PRIMARY KEY(doc, idx)
+      ) WITHOUT ROWID;
+      -- Fixed per-concept fields only: id/title/description/tags (positions
+      -- 0-3). Body postings live in section_postings, one row per section,
+      -- since a term's frequency must be scored PER SECTION, not summed
+      -- across a document's sections.
       CREATE TABLE postings(
         term TEXT NOT NULL,
         doc INTEGER NOT NULL,
@@ -162,6 +221,17 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
         PRIMARY KEY(term, doc, field)
       ) WITHOUT ROWID;
       CREATE INDEX postings_doc ON postings(doc);
+      CREATE TABLE section_postings(
+        term TEXT NOT NULL,
+        doc INTEGER NOT NULL,
+        idx INTEGER NOT NULL,
+        tf INTEGER NOT NULL,
+        PRIMARY KEY(term, doc, idx)
+      ) WITHOUT ROWID;
+      CREATE INDEX section_postings_doc ON section_postings(doc);
+      -- df counts DISTINCT DOCUMENTS containing a term in ANY field or ANY
+      -- section (buildConceptIndex's own dedup-per-doc rule) — bumped once
+      -- per doc regardless of how many fields/sections mention the term.
       CREATE TABLE terms(term TEXT PRIMARY KEY, df INTEGER NOT NULL);
       CREATE TABLE links(
         doc INTEGER NOT NULL,
@@ -175,15 +245,34 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
   }
 
   function ensureSchema() {
-    if (!tablesExist()) {
-      createSchema();
-      return;
-    }
-    const row = db.prepare("SELECT value FROM meta WHERE key = 'format'").get();
-    if (!row || row.value !== String(FORMAT_VERSION)) createSchema();
+    // BEGIN IMMEDIATE grabs the write lock before any read, so a concurrent
+    // opener that loses the race sees SQLITE_BUSY here (caught by
+    // withBusyRetry) rather than a half-created schema. tablesExist() and the
+    // format check are re-run INSIDE the lock — a process that lost the race
+    // and retried finds the winner's schema already in place and does
+    // nothing, rather than dropping and recreating it a second time.
+    withBusyRetry(() => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (!tablesExist()) {
+          createSchema();
+        } else {
+          const row = db.prepare("SELECT value FROM meta WHERE key = 'format'").get();
+          if (!row || row.value !== String(FORMAT_VERSION)) createSchema();
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    });
   }
 
   ensureSchema();
+  // Set only after schema creation has committed — WAL mode itself can throw
+  // busy on a fresh file under the same cross-process race ensureSchema
+  // guards against, so it gets the same bounded retry.
+  withBusyRetry(() => db.exec("PRAGMA journal_mode = WAL"));
 
   // This instance's identity for the "gen unchanged -> skip" fast path: a gen
   // number is only meaningful within the process that minted it (search-index.
@@ -207,15 +296,23 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     deleteLayer: db.prepare("DELETE FROM layers WHERE name = ?"),
     allLayerNames: db.prepare("SELECT name FROM layers"),
     docsForLayer: db.prepare("SELECT doc, id, fp, ord FROM docs WHERE layer = ?"),
-    docTermsFor: db.prepare("SELECT DISTINCT term FROM postings WHERE doc = ?"),
+    docTermsFor: db.prepare(
+      "SELECT term FROM postings WHERE doc = ? UNION SELECT term FROM section_postings WHERE doc = ?",
+    ),
     deletePostingsForDoc: db.prepare("DELETE FROM postings WHERE doc = ?"),
+    deleteSectionPostingsForDoc: db.prepare("DELETE FROM section_postings WHERE doc = ?"),
+    deleteSectionsForDoc: db.prepare("DELETE FROM sections WHERE doc = ?"),
     deleteDoc: db.prepare("DELETE FROM docs WHERE doc = ?"),
     updateDocOrd: db.prepare("UPDATE docs SET ord = ? WHERE doc = ?"),
     insertDoc: db.prepare(
-      "INSERT INTO docs(layer, id, ord, fp, title, frontmatter, body, len0, len1, len2, len3, len4) "
-      + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO docs(layer, id, ord, fp, title, frontmatter, body, len0, len1, len2, len3) "
+      + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ),
+    insertSection: db.prepare(
+      "INSERT INTO sections(doc, idx, key, heading, text, length) VALUES (?, ?, ?, ?, ?, ?)",
     ),
     insertPosting: db.prepare("INSERT INTO postings(term, doc, field, tf) VALUES (?, ?, ?, ?)"),
+    insertSectionPosting: db.prepare("INSERT INTO section_postings(term, doc, idx, tf) VALUES (?, ?, ?, ?)"),
     bumpTermUp: db.prepare(
       "INSERT INTO terms(term, df) VALUES (?, 1) ON CONFLICT(term) DO UPDATE SET df = df + 1",
     ),
@@ -223,15 +320,18 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     deleteZeroTerm: db.prepare("DELETE FROM terms WHERE term = ? AND df <= 0"),
     termDf: db.prepare("SELECT df FROM terms WHERE term = ?"),
     countDocs: db.prepare("SELECT COUNT(*) AS n FROM docs"),
-    sumLens: db.prepare("SELECT SUM(len0) AS s0, SUM(len1) AS s1, SUM(len2) AS s2, SUM(len3) AS s3, SUM(len4) AS s4 FROM docs"),
+    sumLens: db.prepare("SELECT SUM(len0) AS s0, SUM(len1) AS s1, SUM(len2) AS s2, SUM(len3) AS s3 FROM docs"),
+    sectionAgg: db.prepare("SELECT SUM(length) AS total, COUNT(*) AS cnt FROM sections"),
     postingsForTerm: db.prepare("SELECT doc, field, tf FROM postings WHERE term = ?"),
-    docRow: db.prepare("SELECT doc, layer, id, ord, title, frontmatter, body, len0, len1, len2, len3, len4 FROM docs WHERE doc = ?"),
+    sectionPostingsForTerm: db.prepare("SELECT doc, idx, tf FROM section_postings WHERE term = ?"),
     docByLayerId: db.prepare("SELECT frontmatter FROM docs WHERE layer = ? AND id = ?"),
     bodyForDoc: db.prepare("SELECT body FROM docs WHERE doc = ?"),
+    sectionByDocIdx: db.prepare("SELECT key, heading, text FROM sections WHERE doc = ? AND idx = ?"),
     insertLink: db.prepare("INSERT INTO links(doc, ord, target) VALUES (?, ?, ?)"),
     deleteLinksForDoc: db.prepare("DELETE FROM links WHERE doc = ?"),
     linksForDoc: db.prepare("SELECT target FROM links WHERE doc = ? ORDER BY ord"),
     docExists: db.prepare("SELECT 1 FROM docs WHERE id = ? LIMIT 1"),
+    existingDocByLayerId: db.prepare("SELECT doc, fp, ord FROM docs WHERE layer = ? AND id = ?"),
   };
 
   // SQLite's default host-parameter ceiling (SQLITE_MAX_VARIABLE_NUMBER) is
@@ -247,11 +347,30 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       const chunk = arr.slice(i, i + IN_CHUNK);
       const placeholders = chunk.map(() => "?").join(",");
       const stmt = db.prepare(
-        `SELECT doc, layer, id, ord, title, len0, len1, len2, len3, len4 FROM docs WHERE doc IN (${placeholders})`,
+        `SELECT doc, layer, id, ord, title, len0, len1, len2, len3 FROM docs WHERE doc IN (${placeholders})`,
       );
       rows.push(...stmt.all(...chunk));
     }
     return rows;
+  }
+
+  /** Map<doc, Map<idx, length>> for exactly the given candidate doc ids,
+   * batched — the section LENGTHS only (not text), needed to score each
+   * matched section with its own length normalization. */
+  function sectionLensForDocs(ids) {
+    const arr = [...ids];
+    const byDoc = new Map();
+    for (let i = 0; i < arr.length; i += IN_CHUNK) {
+      const chunk = arr.slice(i, i + IN_CHUNK);
+      const placeholders = chunk.map(() => "?").join(",");
+      const stmt = db.prepare(`SELECT doc, idx, length FROM sections WHERE doc IN (${placeholders})`);
+      for (const row of stmt.all(...chunk)) {
+        let m = byDoc.get(row.doc);
+        if (!m) { m = new Map(); byDoc.set(row.doc, m); }
+        m.set(row.idx, row.length);
+      }
+    }
+    return byDoc;
   }
 
   /** Which of `ids` (a set/array of concept ids) belong to layer `layerName`, batched. */
@@ -268,18 +387,28 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
   }
 
   function removeDoc(doc) {
-    const terms = stmts.docTermsFor.all(doc);
+    const terms = stmts.docTermsFor.all(doc, doc);
     for (const { term } of terms) {
       stmts.bumpTermDown.run(term);
       stmts.deleteZeroTerm.run(term);
     }
     stmts.deletePostingsForDoc.run(doc);
+    stmts.deleteSectionPostingsForDoc.run(doc);
+    stmts.deleteSectionsForDoc.run(doc);
     stmts.deleteLinksForDoc.run(doc);
     stmts.deleteDoc.run(doc);
   }
 
+  /** The raw section objects analyzeConceptFields iterated, in the same
+   * order (including the single synthetic `null` for a zero-section
+   * concept) — needed here only to recover each section's raw TEXT, which
+   * analyzeConceptFields does not return (it returns term stats, not text). */
+  function rawSectionsFor(concept) {
+    return concept.sections.length ? concept.sections : [null];
+  }
+
   function insertDocWithPostings(layerName, id, ord, fp, concept, layerNames) {
-    const fields = analyzeConceptFields(id, concept);
+    const { fields, sections } = analyzeConceptFields(id, concept);
     analyzedCount += 1;
     const lens = fields.map((f) => f.length);
     const result = stmts.insertDoc.run(
@@ -287,7 +416,7 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       concept.frontmatter?.title ?? null,
       JSON.stringify(concept.frontmatter ?? {}),
       conceptBody(concept),
-      lens[0] ?? 0, lens[1] ?? 0, lens[2] ?? 0, lens[3] ?? 0, lens[4] ?? 0,
+      lens[0] ?? 0, lens[1] ?? 0, lens[2] ?? 0, lens[3] ?? 0,
     );
     const doc = result.lastInsertRowid;
     const seen = new Set();
@@ -297,6 +426,15 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
         seen.add(term);
       }
     }
+    const rawSections = rawSectionsFor(concept);
+    sections.forEach((section, idx) => {
+      const text = rawSections[idx] ? sectionText(rawSections[idx]) : "";
+      stmts.insertSection.run(doc, idx, section.key ?? null, section.heading ?? null, text, section.length);
+      for (const [term, tf] of section.frequencies) {
+        stmts.insertSectionPosting.run(term, doc, idx, tf);
+        seen.add(term);
+      }
+    });
     for (const term of seen) stmts.bumpTermUp.run(term);
 
     // Self-excluded, deduped, normalized outgoing targets — document order
@@ -372,30 +510,160 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     stmts.upsertLayer.run(view.name, identity, view.level ?? 0, view.gen, proc);
   }
 
-  function sync(contributing) {
-    db.exec("BEGIN");
-    try {
-      const wanted = new Set(contributing.map((view) => view.name));
-      for (const view of contributing) syncLayer(view, wanted);
-      for (const { name } of stmts.allLayerNames.all()) {
-        if (!wanted.has(name)) {
-          for (const row of stmts.docsForLayer.all(name)) removeDoc(row.doc);
-          stmts.deleteLayer.run(name);
-        }
-      }
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
+  /**
+   * True iff the store's stored row for layer `name` already reflects `gen`
+   * under THIS instance's proc token, with a matching `identity` — i.e.
+   * nothing about this layer's listing has moved since the last time this
+   * process synced it (syncLayer's own "nothing moved" fast path, exposed so
+   * a caller can skip pending() entirely rather than pay a per-id fingerprint
+   * compare to rediscover what it already knows).
+   */
+  function isCurrent(name, identity, gen) {
+    const existingLayer = stmts.getLayer.get(name);
+    return Boolean(existingLayer)
+      && existingLayer.identity === (identity ?? null)
+      && existingLayer.gen === gen
+      && existingLayer.proc === proc;
   }
 
+  /**
+   * Streaming counterpart to syncLayer, for a cold build over many pending
+   * documents: beginLayer/upsertBatch/finishLayer lets a caller commit small batches
+   * of newly-analyzed documents one at a time instead of holding every
+   * pending concept in a JS Map before a single sync() call. Each function
+   * below opens and commits (or rolls back) its own transaction, so a batch
+   * is durable — and visible to another process reading the same file — the
+   * moment upsertBatch/finishLayer returns. The worst race this allows is a
+   * concurrent reader seeing a partially-synced layer mid-build (some
+   * documents from the new listing, some still from the old one); it can
+   * never see a half-written document, because insertDocWithPostings's own
+   * doc+postings+links insert happens inside one batch's transaction.
+   *
+   * beginLayer records just enough to let upsertBatch/finishLayer proceed;
+   * it does not touch the database. Call it once per layer before any
+   * upsertBatch calls for that layer.
+   */
+  function beginLayer({
+    name, identity, level, gen,
+  }) {
+    return { name, identity: identity ?? null, level, gen };
+  }
+
+  /**
+   * Commit one batch of freshly-analyzed documents for `name`. Each item is
+   * `{ id, ord, concept, fileMeta }` — `fileMeta` is that one document's own
+   * file metadata (or omitted for an unfingerprinted source, which falls
+   * back to the same content-hash fingerprint syncLayer uses). Replaces
+   * docs/postings/links/df for exactly these ids, in one transaction, the
+   * same as syncLayer's own insert path — never touches a row for any other
+   * id.
+   */
+  function upsertBatch(name, items, layerNames) {
+    if (!items.length) return;
+    // BEGIN IMMEDIATE + bounded retry: a concurrent writer on the same file
+    // (another process's own cold build, or a query mid-sync) can hold the
+    // write lock past a single attempt; same discipline as ensureSchema,
+    // covering the general "two processes racing to write" case, not only
+    // first-open schema creation.
+    withBusyRetry(() => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const {
+          id, ord, concept, fileMeta,
+        } of items) {
+          const fp = fileMeta
+            ? JSON.stringify([fileMeta.rel, fileMeta.ext, fileMeta.size, fileMeta.mtimeMs, fileMeta.authoredDate ?? null])
+            : contentFingerprint(id, concept);
+          const existingRow = stmts.existingDocByLayerId.get(name, id);
+          if (existingRow && existingRow.fp === fp) {
+            // Same discipline as syncLayer: an unfingerprinted (remote)
+            // source is always reloaded, but identical content still hashes
+            // to the same fingerprint, so it is kept as-is rather than
+            // reanalyzed — only the position may need fixing.
+            if (existingRow.ord !== ord) stmts.updateDocOrd.run(ord, existingRow.doc);
+            continue;
+          }
+          if (existingRow) removeDoc(existingRow.doc);
+          insertDocWithPostings(name, id, ord, fp, concept, layerNames ?? new Set([name]));
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Finish a streaming layer sync: sweep out any stored document whose id is
+   * no longer in `ids` (a deletion — upsertBatch never sees these, since a
+   * caller only batches ids it actually loaded), fix `ord` for documents
+   * that were already correct and so were never touched by upsertBatch, and
+   * write the layer's row (identity/level/gen/proc) so a later isCurrent()
+   * check recognizes this exact listing as already synced. Own transaction,
+   * same durability story as upsertBatch.
+   */
+  function finishLayer(state, { ids, gen, level }) {
+    withBusyRetry(() => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const seen = new Set(ids);
+        const rows = stmts.docsForLayer.all(state.name);
+        for (const row of rows) {
+          if (!seen.has(row.id)) removeDoc(row.doc);
+        }
+        const byId = new Map(stmts.docsForLayer.all(state.name).map((row) => [row.id, row]));
+        ids.forEach((id, ord) => {
+          const row = byId.get(id);
+          if (row && row.ord !== ord) stmts.updateDocOrd.run(ord, row.doc);
+        });
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+    withBusyRetry(() => stmts.upsertLayer.run(state.name, state.identity, level ?? 0, gen, proc));
+  }
+
+  function sync(contributing) {
+    // BEGIN IMMEDIATE (not the plain deferred BEGIN this used to open with):
+    // grabbing the write lock up front means a concurrent writer surfaces as
+    // one clean SQLITE_BUSY at the BEGIN itself — caught by withBusyRetry —
+    // instead of partway through the loop below after some statements on
+    // this connection have already run.
+    withBusyRetry(() => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const wanted = new Set(contributing.map((view) => view.name));
+        for (const view of contributing) syncLayer(view, wanted);
+        for (const { name } of stmts.allLayerNames.all()) {
+          if (!wanted.has(name)) {
+            for (const row of stmts.docsForLayer.all(name)) removeDoc(row.doc);
+            stmts.deleteLayer.run(name);
+          }
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  // averageLength is FIXED_FIELD_COUNT (4) per-concept averages plus ONE
+  // aggregate body figure — the mean SECTION length across every section in
+  // the corpus (total section terms / total section count), matching
+  // buildConceptIndex exactly: a 9-section runbook contributes 9 length
+  // samples to that average, not one.
   function corpusStats(terms) {
     const { n } = stmts.countDocs.get();
     const sums = stmts.sumLens.get();
-    const averageLength = [sums.s0, sums.s1, sums.s2, sums.s3, sums.s4].map(
-      (sum) => (n ? (sum ?? 0) / n : 0),
-    );
+    const sectionAgg = stmts.sectionAgg.get();
+    const averageLength = [
+      ...[sums.s0, sums.s1, sums.s2, sums.s3].map((sum) => (n ? (sum ?? 0) / n : 0)),
+      sectionAgg.cnt ? (sectionAgg.total ?? 0) / sectionAgg.cnt : 0,
+    ];
     const documentFrequency = new Map();
     for (const term of terms) {
       const row = stmts.termDf.get(term);
@@ -404,22 +672,80 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     return { total: n, averageLength, documentFrequency };
   }
 
-  // doc -> { fields: [{frequencies, length}] } for scoreEntry, built ONLY for
-  // documents that have at least one posting among the query terms — the
-  // per-doc structures are transient, discarded after this search() call.
+  // doc -> { fixed: [{frequencies,length}] x FIXED_FIELD_COUNT, sections:
+  // Map<idx, {frequencies}> } for scoreBestSection, built ONLY for documents
+  // that have at least one posting (fixed-field OR section) among the query
+  // terms — the per-doc structures are transient, discarded after this
+  // search() call.
   function buildCandidates(terms) {
-    const candidates = new Map(); // doc -> fields[]
+    const candidates = new Map();
+    const ensure = (doc) => {
+      let c = candidates.get(doc);
+      if (!c) {
+        c = {
+          fixed: Array.from({ length: FIXED_FIELD_COUNT }, () => ({ frequencies: new Map(), length: 0 })),
+          sections: new Map(),
+        };
+        candidates.set(doc, c);
+      }
+      return c;
+    };
     for (const term of terms) {
       for (const { doc, field, tf } of stmts.postingsForTerm.all(term)) {
-        let fields = candidates.get(doc);
-        if (!fields) {
-          fields = Array.from({ length: FIELD_COUNT }, () => ({ frequencies: new Map(), length: 0 }));
-          candidates.set(doc, fields);
+        ensure(doc).fixed[field].frequencies.set(term, tf);
+      }
+      for (const { doc, idx, tf } of stmts.sectionPostingsForTerm.all(term)) {
+        const c = ensure(doc);
+        let section = c.sections.get(idx);
+        if (!section) {
+          section = { frequencies: new Map() };
+          c.sections.set(idx, section);
         }
-        fields[field].frequencies.set(term, tf);
+        section.frequencies.set(term, tf);
       }
     }
     return candidates;
+  }
+
+  /**
+   * The store's counterpart to search.mjs's scoreConceptSections: score every
+   * section of `doc` as its own body candidate and return the max, with the
+   * winning section's index and whether the winning score came from an
+   * actual section match (`matched`).
+   *
+   * Unlike scoreConceptSections, this does NOT need every section of the
+   * document — only the ones `candidate.sections` names (i.e. the ones with
+   * at least one query-term posting). Proof: a section's score is
+   * baseScore + a NON-NEGATIVE per-matched-term contribution (idf > 0 for
+   * any term with a posting, and a stored posting always has tf >= 1, so
+   * `weighted > 0` and the term's contribution to scoreEntry is strictly
+   * positive). So any section with zero matching postings scores EXACTLY
+   * `baseScore` (the fixed-fields-only score — section-invariant, since an
+   * empty section frequency map contributes 0 regardless of that section's
+   * own length), and any matched section scores STRICTLY more than
+   * baseScore. The true maximum is therefore always baseScore itself (when
+   * no section matched) or the best matched section (when any did) — never
+   * an unmatched section "winning" by tying above every matched section.
+   * Iterating matched sections in ascending idx order and comparing with
+   * strict `>` reproduces scoreConceptSections's first-on-ties rule exactly.
+   */
+  function scoreBestSection(index, fixedFields, candidate, terms, sectionLens) {
+    const matchedIdx = [...(candidate?.sections ?? [])].sort((a, b) => a[0] - b[0]);
+    if (matchedIdx.length === 0) {
+      const score = scoreEntry(index, { fields: [...fixedFields, EMPTY_SECTION_FIELD] }, terms);
+      return { score, sectionIndex: 0, matched: false };
+    }
+    let bestScore = -Infinity;
+    let bestIndex = 0;
+    for (const [idx, section] of matchedIdx) {
+      const sectionField = { frequencies: section.frequencies, length: sectionLens.get(idx) ?? 0 };
+      const score = scoreEntry(index, { fields: [...fixedFields, sectionField] }, terms);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = idx;
+      }
+    }
+    return { score: bestScore, sectionIndex: bestIndex, matched: true };
   }
 
   /**
@@ -529,6 +855,7 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
 
       const rowsByDoc = new Map();
       for (const row of docsByIds(candidates.keys())) rowsByDoc.set(row.doc, row);
+      const sectionLensByDoc = sectionLensForDocs(candidates.keys());
 
       // source filter: which of the CANDIDATE ids belong to that named layer,
       // right now — never a full listing of the layer.
@@ -557,26 +884,27 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       const byId = new Map();
       for (const row of orderedRows) {
         if (sourceIdSet && !sourceIdSet.has(row.id)) continue;
-        const fields = candidates.get(row.doc);
-        const entry = {
-          fields: fields.map((f, i) => ({
-            frequencies: f.frequencies,
-            length: [row.len0, row.len1, row.len2, row.len3, row.len4][i],
-          })),
-        };
-        const score = scoreEntry(index, entry, terms);
-        if (score <= 0) continue;
+        const candidate = candidates.get(row.doc);
+        const fixedFields = candidate.fixed.map((f, i) => ({
+          frequencies: f.frequencies,
+          length: [row.len0, row.len1, row.len2, row.len3][i],
+        }));
+        const sectionLens = sectionLensByDoc.get(row.doc) ?? new Map();
+        const best = scoreBestSection(index, fixedFields, candidate, terms, sectionLens);
+        if (best.score <= 0) continue;
         const view = contributing[viewIndexByName.get(row.layer)];
         const title = row.title ?? null;
         const existing = byId.get(row.id);
         if (!existing) {
           byId.set(row.id, {
-            id: row.id, title, score, layers: [view.name], doc: row.doc,
+            id: row.id, title, score: best.score, layers: [view.name], doc: row.doc, sectionIndex: best.sectionIndex, matched: best.matched,
           });
         } else {
-          if (score > existing.score) {
-            existing.score = score;
+          if (best.score > existing.score) {
+            existing.score = best.score;
             existing.doc = row.doc;
+            existing.sectionIndex = best.sectionIndex;
+            existing.matched = best.matched;
           }
           existing.layers.push(view.name);
           if (!existing.title) existing.title = title;
@@ -594,17 +922,35 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       let hits = [...byId.values()];
       if (type) hits = hits.filter((hit) => typeOf(contributing, hit.id) === type);
 
-      // `body` is fetched only for the documents that survive ranking AND the
-      // limit cut — one row read per returned hit, never per corpus document.
+      // Section/body text is fetched only for the documents that survive
+      // ranking AND the limit cut — one text read per returned hit, never
+      // per corpus document. A matched hit reads its winning section's own
+      // text (for the snippet) and reports `section: {key, heading}`; an
+      // unmatched hit (the score came entirely from fixed fields — no
+      // section had a query-term match) falls back to the whole-document
+      // body for the snippet and reports `section: null`, exactly as
+      // searchConcepts does.
       return hits
         .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
         .slice(0, Number(limit) || 10)
-        .map(({ doc, ...hit }, rank) => {
-          const { body } = stmts.bodyForDoc.get(doc);
+        .map(({
+          doc, sectionIndex, matched, ...hit
+        }, rank) => {
+          let snippetSource;
+          let section;
+          if (matched) {
+            const srow = stmts.sectionByDocIdx.get(doc, sectionIndex);
+            snippetSource = srow.text;
+            section = { key: srow.key, heading: srow.heading };
+          } else {
+            snippetSource = stmts.bodyForDoc.get(doc).body;
+            section = null;
+          }
           bodyReadCount += 1;
           const result = {
             ...hit,
-            snippet: makeSnippet(body, rawTokens),
+            snippet: makeSnippet(snippetSource, rawTokens),
+            section,
             layers: orderLayerNames(hit.layers),
           };
           if (rank < LINKS_TO_CAP) result.linksTo = linksToFor(doc);
@@ -613,6 +959,10 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     },
 
     pending,
+    isCurrent,
+    beginLayer,
+    upsertBatch,
+    finishLayer,
 
     close() {
       // Idempotent: unlike DatabaseSync itself (which throws on a second

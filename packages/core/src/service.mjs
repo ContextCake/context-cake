@@ -627,7 +627,6 @@ export function createEngineService({
     }
   }
   if (!searchIndex) searchIndex = createSearchIndex();
-  void usingSearchStore; // kept for future diagnostics; /api/status shape is unaffected either way
   // { key, promise, evictTimer } — the resolved corpus behind /api/resolve-all
   // and /api/discrepancies. Same live-key correctness story as graphMemo, plus
   // a residency bound the others don't need: unlike graph rows (compact) or
@@ -2343,6 +2342,11 @@ export function createEngineService({
       // particular) can use this to throttle its own polling or show a
       // banner without adding its own watermark logic.
       memory: memory.level,
+      // "sqlite" | "memory" — which search backend answered /api/search: the
+      // persisted store (searchStoreDir above) when node:sqlite opened
+      // successfully, otherwise the in-memory index. Additive diagnostic
+      // field.
+      searchBackend: usingSearchStore ? "sqlite" : "memory",
       // Sources the user paused (POST /api/indexing/pause) — additive; "*"
       // means everything. A paused source is settled state, so ?wait= callers
       // and the console must be able to SEE why nothing is progressing.

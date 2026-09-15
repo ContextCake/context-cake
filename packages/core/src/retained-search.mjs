@@ -27,6 +27,12 @@ function sameFile(a, b) {
     && a.authoredDate === b.authoredDate;
 }
 
+// How many freshly-loaded documents to hand the store per upsertBatch call.
+// Bounds how much parsed content is ever resident in the JS heap at once
+// during a cold build — a 50,000-document vault holds at most this many
+// parsed concepts in memory, never the whole corpus.
+const SYNC_BATCH_SIZE = 256;
+
 export function createRetainedSearch(sources, options = {}) {
   if (isSearchStoreAvailable()) {
     try {
@@ -55,6 +61,12 @@ function createStoreRetainedSearch(sources, {
   let closed = false;
   let documentsRead = 0; // instrumentation: loadConcept calls since open (tests, benchmark)
 
+  // All layer names this instance will ever sync — computed once, since
+  // `sources` is fixed for the process's lifetime. Passed to upsertBatch so
+  // link-target resolution sees the same scope syncLayer's own `wanted` set
+  // would, without needing every OTHER source's view built first.
+  const layerNames = new Set(sources.map((source) => source.name));
+
   function identityFor(source) {
     return identities?.get(source.name) ?? source.name;
   }
@@ -80,26 +92,69 @@ function createStoreRetainedSearch(sources, {
       const gen = (fingerprinted && unchanged) ? (genByName.get(source.name) ?? ++generation) : ++generation;
       genByName.set(source.name, gen);
 
+      // Warm fast path: the listing proved identical to last time AND the
+      // store's own row for this layer already reflects this exact gen under
+      // this process's proc token — nothing moved, including no additions or
+      // removals (that is what `unchanged` already established), so there is
+      // nothing to sync and no reason to pay a pending() fingerprint compare
+      // just to rediscover it. store.search()'s own sync() will see the same
+      // gen/identity/proc match and take its own early exit.
+      if (fingerprinted && unchanged && store.isCurrent(source.name, identity, gen)) {
+        if (fingerprinted) fileMetaByName.set(source.name, fileMeta);
+        return {
+          name: source.name, level: source.level, identity, gen, ids, concepts: new Map(), fileMeta,
+        };
+      }
+
       const pendingIds = store.pending({
         name: source.name, identity, ids, fileMeta,
       });
-      const concepts = new Map();
-      for (const [i, id] of pendingIds.entries()) {
+
+      // Cold/changed path: stream pending documents into the store in small
+      // batches instead of loading them all into one Map first — bounds peak
+      // JS-heap residency to SYNC_BATCH_SIZE parsed concepts regardless of
+      // corpus size. Each batch commits on its own; unpending documents never
+      // touch the JS heap at all (their postings are already on disk).
+      if (pendingIds.length) {
+        const ordById = new Map(ids.map((id, i) => [id, i]));
+        const layerState = store.beginLayer({
+          name: source.name, identity, level: source.level, gen,
+        });
+        for (let start = 0; start < pendingIds.length; start += SYNC_BATCH_SIZE) {
+          const batchIds = pendingIds.slice(start, start + SYNC_BATCH_SIZE);
+          const batch = [];
+          for (const id of batchIds) {
+            signal.throwIfAborted();
+            const item = fileMeta?.get(id);
+            const concept = await source.loadConcept(id, { signal, ...(item?.ext ? { ext: item.ext } : {}) });
+            signal.throwIfAborted();
+            batch.push({
+              id, ord: ordById.get(id), concept, fileMeta: item,
+            });
+            documentsRead += 1;
+          }
+          store.upsertBatch(source.name, batch, layerNames);
+          await yieldNow();
+        }
         signal.throwIfAborted();
-        const item = fileMeta?.get(id);
-        const concept = await source.loadConcept(id, { signal, ...(item?.ext ? { ext: item.ext } : {}) });
-        signal.throwIfAborted();
-        concepts.set(id, concept);
-        documentsRead += 1;
-        if (i % 64 === 63) await yieldNow();
+        store.finishLayer(layerState, { ids, gen, level: source.level });
+      } else {
+        // Nothing pending, but `unchanged`/isCurrent didn't both hold (e.g. a
+        // fresh process's first query against an already-current store) —
+        // still finish the layer so the sweep can drop any deletion and the
+        // stored row picks up this process's gen/proc for next time's fast
+        // path, without loading a single document.
+        const layerState = store.beginLayer({
+          name: source.name, identity, level: source.level, gen,
+        });
+        store.finishLayer(layerState, { ids, gen, level: source.level });
       }
-      signal.throwIfAborted();
 
       if (fingerprinted) fileMetaByName.set(source.name, fileMeta);
       else fileMetaByName.delete(source.name);
 
       return {
-        name: source.name, level: source.level, identity, gen, ids, concepts, fileMeta,
+        name: source.name, level: source.level, identity, gen, ids, concepts: new Map(), fileMeta,
       };
     } finally {
       release?.();

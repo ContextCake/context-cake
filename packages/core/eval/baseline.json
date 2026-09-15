@@ -1,11 +1,19 @@
 {
-  "label": "inbound-link prior (weight 0.1; 0.3 rejected: regresses q06, over-boosts real hubs)",
+  "label": "section-level body scoring",
   "questions": 51,
-  "recall@1": 0.745,
+  "recall@1": 0.765,
   "recall@5": 0.902,
-  "mrr": 0.806,
+  "mrr": 0.818,
   "conflict": 1,
   "history": [
+    {
+      "label": "inbound-link prior (weight 0.1; 0.3 rejected: regresses q06, over-boosts real hubs)",
+      "questions": 51,
+      "recall@1": 0.745,
+      "recall@5": 0.902,
+      "mrr": 0.806,
+      "conflict": 1
+    },
     {
       "label": "inbound-link prior (weight 0.3)",
       "questions": 51,

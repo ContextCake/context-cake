@@ -9,9 +9,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { searchConcepts } from "../src/search.mjs";
 import { createSearchIndex } from "../src/search-index.mjs";
 import { createSearchStore, isSearchStoreAvailable } from "../src/search-store.mjs";
+
+const SEARCH_STORE_URL = pathToFileURL(fileURLToPath(new URL("../src/search-store.mjs", import.meta.url))).href;
 
 // Deterministic PRNG — reproducibility is the point of the differential.
 function mulberry32(seed) {
@@ -417,4 +421,53 @@ test("concurrent opens on the same file answer identically", async (t) => {
   const hitsA = storeA.search([view], { query: "postgres deploy", limit: 10 });
   const hitsB = storeB.search([view], { query: "postgres deploy", limit: 10 });
   assert.deepEqual(hitsA, hitsB);
+});
+
+// Two stdio processes cold-starting on a brand-new manifest share one store
+// file; both can reach schema creation on the very first open. Before the
+// BEGIN IMMEDIATE + bounded-retry fix, the loser of that race threw
+// "database is locked" and fell back to the in-memory index for its whole
+// lifetime (documented in retained-mcp-retrieval.md). worker_threads stands
+// in for two independent processes: each worker requires its own
+// node:sqlite handle exactly like a separate OS process would.
+test("concurrent schema creation on a brand-new file: two workers open and search the same fresh file at once without throwing", async (t) => {
+  const { dir, file } = tempFile();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const workerFile = path.join(dir, "worker.mjs");
+  fs.writeFileSync(workerFile, `
+    import { parentPort, workerData } from "node:worker_threads";
+    import { createSearchStore } from ${JSON.stringify(SEARCH_STORE_URL)};
+    try {
+      const store = createSearchStore({ file: workerData.file });
+      const view = {
+        name: "vault",
+        level: 3,
+        gen: 1,
+        identity: "vault",
+        ids: ["a", "b"],
+        concepts: new Map([
+          ["a", { frontmatter: { title: "Postgres runbook" }, sections: [{ key: "body", heading: "## Body {#body}", text: "postgres deploy rollout" }] }],
+          ["b", { frontmatter: { title: "Deploy guide" }, sections: [{ key: "body", heading: "## Body {#body}", text: "deploy checklist" }] }],
+        ]),
+      };
+      const hits = store.search([view], { query: "postgres deploy", limit: 10 });
+      store.close();
+      parentPort.postMessage({ ok: true, ids: hits.map((h) => h.id) });
+    } catch (error) {
+      parentPort.postMessage({ ok: false, error: error.message });
+    }
+  `);
+
+  const run = () => new Promise((resolve, reject) => {
+    const worker = new Worker(workerFile, { workerData: { file } });
+    worker.once("message", resolve);
+    worker.once("error", reject);
+  });
+
+  const [a, b] = await Promise.all([run(), run()]);
+  assert.equal(a.ok, true, `worker A threw: ${a.error}`);
+  assert.equal(b.ok, true, `worker B threw: ${b.error}`);
+  assert.deepEqual(a.ids, ["a", "b"]);
+  assert.deepEqual(b.ids, ["a", "b"]);
 });

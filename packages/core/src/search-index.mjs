@@ -16,7 +16,8 @@
 //   - enumeration replicates collectDocuments order (layers in contributing
 //     order, ids in snapshot order): the best-layer merge keeps the FIRST
 //     layer's row on equal scores, so order is part of the ranking contract;
-//   - scoring is search.mjs's scoreEntry, applied to the same shapes.
+//   - scoring is search.mjs's scoreConceptSections, applied to the same
+//     shapes: a concept's score is the max over its sections, same tie rule.
 // search-index.test.mjs holds Object.is equality against searchConcepts
 // under randomized mutation; the retrieval eval gates recall on top.
 //
@@ -31,9 +32,10 @@
 // only, at hit time.
 
 import {
-  FIELD_COUNT, analyzeConceptFields, conceptBody, makeSnippet, scoreEntry, tokenizeQuery, analyze,
+  FIXED_FIELD_COUNT, analyzeConceptFields, conceptBody, makeSnippet, scoreConceptSections, tokenizeQuery, analyze,
   linkPriorMultiplier,
 } from "./search.mjs";
+import { sectionText } from "./sections.mjs";
 import { conceptLinkTargets } from "./markdown-links.mjs";
 import { mergeConcepts, orderContributors } from "./resolver.mjs";
 
@@ -51,10 +53,16 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
   // change (a layer add/drop can change what a "layerName:path" prefix
   // resolves to) — see targetsFor.
   const linkTargets = new WeakMap();
-  // layer name -> { gen, entries: Map<id, { id, concept, fields, targets }> }
+  // layer name -> { gen, entries: Map<id, { id, concept, fields, sections, targets }> }
   // — entries in snapshot id order (Map preserves insertion).
   let layers = null;
-  let stats = null; // { total, fieldTotals: number[], documentFrequency: Map }
+  // { total, fixedTotals: number[FIXED_FIELD_COUNT], bodyTermTotal, sectionCount, documentFrequency }
+  // fixedTotals is per-concept (id/title/description/tags), same discipline as
+  // before. bodyTermTotal/sectionCount are corpus-wide sums across ALL
+  // sections of ALL concepts — their ratio is the mean SECTION length, not a
+  // per-concept average, because a 9-section runbook contributes 9 length
+  // samples to the body average, not one.
+  let stats = null;
   // target concept id -> Map<source concept id, refcount>. refcount is how
   // many currently-indexed layer entries of that source concept link to the
   // target — NOT how many links; a source in two layers linking to the same
@@ -64,13 +72,14 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
   let currentLayerNameSet = new Set();
   let evictTimer = null;
 
-  function fieldsFor(id, concept) {
-    let fields = analyzed.get(concept);
-    if (!fields) {
-      fields = analyzeConceptFields(id, concept);
-      analyzed.set(concept, fields);
+  // { fields: [id, title, description, tags], sections: [{key, heading, frequencies, length}] }
+  function analysisFor(id, concept) {
+    let analysis = analyzed.get(concept);
+    if (!analysis) {
+      analysis = analyzeConceptFields(id, concept);
+      analyzed.set(concept, analysis);
     }
-    return fields;
+    return analysis;
   }
 
   function targetsFor(id, concept) {
@@ -122,24 +131,34 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
     return false;
   }
 
-  function addToStats(fields) {
+  function addToStats({ fields, sections }) {
     stats.total += 1;
     const seen = new Set();
     for (let i = 0; i < fields.length; i += 1) {
-      stats.fieldTotals[i] += fields[i].length;
+      stats.fixedTotals[i] += fields[i].length;
       for (const term of fields[i].frequencies.keys()) seen.add(term);
+    }
+    for (const section of sections) {
+      stats.bodyTermTotal += section.length;
+      stats.sectionCount += 1;
+      for (const term of section.frequencies.keys()) seen.add(term);
     }
     for (const term of seen) {
       stats.documentFrequency.set(term, (stats.documentFrequency.get(term) ?? 0) + 1);
     }
   }
 
-  function removeFromStats(fields) {
+  function removeFromStats({ fields, sections }) {
     stats.total -= 1;
     const seen = new Set();
     for (let i = 0; i < fields.length; i += 1) {
-      stats.fieldTotals[i] -= fields[i].length;
+      stats.fixedTotals[i] -= fields[i].length;
       for (const term of fields[i].frequencies.keys()) seen.add(term);
+    }
+    for (const section of sections) {
+      stats.bodyTermTotal -= section.length;
+      stats.sectionCount -= 1;
+      for (const term of section.frequencies.keys()) seen.add(term);
     }
     for (const term of seen) {
       const next = (stats.documentFrequency.get(term) ?? 0) - 1;
@@ -153,7 +172,8 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
     for (const id of view.ids) {
       const concept = view.concepts.get(id);
       if (!concept) continue; // collectDocuments skips unloadable concepts
-      entries.set(id, { id, concept, fields: fieldsFor(id, concept), targets: targetsFor(id, concept) });
+      const { fields, sections } = analysisFor(id, concept);
+      entries.set(id, { id, concept, fields, sections, targets: targetsFor(id, concept) });
     }
     return entries;
   }
@@ -184,12 +204,18 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
     syncLayerNames(contributing);
     if (!layers || !stats) {
       layers = new Map();
-      stats = { total: 0, fieldTotals: Array.from({ length: FIELD_COUNT }, () => 0), documentFrequency: new Map() };
+      stats = {
+        total: 0,
+        fixedTotals: Array.from({ length: FIXED_FIELD_COUNT }, () => 0),
+        bodyTermTotal: 0,
+        sectionCount: 0,
+        documentFrequency: new Map(),
+      };
       linkRefs = new Map();
       for (const view of contributing) {
         const entries = buildLayerEntries(view);
         for (const entry of entries.values()) {
-          addToStats(entry.fields);
+          addToStats(entry);
           addLinkRefs(entry.id, entry.targets);
         }
         layers.set(view.name, { gen: view.gen, level: view.level, entries });
@@ -215,15 +241,15 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
         const before = old.get(id);
         if (before && before.concept === entry.concept) continue; // untouched
         if (before) {
-          removeFromStats(before.fields);
+          removeFromStats(before);
           removeLinkRefs(before.id, before.targets);
         }
-        addToStats(entry.fields);
+        addToStats(entry);
         addLinkRefs(entry.id, entry.targets);
       }
       for (const [id, before] of old) {
         if (!entries.has(id)) {
-          removeFromStats(before.fields);
+          removeFromStats(before);
           removeLinkRefs(before.id, before.targets);
         }
       }
@@ -233,7 +259,7 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
     // Layers that left the manifest: their documents leave the statistics.
     for (const [, gone] of layers) {
       for (const entry of gone.entries.values()) {
-        removeFromStats(entry.fields);
+        removeFromStats(entry);
         removeLinkRefs(entry.id, entry.targets);
       }
     }
@@ -265,7 +291,10 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
       const terms = [...new Set(analyze(query))];
       const index = {
         total: stats.total,
-        averageLength: stats.fieldTotals.map((sum) => (stats.total ? sum / stats.total : 0)),
+        averageLength: [
+          ...stats.fixedTotals.map((sum) => (stats.total ? sum / stats.total : 0)),
+          stats.sectionCount ? stats.bodyTermTotal / stats.sectionCount : 0,
+        ],
         documentFrequency: stats.documentFrequency,
       };
       const levelByName = new Map(contributing.map((view) => [view.name, view.level]));
@@ -284,24 +313,33 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
         if (!layer) continue;
         for (const entry of layer.entries.values()) {
           if (sourceEntries && !sourceEntries.has(entry.id)) continue;
-          const score = scoreEntry(index, entry, terms);
-          if (score <= 0) continue;
+          const best = scoreConceptSections(index, entry, terms);
+          if (best.score <= 0) continue;
+          const winningSection = best.matched ? entry.sections[best.sectionIndex] : null;
+          const section = winningSection ? { key: winningSection.key, heading: winningSection.heading } : null;
+          // Deferred: bodies are not retained by the index, and only hits
+          // need one. Resolved to text after the cut below — sectionOf wins
+          // over snippetOf (the whole concept) when a section actually
+          // matched, falling back to the whole body otherwise.
+          const sectionOf = best.matched ? entry.concept.sections[best.sectionIndex] : null;
           const existing = byId.get(entry.id);
           if (!existing) {
             byId.set(entry.id, {
               id: entry.id,
               title: entry.concept.frontmatter.title ?? null,
-              score,
+              score: best.score,
               layers: [view.name],
-              // Deferred: bodies are not retained by the index, and only hits
-              // need one. Resolved to text after the cut below.
+              section,
               snippetOf: entry.concept,
+              sectionOf,
               targetsOf: entry.targets,
             });
           } else {
-            if (score > existing.score) {
-              existing.score = score;
+            if (best.score > existing.score) {
+              existing.score = best.score;
+              existing.section = section;
               existing.snippetOf = entry.concept;
+              existing.sectionOf = sectionOf;
               existing.targetsOf = entry.targets;
             }
             existing.layers.push(view.name);
@@ -331,10 +369,10 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
         })
         .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
         .slice(0, Number(limit) || 10)
-        .map(({ snippetOf, targetsOf, ...hit }, rank) => {
+        .map(({ snippetOf, sectionOf, targetsOf, ...hit }, rank) => {
           const result = {
             ...hit,
-            snippet: makeSnippet(conceptBody(snippetOf), rawTokens),
+            snippet: makeSnippet(sectionOf ? sectionText(sectionOf) : conceptBody(snippetOf), rawTokens),
             layers: orderLayerNames(hit.layers),
           };
           if (rank < LINKS_TO_CAP) result.linksTo = targetsOf.filter(corpusHas).slice(0, LINKS_TO_MAX);

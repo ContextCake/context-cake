@@ -92,10 +92,13 @@ function layer(name, level, docs) {
     async loadConcept(id) {
       const doc = docs[id];
       if (!doc) return null;
-      return {
-        frontmatter: doc.frontmatter ?? {},
-        sections: [{ key: "body", heading: null, lines: (doc.body ?? "").split("\n") }],
-      };
+      // Most fixtures pass a single `body` string, which becomes one "body"
+      // section. A fixture that wants multiple sections passes `sections`
+      // directly instead: [{ key, heading, body }].
+      const sections = doc.sections
+        ? doc.sections.map((section) => ({ key: section.key, heading: section.heading ?? null, lines: (section.body ?? "").split("\n") }))
+        : [{ key: "body", heading: null, lines: (doc.body ?? "").split("\n") }];
+      return { frontmatter: doc.frontmatter ?? {}, sections };
     },
     close() {},
   };
@@ -306,4 +309,143 @@ test("linksTo appears only on the top 3 hits and is capped at 5 targets, in docu
   for (let i = 3; i < hits.length; i += 1) {
     assert.ok(!("linksTo" in hits[i]), `rank ${i + 1} must not carry linksTo`);
   }
+});
+
+// ---- section-level body scoring ---------------------------------------------
+
+test("a long concept's late section outranks a short concept that dilutes the term with noise in its own section", async () => {
+  const filler = "quarterly review committee reads this operational documentation during the standing cycle. ";
+  const layers = [
+    layer("company", 0, {
+      "runbooks/procedure": {
+        frontmatter: { title: "Standard operating procedure" },
+        sections: [
+          { key: "s1", heading: "## One", body: filler.repeat(3) },
+          { key: "s2", heading: "## Two", body: filler.repeat(3) },
+          { key: "s3", heading: "## Three", body: filler.repeat(3) },
+          // The distinctive term lives alone in a short, LATE section — the
+          // case whole-document BM25 dilutes (a 9-section runbook's real
+          // answer buried in section 7 is the eval's q43-q46).
+          { key: "aftercare", heading: "## Aftercare", body: "Watch for zephyr drift after the change lands." },
+        ],
+      },
+      "notes/scratch": {
+        frontmatter: { title: "Scratch notes" },
+        // Same term, mentioned once, but diluted by noise INSIDE its own
+        // single section — length normalization now applies to that one
+        // section directly instead of to a whole multi-section document.
+        sections: [{ key: "body", body: `${filler.repeat(6)} zephyr ${filler.repeat(6)}` }],
+      },
+    }),
+  ];
+
+  const hits = await searchConcepts(layers, { query: "zephyr", limit: 5 });
+  assert.equal(hits[0].id, "runbooks/procedure");
+  assert.equal(hits[0].section.key, "aftercare");
+});
+
+test("the winning section's key and heading are reported, and the snippet is built from that section", async () => {
+  const layers = [
+    layer("company", 0, {
+      "runbooks/rollout": {
+        frontmatter: { title: "Rollout runbook" },
+        sections: [
+          { key: "prep", heading: "## Preparation {#prep}", body: "confirm the deploy window is open" },
+          { key: "rollback", heading: "## Rollback {#rollback}", body: "trigger a rollback if the error budget burns too fast" },
+        ],
+      },
+    }),
+  ];
+
+  const hits = await searchConcepts(layers, { query: "rollback error budget", limit: 5 });
+  assert.equal(hits[0].section.key, "rollback");
+  assert.equal(hits[0].section.heading, "## Rollback {#rollback}");
+  assert.ok(hits[0].snippet.includes("rollback"), `snippet should come from the winning section, got: ${hits[0].snippet}`);
+});
+
+test("a concept with no sections still scores on title, reporting section: null", async () => {
+  const layers = [
+    layer("company", 0, {
+      "decisions/stub": { frontmatter: { title: "Zephyr initiative" }, sections: [] },
+    }),
+  ];
+
+  const hits = await searchConcepts(layers, { query: "zephyr", limit: 5 });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].id, "decisions/stub");
+  assert.equal(hits[0].section, null);
+});
+
+test("a title-only match (no section contains the query term) reports section: null", async () => {
+  const layers = [
+    layer("company", 0, {
+      "decisions/zephyr-init": {
+        frontmatter: { title: "Zephyr initiative" },
+        sections: [
+          { key: "overview", heading: "## Overview {#overview}", body: "unrelated overview text about something else" },
+          { key: "details", heading: "## Details {#details}", body: "more unrelated detail text with no relation" },
+        ],
+      },
+    }),
+  ];
+
+  const hits = await searchConcepts(layers, { query: "zephyr", limit: 5 });
+  assert.equal(hits[0].id, "decisions/zephyr-init");
+  assert.equal(hits[0].section, null);
+});
+
+test("a tie between two equally-strong sections keeps the first one in document order", async () => {
+  const layers = [
+    layer("company", 0, {
+      "notes/dup": {
+        frontmatter: { title: "Duplicate content" },
+        sections: [
+          { key: "alpha", heading: "## Alpha {#alpha}", body: "kafka lag alert" },
+          { key: "beta", heading: "## Beta {#beta}", body: "kafka lag alert" },
+        ],
+      },
+    }),
+  ];
+
+  const hits = await searchConcepts(layers, { query: "kafka lag", limit: 5 });
+  assert.equal(hits[0].section.key, "alpha", "equal-scoring sections keep the first one in document order");
+});
+
+test("document frequency counts a concept once even when three of its sections share a term", async () => {
+  const buildLayers = (spread) =>
+    layer("company", 0, {
+      "notes/target": {
+        frontmatter: { title: "Target" },
+        sections: spread
+          ? [
+              { key: "a", heading: "## A", body: "wombat sighting logged" },
+              { key: "b", heading: "## B", body: "wombat sighting logged" },
+              { key: "c", heading: "## C", body: "wombat sighting logged" },
+            ]
+          : [
+              // Same word count per section as the "spread" corpus above, so
+              // the corpus's mean SECTION length — which both scenarios'
+              // scores depend on — stays identical and only df can explain
+              // a score difference.
+              { key: "a", heading: "## A", body: "wombat sighting logged" },
+              { key: "b", heading: "## B", body: "another filler entry" },
+              { key: "c", heading: "## C", body: "extra filler notes" },
+            ],
+      },
+      "notes/other-1": { frontmatter: { title: "Other one" }, body: "irrelevant content about kafka" },
+      "notes/other-2": { frontmatter: { title: "Other two" }, body: "irrelevant content about postgres" },
+    });
+
+  const spreadHits = await searchConcepts([buildLayers(true)], { query: "wombat", limit: 5 });
+  const singleHits = await searchConcepts([buildLayers(false)], { query: "wombat", limit: 5 });
+  assert.equal(spreadHits[0].id, "notes/target");
+  assert.equal(singleHits[0].id, "notes/target");
+  // The winning section ("a") is identical text in both corpora; if df wrongly
+  // counted the term once per SECTION instead of once per CONCEPT, repeating
+  // it across three sections would inflate df and shrink idf, changing the
+  // score even though the winning section itself never changed.
+  assert.ok(
+    Object.is(spreadHits[0].score, singleHits[0].score),
+    `df must count the concept once regardless of how many of its sections repeat the term: ${spreadHits[0].score} vs ${singleHits[0].score}`,
+  );
 });

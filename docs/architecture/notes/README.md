@@ -20,3 +20,4 @@ change one and the reasoning here goes stale, update the note in the same PR.
 | [manifest-validation.md](manifest-validation.md) | Tolerant reads, strict writes, and the one repair door between them |
 | [discrepancy-projection.md](discrepancy-projection.md) | One memoized discrepancy projection, what keys it, why candidates stay out of `revision`, and why live-layer decision writes go through git-core |
 | [link-prior.md](link-prior.md) | The static inbound-link ranking prior: what inbound counts, why the weight is log-damped, the weight sweep against the eval, and how all three scorers stay bit-identical |
+| [section-retrieval.md](section-retrieval.md) | Why the body field scores per section instead of per whole document, the exact corpus-statistics rules, the tie rule, what `section: null` on a hit means, and the known scattered-vs-concentrated limitation |

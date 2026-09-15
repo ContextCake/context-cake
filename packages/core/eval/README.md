@@ -42,6 +42,17 @@ node packages/core/eval/run.mjs --record --label "why"    # accept a new number
 | BM25F over Porter-stemmed tokens | 38 | 0.895 | 1.000 | 0.947 | 1.000 |
 | BM25F, + graph-prior/section-depth/paraphrase probes | 51 | 0.745 | 0.902 | 0.809 | 1.000 |
 | BM25F, + static inbound-link prior (weight 0.1) | 51 | 0.745 | 0.902 | 0.806 | 1.000 |
+| BM25F, + section-level body scoring | 51 | 0.765 | 0.902 | 0.818 | 1.000 |
+
+Section-level scoring (`docs/architecture/notes/section-retrieval.md`) scores
+each section as its own body candidate instead of diluting a match across the
+whole document; recall@1 and mrr both improve, and q03/q05 flip to rank 1.
+It is not a uniform win: q44 drops from rank 3 to rank 5 because its matching
+terms were scattered thin across `database-migration-guide`'s nine sections
+rather than concentrated in one, so cross-section frequency aggregation (which
+whole-document BM25 got "for free") no longer helps it against
+`standards/code-review`'s more concentrated match — still inside recall@5,
+and the honest cost of scoring sections independently.
 
 The link prior (`LINK_PRIOR_WEIGHT` in `search.mjs`) is deliberately small.
 At 0.1 it moves q40 from rank 3 to rank 2, leaves every original question

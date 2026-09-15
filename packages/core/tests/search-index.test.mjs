@@ -40,18 +40,35 @@ function randomLinks(rand, id) {
   return parts.join(" ");
 }
 
+// 1-6 sections of varying length, each with its own key/heading, so the
+// differential exercises section-level scoring (max-over-sections, tie
+// rule, which winning section gets reported) the same way it exercises
+// term scoring and the link prior. Exactly one section (chosen per concept)
+// carries the marker term, so there is always a "correct" winning section
+// to check the differential against.
+const SECTION_NAMES = ["overview", "planning", "details", "notes", "risks", "followup"];
+
 function makeConcept(rand, seed, id) {
   const words = (count) => Array.from({ length: count }, () => VOCAB[Math.floor(rand() * VOCAB.length)]);
+  const sectionCount = 1 + Math.floor(rand() * 6); // 1..6
+  const markerSection = Math.floor(rand() * sectionCount);
+  const sections = Array.from({ length: sectionCount }, (_, i) => {
+    const name = SECTION_NAMES[i % SECTION_NAMES.length];
+    const length = 5 + Math.floor(rand() * 60); // varying length
+    const marker = i === markerSection ? ` marker-${seed}` : "";
+    return {
+      key: `${name}-${i}`,
+      heading: `## ${name} {#${name}-${i}}`,
+      text: `${words(length).join(" ")}${marker} ${randomLinks(rand, id)}`,
+    };
+  });
   return {
     frontmatter: {
       title: words(3).join(" "),
       description: rand() < 0.5 ? words(5).join(" ") : undefined,
       tags: rand() < 0.4 ? words(2).join(",") : undefined,
     },
-    sections: [
-      { key: "body", heading: "## Body {#body}", text: `${words(30 + Math.floor(rand() * 40)).join(" ")} marker-${seed} ${randomLinks(rand, id)}` },
-      ...(rand() < 0.5 ? [{ key: "notes", heading: "## Notes {#notes}", text: words(15).join(" ") }] : []),
-    ],
+    sections,
   };
 }
 
@@ -106,6 +123,7 @@ test("incremental index answers Object.is-equal to searchConcepts across a mutat
         assert.equal(incremental[i].title, reference[i].title, `${label} · "${query}" · hit ${i} title`);
         assert.equal(incremental[i].inbound, reference[i].inbound, `${label} · "${query}" · hit ${i} inbound`);
         assert.deepEqual(incremental[i].linksTo, reference[i].linksTo, `${label} · "${query}" · hit ${i} linksTo`);
+        assert.deepEqual(incremental[i].section, reference[i].section, `${label} · "${query}" · hit ${i} section`);
       }
     }
   };

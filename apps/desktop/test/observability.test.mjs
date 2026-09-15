@@ -100,6 +100,81 @@ test('disabled configuration never makes a network request', async (t) => {
   assert.equal(requests, 0)
   assert.equal(telemetry.status().state, 'disabled')
 })
+test('history clearing resets exporter totals and trace evidence, ordinary restart preserves them', async (t) => {
+  const directory = await temp(t),
+    configPath = path.join(directory, 'config')
+  const configure = (generation, endpoint = 'http://127.0.0.1:4318') =>
+    fs.writeFile(
+      configPath,
+      JSON.stringify({
+        enabled: true,
+        endpoint,
+        historyGeneration: generation,
+      }),
+    )
+  const payloads = []
+  const telemetry = createTelemetry({
+    configPath,
+    fetcher: async (url, options) => {
+      payloads.push([url, JSON.parse(options.body)])
+      return { ok: true, json: async () => ({}) }
+    },
+  })
+  t.after(() => telemetry.close())
+  await configure(0)
+  channel('contextcake.diagnostics.v1').publish(event)
+  await telemetry.flush()
+  assert.deepEqual(telemetry.status().exportedTraceIds, [event.traceId])
+  await configure(0, null)
+  await telemetry.flush()
+  await configure(0)
+  await telemetry.flush()
+  assert.deepEqual(telemetry.status().exportedTraceIds, [event.traceId])
+  channel('contextcake.diagnostics.v1').publish(event)
+  await configure(1, null)
+  await telemetry.flush()
+  assert.equal(telemetry.status().historyGeneration, 1)
+  assert.deepEqual(telemetry.status().exportedTraceIds, [])
+  assert.equal(telemetry.status().queued, 0)
+  await configure(1)
+  await telemetry.flush()
+  const metrics = payloads.filter(([url]) => url.endsWith('/metrics')).at(-1)[1]
+    .resourceMetrics[0].scopeMetrics[0].metrics
+  assert.ok(!metrics.some((metric) => metric.name === 'contextcake.operations'))
+  const fresh = { ...event, traceId: 'd'.repeat(32) }
+  channel('contextcake.diagnostics.v1').publish(fresh)
+  await telemetry.flush()
+  assert.deepEqual(telemetry.status().exportedTraceIds, [fresh.traceId])
+})
+test('an exporter first observing a cleared history retains only post-clear startup events', async (t) => {
+  const directory = await temp(t),
+    configPath = path.join(directory, 'config'),
+    clearedAt = Date.now()
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({
+      enabled: true,
+      endpoint: 'http://127.0.0.1:4318',
+      historyGeneration: 1,
+      historyClearedAt: clearedAt,
+    }),
+  )
+  const telemetry = createTelemetry({
+    configPath,
+    fetcher: async () => ({ ok: true, json: async () => ({}) }),
+  })
+  t.after(() => telemetry.close())
+  channel('contextcake.diagnostics.v1').publish({ ...event, at: clearedAt - 1 })
+  channel('contextcake.diagnostics.v1').publish({
+    ...event,
+    at: clearedAt + 1,
+    traceId: 'e'.repeat(32),
+  })
+  await telemetry.flush()
+  assert.deepEqual(telemetry.status().exportedTraceIds, ['e'.repeat(32)])
+  assert.equal(telemetry.status().sent, 1)
+  assert.equal(telemetry.status().dropped, 1)
+})
 test('failed collector responses drop a bounded batch and preserve the caller', async (t) => {
   const dir = await temp(t),
     configPath = path.join(dir, 'config')
@@ -255,6 +330,10 @@ test('concurrent startup, relaunch adoption, retained history and explicit clear
   assert.equal(relaunched.status().failure, 'CONTAINER_STOPPED')
   await relaunched.clear()
   assert.equal(docker.volume, false)
+  assert.equal(relaunched.status().historyGeneration, 1)
+  const afterClear = createLocalGrafana({ directory, run: docker.run, fetcher })
+  await afterClear.load()
+  assert.equal(afterClear.status().historyGeneration, 1)
 })
 test('download failures and slow readiness remain explicit without blocking callers', async (t) => {
   const directory = await temp(t),
@@ -274,6 +353,43 @@ test('download failures and slow readiness remain explicit without blocking call
   assert.equal(waiting.status().failure, 'START_TIMEOUT')
   await waiting.stop()
 })
+for (const checkpoint of ['info', 'ps', 'image']) {
+  test(`quit during ${checkpoint} inspection cannot begin a late download`, async (t) => {
+    const directory = await temp(t),
+      docker = fakeDocker(directory)
+    let reached,
+      release,
+      held = false
+    const entered = new Promise((resolve) => {
+      reached = resolve
+    })
+    const gate = new Promise((resolve) => {
+      release = resolve
+    })
+    const stack = createLocalGrafana({
+      directory,
+      run: async (args, ...rest) => {
+        if (!held && args[0] === checkpoint) {
+          held = true
+          reached()
+          await gate
+        }
+        return docker.run(args, ...rest)
+      },
+    })
+    const starting = stack.start({ enable: true })
+    await entered
+    const stopping = stack.stop()
+    release()
+    await Promise.all([starting, stopping])
+    assert.equal(stack.status().state, 'stopped')
+    assert.ok(
+      !docker.calls.some((args) =>
+        ['pull', 'create', 'start'].includes(args[0]),
+      ),
+    )
+  })
+}
 test('quit cancels an image download and prevents a late container creation', async (t) => {
   const directory = await temp(t),
     docker = fakeDocker(directory)

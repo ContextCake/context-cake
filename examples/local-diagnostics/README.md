@@ -16,8 +16,9 @@ node examples/local-diagnostics/run.mjs --telemetry-config "$HOME/Library/Applic
 The walkthrough searches, edits one document, verifies one read/one reuse, makes
 its temporary source unavailable, checks the native warning, restores it, and
 verifies recovery. The JSON report contains the observation trace IDs. In Grafana,
-filter Events and traces to `index: error` or `coverage: partial`; open the trace
-from that event. No user knowledge folder is changed.
+inspect Structured events for `index: error` or `coverage: partial`. Event
+details preserve the trace identifier; embedded trace navigation is available
+from recent operations in the interactive Mac check below. No user knowledge folder is changed.
 
 For an interactive Mac check, add a **copy** of `apps/playground/demo-layers` to an
 isolated app profile, search it, open Diagnostics, then rename one of the copied

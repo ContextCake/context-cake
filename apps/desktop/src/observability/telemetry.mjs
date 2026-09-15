@@ -45,8 +45,9 @@ export function createTelemetry({
     state = 'disabled',
     lastSuccessAt = null,
     deliveryFailures = 0
-  const metricStart = Date.now(),
-    groups = new Map(),
+  let metricStart = Date.now(),
+    historyGeneration = null
+  const groups = new Map(),
     gauges = new Map(),
     delivered = new Set()
   const instanceId = randomBytes(8).toString('hex')
@@ -134,8 +135,32 @@ export function createTelemetry({
       try {
         config = JSON.parse(await fs.readFile(configPath, 'utf8'))
       } catch {
-        config = {}
+        config = { historyGeneration }
       }
+      const generation =
+        Number.isSafeInteger(config.historyGeneration) &&
+        config.historyGeneration >= 0
+          ? config.historyGeneration
+          : 0
+      if (historyGeneration !== null && generation !== historyGeneration) {
+        dropped = 0
+        sent = 0
+        deliveryFailures = 0
+        lastSuccessAt = null
+        groups.clear()
+        gauges.clear()
+        delivered.clear()
+        metricStart = Date.now()
+      }
+      if (generation !== historyGeneration && generation > 0) {
+        const clearedAt = Number.isFinite(config.historyClearedAt)
+          ? config.historyClearedAt
+          : Date.now()
+        const retained = queue.filter((event) => event.at > clearedAt)
+        dropped += queue.length - retained.length
+        queue = retained
+      }
+      historyGeneration = generation
       const endpoint = config.enabled && localEndpoint(config.endpoint)
       if (!endpoint) {
         if (config.enabled) dropped += queue.length
@@ -381,6 +406,7 @@ export function createTelemetry({
     flush,
     status: () => ({
       state,
+      historyGeneration,
       dropped,
       sent,
       deliveryFailures,

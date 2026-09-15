@@ -10,10 +10,10 @@ copies; the developer's normal app configuration and knowledge folders were not 
 - Engine: 59/59 suites pass, including the unchanged retrieval evaluation.
   Golden set: 38 questions; recall@1 0.895, recall@5 1.000, MRR 0.947,
   conflict coverage 1.000. New diagnostics and policy tests also pass after fixes.
-- Desktop: 143/143 tests pass, covering lifecycle/ownership, CLI dispatch, bounded export and trust-boundary tests.
+- Desktop: 148/148 tests pass, covering lifecycle/ownership, CLI dispatch, bounded export and trust-boundary tests.
   A real nonresponding HTTP collector verifies two-second export deadlines and a
   10,000-event burst remains bounded at the configured queue capacity.
-- Console: 769/769 tests across 43 files pass, including diagnostics empty data, nullable failed-source totals, percentile samples,
+- Console: 770/770 tests across 43 files pass, including diagnostics empty data, nullable failed-source totals, percentile samples,
   frame URL restrictions, demo isolation and paused/unmounted polling have regression
   coverage. Activity bins, unavailable observations, same-instant samples and accessible
   interval counts are also covered. Full console tests, typecheck and build pass.
@@ -72,6 +72,14 @@ when saving preferences fails; histogram bounds cover supported long index passe
 and undone policies do not emit stale/blocked diagnostic events. Regression tests
 cover each. CI also prompted a compatible js-yaml security patch and strict
 allowlisting/encoding of embedded-dashboard time range and theme parameters.
+
+A subsequent adversarial pass reproduced and fixed startup continuing into an
+uncancelled download after quit, and exporters repopulating cleared history.
+Startup now checks cancellation between asynchronous steps. A persisted history
+generation resets exporter totals and trace evidence only on explicit clearing;
+the native view rejects evidence from an older generation. Held-startup and
+clear/restart regressions cover both, including exporters first flushing after a clear.
+The walkthrough documentation also uses the tested native trace action.
 
 ## Incremental walkthrough
 

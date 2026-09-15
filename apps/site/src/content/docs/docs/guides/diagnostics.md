@@ -32,7 +32,8 @@ Once enabled, ContextCake starts its owned container asynchronously on launch wh
 Docker is running. App startup and retrieval never wait for telemetry. **Stop**
 ends collection and retains history; **Restart** reuses it. **Disable** prevents
 automatic startup. **Clear local history…** requires confirmation and removes only
-the owned telemetry container and volume. Normal app quit stops the owned container.
+the owned telemetry container and volume. Running exporters discard pre-clear
+totals and trace-link evidence; normal restarts preserve them. Normal app quit stops the owned container.
 A subsequent launch reconciles it after a crash without creating duplicates.
 
 The stack has a two-CPU, 2 GB memory ceiling, rotating container logs (two 5 MB

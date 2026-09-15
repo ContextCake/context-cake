@@ -57,6 +57,8 @@ export function createLocalGrafana({
     volume = `${name}-data`
   const configPath = path.join(directory, 'local-observability.json')
   let enabled = false,
+    historyGeneration = 0,
+    historyClearedAt = 0,
     state = 'disabled',
     origin = null,
     endpoint = null,
@@ -69,6 +71,7 @@ export function createLocalGrafana({
     saves = Promise.resolve()
   const status = () => ({
     enabled,
+    historyGeneration,
     state,
     origin: state === 'ready' ? origin : null,
     failure,
@@ -79,6 +82,8 @@ export function createLocalGrafana({
     const value = JSON.stringify({
       version: 1,
       enabled,
+      historyGeneration,
+      historyClearedAt,
       endpoint: state === 'ready' ? endpoint : null,
     })
     saves = saves
@@ -129,6 +134,14 @@ export function createLocalGrafana({
     try {
       const saved = JSON.parse(await fs.readFile(configPath, 'utf8'))
       enabled = saved.version === 1 && saved.enabled === true
+      historyGeneration =
+        Number.isSafeInteger(saved.historyGeneration) &&
+        saved.historyGeneration >= 0
+          ? saved.historyGeneration
+          : 0
+      historyClearedAt = Number.isFinite(saved.historyClearedAt)
+        ? saved.historyClearedAt
+        : 0
     } catch {}
     state = enabled ? 'stopped' : 'disabled'
     failure = null
@@ -148,22 +161,30 @@ export function createLocalGrafana({
       state = 'starting'
       try {
         await save()
+        if (ticket !== epoch) return status()
         try {
           await run(['info', '--format', '{{.ServerVersion}}'])
         } catch {
+          if (ticket !== epoch) return status()
           state = 'docker-stopped'
           return status()
         }
+        if (ticket !== epoch) return status()
         let row = await inspect()
+        if (ticket !== epoch) return status()
         if (row && row.Config.Labels[`${OWNER}.config`] !== CONFIG_VERSION) {
           if (row.State.Running) await run(['stop', '--time', '5', name])
+          if (ticket !== epoch) return status()
           await run(['rm', name]) // Retain the owned volume across configuration upgrades.
+          if (ticket !== epoch) return status()
           row = null
         }
         const provision = path.join(directory, 'grafana-provisioning')
         if (!row?.State.Running) {
           await fs.mkdir(provision, { recursive: true, mode: 0o700 })
+          if (ticket !== epoch) return status()
           await fs.cp(provisioningPath, provision, { recursive: true })
+          if (ticket !== epoch) return status()
         }
         if (!row) {
           let imageAvailable = false
@@ -171,6 +192,9 @@ export function createLocalGrafana({
             await run(['image', 'inspect', IMAGE])
             imageAvailable = true
           } catch {}
+          // Stop can arrive while image inspection is pending, before there is
+          // a pull controller to abort. Never begin new work for that startup.
+          if (ticket !== epoch) return status()
           if (!imageAvailable) {
             state = 'downloading'
             pulling = new AbortController()
@@ -189,8 +213,10 @@ export function createLocalGrafana({
             '--filter',
             `name=^${volume}$`,
           ])
+          if (ticket !== epoch) return status()
           if (existing) {
             const v = JSON.parse(await run(['volume', 'inspect', volume]))[0]
+            if (ticket !== epoch) return status()
             if (v?.Labels?.[OWNER] !== id) throw new Error('OWNERSHIP_MISMATCH')
           } else
             await run(['volume', 'create', '--label', `${OWNER}=${id}`, volume])
@@ -268,6 +294,7 @@ export function createLocalGrafana({
         const deadline = Date.now() + readyTimeoutMs
         while (ticket === epoch && Date.now() < deadline) {
           row = await inspect()
+          if (ticket !== epoch) return status()
           if (!row?.State.Running) throw new Error('CONTAINER_STOPPED')
           const port = (key) => {
             const binding = row.NetworkSettings?.Ports?.[`${key}/tcp`]?.[0]
@@ -285,6 +312,7 @@ export function createLocalGrafana({
               redirect: 'error',
               signal: AbortSignal.timeout(1500),
             })
+            if (ticket !== epoch) return status()
             const collector = await fetcher(`${endpoint}/v1/traces`, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
@@ -371,7 +399,6 @@ export function createLocalGrafana({
       await stop()
       if (state === 'failed') return status()
       const row = await inspect()
-      if (row) await run(['rm', name])
       const found = await run([
         'volume',
         'ls',
@@ -382,8 +409,14 @@ export function createLocalGrafana({
       if (found) {
         const v = JSON.parse(await run(['volume', 'inspect', volume]))[0]
         if (v?.Labels?.[OWNER] !== id) throw new Error('OWNERSHIP_MISMATCH')
-        await run(['volume', 'rm', volume])
       }
+      // Persist the reset before deleting storage: existing MCP exporters must
+      // not refill a fresh backend with pre-clear cumulative observations.
+      historyGeneration++
+      historyClearedAt = Date.now()
+      await save()
+      if (row) await run(['rm', name])
+      if (found) await run(['volume', 'rm', volume])
       return status()
     })().finally(() => {
       clearing = null

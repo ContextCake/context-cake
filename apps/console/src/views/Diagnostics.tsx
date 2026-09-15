@@ -14,6 +14,7 @@ import {
 
 type StackStatus = {
   enabled: boolean
+  historyGeneration?: number
   state: string
   origin?: string | null
   failure?: string | null
@@ -35,6 +36,7 @@ type Report = {
   operations: Observation[]
   telemetry?: {
     state: string
+    historyGeneration?: number
     dropped: number
     sent: number
     queued: number
@@ -209,6 +211,7 @@ function DiagnosticsInner() {
           ? bridge.open({ traceId: trace, range, theme })
           : bridge[action]()),
       )
+      if (action === 'clear') setTrace(undefined)
       setError('')
     } catch {
       setError('The local Grafana action failed. Check Docker and retry.')
@@ -795,6 +798,8 @@ function DiagnosticsInner() {
                             <td className="cc-diag-trace">
                               {frame &&
                                 o.traceId &&
+                                report?.telemetry?.historyGeneration ===
+                                  stack.historyGeneration &&
                                 report?.telemetry?.exportedTraceIds?.includes(
                                   o.traceId,
                                 ) && (

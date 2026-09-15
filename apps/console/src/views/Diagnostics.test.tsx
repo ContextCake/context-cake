@@ -177,3 +177,56 @@ it('activity counts only observed retrievals and preserves failures at window bo
   expect(bins[bins.length - 1]).toEqual({ search: 0, read: 1, errors: 1 })
   expect(bins.reduce((sum, b) => sum + b.search + b.read, 0)).toBe(2)
 })
+
+it('withholds stale trace links until exporter evidence matches the cleared history', async () => {
+  vi.useFakeTimers()
+  state.mode = 'live'
+  const traceId = 'a'.repeat(32)
+  let generation = 0
+  const report = {
+    observedFrom: 100,
+    observedTo: 200,
+    sampleCount: 1,
+    operations: [
+      { at: 150, operation: 'search', outcome: 'ok', durationMs: 2, traceId },
+    ],
+    telemetry: {
+      state: 'ready',
+      sent: 1,
+      queued: 0,
+      dropped: 0,
+      historyGeneration: 0,
+      exportedTraceIds: [traceId],
+    },
+    health: { memory: 'normal', sources: [] },
+    indexing: { events: [] },
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({ ok: true, json: async () => report })),
+  )
+  vi.stubGlobal('__CC_DESKTOP', {
+    observability: {
+      status: async () => ({
+        state: 'ready',
+        enabled: true,
+        origin: 'http://127.0.0.1:1234',
+        historyGeneration: generation,
+      }),
+    },
+  })
+  const container = document.createElement('div'),
+    root = createRoot(container)
+  await act(async () => root.render(<Diagnostics />))
+  const trace = () =>
+    container.querySelector('button[aria-label^="View search trace"]')
+  expect(trace()).not.toBeNull()
+  generation = 1
+  await act(async () => vi.advanceTimersByTimeAsync(5000))
+  expect(trace()).toBeNull()
+  report.telemetry.historyGeneration = 1
+  report.telemetry.exportedTraceIds = []
+  await act(async () => vi.advanceTimersByTimeAsync(5000))
+  expect(trace()).toBeNull()
+  await act(async () => root.unmount())
+})

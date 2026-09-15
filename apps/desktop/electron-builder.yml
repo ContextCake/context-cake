@@ -29,9 +29,8 @@ extraResources:
   # NOTE: do NOT add package.json as an extraResources entry. electron-builder
   # adds every extraResources source to the asar exclude set, so shipping
   # package.json here drops it from app.asar — Electron then can't resolve the
-  # app entry point and pack fails its asar sanity check. package.json ships
-  # inside app.asar (via the `files` globs above); `contextcake --version`
-  # degrades to "unknown" in the packaged CLI, which is best-effort by design.
+  # app entry point and pack fails its asar sanity check. The packaged CLI reads
+  # the existing package.json inside app.asar through Electron's fs support.
   - from: build/supabase-config.json
     to: supabase-config.json
 

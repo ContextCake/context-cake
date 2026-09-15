@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { readCliVersion } from './version.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -56,13 +57,7 @@ if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
 }
 
 if (cmd === '--version' || cmd === '-v') {
-  // The engine and app version in one line, best-effort.
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.resolve(here, '..', '..', 'package.json'), 'utf8'))
-    console.log(pkg.version ?? '0.0.0')
-  } catch {
-    console.log('unknown')
-  }
+  console.log(readCliVersion(here))
   process.exit(0)
 }
 

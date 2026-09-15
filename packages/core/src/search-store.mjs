@@ -223,9 +223,6 @@ export function createSearchStore({ file, idleEvictMs, segmentDocs = DEFAULT_SEG
   const { DatabaseSync } = sqliteModule;
   const path = file ?? ":memory:";
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA synchronous = NORMAL");
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA temp_store = MEMORY");
 
   // Two processes cold-starting on the same brand-new store file can both
   // reach schema creation at once; WAL's busy_timeout does not cover DDL lock
@@ -255,6 +252,22 @@ export function createSearchStore({ file, idleEvictMs, segmentDocs = DEFAULT_SEG
     }
     return undefined; // unreachable — the loop above always returns or throws
   }
+
+  // busy_timeout MUST be the very first statement this connection executes.
+  // It is what makes every later SQLITE_BUSY wait and retry instead of
+  // throwing — including the plain PRAGMA calls right below it. Reported
+  // "database is locked" failures under concurrent-open load (worker_threads
+  // racing on a brand-new file — see the schema-creation test below) traced
+  // to `PRAGMA synchronous` running BEFORE busy_timeout was set: with no
+  // timeout registered yet, that statement had no SQLite-level wait to fall
+  // back on and threw immediately (0ms), before withBusyRetry ever ran.
+  // busy_timeout itself is connection-local bookkeeping, never a file lock,
+  // so it cannot throw busy and does not need the wrapper; `synchronous` and
+  // `temp_store` get it anyway, in case some future SQLite build applies it
+  // more narrowly than this one does.
+  db.exec("PRAGMA busy_timeout = 5000");
+  withBusyRetry(() => db.exec("PRAGMA synchronous = NORMAL"));
+  withBusyRetry(() => db.exec("PRAGMA temp_store = MEMORY"));
 
   function tablesExist() {
     const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();

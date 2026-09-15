@@ -101,6 +101,34 @@ test("isSearchStoreAvailable is true on this Node", () => {
   assert.equal(isSearchStoreAvailable(), true);
 });
 
+// Regression for a real production failure: two workers racing to open the
+// same brand-new file both hit "database is locked" with zero retry, because
+// `PRAGMA synchronous` ran before `PRAGMA busy_timeout` was set on that
+// connection — the one statement with no timeout registered yet has no
+// SQLite-level wait to fall back on. Reproduced under CPU load (worker_threads
+// test below), root-caused to statement order, not a timing budget. This test
+// pins the order directly and deterministically, with no load or races
+// needed: the very first statement any new connection executes must be the
+// one that makes every later statement retry instead of throwing.
+test("busy_timeout is the first statement a new connection executes", async (t) => {
+  const { createRequire } = await import("node:module");
+  const sqlite = createRequire(import.meta.url)("node:sqlite");
+  const calls = [];
+  const original = sqlite.DatabaseSync.prototype.exec;
+  sqlite.DatabaseSync.prototype.exec = function patched(sql) {
+    calls.push(sql);
+    return original.call(this, sql);
+  };
+  t.after(() => { sqlite.DatabaseSync.prototype.exec = original; });
+
+  const { dir, file } = tempFile();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  createSearchStore({ file }).close();
+
+  assert.ok(calls.length > 0, "createSearchStore must issue at least one PRAGMA");
+  assert.equal(calls[0], "PRAGMA busy_timeout = 5000", `first statement was ${JSON.stringify(calls[0])}`);
+});
+
 for (const mode of ["file", "memory"]) {
   test(`store answers Object.is-equal to searchConcepts and createSearchIndex across a mutation sequence (${mode})`, async (t) => {
     const rand = mulberry32(0xcafe);

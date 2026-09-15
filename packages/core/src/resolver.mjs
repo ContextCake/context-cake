@@ -78,11 +78,18 @@ export function orderContributors(contributors) {
   });
 }
 
+// A contributor with `override: full` drops every lower-precedence
+// contributor from consideration entirely (not just its sections) — shared
+// by mergeConcepts and effectiveType so the truncation rule can't drift
+// between the full merge and the type-only fast path.
+function truncateAtFullOverride(ordered, isFullOverride) {
+  const fullIndex = ordered.findIndex(isFullOverride);
+  return fullIndex === -1 ? ordered : ordered.slice(0, fullIndex + 1);
+}
+
 // contributors must be ordered highest-precedence first.
 export function mergeConcepts(contributors) {
-  let active = contributors;
-  const fullIndex = active.findIndex((c) => c.frontmatter.override === "full");
-  if (fullIndex !== -1) active = active.slice(0, fullIndex + 1);
+  const active = truncateAtFullOverride(contributors, (c) => c.frontmatter.override === "full");
 
   const frontmatter = {};
   const frontmatterProvenance = {};
@@ -174,6 +181,23 @@ export function mergeConcepts(contributors) {
     ...(frontmatterConflicts.length ? { frontmatterConflicts } : {}),
     sections,
   };
+}
+
+// The value `mergeConcepts(orderContributors(contributors)).frontmatter.type
+// ?? "concept"` would produce, without building sections, frontmatter
+// conflicts, or provenance — just the `type`/`override`/`updated`/`level` a
+// caller can cheaply have on hand (a store column, an already-parsed
+// frontmatter object) instead of the concept's full frontmatter and sections.
+// Search backends use this to answer a `type` filter per candidate without a
+// full resolve; keep it exercised by the same differential tests that check
+// mergeConcepts, since a drift here would silently mis-filter.
+export function effectiveType(contributors) {
+  const ordered = orderContributors(contributors);
+  const active = truncateAtFullOverride(ordered, (c) => c.override === "full");
+  for (const c of active) {
+    if (c.type != null) return c.type;
+  }
+  return "concept";
 }
 
 function stableValue(value) {

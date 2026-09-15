@@ -38,7 +38,7 @@ import {
 } from "./search.mjs";
 import { sectionText } from "./sections.mjs";
 import { conceptLinkTargets } from "./markdown-links.mjs";
-import { mergeConcepts, orderContributors } from "./resolver.mjs";
+import { effectiveType } from "./resolver.mjs";
 
 const IDLE_EVICT_MS = 30_000;
 const LINKS_TO_CAP = 3;
@@ -373,13 +373,16 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
         .filter((hit) => {
           if (!type) return true;
           // Use the resolver's frontmatter semantics, including equal-level
-          // date ties, inherited types, and full overrides. Section bodies
-          // aren't needed to compute this facet.
+          // date ties, inherited types, and full overrides — via effectiveType,
+          // the type-only projection of mergeConcepts' frontmatter resolution.
+          // Section bodies aren't needed to compute this facet.
           const contributors = contributing.flatMap((view) => {
             const concept = layers.get(view.name)?.entries.get(hit.id)?.concept;
-            return concept ? [{ layer: view.name, level: view.level, updated: concept.frontmatter.updated ?? null, frontmatter: concept.frontmatter, sections: [] }] : [];
+            return concept
+              ? [{ level: view.level, updated: concept.frontmatter.updated ?? null, type: concept.frontmatter.type ?? null, override: concept.frontmatter.override ?? null }]
+              : [];
           });
-          return (mergeConcepts(orderContributors(contributors)).frontmatter.type ?? "concept") === type;
+          return effectiveType(contributors) === type;
         })
         .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
         .slice(0, Number(limit) || 10)

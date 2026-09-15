@@ -412,7 +412,10 @@ async function handleMessage(message) {
 }
 
 async function callTool(name, toolArgs) {
-  if (name === "search") return await diagnostics.measure("search", () => search(toolArgs), { annotate: (result) => result?.__diag });
+  if (name === "search") {
+    const { hits } = await diagnostics.measure("search", () => search(toolArgs), { annotate: (result) => result?.diag });
+    return hits;
+  }
   if (name === "read_file") return await diagnostics.measure("read", () => readFileTool(toolArgs));
   if (name === "list_concepts") return await listConcepts(toolArgs);
   if (name === "get_links") return await getLinks(toolArgs);
@@ -497,17 +500,13 @@ async function confirmCaptureTool({ token }) {
 async function search({ query, limit = 10 }) {
   const { hits, sources, stats } = await retrieval.search({ query, limit });
   await annotateContested(hits, sources);
-  // Per-query retrieval diagnostics ride along as a non-enumerable property
-  // on the returned array — invisible to JSON.stringify (the tool's public
-  // response contract stays a bare hits array) but readable by the
-  // diagnostics.measure() `annotate` callback below, which sees this exact
-  // return value. A module-level variable would race under concurrent
-  // tools/call requests; this does not.
-  Object.defineProperty(hits, "__diag", {
-    value: stats ? { ...stats, backend: retrieval.backend } : null,
-    enumerable: false,
-  });
-  return hits;
+  // Returns {hits, diag} rather than a bare array so per-query diagnostics
+  // reach diagnostics.measure()'s `annotate` callback through an explicit
+  // field, not a hidden property riding along on the array (fragile: any
+  // future `hits.map(...)`/clone before this reaches annotate would have
+  // silently dropped it with no error). callTool's "search" branch unwraps
+  // `.hits` for the tool's public response, which stays a bare array.
+  return { hits, diag: stats ? { ...stats, backend: retrieval.backend } : null };
 }
 
 // Contested annotation lives in the handler, not search.mjs — the ranking
@@ -657,8 +656,8 @@ async function getLinks({ concept_id }) {
   resolved = await applyRecordedContextResolution(resolved);
 
   const body = resolved.sections.map((s) => `${s.heading ?? ""}\n${s.content}`).join("\n");
-  const rawLinks = extractLinks(body).map((link) => {
-    const targetId = resolveLinkTarget(id, link.target);
+  const rawLinks = extractLinks(body, layerNameSet).map((link) => {
+    const targetId = resolveLinkTarget(id, link.target, layerNameSet);
     return { raw: link.raw, target: link.target, id: targetId };
   });
   const outgoing = await Promise.all(rawLinks.map(async (link) => ({
@@ -673,8 +672,8 @@ async function getLinks({ concept_id }) {
       const entry = await source.loadConcept(sourceId);
       if (!entry) continue;
       const sourceBody = entry.sections.map((s) => `${s.heading ?? ""}\n${sectionText(s)}`).join("\n");
-      for (const link of extractLinks(sourceBody)) {
-        if (resolveLinkTarget(sourceId, link.target) === id) {
+      for (const link of extractLinks(sourceBody, layerNameSet)) {
+        if (resolveLinkTarget(sourceId, link.target, layerNameSet) === id) {
           incoming.push({ id: sourceId, layer: source.name, raw: link.raw });
           break;
         }

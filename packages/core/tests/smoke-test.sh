@@ -85,6 +85,21 @@ if ! grep -q 'systems/api-gateway' <<<"$responses"; then
   exit 1
 fi
 
+# The check above matches ANY response line — including the search snippet,
+# which contains this substring verbatim from the raw body text regardless of
+# whether get_links resolved anything. Isolate id 3's own response (get_links)
+# and assert the layer-prefixed [[shared:systems/api-gateway]] link actually
+# resolved into its outgoing array, not just that the substring appears
+# somewhere in the JSON-RPC stream.
+get_links_response="$(grep '"id":3' <<<"$responses")"
+# The response text is JSON-inside-a-JSON-string, so quotes arrive
+# backslash-escaped (\"id\": \"systems/api-gateway\"), not raw.
+if ! grep -Eq '\\"id\\": *\\"systems/api-gateway\\"' <<<"$get_links_response"; then
+  echo "get_links did not resolve the [[shared:systems/api-gateway]] cross-layer link into its outgoing array" >&2
+  echo "$get_links_response" >&2
+  exit 1
+fi
+
 if ! grep -q 'Login Runbook' "$shared/index.md"; then
   echo "Shared index was not rebuilt" >&2
   exit 1

@@ -100,3 +100,45 @@ test('/api/diagnostics carries a retrieval summary and a search event records it
   assert.ok(['cold', 'warm'].includes(searchEvent.phase));
   assert.ok(['sqlite', 'memory'].includes(searchEvent.backend));
 });
+
+test('CONTEXTCAKE_DISABLE_SEARCH_STORE forces the in-memory fallback and /api/status reports it', async t => {
+  // Mirrors the same DI seam and rationale as retained-search.test.mjs's
+  // fallback test: on any Node this engine supports (node:sqlite unflagged
+  // from 22.13), the in-memory branch is otherwise unreachable and untested.
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cc-search-fallback-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const layerPath = path.join(root, 'personal');
+  await fsp.mkdir(layerPath);
+  await fsp.writeFile(path.join(layerPath, 'note.md'), doc('Build and test', 'note', 'build and test'));
+  const manifestPath = path.join(root, 'layers.json');
+  await fsp.writeFile(manifestPath, JSON.stringify({ layers: [{ name: 'personal', level: 3, path: layerPath }] }));
+
+  process.env.CONTEXTCAKE_DISABLE_SEARCH_STORE = '1';
+  t.after(() => { delete process.env.CONTEXTCAKE_DISABLE_SEARCH_STORE; });
+  const service = createEngineService({ manifestPath });
+  const server = http.createServer(async (req, res) => {
+    if (await service.handleRequest(req, res)) return;
+    res.writeHead(404); res.end();
+  });
+  t.after(async () => {
+    service.close(); server.closeAllConnections();
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+
+  const statusUrl = new URL(`http://127.0.0.1:${server.address().port}/api/status`);
+  const status = await (await fetch(statusUrl)).json();
+  assert.equal(status.searchBackend, 'memory', 'the env var must force the in-memory search index');
+
+  const searchUrl = new URL(`http://127.0.0.1:${server.address().port}/api/search`);
+  searchUrl.search = new URLSearchParams({ q: 'build and test', limit: '20', wait: '15000' });
+  const body = await (await fetch(searchUrl)).json();
+  assert.equal(body.hits.length, 1);
+  assert.equal(body.hits[0].id, 'note');
+
+  const diagUrl = new URL(`http://127.0.0.1:${server.address().port}/api/diagnostics`);
+  const diag = await (await fetch(diagUrl)).json();
+  assert.equal(diag.retrieval.backend, 'memory');
+  assert.equal(diag.retrieval.persisted, false);
+  assert.equal(diag.retrieval.index, null, 'the in-memory index has no size to report');
+});

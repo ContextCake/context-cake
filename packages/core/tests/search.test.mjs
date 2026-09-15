@@ -245,6 +245,28 @@ test("inbound counts distinct concepts, not distinct layers or contributions", a
   assert.equal(hub.inbound, 2);
 });
 
+test("a layer-prefixed [[layerName:path]] cross-layer link counts as inbound, not external", async () => {
+  // Regression: extractLinks used to classify layer:path as an unknown URI
+  // scheme (external) because it never received the corpus's layer names,
+  // even though resolveLinkTarget was passed them correctly — the link was
+  // filtered out one step before resolution ever ran.
+  const layers = [
+    layer("personal", 3, {
+      "scratch/notes": {
+        frontmatter: { title: "Notes" },
+        body: "see [[shared:systems/hub]] for launch details",
+      },
+    }),
+    layer("shared", 0, {
+      "systems/hub": { frontmatter: { title: "Hub" }, body: "launch hub content" },
+    }),
+  ];
+
+  const hits = await searchConcepts(layers, { query: "hub launch", limit: 5 });
+  const hub = hits.find((hit) => hit.id === "systems/hub");
+  assert.equal(hub.inbound, 1, "the [[shared:path]] link must count toward inbound");
+});
+
 test("a self-link does not inflate a concept's own inbound count", async () => {
   const layers = [
     layer("company", 0, {

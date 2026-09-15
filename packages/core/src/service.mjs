@@ -2492,9 +2492,14 @@ export function createEngineService({
     const backend = usingSearchStore ? "sqlite" : "memory";
     let phase, documentsRead, documentsReused;
     if (usingSearchStore) {
-      const analyzedAfter = searchIndex.inspect?.()?.analyzed ?? 0;
+      // One inspect() call, not two: it already returns analyzed and
+      // documents together, so the post-search snapshot only needs reading
+      // once. inspect() runs a COUNT(*) over the term index every call — at
+      // vault scale that's real cost to pay twice for nothing.
+      const after = searchIndex.inspect?.() ?? null;
+      const analyzedAfter = after?.analyzed ?? 0;
       documentsRead = Math.max(0, analyzedAfter - (analyzedBefore ?? 0));
-      const totalDocuments = searchIndex.inspect?.()?.documents ?? null;
+      const totalDocuments = after?.documents ?? null;
       documentsReused = totalDocuments === null ? null : Math.max(0, totalDocuments - documentsRead);
       phase = documentsRead > 0 ? "cold" : "warm";
     } else {

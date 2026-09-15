@@ -196,3 +196,28 @@ test("no parsed concept is retained across queries or a process restart", async 
   assert.equal(retained2._debug.documentsRead, 0, "a fresh instance over the same store file loads zero documents on its first query");
   assert.deepEqual(restarted.hits, first.hits);
 });
+
+test("CONTEXTCAKE_DISABLE_SEARCH_STORE forces the in-memory fallback, and it ranks identically to the store-backed path", async (t) => {
+  // The fallback (createLegacyRetainedSearch) is otherwise unreachable on any
+  // Node this engine supports (>=22.13, where node:sqlite ships unflagged) —
+  // this env var is the DI seam that makes it testable. See search-store.mjs.
+  const { root, source } = await fixture(t);
+  process.env.CONTEXTCAKE_DISABLE_SEARCH_STORE = "1";
+  t.after(() => { delete process.env.CONTEXTCAKE_DISABLE_SEARCH_STORE; });
+
+  const retained = createRetainedSearch([source]);
+  t.after(() => retained.close());
+  assert.equal(retained.backend, "memory", "the env var must force the legacy in-memory path");
+  const result = await retained.search({ query: "database" });
+  assert.equal(result.stats.phase, "cold", "the first query still reports a real phase from the legacy path's own stats");
+  assert.deepEqual(result.hits, await searchConcepts([source], { query: "database" }), "the fallback must rank identically to the reference scorer");
+
+  // A second query over unchanged content still costs nothing to re-index —
+  // the legacy path's own idle-evicted in-memory index reports it as warm,
+  // same contract as the store-backed path, just without the _debug counter
+  // (which only the store-backed implementation exposes).
+  const second = await retained.search({ query: "deploy" });
+  assert.equal(second.stats.phase, "warm", "unchanged content is warm under the fallback too");
+  assert.equal(second.stats.documentsRead, 0);
+  assert.deepEqual(second.hits, await searchConcepts([source], { query: "deploy" }));
+});

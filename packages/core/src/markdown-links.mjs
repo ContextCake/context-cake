@@ -252,11 +252,18 @@ export function safeId(value) {
   }
 }
 
-/** Internal (non-external) link spans in a document body: {raw, target}. */
-export function extractLinks(body) {
+/**
+ * Internal (non-external) link spans in a document body: {raw, target}.
+ * `layerNames` must be the SAME set passed to `resolveLinkTarget`/`isExternal`
+ * for these targets — otherwise a `layerName:path` cross-layer link (e.g.
+ * `[[shared:systems/api-gateway]]`) is misclassified as an external URI here
+ * and dropped before resolution ever sees it, even though resolution itself
+ * would have handled it correctly. Every caller must pass its real layer set.
+ */
+export function extractLinks(body, layerNames = EMPTY_SET) {
   return markdownLinkSpans(body)
     .map(({ raw, target }) => ({ raw, target }))
-    .filter((link) => link.target && !isExternal(stripDecoration(link.target)));
+    .filter((link) => link.target && !isExternal(stripDecoration(link.target), layerNames));
 }
 
 /**
@@ -291,7 +298,7 @@ export function resolveLinkTarget(sourceId, target, layerNames = EMPTY_SET) {
 export function conceptLinkTargets(body, sourceId = "", layerNames = EMPTY_SET) {
   const seen = new Set();
   const out = [];
-  for (const link of extractLinks(body)) {
+  for (const link of extractLinks(body, layerNames)) {
     const id = resolveLinkTarget(sourceId, link.target, layerNames);
     if (id !== null && !seen.has(id)) {
       seen.add(id);

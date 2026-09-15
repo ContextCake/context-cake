@@ -127,8 +127,17 @@ try {
   probeError = error;
 }
 
-/** True iff node:sqlite loaded in this runtime. */
+/**
+ * True iff node:sqlite loaded in this runtime. `CONTEXTCAKE_DISABLE_SEARCH_STORE=1`
+ * forces false regardless — the DI seam that lets a test exercise the
+ * in-memory fallback path (retained-search.mjs's legacy implementation, and
+ * service.mjs's createSearchIndex branch) on a Node build where node:sqlite
+ * IS available, since that fallback is otherwise unreachable and untested on
+ * any Node this engine supports (>=22.13, where node:sqlite is unflagged).
+ * Real callers never set this; it exists only to make the fallback testable.
+ */
 export function isSearchStoreAvailable() {
+  if (process.env.CONTEXTCAKE_DISABLE_SEARCH_STORE === "1") return false;
   return Boolean(sqliteModule);
 }
 

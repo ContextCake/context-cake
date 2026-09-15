@@ -46,8 +46,10 @@ type RetrievalLastSearch = {
   at: number
   phase: 'cold' | 'warm'
   durationMs: number
-  documentsRead: number
-  documentsReused: number
+  // null on the in-memory search backend, which has no per-search
+  // analyzed/reused counter (see service.mjs's searchApi) — never guess it.
+  documentsRead: number | null
+  documentsReused: number | null
   candidateCount: number
   storeSyncMs: number
 }
@@ -143,12 +145,21 @@ export function retrievalSummary(
   operation: string,
   phase?: 'cold' | 'warm',
 ) {
-  const selected = rows.filter(
-    (r) =>
-      r.operation === operation &&
-      (phase === undefined ||
-        (phase === 'cold' ? r.phase === 'cold' : r.phase !== 'cold')),
-  )
+  const operationRows = rows.filter((r) => r.operation === operation)
+  // An older engine never sends `phase` on any row — treat everything as
+  // warm so the panel renders as it always has. A current engine omits
+  // `phase` only on a row it recorded before it knew the phase: a search
+  // that errored before analysis ran (diagnostics.mjs's measure() catch
+  // path never calls annotate). That row is neither cold nor warm — it
+  // never got an answer — so it must not inflate the warm median with a
+  // failure-path duration. Only fall back to "no phase means warm" when
+  // NOTHING in this operation ever reports a phase.
+  const engineReportsPhase = operationRows.some((r) => r.phase !== undefined)
+  const selected = operationRows.filter((r) => {
+    if (phase === undefined) return true
+    if (!engineReportsPhase) return phase === 'warm'
+    return r.phase === phase
+  })
   const durations = selected.map((r) => r.durationMs).sort((a, b) => a - b)
   return {
     samples: selected.length,
@@ -1363,7 +1374,7 @@ function DiagnosticsInner() {
                       <dt>Documents read / reused</dt>
                       <dd>
                         {report.retrieval.lastSearch
-                          ? `${report.retrieval.lastSearch.documentsRead} / ${report.retrieval.lastSearch.documentsReused}`
+                          ? `${report.retrieval.lastSearch.documentsRead ?? '—'} / ${report.retrieval.lastSearch.documentsReused ?? '—'}`
                           : '—'}
                       </dd>
                     </div>

@@ -331,6 +331,43 @@ it('renders the retrieval index panel from a report with retrieval data', async 
   await act(async () => root.unmount())
 })
 
+it('renders the memory backend\'s unknown documents read/reused as a dash, never the string null', async () => {
+  vi.useFakeTimers()
+  state.mode = 'live'
+  const report = {
+    observedFrom: 100,
+    observedTo: 200,
+    sampleCount: 0,
+    operations: [],
+    health: { memory: 'normal', sources: [] },
+    indexing: { events: [] },
+    retrieval: {
+      backend: 'memory',
+      persisted: false,
+      index: null,
+      lastSearch: {
+        at: 150,
+        phase: 'warm',
+        durationMs: 2,
+        documentsRead: null,
+        documentsReused: null,
+        candidateCount: 4,
+        storeSyncMs: 0,
+      },
+      searches: { warm: 3, cold: 0, medianWarmMs: 2, medianColdMs: null },
+    },
+  }
+  const fetch = vi.fn(async () => ({ ok: true, json: async () => report }))
+  vi.stubGlobal('fetch', fetch)
+  const container = document.createElement('div'),
+    root = createRoot(container)
+  await act(async () => root.render(<Diagnostics />))
+  expect(container.textContent).toContain('In memory')
+  expect(container.textContent).toContain('— / —')
+  expect(container.textContent).not.toMatch(/null/i)
+  await act(async () => root.unmount())
+})
+
 it('renders unchanged with no retrieval index panel when the engine omits retrieval data', async () => {
   vi.useFakeTimers()
   state.mode = 'live'

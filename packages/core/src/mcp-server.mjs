@@ -412,7 +412,7 @@ async function handleMessage(message) {
 }
 
 async function callTool(name, toolArgs) {
-  if (name === "search") return await diagnostics.measure("search", () => search(toolArgs));
+  if (name === "search") return await diagnostics.measure("search", () => search(toolArgs), { annotate: (result) => result?.__diag });
   if (name === "read_file") return await diagnostics.measure("read", () => readFileTool(toolArgs));
   if (name === "list_concepts") return await listConcepts(toolArgs);
   if (name === "get_links") return await getLinks(toolArgs);
@@ -495,8 +495,18 @@ async function confirmCaptureTool({ token }) {
 // ---- tools ----------------------------------------------------------------
 
 async function search({ query, limit = 10 }) {
-  const { hits, sources } = await retrieval.search({ query, limit });
+  const { hits, sources, stats } = await retrieval.search({ query, limit });
   await annotateContested(hits, sources);
+  // Per-query retrieval diagnostics ride along as a non-enumerable property
+  // on the returned array — invisible to JSON.stringify (the tool's public
+  // response contract stays a bare hits array) but readable by the
+  // diagnostics.measure() `annotate` callback below, which sees this exact
+  // return value. A module-level variable would race under concurrent
+  // tools/call requests; this does not.
+  Object.defineProperty(hits, "__diag", {
+    value: stats ? { ...stats, backend: retrieval.backend } : null,
+    enumerable: false,
+  });
   return hits;
 }
 

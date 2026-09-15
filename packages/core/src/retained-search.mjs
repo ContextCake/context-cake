@@ -176,17 +176,41 @@ function createStoreRetainedSearch(sources, {
   }
 
   return {
+    // Additive: which backend answered — mirrors service.mjs's own
+    // usingSearchStore flag for callers (mcp-server.mjs) that only hold this
+    // object, not the store reference directly.
+    backend: "sqlite",
     async search(searchOptions) {
       if (typeof searchOptions?.query !== "string" || !tokenizeQuery(searchOptions.query).length) {
         throw new Error("search requires a non-empty query string with at least one searchable token");
       }
+      const readBefore = documentsRead;
       const views = await refresh();
       if (closed) throw new Error("Retrieval index is closed");
       const hits = store.search(views, searchOptions);
+      // Per-query diagnostics: how many of the corpus this exact call caused
+      // to be freshly loaded/decoded (documentsRead delta since before the
+      // refresh) vs. how much of the corpus it answered from already-synced
+      // store rows (the rest of the contributing views). A query that read
+      // nothing new answers entirely from disk/cache — "warm"; any fresh read
+      // means at least one document was analyzed/decoded for this
+      // call — "cold". storeSyncMs/candidateCount come from the store itself
+      // when it exposes lastSearchStats() (optional: the store may not have
+      // landed that method yet), never guessed here.
+      const thisQueryRead = documentsRead - readBefore;
+      const totalIds = views.reduce((n, view) => n + view.ids.length, 0);
+      const storeStats = store.lastSearchStats?.() ?? null;
+      const stats = {
+        documentsRead: thisQueryRead,
+        documentsReused: Math.max(0, totalIds - thisQueryRead),
+        phase: thisQueryRead > 0 ? "cold" : "warm",
+        storeSyncMs: storeStats?.syncMs ?? null,
+        candidateCount: storeStats?.candidateCount ?? null,
+      };
       // The real adapters, not synthetic view wrappers: contested-hit
       // resolves (mcp-server.mjs's annotateContested, ≤5 hits) read live
       // through these rather than against a point-in-time snapshot map.
-      return { hits, sources };
+      return { hits, sources, stats };
     },
     close() {
       closed = true;
@@ -209,6 +233,7 @@ function createLegacyRetainedSearch(sources, { idleEvictMs = 60_000, sourceBudge
   let generation = 0;
   let closed = false;
   let activeSearches = 0;
+  let documentsRead = 0; // loadConcept calls since open — this backend's counterpart to the store path's counter
 
   async function readSource(source, previous) {
     const signal = AbortSignal.timeout(sourceBudgetMs);
@@ -228,6 +253,7 @@ function createLegacyRetainedSearch(sources, { idleEvictMs = 60_000, sourceBudge
           concept = before;
         } else {
           concept = await source.loadConcept(item.id, { signal, ...(item.ext ? { ext: item.ext } : {}) });
+          documentsRead += 1;
           signal.throwIfAborted();
           // Remote adapters may return a fresh object for identical content.
           if (before && isDeepStrictEqual(before, concept)) concept = before;
@@ -267,16 +293,28 @@ function createLegacyRetainedSearch(sources, { idleEvictMs = 60_000, sourceBudge
   }
 
   return {
+    backend: "memory",
     async search(options) {
       if (typeof options?.query !== "string" || !tokenizeQuery(options.query).length) {
         throw new Error("search requires a non-empty query string with at least one searchable token");
       }
       activeSearches++;
+      const readBefore = documentsRead;
       try {
         const views = await refresh();
         if (closed) throw new Error("Retrieval index is closed");
         const hits = index.search(views, options);
-        return { hits, sources: views };
+        const thisQueryRead = documentsRead - readBefore;
+        const totalIds = views.reduce((n, view) => n + view.ids.length, 0);
+        const indexStats = index.lastSearchStats?.() ?? null;
+        const stats = {
+          documentsRead: thisQueryRead,
+          documentsReused: Math.max(0, totalIds - thisQueryRead),
+          phase: thisQueryRead > 0 ? "cold" : "warm",
+          storeSyncMs: indexStats?.syncMs ?? null,
+          candidateCount: indexStats?.candidateCount ?? null,
+        };
+        return { hits, sources: views, stats };
       } finally {
         activeSearches--;
         // A failed refresh cleared the old idle timer too. Rearm after the

@@ -35,7 +35,16 @@ const COUNTS = [
   'sourceCount',
   'incompleteSources',
   'dropped',
+  'candidateCount',
+  'storeSyncMs',
+  'decodedRecords',
 ];
+// Retrieval-backend phase and storage kind — bounded enums, same discipline
+// as `role`. `phase` only carries meaning on a `search` event (cold: this
+// search caused documents to be analyzed/decoded; warm: it answered from an
+// already-current index/store).
+const PHASES = new Set(['cold', 'warm']);
+const BACKENDS = new Set(['sqlite', 'memory']);
 
 // Closed fields and enums, not a redactor applied to arbitrary source text.
 export function safeEvent(input) {
@@ -54,6 +63,9 @@ export function safeEvent(input) {
   for (const key of COUNTS)
     if (Number.isFinite(input[key]) && input[key] >= 0)
       event[key] = Math.min(input[key], Number.MAX_SAFE_INTEGER);
+  if (event.operation === 'search' && PHASES.has(input.phase))
+    event.phase = input.phase;
+  if (BACKENDS.has(input.backend)) event.backend = input.backend;
   for (const [key, size] of [
     ['traceId', 32],
     ['spanId', 16],
@@ -91,10 +103,36 @@ export function createDiagnostics({
     events.publish(event);
     return event;
   }
-  async function measure(operation, action) {
+  // Filters an annotate() callback's return value through the same closed
+  // schema as any other event, then strips the fields record() itself always
+  // supplies (operation/outcome/role/at/durationMs/traceId/spanId/instanceId)
+  // so an annotation can only ever ADD bounded fields (phase, backend,
+  // candidateCount, ...), never override identity/timing.
+  function filterAnnotation(operation, raw) {
+    if (!raw || typeof raw !== 'object') return {};
+    const filtered = safeEvent({ operation, outcome: 'ok', role, ...raw });
+    if (!filtered) return {};
+    const {
+      operation: _operation,
+      outcome: _outcome,
+      role: _role,
+      at: _at,
+      durationMs: _durationMs,
+      traceId: _traceId,
+      spanId: _spanId,
+      instanceId: _instanceId,
+      ...rest
+    } = filtered;
+    return rest;
+  }
+  async function measure(operation, action, { annotate } = {}) {
     const start = performance.now();
     try {
       const result = await action();
+      const extra =
+        typeof annotate === 'function'
+          ? filterAnnotation(operation, annotate(result))
+          : {};
       record({
         operation,
         outcome: result?.indexing ? 'partial' : 'ok',
@@ -102,6 +140,7 @@ export function createDiagnostics({
         resultCount: Array.isArray(result)
           ? result.length
           : (result?.hits?.length ?? (result ? 1 : 0)),
+        ...extra,
       });
       return result;
     } catch (error) {
@@ -146,8 +185,59 @@ export function createDiagnostics({
         durations.length >= 20
           ? durations[Math.ceil(durations.length * 0.95) - 1]
           : null,
+      // Additive: what the retrieval layer (search backend, cold/warm split)
+      // did in this same bounded window. `backend`/`persisted`/`index` are
+      // NOT set here — diagnostics.mjs has no reference to the search
+      // backend, only to recorded events — a caller with that reference
+      // (service.mjs, mcp-server.mjs) merges those fields in.
+      retrieval: retrievalSummary(rows),
       operations: rows.slice().reverse(),
     };
   }
   return { record, measure, snapshot };
+}
+
+function median(sortedValues) {
+  if (!sortedValues.length) return null;
+  const mid = sortedValues.length - 1;
+  return (
+    (sortedValues[Math.floor(mid / 2)] + sortedValues[Math.ceil(mid / 2)]) / 2
+  );
+}
+
+// Derives the `searches`/`lastSearch` parts of the retrieval snapshot from
+// this instance's own bounded window of recorded events — the same `rows`
+// snapshot() already filtered to windowMs. Exported so a caller assembling
+// the full `/api/diagnostics` `retrieval` object (service.mjs, which also
+// knows the search backend) can build it from one snapshot() call.
+export function retrievalSummary(rows) {
+  const searches = rows.filter((row) => row.operation === 'search');
+  const cold = searches
+    .filter((row) => row.phase === 'cold')
+    .map((row) => row.durationMs)
+    .sort((a, b) => a - b);
+  const warm = searches
+    .filter((row) => row.phase === 'warm')
+    .map((row) => row.durationMs)
+    .sort((a, b) => a - b);
+  const last = searches.at(-1) ?? null;
+  return {
+    searches: {
+      cold: cold.length,
+      warm: warm.length,
+      medianColdMs: median(cold),
+      medianWarmMs: median(warm),
+    },
+    lastSearch: last
+      ? {
+          at: last.at,
+          phase: last.phase ?? null,
+          durationMs: last.durationMs,
+          documentsRead: last.documentsRead ?? null,
+          documentsReused: last.documentsReused ?? null,
+          candidateCount: last.candidateCount ?? null,
+          storeSyncMs: last.storeSyncMs ?? null,
+        }
+      : null,
+  };
 }

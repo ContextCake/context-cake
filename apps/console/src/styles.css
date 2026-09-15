@@ -3310,6 +3310,7 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .cc-diag-table tbody th { font-weight: 500; color: var(--cc-ink); }
 .cc-diag-table tbody tr:hover { background: var(--cc-neutral-fill); }
 .cc-diag-table .is-number { text-align: right; }
+.cc-diag-row-cold th, .cc-diag-row-cold td { color: var(--cc-caption); font-weight: 400; }
 .cc-diag-table .cc-ui-status { font-size: 11px; }
 .cc-diag-table .cc-ui-button { min-height: 24px; padding-block: 2px; font-size: 11px; }
 .cc-diag-time { color: var(--cc-caption); }

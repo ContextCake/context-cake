@@ -59,3 +59,44 @@ test('HTTP source/type filters recover hits below the global top-k and use disti
   assert.deepEqual(await search(), global, 'filter cache entries must not replace the unfiltered answer');
   assert.deepEqual(withoutLinksTo(await search({ source: 'specs' })), withoutLinksTo(expected), 'repeat scoped searches use their own retained answer');
 });
+
+test('/api/diagnostics carries a retrieval summary and a search event records its phase', async t => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cc-search-diag-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const layerPath = path.join(root, 'personal');
+  await fsp.mkdir(layerPath);
+  await fsp.writeFile(path.join(layerPath, 'note.md'), doc('Build and test', 'note', 'build and test'));
+  const manifestPath = path.join(root, 'layers.json');
+  await fsp.writeFile(manifestPath, JSON.stringify({ layers: [{ name: 'personal', level: 3, path: layerPath }] }));
+  const service = createEngineService({ manifestPath });
+  const server = http.createServer(async (req, res) => {
+    if (await service.handleRequest(req, res)) return;
+    res.writeHead(404); res.end();
+  });
+  t.after(async () => {
+    service.close(); server.closeAllConnections();
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const searchUrl = new URL(`${base}/api/search`);
+  searchUrl.search = new URLSearchParams({ q: 'build and test', wait: '15000' });
+  const searchResponse = await fetch(searchUrl);
+  const searchBody = await searchResponse.json();
+  assert.equal(searchResponse.status, 200, JSON.stringify(searchBody));
+  // The response contract is unchanged: no `diag` leaks into the client body.
+  assert.equal('diag' in searchBody, false);
+
+  const diagBody = await (await fetch(`${base}/api/diagnostics`)).json();
+  assert.ok(diagBody.retrieval, 'retrieval object is present');
+  assert.ok(['sqlite', 'memory'].includes(diagBody.retrieval.backend));
+  assert.equal(typeof diagBody.retrieval.persisted, 'boolean');
+  assert.ok(diagBody.retrieval.index === null || typeof diagBody.retrieval.index === 'object');
+  assert.ok(diagBody.retrieval.searches);
+  assert.ok(diagBody.retrieval.searches.cold + diagBody.retrieval.searches.warm >= 1);
+
+  const searchEvent = diagBody.operations.find(op => op.operation === 'search');
+  assert.ok(searchEvent, 'a search event was recorded');
+  assert.ok(['cold', 'warm'].includes(searchEvent.phase));
+  assert.ok(['sqlite', 'memory'].includes(searchEvent.backend));
+});

@@ -471,3 +471,110 @@ test("concurrent schema creation on a brand-new file: two workers open and searc
   assert.deepEqual(a.ids, ["a", "b"]);
   assert.deepEqual(b.ids, ["a", "b"]);
 });
+
+// The segmented posting layout's own moving parts, each compared against the
+// same reference scorers the differential above uses: a corpus large enough
+// to seal several segments, deletions that leave tombstoned records behind in
+// sealed blobs, and the compaction that eventually rewrites those blobs.
+// SEGMENT_DOCS is an option purely so this can happen at 40 documents instead
+// of 4,096.
+test("segment sealing, deletion tombstones and compaction all keep answers identical", async (t) => {
+  const { dir, file } = tempFile();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const rand = mulberry32(0x7e57);
+  const legacyIndex = createSearchIndex();
+  const store = createSearchStore({ file, segmentDocs: 8 });
+  t.after(() => { store.close(); legacyIndex.close(); });
+
+  let seq = 0;
+  const docs = new Map(Array.from({ length: 60 }, (_, i) => [`concept-${i}`, makeConcept(rand, seq++, `concept-${i}`)]));
+
+  const compare = async (label) => {
+    const layer = { name: "vault", level: 3, snap: makeSnapshot([...docs]) };
+    const contributing = [contributingView(layer, "vault-identity")];
+    const legacyViews = [legacyView({ name: layer.name, level: layer.level, ...layer.snap })];
+    for (const query of ["postgres", "deploy rollout", "auth token cache", "runbook"]) {
+      const reference = await searchConcepts(legacyViews, { query, limit: 10 });
+      const viaIndex = legacyIndex.search(contributing, { query, limit: 10 });
+      const viaStore = store.search(contributing, { query, limit: 10 });
+      assert.equal(viaStore.length, viaIndex.length, `${label} · "${query}" · hit count`);
+      for (let i = 0; i < viaIndex.length; i += 1) {
+        assert.equal(viaStore[i].id, viaIndex[i].id, `${label} · "${query}" · hit ${i} id`);
+        assert.ok(Object.is(viaStore[i].score, viaIndex[i].score), `${label} · "${query}" · hit ${i} score`);
+        assert.equal(viaStore[i].snippet, viaIndex[i].snippet, `${label} · "${query}" · hit ${i} snippet`);
+        assert.deepEqual(viaStore[i].section, viaIndex[i].section, `${label} · "${query}" · hit ${i} section`);
+        assert.equal(viaStore[i].inbound, viaIndex[i].inbound, `${label} · "${query}" · hit ${i} inbound`);
+        assert.deepEqual(viaStore[i].linksTo, viaIndex[i].linksTo, `${label} · "${query}" · hit ${i} linksTo`);
+      }
+      assert.equal(reference.length, viaStore.length, `${label} · "${query}" · vs searchConcepts · hit count`);
+      for (let i = 0; i < reference.length; i += 1) {
+        assert.equal(viaStore[i].id, reference[i].id, `${label} · "${query}" · vs searchConcepts · hit ${i} id`);
+        assert.ok(Object.is(viaStore[i].score, reference[i].score), `${label} · "${query}" · vs searchConcepts · hit ${i} score`);
+      }
+    }
+  };
+
+  await compare("sealed segments");
+  // 60 documents at 8 per segment: at least 7 sealed segments plus the open one.
+  assert.ok(store.inspect().segments >= 8, `expected several segments, got ${store.inspect().segments}`);
+  assert.equal(store.inspect().documents, 60);
+  const postingsFull = store.inspect().postings;
+  assert.ok(postingsFull > 0);
+
+  // Delete a third of the corpus. Their records become tombstones in sealed
+  // blobs: the live record count drops, the answers stay reference-identical.
+  for (const id of [...docs.keys()].filter((_, i) => i % 3 === 0)) docs.delete(id);
+  await compare("after deletions");
+  assert.equal(store.inspect().documents, docs.size);
+  assert.ok(store.inspect().postings < postingsFull, "live record count must drop when documents are deleted");
+
+  // Each search's sync compacts at most one over-dead sealed segment, so a
+  // few more searches walk the whole backlog. Answers must not move.
+  for (let i = 0; i < 10; i += 1) await compare(`compaction pass ${i}`);
+
+  // Rewriting a document (same id, new content) is a delete plus an insert
+  // under a NEW doc id — the tombstoned old records must never be mistaken
+  // for the new document's.
+  for (const id of [...docs.keys()].slice(0, 10)) docs.set(id, makeConcept(rand, seq++, id));
+  await compare("after rewrites");
+
+  // Everything gone: no stale tombstone may resurrect a hit.
+  const gone = store.search([], { query: "postgres", limit: 10 });
+  assert.deepEqual(gone, []);
+  assert.equal(store.inspect().documents, 0);
+  assert.equal(store.inspect().postings, 0, "compaction plus deletion leaves no live records behind");
+});
+
+test("inspect() and lastSearchStats() report the store's own shape", async (t) => {
+  const { dir, file } = tempFile();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const rand = mulberry32(0xbeef);
+  let seq = 0;
+  const docs = new Map(Array.from({ length: 30 }, (_, i) => [`i-${i}`, makeConcept(rand, seq++, `i-${i}`)]));
+  const snap = makeSnapshot([...docs]);
+  const view = { name: "vault", level: 3, gen: snap.gen, ids: snap.ids, concepts: snap.concepts, identity: "vault" };
+
+  const store = createSearchStore({ file, segmentDocs: 8 });
+  t.after(() => store.close());
+  const hits = store.search([view], { query: "postgres deploy", limit: 10 });
+
+  const info = store.inspect();
+  assert.equal(info.documents, 30);
+  assert.ok(info.terms > 0);
+  assert.ok(info.postings > 0);
+  assert.equal(info.analyzed, 30);
+  assert.equal(info.bodyReads, hits.length);
+  assert.ok(info.segments >= 4, `expected sealed segments, got ${info.segments}`);
+  assert.ok(info.storeBytes > 0, "a file-backed store reports its size on disk");
+
+  const stats = store.lastSearchStats();
+  assert.ok(stats.candidateCount > 0 && stats.candidateCount <= 30);
+  assert.ok(stats.decodedRecords >= stats.candidateCount);
+  assert.equal(typeof stats.syncMs, "number");
+
+  const empty = createSearchStore({ file: ":memory:" });
+  t.after(() => empty.close());
+  assert.equal(empty.inspect().storeBytes, null, ":memory: has no file to size");
+});

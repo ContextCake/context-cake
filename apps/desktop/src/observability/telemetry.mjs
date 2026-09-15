@@ -101,6 +101,9 @@ export function createTelemetry({
         'queueMs',
         'sourceCount',
         'incompleteSources',
+        'candidateCount',
+        'storeSyncMs',
+        'decodedRecords',
       ])
         if (
           event[k] !== undefined &&
@@ -112,6 +115,14 @@ export function createTelemetry({
               : Number.isFinite(event[k]) && event[k] >= 0))
         )
           safe[k] = event[k]
+      // Bounded enums, same allowlist discipline as operation/outcome/role.
+      // phase is meaningful only on a search event, matching the core's own
+      // safeEvent() — an index/read event carrying a stray `phase` is
+      // dropped here too, not exported as a stray label.
+      if (event.operation === 'search' && ['cold', 'warm'].includes(event.phase))
+        safe.phase = event.phase
+      if (['sqlite', 'memory'].includes(event.backend))
+        safe.backend = event.backend
       if (
         [
           'OPERATION_FAILED',
@@ -231,6 +242,18 @@ export function createTelemetry({
         for (const key of ['queueMs', 'sourceCount', 'incompleteSources'])
           if (e[key] !== undefined)
             gauges.set(`${key}:${e.role}`, { key, role: e.role, value: e[key] })
+        // candidateCount/storeSyncMs also carry `phase` when the event is a
+        // search — the "Search candidates" dashboard panel breaks down by
+        // phase (cold/warm), so the gauge key (and its exported attributes,
+        // below) include it rather than collapsing cold and warm together.
+        for (const key of ['candidateCount', 'storeSyncMs'])
+          if (e[key] !== undefined)
+            gauges.set(`${key}:${e.role}:${e.phase ?? ''}`, {
+              key,
+              role: e.role,
+              phase: e.phase ?? null,
+              value: e[key],
+            })
       }
       const stamp = {
         startTimeUnixNano: nanos(metricStart),
@@ -285,6 +308,25 @@ export function createTelemetry({
                 timeUnixNano: stamp.timeUnixNano,
                 asDouble: g.value,
                 attributes: [attr('role', g.role)],
+              })),
+          },
+        })),
+        // Retrieval sync/candidate gauges: most recent observed value per
+        // participating process, tagged by phase (cold/warm) when the
+        // source event carried one — same "latest observation, not a
+        // continuous measure" semantics as queueMs above.
+        ...['candidateCount', 'storeSyncMs'].map((key) => ({
+          name: `contextcake.${key}`,
+          gauge: {
+            dataPoints: [...gauges.values()]
+              .filter((g) => g.key === key)
+              .map((g) => ({
+                timeUnixNano: stamp.timeUnixNano,
+                asDouble: g.value,
+                attributes: [
+                  attr('role', g.role),
+                  ...(g.phase ? [attr('phase', g.phase)] : []),
+                ],
               })),
           },
         })),

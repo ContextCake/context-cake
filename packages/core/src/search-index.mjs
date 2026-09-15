@@ -31,6 +31,7 @@
 // retain their body text — snippets are rebuilt from the winning concepts
 // only, at hit time.
 
+import { performance } from "node:perf_hooks";
 import {
   FIXED_FIELD_COUNT, analyzeConceptFields, conceptBody, makeSnippet, scoreConceptSections, tokenizeQuery, analyze,
   linkPriorMultiplier,
@@ -71,6 +72,12 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
   let linkRefs = null;
   let currentLayerNameSet = new Set();
   let evictTimer = null;
+  // What the memory backend can report about its own last search() call —
+  // the sqlite store's equivalent shape (search-store.mjs's lastSearchStats),
+  // so diagnostics can read either backend the same optional-chained way.
+  // decodedRecords stays null: this backend never decodes stored records —
+  // everything is already parsed JS objects in the WeakMap/Map above.
+  let lastStats = { candidateCount: null, syncMs: null, decodedRecords: null };
 
   // { fields: [id, title, description, tags], sections: [{key, heading, frequencies, length}] }
   function analysisFor(id, concept) {
@@ -286,7 +293,9 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
       if (!query || typeof query !== "string" || rawTokens.length === 0) {
         throw new Error("search requires a non-empty query string with at least one searchable token");
       }
+      const syncStart = performance.now();
       update(contributing);
+      const syncMs = performance.now() - syncStart;
       armEviction();
       const terms = [...new Set(analyze(query))];
       const index = {
@@ -355,6 +364,11 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
         hit.score *= linkPriorMultiplier(hit.inbound);
       }
 
+      // byId at this point is the full candidate set (score > 0, before the
+      // type filter/sort/top-k slice) — the same thing search-store.mjs's
+      // lastSearchStats().candidateCount means for the sqlite backend.
+      lastStats = { candidateCount: byId.size, syncMs, decodedRecords: null };
+
       return [...byId.values()]
         .filter((hit) => {
           if (!type) return true;
@@ -378,6 +392,12 @@ export function createSearchIndex({ idleEvictMs = IDLE_EVICT_MS } = {}) {
           if (rank < LINKS_TO_CAP) result.linksTo = targetsOf.filter(corpusHas).slice(0, LINKS_TO_MAX);
           return result;
         });
+    },
+    // The memory-backend counterpart of search-store.mjs's lastSearchStats():
+    // what THIS instance's last search() call did, for diagnostics to read
+    // the same optional-chained way regardless of which backend answered.
+    lastSearchStats() {
+      return lastStats;
     },
     close() {
       clearTimeout(evictTimer);

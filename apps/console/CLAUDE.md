@@ -234,6 +234,11 @@ Key files: `src/store.tsx` (state), `src/theme.ts` (`css()` + tokens),
 
 ## Gotchas
 
+- **Run the test suite on Node 22 or 24, the versions CI uses.** On Node 26
+  every jsdom test that touches `window.localStorage` fails with "Cannot read
+  properties of undefined (reading 'clear')": Node's own Web Storage global
+  shadows jsdom's, so the branch looks broken when it is not. On a Mac with
+  Homebrew: `PATH=/opt/homebrew/opt/node@24/bin:$PATH npx vitest run`.
 - **New inline hex colors must be registered.** Inline styles are written as hex
   literals and only theme correctly if the hex is in `HEX_VARS` in
   `src/theme.ts`. An unregistered hex renders fine in light mode and silently

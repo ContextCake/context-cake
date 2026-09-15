@@ -29,6 +29,39 @@ export type Observation = {
   documentsRead?: number
   documentsReused?: number
   queueMs?: number
+  phase?: 'cold' | 'warm'
+  backend?: 'sqlite' | 'memory'
+  candidateCount?: number
+  storeSyncMs?: number
+  decodedRecords?: number
+}
+type RetrievalIndexStats = {
+  documents: number
+  terms: number
+  postings: number
+  segments: number
+  storeBytes: number | null
+}
+type RetrievalLastSearch = {
+  at: number
+  phase: 'cold' | 'warm'
+  durationMs: number
+  documentsRead: number
+  documentsReused: number
+  candidateCount: number
+  storeSyncMs: number
+}
+type RetrievalStats = {
+  backend: 'sqlite' | 'memory'
+  persisted: boolean
+  index: RetrievalIndexStats | null
+  lastSearch: RetrievalLastSearch | null
+  searches: {
+    cold: number
+    warm: number
+    medianWarmMs: number | null
+    medianColdMs: number | null
+  }
 }
 type Report = {
   observedFrom: number
@@ -51,6 +84,7 @@ type Report = {
     >
   }
   indexing: { events: Array<{ at: number; line: string }> }
+  retrieval?: RetrievalStats
 }
 const clock = (at: number) =>
   new Date(at).toLocaleTimeString([], {
@@ -67,6 +101,29 @@ const duration = (n: number | null) =>
         ? `${(n / 1000).toFixed(2)} s`
         : `${n.toFixed(1)} ms`
 const words = (s: string) => s.replace(/[-_]/g, ' ')
+export function formatBytes(bytes: number | null): string {
+  if (bytes === null) return 'unknown'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+  return `${value.toFixed(1)} ${units[unit]}`
+}
+function relativeTime(at: number, now = Date.now()): string {
+  const deltaMs = now - at
+  if (deltaMs < 1000) return 'just now'
+  const seconds = Math.round(deltaMs / 1000)
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return clock(at)
+}
 function scrollDiagnostics(id?: string) {
   const view = document.querySelector('.cc-diagnostics')
   const scroller = view?.closest('.cc-main')
@@ -81,8 +138,17 @@ function scrollDiagnostics(id?: string) {
       : 0,
   })
 }
-export function retrievalSummary(rows: Observation[], operation: string) {
-  const selected = rows.filter((r) => r.operation === operation)
+export function retrievalSummary(
+  rows: Observation[],
+  operation: string,
+  phase?: 'cold' | 'warm',
+) {
+  const selected = rows.filter(
+    (r) =>
+      r.operation === operation &&
+      (phase === undefined ||
+        (phase === 'cold' ? r.phase === 'cold' : r.phase !== 'cold')),
+  )
   const durations = selected.map((r) => r.durationMs).sort((a, b) => a - b)
   return {
     samples: selected.length,
@@ -148,14 +214,24 @@ const stackCopy: Record<string, string> = {
 
 function createDemoReport(now = Date.now()): Report {
   const observedFrom = now - 15 * 60 * 1000
-  const searches: Observation[] = Array.from({ length: 24 }, (_, i) => ({
-    at: observedFrom + i * 36_000,
-    operation: 'search',
-    outcome: i === 17 ? 'error' : 'ok',
-    durationMs: 7 + ((i * 11) % 31),
-    resultCount: i === 17 ? 0 : 3 + (i % 6),
-    traceId: (i + 1).toString(16).padStart(32, '0'),
-  }))
+  const searches: Observation[] = Array.from({ length: 24 }, (_, i) => {
+    const cold = i === 3 || i === 11
+    return {
+      at: observedFrom + i * 36_000,
+      operation: 'search',
+      outcome: i === 17 ? 'error' : 'ok',
+      durationMs: cold ? 118 + ((i * 13) % 40) : 7 + ((i * 11) % 31),
+      resultCount: i === 17 ? 0 : 3 + (i % 6),
+      traceId: (i + 1).toString(16).padStart(32, '0'),
+      phase: cold ? 'cold' : 'warm',
+      backend: 'sqlite',
+      candidateCount: 34 + ((i * 7) % 90),
+      storeSyncMs: cold ? 5 + (i % 3) : 0,
+      documentsRead: cold ? 1 + (i % 2) : 0,
+      documentsReused: cold ? 5 : 0,
+      decodedRecords: 3 + (i % 6),
+    }
+  })
   const reads: Observation[] = Array.from({ length: 24 }, (_, i) => ({
     at: observedFrom + 18_000 + i * 36_000,
     operation: 'read',
@@ -185,11 +261,43 @@ function createDemoReport(now = Date.now()): Report {
     },
   ].sort((a, b) => b.at - a.at)
 
+  const warmSearches = retrievalSummary(operations, 'search', 'warm')
+  const coldSearches = retrievalSummary(operations, 'search', 'cold')
+  const lastSearchRow = operations.find((row) => row.operation === 'search')
+
   return {
     observedFrom,
     observedTo: now,
     sampleCount: operations.length,
     operations,
+    retrieval: {
+      backend: 'sqlite',
+      persisted: true,
+      index: {
+        documents: 2483,
+        terms: 9318,
+        postings: 41760,
+        segments: 4,
+        storeBytes: 6_291_456,
+      },
+      lastSearch: lastSearchRow
+        ? {
+            at: lastSearchRow.at,
+            phase: lastSearchRow.phase ?? 'warm',
+            durationMs: lastSearchRow.durationMs,
+            documentsRead: lastSearchRow.documentsRead ?? 0,
+            documentsReused: lastSearchRow.documentsReused ?? 0,
+            candidateCount: lastSearchRow.candidateCount ?? 0,
+            storeSyncMs: lastSearchRow.storeSyncMs ?? 0,
+          }
+        : null,
+      searches: {
+        warm: warmSearches.samples,
+        cold: coldSearches.samples,
+        medianWarmMs: warmSearches.median,
+        medianColdMs: coldSearches.median,
+      },
+    },
     telemetry: {
       state: 'ready',
       historyGeneration: 0,
@@ -817,33 +925,66 @@ function DiagnosticsInner() {
                       </tr>
                     </thead>
                     <tbody>
-                      {['search', 'read'].map((operation) => {
-                        const s = retrievalSummary(
+                      {[
+                        { operation: 'search', label: 'Search' },
+                        { operation: 'read', label: 'Read context' },
+                      ].flatMap(({ operation, label }) => {
+                        const warm = retrievalSummary(
                           report?.operations ?? [],
                           operation,
+                          'warm',
                         )
-                        return (
+                        const cold = retrievalSummary(
+                          report?.operations ?? [],
+                          operation,
+                          'cold',
+                        )
+                        const rows = [
                           <tr key={operation}>
-                            <th scope="row">
-                              {operation === 'search'
-                                ? 'Search'
-                                : 'Read context'}
-                            </th>
-                            <td className="is-number">{s.samples || '—'}</td>
-                            <td className="is-number">{duration(s.median)}</td>
-                            <td className="is-number">{duration(s.p95)}</td>
+                            <th scope="row">{label}</th>
                             <td className="is-number">
-                              {s.samples ? s.errors : '—'}
+                              {warm.samples || '—'}
                             </td>
-                          </tr>
-                        )
+                            <td className="is-number">
+                              {duration(warm.median)}
+                            </td>
+                            <td className="is-number">
+                              {duration(warm.p95)}
+                            </td>
+                            <td className="is-number">
+                              {warm.samples ? warm.errors : '—'}
+                            </td>
+                          </tr>,
+                        ]
+                        if (cold.samples > 0) {
+                          rows.push(
+                            <tr
+                              key={`${operation}-cold`}
+                              className="cc-diag-row-cold"
+                            >
+                              <th scope="row">{label} · cold</th>
+                              <td className="is-number">{cold.samples}</td>
+                              <td className="is-number">
+                                {duration(cold.median)}
+                              </td>
+                              <td className="is-number">
+                                {duration(cold.p95)}
+                              </td>
+                              <td className="is-number">
+                                {cold.errors || '—'}
+                              </td>
+                            </tr>,
+                          )
+                        }
+                        return rows
                       })}
                     </tbody>
                   </table>
                 </div>
                 <p className="cc-diag-footnote">
-                  P95 needs 20 observations per operation. A dash means
-                  insufficient data.
+                  P95 needs 20 warm observations per operation. A dash means
+                  insufficient data. Warm numbers are what to expect; a cold
+                  search or read paid to index changed documents first.
                 </p>
               </section>
               <section
@@ -1006,6 +1147,8 @@ function DiagnosticsInner() {
                           <th>Operation</th>
                           <th>Outcome</th>
                           <th className="is-number">Duration</th>
+                          <th className="is-number">Candidates</th>
+                          <th>Phase</th>
                           <th>
                             <span className="sr-only">Trace</span>
                           </th>
@@ -1049,6 +1192,17 @@ function DiagnosticsInner() {
                               {['search', 'read', 'index'].includes(o.operation)
                                 ? duration(o.durationMs)
                                 : '—'}
+                            </td>
+                            <td className="is-number">
+                              {o.operation === 'search' &&
+                              o.candidateCount !== undefined
+                                ? o.candidateCount.toLocaleString()
+                                : ''}
+                            </td>
+                            <td>
+                              {o.operation === 'search' && o.phase
+                                ? words(o.phase)
+                                : ''}
                             </td>
                             <td className="cc-diag-trace">
                               {frame &&
@@ -1127,6 +1281,119 @@ function DiagnosticsInner() {
                   pressure.
                 </p>
               </section>
+              {report?.retrieval && (
+                <section className="cc-diag-section">
+                  <header className="cc-diag-section-heading">
+                    <h3>Retrieval index</h3>
+                    <StatusBadge
+                      tone={
+                        report.retrieval.backend === 'sqlite' &&
+                        report.retrieval.persisted
+                          ? 'success'
+                          : 'neutral'
+                      }
+                    >
+                      {report.retrieval.backend === 'sqlite' &&
+                      report.retrieval.persisted
+                        ? 'On disk'
+                        : 'In memory'}
+                    </StatusBadge>
+                  </header>
+                  <dl className="cc-diag-facts">
+                    <div>
+                      <dt>Documents</dt>
+                      <dd>
+                        {report.retrieval.index
+                          ? report.retrieval.index.documents.toLocaleString()
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Terms</dt>
+                      <dd>
+                        {report.retrieval.index
+                          ? report.retrieval.index.terms.toLocaleString()
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Postings</dt>
+                      <dd>
+                        {report.retrieval.index
+                          ? report.retrieval.index.postings.toLocaleString()
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Segments</dt>
+                      <dd>
+                        {report.retrieval.index
+                          ? report.retrieval.index.segments.toLocaleString()
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>On-disk size</dt>
+                      <dd>
+                        {report.retrieval.index
+                          ? formatBytes(report.retrieval.index.storeBytes)
+                          : '—'}
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="cc-diag-note">Last search</p>
+                  <dl className="cc-diag-facts">
+                    <div>
+                      <dt>Phase</dt>
+                      <dd>
+                        {report.retrieval.lastSearch
+                          ? words(report.retrieval.lastSearch.phase)
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Duration</dt>
+                      <dd>
+                        {report.retrieval.lastSearch
+                          ? duration(report.retrieval.lastSearch.durationMs)
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Documents read / reused</dt>
+                      <dd>
+                        {report.retrieval.lastSearch
+                          ? `${report.retrieval.lastSearch.documentsRead} / ${report.retrieval.lastSearch.documentsReused}`
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Candidates</dt>
+                      <dd>
+                        {report.retrieval.lastSearch
+                          ? report.retrieval.lastSearch.candidateCount.toLocaleString()
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Sync time</dt>
+                      <dd>
+                        {report.retrieval.lastSearch
+                          ? duration(report.retrieval.lastSearch.storeSyncMs)
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>When</dt>
+                      <dd>
+                        {report.retrieval.lastSearch
+                          ? relativeTime(report.retrieval.lastSearch.at)
+                          : '—'}
+                      </dd>
+                    </div>
+                  </dl>
+                </section>
+              )}
               {stackControls}
               {report?.telemetry && stack.enabled && (
                 <section className="cc-diag-section">

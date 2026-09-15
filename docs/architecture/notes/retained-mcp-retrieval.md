@@ -8,6 +8,53 @@ available; it falls back to the previous in-memory `createSearchIndex`-backed
 implementation otherwise (`isSearchStoreAvailable()`, checked once at
 construction). The app does not need to run.
 
+**How the postings are stored: segmented blobs, not a row per posting**
+(reworked 2026-09-15). The store's first version kept one SQLite row per
+(term, document, field/section, term frequency). That shape is the obvious
+one and it is wrong at vault scale: a common query term made SQLite
+materialize a JS object per matching row — ~150,000 of them per query on a
+12,000-document vault where every document matches every term — which turned
+what had been a 63 ms in-memory scan into ~600 ms, and inflated the file to
+689 MB for a 369 MB corpus. The layout now is:
+
+- **Segments.** Documents are grouped into segments of `SEGMENT_DOCS` (4,096)
+  documents. One segment is open and accepts appends; the rest are sealed.
+  Because a document always gets a NEW monotonic id (an edit deletes the old
+  row and inserts a new one), records appended to the open segment are sorted
+  by construction — nothing is ever re-sorted.
+- **One blob per (term, segment).** `postings(term, seg, data BLOB)` holds
+  fixed-width 12-byte little-endian records: `[doc u32][kind<<24 | slot u32]
+  [tf u32]`, sorted by (doc, kind, slot). Kinds 0-3 are the four fixed fields
+  (id/title/description/tags); kind 4 is a section body with `slot` the
+  section index. A query reads a handful of rows per term (three, at 12,000
+  documents) and decodes them with a `DataView` straight into the
+  per-candidate frequency structures scoring needs — a flat `Uint32Array` per
+  candidate, never a JS object per record. The brief called for 9-byte
+  records; 12 was chosen so `tf` and the section index cannot overflow on a
+  pathological document and so every field is 4-byte aligned. The cost is
+  ~3 bytes per (term, field) pair, noise beside the section text in the same
+  file.
+- **Deletion is a tombstone.** A removed document is simply absent from
+  `docs`; its records stay in the blobs and score nothing, because candidate
+  rows are fetched by doc id and a record with no row is skipped. Each
+  segment counts its dead records, and a write transaction that pushes a
+  sealed segment past 25% dead rewrites that segment's blobs without them —
+  at most one segment per transaction, so compaction is never an unbounded
+  lock hold.
+- **The document text is stored once.** There is no `body` column: a
+  concept's whole body is exactly its section texts joined with `"\n"`
+  (`conceptBody` in search.mjs), so the `sections` rows are the only copy and
+  an unmatched hit's whole-body snippet is rebuilt from them. `sections` is a
+  ROWID table with a unique index rather than `WITHOUT ROWID` — an index
+  b-tree keeps only ~1 KB of a row locally and spills the rest into mostly
+  empty overflow pages, which cost +45% on the file for a corpus of
+  multi-kilobyte sections.
+- **Corpus aggregates are maintained integer counters**, not `SUM()` over the
+  tables: at 12,000 documents a `SUM(length)` over `sections` is a
+  72,000-row scan on the warm path. Document frequency, per-field length
+  totals, document count, section count and section term total are all
+  add/subtract, so they stay bit-identical to a fresh build.
+
 **No parsed document is retained in the JS heap between queries.** Each query
 lists the source and asks the store what it needs. Two cases, since 2026-09-15:
 
@@ -45,7 +92,7 @@ exists to avoid holding for repeat queries. Now `retained-search.mjs` streams:
 `store.beginLayer({name, identity, level, gen})` starts the layer sync,
 `store.upsertBatch(name, items, layerNames)` commits up to 256 freshly-loaded
 `{id, ord, concept, fileMeta}` documents per call (its own transaction —
-docs/postings/sections/section_postings/links/df replaced for exactly those
+docs/sections/posting blobs/links/df replaced for exactly those
 ids, matching syncLayer's own insert path), and `store.finishLayer(state,
 {ids, gen, level})` sweeps out any stored document no longer in `ids` (a
 deletion), fixes `ord` for documents nothing touched, and writes the layer's
@@ -60,8 +107,8 @@ time) is unchanged — this streaming path is additive, used only by
 bug.** Each batch commits independently, so a second process reading the same
 store file mid-build can observe a layer with some documents from the new
 listing and some still from the old one — never a half-written document
-(insertDocWithPostings's own doc+postings+sections+links insert happens
-inside one batch's transaction), but a genuinely mixed-generation view of the
+(a document's own doc+sections+links rows and its batch's posting-blob
+appends happen inside one batch's transaction), but a genuinely mixed-generation view of the
 layer as a whole. The worst outcome is a query landing in that window seeing
 a partially-updated layer; it resolves itself the moment the build's next
 batch (or its own) commits. This trades a small, self-healing staleness
@@ -127,7 +174,65 @@ equivalence before and after an edit and after a restart. It also launches two
 real stdio MCP clients with independent processes. It does not edit the
 installed app's sources.
 
-### Current: warm/batched-cold rework, 12,000 documents, Node 26.8.1, 2026-09-15
+### Current: segmented posting blobs, 12,000 documents, Node 26.8.1, 2026-09-15
+
+Two measurements again, for the same reason as the history below: the
+benchmark script's own corpus (one repeated boilerplate paragraph) makes
+nearly every document a BM25F candidate for any common query term, so it
+measures candidate-proportional scoring cost rather than store behavior. A
+separate worst-case probe isolates the store itself.
+
+**(a) `benchmark-retained-search.mjs 12000`** (boilerplate corpus, unchanged
+script, directly comparable to the rows below). 368.5 MB synthetic corpus.
+Peak RSS across the whole run: **935.5 MB** (12k documents' worth of file
+writes, two live stdio child processes, and the in-process store all resident
+at once — not a per-process figure).
+
+| Operation | Row-per-posting | Segmented blobs | Documents read |
+| --- | ---: | ---: | ---: |
+| Previous full-rebuild search (`searchConcepts`, no store) | 22,245 ms | 24,360 ms | 12,000 |
+| Retained cold search (first ever query, cold store) | 28,167 ms | **27,372 ms** | 12,000 |
+| Retained repeated searches | 992-1,064 ms | **116-127 ms** | 0 |
+| Two stdio clients initialize | 46 ms | 151 ms | n/a |
+| Two stdio clients cold-search concurrently | 31,480 ms | 33,806 ms | n/a |
+| Repeated stdio search | 1,001-1,073 ms | **125-155 ms** | n/a |
+| Different stdio query | 1,004 ms | **149 ms** | n/a |
+| Retained search after one edit | 1,129 ms | 1,040 ms | 1 |
+| Two stdio clients search after one edit | 1,887 ms | 340 ms | n/a |
+| Retained cold search after a restart | 1,198 ms | **261 ms** | 0 |
+
+Cold build did not regress (27.4 s against 28.2 s) even though every document
+now also writes a `dterms` column and an appended blob: dropping ~1.9 million
+row inserts pays for the blob copying. Warm search is 8x faster, and the
+restart query 4.6x.
+
+**(b) Worst-case probe** — 12,000 OKF documents, 6 sections of ~500 words each
+drawn from a **25-word vocabulary**, so every document matches every query
+term and every document is a candidate. 262.7 MB corpus, real stdio
+`mcp-server.mjs` child process. This is the shape the rework was aimed at.
+
+| Operation | Row-per-posting | Segmented blobs |
+| --- | ---: | ---: |
+| `store.search()` in-process, warm | ~600 ms | **80-91 ms** |
+| stdio warm search end to end (includes the ~90 ms listing walk over 12,000 files) | — | 144-185 ms |
+| stdio cold search (first ever query, full parse) | — | 35.2 s |
+| stdio search after a restart, same store file | — | 276 ms |
+| Store file for the corpus | 689 MB / 369 MB = 1.87x | **312 MB / 263 MB = 1.19x** |
+| stdio RSS, warm (5 consecutive queries) | — | flat: 223, 223, 223, 223, 224 MB |
+| Segments / live posting records | n/a | 3 / 1,872,000 |
+
+`lastSearchStats()` for one of those warm queries: 12,000 candidates,
+144,960 records decoded, 0.08 ms of sync. That is the whole cost model in one
+line — the query touches every document in the vault and still answers in
+under 100 ms, because decoding 145k records into typed arrays is cheap and
+nothing allocates per record.
+
+The cold figure in (b) is larger than (a)'s because the probe's documents are
+3,000 words each with six separately-analyzed sections; it is a parse cost
+(`analyzeConceptFields` over 36 million words), not a store cost — the store
+writes 1.9 million records as 34,026 blob appends.
+
+### History: row-per-posting store, warm/batched-cold rework, 12,000 documents, Node 26.8.1, 2026-09-15
 
 Two measurements, because `benchmark-retained-search.mjs`'s own corpus (one
 repeated boilerplate paragraph, varied only by a topic word) makes nearly
@@ -279,3 +384,33 @@ skipped and unreadable documents require abstention even when the adapter is up.
 Cache wrappers preserve these coverage notes on both fresh and cached listings.
 `get_links` incoming references remain original source evidence, labeled with
 their source layer; they can include a reference from a losing contribution.
+
+## Diagnostics for this layer
+
+The sqlite store, section scoring and link prior above are measured by hand in
+this document. `diagnostics.mjs` (`contextcake.diagnostics.v1`) now records the
+same shape of thing per query, inside the closed event schema: which backend
+answered (`backend`: `sqlite` or `memory`), whether the query was `cold`
+(caused documents to be analyzed/decoded) or `warm` (answered from an
+already-current index/store), `candidateCount` (documents scored before the
+top-k cut), `storeSyncMs` (time spent bringing the index in line with the
+contributing snapshots before scoring), and `decodedRecords` (rows the sqlite
+store decoded off disk — always `null` for the memory backend, which never
+decodes anything: everything it has is already a parsed JS object). `phase`
+only appears on a `search` event; both fields are dropped for any operation or
+value outside that closed set, same discipline as every other diagnostics
+field — never a path, a query string, or document content.
+
+`GET /api/diagnostics` folds these into an additive `retrieval` object:
+`backend`/`persisted` (is this a file-backed store or `:memory:`/in-process),
+`index` (the store's own `documents`/`terms`/`postings`/`segments`/
+`storeBytes`, `null` on the memory backend), `lastSearch` (the most recent
+search's fields above), and `searches` (cold/warm counts and median durations
+over the same bounded window `snapshot()` already uses for `medianMs`/
+`p95Ms`). retained-search.mjs computes its own `documentsRead`/
+`documentsReused` per query from the `_debug.documentsRead` delta it already
+tracked for the benchmark above — a query is `cold` iff that delta is
+nonzero. The HTTP path (service.mjs) has no such per-query read counter for
+the memory backend, so it falls back to comparing the contributing snapshots'
+generation fingerprint (`contributingKey`) between calls; for the sqlite store
+it uses the store's own `inspect().analyzed` counter instead, which is exact.

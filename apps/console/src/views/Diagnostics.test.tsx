@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Diagnostics, grafanaUrl, retrievalSummary } from './Diagnostics'
+import { Diagnostics, formatBytes, grafanaUrl, retrievalSummary } from './Diagnostics'
 import { DiagnosticActivity } from './DiagnosticActivity'
 
 const state = vi.hoisted(() => ({ mode: 'demo' }))
@@ -245,5 +245,133 @@ it('withholds stale trace links until exporter evidence matches the cleared hist
   report.telemetry.exportedTraceIds = []
   await act(async () => vi.advanceTimersByTimeAsync(5000))
   expect(trace()).toBeNull()
+  await act(async () => root.unmount())
+})
+
+it('keeps cold samples out of the warm median and treats phase-less rows as warm', () => {
+  const rows = [
+    { at: 1, operation: 'search', outcome: 'ok', durationMs: 10, phase: 'warm' as const },
+    { at: 2, operation: 'search', outcome: 'ok', durationMs: 20, phase: 'warm' as const },
+    { at: 3, operation: 'search', outcome: 'ok', durationMs: 999, phase: 'cold' as const },
+  ]
+  expect(retrievalSummary(rows, 'search', 'warm')).toEqual({
+    samples: 2,
+    errors: 0,
+    median: 15,
+    p95: null,
+  })
+  expect(retrievalSummary(rows, 'search', 'cold')).toEqual({
+    samples: 1,
+    errors: 0,
+    median: 999,
+    p95: null,
+  })
+  // Older engines never send `phase` — those rows must still count as warm.
+  const legacyRows = [
+    { at: 1, operation: 'search', outcome: 'ok', durationMs: 5 },
+  ]
+  expect(retrievalSummary(legacyRows, 'search', 'warm').samples).toBe(1)
+  expect(retrievalSummary(legacyRows, 'search', 'cold').samples).toBe(0)
+})
+
+it('formats on-disk index size in KB/MB/GB with one decimal and reports unknown when null', () => {
+  expect(formatBytes(null)).toBe('unknown')
+  expect(formatBytes(500)).toBe('500 B')
+  expect(formatBytes(2048)).toBe('2.0 KB')
+  expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB')
+  expect(formatBytes(3 * 1024 * 1024 * 1024)).toBe('3.0 GB')
+})
+
+it('renders the retrieval index panel from a report with retrieval data', async () => {
+  vi.useFakeTimers()
+  state.mode = 'live'
+  const report = {
+    observedFrom: 100,
+    observedTo: 200,
+    sampleCount: 0,
+    operations: [],
+    health: { memory: 'normal', sources: [] },
+    indexing: { events: [] },
+    retrieval: {
+      backend: 'sqlite',
+      persisted: true,
+      index: {
+        documents: 2500,
+        terms: 9000,
+        postings: 40000,
+        segments: 3,
+        storeBytes: 5 * 1024 * 1024,
+      },
+      lastSearch: {
+        at: 150,
+        phase: 'cold',
+        durationMs: 120,
+        documentsRead: 2,
+        documentsReused: 6,
+        candidateCount: 55,
+        storeSyncMs: 4,
+      },
+      searches: { warm: 10, cold: 2, medianWarmMs: 12, medianColdMs: 130 },
+    },
+  }
+  const fetch = vi.fn(async () => ({ ok: true, json: async () => report }))
+  vi.stubGlobal('fetch', fetch)
+  const container = document.createElement('div'),
+    root = createRoot(container)
+  await act(async () => root.render(<Diagnostics />))
+  expect(container.textContent).toContain('Retrieval index')
+  expect(container.textContent).toContain('On disk')
+  expect(container.textContent).toContain('2,500')
+  expect(container.textContent).toContain('9,000')
+  expect(container.textContent).toContain('40,000')
+  expect(container.textContent).toContain('5.0 MB')
+  expect(container.textContent).toContain('120.0 ms')
+  expect(container.textContent).toContain('2 / 6')
+  expect(container.textContent).toContain('55')
+  await act(async () => root.unmount())
+})
+
+it('renders unchanged with no retrieval index panel when the engine omits retrieval data', async () => {
+  vi.useFakeTimers()
+  state.mode = 'live'
+  const report = {
+    observedFrom: 100,
+    observedTo: 200,
+    sampleCount: 0,
+    operations: [],
+    health: { memory: 'normal', sources: [] },
+    indexing: { events: [] },
+  }
+  const fetch = vi.fn(async () => ({ ok: true, json: async () => report }))
+  vi.stubGlobal('fetch', fetch)
+  const container = document.createElement('div'),
+    root = createRoot(container)
+  await act(async () => root.render(<Diagnostics />))
+  expect(container.textContent).not.toContain('Retrieval index')
+  expect(container.querySelector('.cc-diag-operations-panel')).not.toBeNull()
+  await act(async () => root.unmount())
+})
+
+it('shows candidates and phase only on search rows in the operations table', async () => {
+  const container = document.createElement('div'),
+    root = createRoot(container)
+  await act(async () => root.render(<Diagnostics />))
+  const table = container.querySelector('.cc-diag-operations-panel table')!
+  const headers = [...table.querySelectorAll('thead th')].map(
+    (th) => th.textContent,
+  )
+  expect(headers).toContain('Candidates')
+  expect(headers).toContain('Phase')
+  const rows = [...table.querySelectorAll('tbody tr')] as HTMLTableRowElement[]
+  const searchRow = rows.find((r) =>
+    r.cells[1].textContent?.startsWith('search'),
+  )!
+  expect(searchRow.cells[4].textContent).not.toBe('')
+  expect(['warm', 'cold']).toContain(searchRow.cells[5].textContent)
+  const otherRow = rows.find(
+    (r) => !r.cells[1].textContent?.startsWith('search'),
+  )!
+  expect(otherRow.cells[4].textContent).toBe('')
+  expect(otherRow.cells[5].textContent).toBe('')
   await act(async () => root.unmount())
 })

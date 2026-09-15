@@ -412,6 +412,73 @@ test('quit cancels an image download and prevents a late container creation', as
   assert.equal(stack.status().state, 'stopped')
   assert.ok(!docker.calls.some((c) => c[0] === 'create'))
 })
+test('candidateCount/storeSyncMs and phase/backend are exported as bounded, phase-tagged gauges', async (t) => {
+  const directory = await temp(t),
+    configPath = path.join(directory, 'config')
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({ enabled: true, endpoint: 'http://127.0.0.1:4318' }),
+  )
+  let metrics, spans
+  const telemetry = createTelemetry({
+    configPath,
+    fetcher: async (url, options) => {
+      if (url.endsWith('/metrics'))
+        metrics = JSON.parse(options.body).resourceMetrics[0].scopeMetrics[0]
+          .metrics
+      if (url.endsWith('/traces'))
+        spans = JSON.parse(options.body).resourceSpans[0].scopeSpans[0].spans
+      return { ok: true, json: async () => ({}) }
+    },
+  })
+  t.after(() => telemetry.close())
+  channel('contextcake.diagnostics.v1').publish({
+    ...event,
+    phase: 'cold',
+    backend: 'sqlite',
+    candidateCount: 42,
+    storeSyncMs: 7.5,
+    decodedRecords: 3,
+  })
+  // A non-search event carrying a stray `phase` must not export one — the
+  // core's own safeEvent() only ever attaches phase to a search event, but
+  // the adapter independently allowlists at export and must not trust it.
+  channel('contextcake.diagnostics.v1').publish({
+    ...event,
+    operation: 'read',
+    phase: 'cold',
+    backend: 'memory',
+  })
+  await telemetry.flush()
+  const candidateGauge = metrics.find((m) => m.name === 'contextcake.candidateCount')
+  assert.equal(candidateGauge.gauge.dataPoints.length, 1)
+  assert.equal(candidateGauge.gauge.dataPoints[0].asDouble, 42)
+  assert.ok(
+    candidateGauge.gauge.dataPoints[0].attributes.some(
+      (a) => a.key === 'phase' && a.value.stringValue === 'cold',
+    ),
+  )
+  const syncGauge = metrics.find((m) => m.name === 'contextcake.storeSyncMs')
+  assert.equal(syncGauge.gauge.dataPoints[0].asDouble, 7.5)
+  const searchSpan = spans.find((s) => s.name === 'contextcake.search')
+  assert.ok(
+    searchSpan.attributes.some(
+      (a) => a.key === 'phase' && a.value.stringValue === 'cold',
+    ),
+  )
+  assert.ok(
+    searchSpan.attributes.some(
+      (a) => a.key === 'backend' && a.value.stringValue === 'sqlite',
+    ),
+  )
+  const readSpan = spans.find((s) => s.name === 'contextcake.read')
+  assert.ok(!readSpan.attributes.some((a) => a.key === 'phase'))
+  assert.ok(
+    readSpan.attributes.some(
+      (a) => a.key === 'backend' && a.value.stringValue === 'memory',
+    ),
+  )
+})
 test('untrusted event values cannot expand metric cardinality or export secrets', async (t) => {
   const directory = await temp(t),
     configPath = path.join(directory, 'config')

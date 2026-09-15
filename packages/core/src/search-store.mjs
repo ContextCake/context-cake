@@ -11,13 +11,42 @@
 // cold re-parse, and (2) no per-document term map has to live in the JS heap
 // at all — SQLite owns that memory, on disk.
 //
+// STORAGE LAYOUT: SEGMENTED POSTING BLOBS, not a row per posting.
+// The first version of this store kept one SQLite row per
+// (term, document, field/section, tf). That is the natural relational shape
+// and it is the wrong one: a common query term materialized tens of thousands
+// of JS row objects per query (a 12,000-document vault where every document
+// matches every term decoded ~150,000 rows), which turned a 63 ms in-memory
+// scan into a ~600 ms query and inflated the file to 689 MB for a 369 MB
+// corpus. Now:
+//
+//   - documents are grouped into SEGMENTS of SEGMENT_DOCS documents. One
+//     segment is "open" and accepts appends; the rest are sealed.
+//   - `postings` holds ONE BLOB per (term, segment): fixed-width 12-byte
+//     little-endian records `[doc u32][kind<<24|slot u32][tf u32]`, sorted by
+//     (doc, kind, slot). kinds 0-3 are the four fixed fields
+//     (id/title/description/tags); kind 4 is a section body, `slot` being the
+//     section index. A query reads a handful of blobs per term and decodes
+//     them with a DataView straight into the per-candidate frequency
+//     structures scoring needs — no JS object per record, ever.
+//   - a document ALWAYS gets a new doc id (an edit deletes the old row and
+//     inserts a new one), so appends to the open segment's blob preserve
+//     sorted order without a sort.
+//   - a deleted document is simply absent from `docs`. Its records stay in
+//     the blobs as tombstones and are skipped at scoring time (candidate rows
+//     are fetched by doc id; a record with no row scores nothing). Each
+//     segment tracks its dead-record count; a sealed segment past
+//     DEAD_RATIO is rewritten without its dead records, one segment per
+//     write transaction.
+//
 // BIT-IDENTICAL BY CONSTRUCTION, same discipline as search-index.mjs:
 //   - per-document analysis is search.mjs's own analyzeConceptFields, so terms,
 //     stemming, and per-field lengths match exactly;
 //   - corpus statistics (document frequency, per-field length totals, document
-//     count) are maintained by integer add/subtract as documents enter and
-//     leave the store — integer arithmetic is order-independent, so the
-//     maintained values equal a fresh build's exactly;
+//     count, section count and section term total) are maintained by integer
+//     add/subtract as documents enter and leave the store — integer arithmetic
+//     is order-independent, so the maintained values equal a fresh build's
+//     exactly;
 //   - candidate documents are reconstructed into the exact `entry.fields` shape
 //     scoreEntry expects, and scoreEntry itself (imported, not reimplemented)
 //     does the arithmetic;
@@ -27,7 +56,8 @@
 //     is part of the ranking contract, exactly as in search-index.mjs.
 // search-store.test.mjs holds Object.is equality against searchConcepts AND
 // createSearchIndex under randomized mutation, plus restart/identity/eviction
-// scenarios specific to durability.
+// scenarios and a segment-sealing/tombstone/compaction scenario specific to
+// this layout.
 //
 // Nothing per-document is retained in the JS heap between searches — only
 // prepared statements on the instance. Every sync (the "bring the store in
@@ -39,6 +69,8 @@
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { statSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import {
   analyze, analyzeConceptFields, conceptBody, makeSnippet, scoreEntry, tokenizeQuery, FIXED_FIELD_COUNT,
   linkPriorMultiplier,
@@ -47,17 +79,33 @@ import { sectionText } from "./sections.mjs";
 import { conceptLinkTargets } from "./markdown-links.mjs";
 import { mergeConcepts, orderContributors } from "./resolver.mjs";
 
-// Bumped for the `sections`/`section_postings` tables (section-level body
-// scoring, mirroring search.mjs's scoreConceptSections): a store built under
-// an earlier FORMAT_VERSION has no per-section postings, so any pre-existing
-// file rebuilds from scratch rather than silently scoring the whole body as
-// section 0.
-const FORMAT_VERSION = 3;
+// Bumped for the segmented posting-blob layout: a store built under an
+// earlier FORMAT_VERSION has row-per-posting tables this code cannot read, so
+// any pre-existing file rebuilds from scratch.
+const FORMAT_VERSION = 4;
+// Documents per segment. Bigger segments mean fewer blobs to read per query
+// term and a better compression ratio for the per-term header cost; smaller
+// segments mean less bytes copied when the open segment's blob is appended
+// to. 4096 keeps a common term's open-segment blob well under a megabyte.
+const DEFAULT_SEGMENT_DOCS = 4096;
+// Fixed-width posting record: [doc u32][kind<<24 | slot u32][tf u32].
+// 12 bytes rather than the 9 a packed [doc u32][kind u8][slot u16][tf u16]
+// would take: u32 tf and a 24-bit slot cannot overflow on a pathological
+// document (a section repeating one term 65,536 times, or a document with
+// more than 65,536 sections), and 4-byte fields keep the decode a plain
+// aligned DataView read. The size difference is ~3 bytes per (term, field)
+// pair — noise next to the section text the same file stores.
+const REC_BYTES = 12;
+const KIND_SECTION = FIXED_FIELD_COUNT; // 4: kinds 0..3 are the fixed fields
+const SLOT_MASK = 0x00ffffff;
+// Rewrite a sealed segment's blobs once more than this fraction of its
+// records belong to documents that no longer exist.
+const DEAD_RATIO = 0.25;
 // A section field's contribution to scoreEntry when a section has no query
 // term matches at all: {frequencies: empty, length: irrelevant} — the SAME
 // object works for any unmatched section because an empty frequency map
 // contributes 0 regardless of `length` (scoreEntry only reads `length` when
-// `frequencies.get(term)` is truthy). This is what lets buildCandidates skip
+// `frequencies.get(term)` is truthy). This is what lets the decoder skip
 // enumerating a document's non-matching sections entirely: their score is
 // this baseline, provably true for every candidate document (see the header
 // comment on scoreBestSection).
@@ -107,16 +155,54 @@ function randomToken() {
   return createHash("sha256").update(String(Math.random())).update(String(Date.now())).update(String(process.pid)).digest("hex").slice(0, 16);
 }
 
+/** A stored u32 array column (section lengths) as a Uint32Array, copying only
+ * when the driver handed back a view whose byteOffset is not 4-aligned. */
+function u32ArrayOf(bytes) {
+  if (!bytes || bytes.byteLength === 0) return new Uint32Array(0);
+  if (bytes.byteOffset % 4 === 0) {
+    return new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >>> 2);
+  }
+  const copy = Uint8Array.prototype.slice.call(bytes);
+  return new Uint32Array(copy.buffer, copy.byteOffset, copy.byteLength >>> 2);
+}
+
+/**
+ * A candidate document's per-field term frequencies, backed by a slice of a
+ * flat Uint32Array rather than a Map per field per document. scoreEntry only
+ * ever calls `.get(term)` and treats 0 as "no match", so this is a drop-in
+ * for the Map the in-memory index holds — without allocating one per field
+ * per candidate, which is precisely the cost this layout exists to avoid.
+ */
+class TermFrequencies {
+  constructor(values, base, termIndex) {
+    this.values = values;
+    this.base = base;
+    this.termIndex = termIndex;
+  }
+
+  get(term) {
+    const i = this.termIndex.get(term);
+    return i === undefined ? undefined : this.values[this.base + i];
+  }
+
+  has(term) {
+    const i = this.termIndex.get(term);
+    return i !== undefined && this.values[this.base + i] > 0;
+  }
+}
+
 /**
  * Open (or create) a SQLite-backed BM25F posting store.
  *
  * `file`: absolute path, or ":memory:" for a process-local store.
+ * `segmentDocs`: documents per posting segment (tests lower it to exercise
+ * sealing and compaction without writing 4,096 documents).
  * `idleEvictMs`: accepted for API symmetry with createSearchIndex. This store
  * keeps no corpus-scale state in the JS heap between searches — only the
  * open database handle and prepared statements, which are cheap to hold — so
  * there is nothing profitable to evict on a timer. Accepted and ignored.
  */
-export function createSearchStore({ file, idleEvictMs } = {}) {
+export function createSearchStore({ file, idleEvictMs, segmentDocs = DEFAULT_SEGMENT_DOCS } = {}) {
   if (!sqliteModule) {
     throw new Error(
       "search-store requires node:sqlite, which failed to load in this runtime"
@@ -126,7 +212,8 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
   void idleEvictMs; // see doc comment above
 
   const { DatabaseSync } = sqliteModule;
-  const db = new DatabaseSync(file ?? ":memory:");
+  const path = file ?? ":memory:";
+  const db = new DatabaseSync(path);
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA temp_store = MEMORY");
@@ -173,7 +260,9 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       DROP TABLE IF EXISTS sections;
       DROP TABLE IF EXISTS postings;
       DROP TABLE IF EXISTS section_postings;
+      DROP TABLE IF EXISTS segments;
       DROP TABLE IF EXISTS terms;
+      DROP TABLE IF EXISTS stats;
       DROP TABLE IF EXISTS links;
 
       CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -184,55 +273,85 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
         gen INTEGER,
         proc TEXT
       );
+      -- AUTOINCREMENT, not a bare INTEGER PRIMARY KEY: doc ids must be
+      -- MONOTONIC. Plain rowid assignment reuses the id of a deleted last row,
+      -- which would let a new document inherit a deleted one's tombstoned
+      -- posting records. Monotonic ids are also what makes an append to the
+      -- open segment's blob sorted by construction.
+      -- seg is the segment this document's records live in, nrec how many
+      -- records it contributed (both needed to account for its tombstones on
+      -- delete), dterms its distinct terms (newline-joined; the analyzer's
+      -- alphabet cannot contain a newline) so a delete can decrement df
+      -- without a row-per-(doc, term) table, and seclens its per-section
+      -- term lengths as packed u32 — read at query time instead of a
+      -- 6-rows-per-document join.
       CREATE TABLE docs(
-        doc INTEGER PRIMARY KEY,
+        doc INTEGER PRIMARY KEY AUTOINCREMENT,
         layer TEXT NOT NULL,
         id TEXT NOT NULL,
         ord INTEGER NOT NULL,
         fp TEXT NOT NULL,
         title TEXT,
         frontmatter TEXT NOT NULL,
-        body TEXT NOT NULL,
         len0 INTEGER, len1 INTEGER, len2 INTEGER, len3 INTEGER,
+        seg INTEGER NOT NULL,
+        nrec INTEGER NOT NULL,
+        dterms TEXT NOT NULL,
+        seclens BLOB NOT NULL,
         UNIQUE(layer, id)
       );
+      CREATE INDEX docs_seg ON docs(seg);
+      CREATE INDEX docs_id ON docs(id);
       -- One row per concept.sections element (or one synthetic empty section
       -- for a zero-section concept, matching analyzeConceptFields exactly).
-      -- text is the raw section text, kept ONLY so a winning section's
-      -- snippet can be built without re-reading the whole document.
+      -- text is the raw section text. It is the ONLY copy of the document
+      -- body the store keeps: a hit whose score came entirely from the fixed
+      -- fields needs the whole body for its snippet, and the whole body is
+      -- exactly these texts joined with "\\n" (conceptBody in search.mjs), so
+      -- storing both would double the file for nothing.
+      -- A ROWID table with a unique index, deliberately NOT a WITHOUT ROWID
+      -- table keyed on (doc, idx): section text is kilobytes, and an index
+      -- b-tree keeps only ~1 KB of a row locally before spilling the rest to
+      -- overflow pages, so multi-kilobyte sections wasted most of an overflow
+      -- page each (measured: +45% on the file for a 3.5 KB-per-section
+      -- corpus). A table b-tree keeps ~4 KB locally and spills the remainder
+      -- densely.
       CREATE TABLE sections(
         doc INTEGER NOT NULL,
         idx INTEGER NOT NULL,
         key TEXT,
         heading TEXT,
         text TEXT NOT NULL,
-        length INTEGER NOT NULL,
-        PRIMARY KEY(doc, idx)
-      ) WITHOUT ROWID;
-      -- Fixed per-concept fields only: id/title/description/tags (positions
-      -- 0-3). Body postings live in section_postings, one row per section,
-      -- since a term's frequency must be scored PER SECTION, not summed
-      -- across a document's sections.
+        length INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX sections_doc_idx ON sections(doc, idx);
+      -- One open segment (sealed = 0) accepts appends; the rest are sealed.
+      -- records counts every record in this segment's blobs, dead how many
+      -- of those belong to documents that have since been removed.
+      CREATE TABLE segments(
+        seg INTEGER PRIMARY KEY,
+        sealed INTEGER NOT NULL,
+        docCount INTEGER NOT NULL,
+        records INTEGER NOT NULL,
+        dead INTEGER NOT NULL
+      );
+      -- One blob per (term, segment): fixed-width records sorted by
+      -- (doc, kind, slot). See the module header for the encoding.
       CREATE TABLE postings(
         term TEXT NOT NULL,
-        doc INTEGER NOT NULL,
-        field INTEGER NOT NULL,
-        tf INTEGER NOT NULL,
-        PRIMARY KEY(term, doc, field)
+        seg INTEGER NOT NULL,
+        data BLOB NOT NULL,
+        PRIMARY KEY(term, seg)
       ) WITHOUT ROWID;
-      CREATE INDEX postings_doc ON postings(doc);
-      CREATE TABLE section_postings(
-        term TEXT NOT NULL,
-        doc INTEGER NOT NULL,
-        idx INTEGER NOT NULL,
-        tf INTEGER NOT NULL,
-        PRIMARY KEY(term, doc, idx)
-      ) WITHOUT ROWID;
-      CREATE INDEX section_postings_doc ON section_postings(doc);
+      CREATE INDEX postings_seg ON postings(seg);
       -- df counts DISTINCT DOCUMENTS containing a term in ANY field or ANY
       -- section (buildConceptIndex's own dedup-per-doc rule) — bumped once
       -- per doc regardless of how many fields/sections mention the term.
       CREATE TABLE terms(term TEXT PRIMARY KEY, df INTEGER NOT NULL);
+      -- Corpus aggregates, maintained by integer add/subtract rather than
+      -- recomputed with SUM() per query: at 12k documents a SUM over the
+      -- sections table is a 72,000-row scan on the warm path.
+      CREATE TABLE stats(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
       CREATE TABLE links(
         doc INTEGER NOT NULL,
         ord INTEGER NOT NULL,
@@ -242,6 +361,8 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       CREATE INDEX links_doc ON links(doc);
     `);
     db.prepare("INSERT INTO meta(key, value) VALUES ('format', ?)").run(String(FORMAT_VERSION));
+    const insertStat = db.prepare("INSERT INTO stats(key, value) VALUES (?, 0)");
+    for (const key of ["docs", "len0", "len1", "len2", "len3", "secLen", "secCount"]) insertStat.run(key);
   }
 
   function ensureSchema() {
@@ -282,7 +403,8 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
 
   let closed = false;
   let analyzedCount = 0; // documents (re-)analyzed by THIS instance since open
-  let bodyReadCount = 0; // `body` column reads by THIS instance since open — bounded by hit count per search, never corpus size
+  let bodyReadCount = 0; // section/body text reads by THIS instance since open — bounded by hit count per search, never corpus size
+  let lastStats = { candidateCount: 0, syncMs: 0, decodedRecords: 0 };
 
   // ---- prepared statements, cached on the instance -------------------------
   const stmts = {
@@ -296,36 +418,45 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     deleteLayer: db.prepare("DELETE FROM layers WHERE name = ?"),
     allLayerNames: db.prepare("SELECT name FROM layers"),
     docsForLayer: db.prepare("SELECT doc, id, fp, ord FROM docs WHERE layer = ?"),
-    docTermsFor: db.prepare(
-      "SELECT term FROM postings WHERE doc = ? UNION SELECT term FROM section_postings WHERE doc = ?",
-    ),
-    deletePostingsForDoc: db.prepare("DELETE FROM postings WHERE doc = ?"),
-    deleteSectionPostingsForDoc: db.prepare("DELETE FROM section_postings WHERE doc = ?"),
+    docForRemoval: db.prepare("SELECT seg, nrec, dterms, len0, len1, len2, len3, seclens FROM docs WHERE doc = ?"),
     deleteSectionsForDoc: db.prepare("DELETE FROM sections WHERE doc = ?"),
     deleteDoc: db.prepare("DELETE FROM docs WHERE doc = ?"),
     updateDocOrd: db.prepare("UPDATE docs SET ord = ? WHERE doc = ?"),
     insertDoc: db.prepare(
-      "INSERT INTO docs(layer, id, ord, fp, title, frontmatter, body, len0, len1, len2, len3) "
-      + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO docs(layer, id, ord, fp, title, frontmatter, len0, len1, len2, len3, seg, nrec, dterms, seclens) "
+      + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ),
     insertSection: db.prepare(
       "INSERT INTO sections(doc, idx, key, heading, text, length) VALUES (?, ?, ?, ?, ?, ?)",
     ),
-    insertPosting: db.prepare("INSERT INTO postings(term, doc, field, tf) VALUES (?, ?, ?, ?)"),
-    insertSectionPosting: db.prepare("INSERT INTO section_postings(term, doc, idx, tf) VALUES (?, ?, ?, ?)"),
-    bumpTermUp: db.prepare(
-      "INSERT INTO terms(term, df) VALUES (?, 1) ON CONFLICT(term) DO UPDATE SET df = df + 1",
+    bumpTerm: db.prepare(
+      "INSERT INTO terms(term, df) VALUES (?, ?) ON CONFLICT(term) DO UPDATE SET df = df + excluded.df",
     ),
-    bumpTermDown: db.prepare("UPDATE terms SET df = df - 1 WHERE term = ?"),
     deleteZeroTerm: db.prepare("DELETE FROM terms WHERE term = ? AND df <= 0"),
     termDf: db.prepare("SELECT df FROM terms WHERE term = ?"),
-    countDocs: db.prepare("SELECT COUNT(*) AS n FROM docs"),
-    sumLens: db.prepare("SELECT SUM(len0) AS s0, SUM(len1) AS s1, SUM(len2) AS s2, SUM(len3) AS s3 FROM docs"),
-    sectionAgg: db.prepare("SELECT SUM(length) AS total, COUNT(*) AS cnt FROM sections"),
-    postingsForTerm: db.prepare("SELECT doc, field, tf FROM postings WHERE term = ?"),
-    sectionPostingsForTerm: db.prepare("SELECT doc, idx, tf FROM section_postings WHERE term = ?"),
+    allStats: db.prepare("SELECT key, value FROM stats"),
+    addStat: db.prepare("UPDATE stats SET value = value + ? WHERE key = ?"),
+    openSegment: db.prepare("SELECT seg, docCount FROM segments WHERE sealed = 0 LIMIT 1"),
+    maxSegment: db.prepare("SELECT MAX(seg) AS m FROM segments"),
+    insertSegment: db.prepare("INSERT INTO segments(seg, sealed, docCount, records, dead) VALUES (?, 0, 0, 0, 0)"),
+    sealSegment: db.prepare("UPDATE segments SET sealed = 1, docCount = ? WHERE seg = ?"),
+    setSegmentDocCount: db.prepare("UPDATE segments SET docCount = ? WHERE seg = ?"),
+    addSegmentRecords: db.prepare("UPDATE segments SET records = records + ? WHERE seg = ?"),
+    addSegmentDead: db.prepare("UPDATE segments SET dead = dead + ? WHERE seg = ?"),
+    resetSegmentDead: db.prepare("UPDATE segments SET records = ?, dead = 0 WHERE seg = ?"),
+    dirtySegment: db.prepare(
+      `SELECT seg FROM segments WHERE sealed = 1 AND records > 0 AND dead * ${Math.round(1 / DEAD_RATIO)} > records LIMIT 1`,
+    ),
+    segmentCount: db.prepare("SELECT COUNT(*) AS n FROM segments"),
+    docsInSegment: db.prepare("SELECT doc FROM docs WHERE seg = ?"),
+    postingsInSegment: db.prepare("SELECT term, data FROM postings WHERE seg = ?"),
+    getPosting: db.prepare("SELECT data FROM postings WHERE term = ? AND seg = ?"),
+    insertPosting: db.prepare("INSERT INTO postings(term, seg, data) VALUES (?, ?, ?)"),
+    updatePosting: db.prepare("UPDATE postings SET data = ? WHERE term = ? AND seg = ?"),
+    deletePosting: db.prepare("DELETE FROM postings WHERE term = ? AND seg = ?"),
+    postingsForTerm: db.prepare("SELECT data FROM postings WHERE term = ? ORDER BY seg"),
     docByLayerId: db.prepare("SELECT frontmatter FROM docs WHERE layer = ? AND id = ?"),
-    bodyForDoc: db.prepare("SELECT body FROM docs WHERE doc = ?"),
+    sectionTextsForDoc: db.prepare("SELECT text FROM sections WHERE doc = ? ORDER BY idx"),
     sectionByDocIdx: db.prepare("SELECT key, heading, text FROM sections WHERE doc = ? AND idx = ?"),
     insertLink: db.prepare("INSERT INTO links(doc, ord, target) VALUES (?, ?, ?)"),
     deleteLinksForDoc: db.prepare("DELETE FROM links WHERE doc = ?"),
@@ -339,7 +470,7 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
   // either so a batched IN(...) query never risks "too many SQL variables".
   const IN_CHUNK = 500;
 
-  /** Rows for exactly the given doc ids, batched, WITHOUT the body column. */
+  /** Rows for exactly the given doc ids, batched, WITHOUT the document text. */
   function docsByIds(ids) {
     const arr = [...ids];
     const rows = [];
@@ -347,30 +478,11 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       const chunk = arr.slice(i, i + IN_CHUNK);
       const placeholders = chunk.map(() => "?").join(",");
       const stmt = db.prepare(
-        `SELECT doc, layer, id, ord, title, len0, len1, len2, len3 FROM docs WHERE doc IN (${placeholders})`,
+        `SELECT doc, layer, id, ord, title, len0, len1, len2, len3, seclens FROM docs WHERE doc IN (${placeholders})`,
       );
       rows.push(...stmt.all(...chunk));
     }
     return rows;
-  }
-
-  /** Map<doc, Map<idx, length>> for exactly the given candidate doc ids,
-   * batched — the section LENGTHS only (not text), needed to score each
-   * matched section with its own length normalization. */
-  function sectionLensForDocs(ids) {
-    const arr = [...ids];
-    const byDoc = new Map();
-    for (let i = 0; i < arr.length; i += IN_CHUNK) {
-      const chunk = arr.slice(i, i + IN_CHUNK);
-      const placeholders = chunk.map(() => "?").join(",");
-      const stmt = db.prepare(`SELECT doc, idx, length FROM sections WHERE doc IN (${placeholders})`);
-      for (const row of stmt.all(...chunk)) {
-        let m = byDoc.get(row.doc);
-        if (!m) { m = new Map(); byDoc.set(row.doc, m); }
-        m.set(row.idx, row.length);
-      }
-    }
-    return byDoc;
   }
 
   /** Which of `ids` (a set/array of concept ids) belong to layer `layerName`, batched. */
@@ -386,14 +498,176 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     return found;
   }
 
-  function removeDoc(doc) {
-    const terms = stmts.docTermsFor.all(doc, doc);
-    for (const { term } of terms) {
-      stmts.bumpTermDown.run(term);
-      stmts.deleteZeroTerm.run(term);
+  // ---- write session -------------------------------------------------------
+  //
+  // Every write transaction runs against one of these. Posting records are
+  // accumulated per (segment, term) as flat arrays of numbers — never one
+  // object per record — and each touched blob is read/concatenated/written
+  // ONCE at flush, instead of once per document. Document-frequency and
+  // corpus-aggregate deltas are likewise summed in memory and applied once,
+  // so a 256-document batch costs a handful of statements per distinct term
+  // rather than a statement per (document, term).
+
+  function newWriter() {
+    return {
+      bySeg: new Map(), // seg -> { terms: Map<term, number[]>, count }
+      dfDelta: new Map(), // term -> integer delta
+      stats: {
+        docs: 0, len0: 0, len1: 0, len2: 0, len3: 0, secLen: 0, secCount: 0,
+      },
+      seg: -1,
+      segDocCount: 0,
+      segTouched: false,
+    };
+  }
+
+  function segmentForInsert(writer) {
+    if (writer.seg < 0) {
+      const open = stmts.openSegment.get();
+      if (open) {
+        writer.seg = open.seg;
+        writer.segDocCount = open.docCount;
+      } else {
+        const next = (stmts.maxSegment.get()?.m ?? -1) + 1;
+        stmts.insertSegment.run(next);
+        writer.seg = next;
+        writer.segDocCount = 0;
+      }
     }
-    stmts.deletePostingsForDoc.run(doc);
-    stmts.deleteSectionPostingsForDoc.run(doc);
+    if (writer.segDocCount >= segmentDocs) {
+      stmts.sealSegment.run(writer.segDocCount, writer.seg);
+      const next = (stmts.maxSegment.get()?.m ?? -1) + 1;
+      stmts.insertSegment.run(next);
+      writer.seg = next;
+      writer.segDocCount = 0;
+    }
+    writer.segDocCount += 1;
+    writer.segTouched = true;
+    return writer.seg;
+  }
+
+  function pushRecord(writer, seg, term, doc, kind, slot, tf) {
+    let bucket = writer.bySeg.get(seg);
+    if (!bucket) {
+      bucket = { terms: new Map(), count: 0 };
+      writer.bySeg.set(seg, bucket);
+    }
+    let nums = bucket.terms.get(term);
+    if (!nums) {
+      nums = [];
+      bucket.terms.set(term, nums);
+    }
+    nums.push(doc, ((kind << 24) | slot) >>> 0, tf);
+    bucket.count += 1;
+  }
+
+  function flushWriter(writer) {
+    for (const [seg, bucket] of writer.bySeg) {
+      for (const [term, nums] of bucket.terms) {
+        const existing = stmts.getPosting.get(term, seg);
+        const old = existing ? existing.data : null;
+        const oldLength = old ? old.byteLength : 0;
+        const buffer = Buffer.allocUnsafe(oldLength + (nums.length / 3) * REC_BYTES);
+        if (oldLength) Buffer.from(old.buffer, old.byteOffset, oldLength).copy(buffer, 0);
+        let offset = oldLength;
+        for (let i = 0; i < nums.length; i += 3) {
+          buffer.writeUInt32LE(nums[i], offset);
+          buffer.writeUInt32LE(nums[i + 1], offset + 4);
+          buffer.writeUInt32LE(nums[i + 2], offset + 8);
+          offset += REC_BYTES;
+        }
+        if (existing) stmts.updatePosting.run(buffer, term, seg);
+        else stmts.insertPosting.run(term, seg, buffer);
+      }
+      if (bucket.count) stmts.addSegmentRecords.run(bucket.count, seg);
+    }
+    if (writer.segTouched) stmts.setSegmentDocCount.run(writer.segDocCount, writer.seg);
+    for (const [term, delta] of writer.dfDelta) {
+      if (delta === 0) continue;
+      stmts.bumpTerm.run(term, delta);
+      if (delta < 0) stmts.deleteZeroTerm.run(term);
+    }
+    for (const [key, delta] of Object.entries(writer.stats)) {
+      if (delta !== 0) stmts.addStat.run(delta, key);
+    }
+  }
+
+  /**
+   * Rewrite one sealed segment's blobs without the records of documents that
+   * no longer exist. Runs inside the caller's transaction, at most one
+   * segment per transaction — a bounded amount of work attached to the write
+   * that crossed the threshold, never a background sweep that could surprise
+   * a query with a long lock hold.
+   */
+  function compactSegment(seg) {
+    const live = new Set(stmts.docsInSegment.all(seg).map((row) => row.doc));
+    let kept = 0;
+    for (const row of stmts.postingsInSegment.all(seg)) {
+      const data = row.data;
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const total = (data.byteLength / REC_BYTES) | 0;
+      const out = Buffer.allocUnsafe(data.byteLength);
+      let offset = 0;
+      for (let r = 0; r < total; r += 1) {
+        const at = r * REC_BYTES;
+        if (!live.has(view.getUint32(at, true))) continue;
+        out.writeUInt32LE(view.getUint32(at, true), offset);
+        out.writeUInt32LE(view.getUint32(at + 4, true), offset + 4);
+        out.writeUInt32LE(view.getUint32(at + 8, true), offset + 8);
+        offset += REC_BYTES;
+      }
+      if (offset === 0) stmts.deletePosting.run(row.term, seg);
+      else if (offset !== data.byteLength) stmts.updatePosting.run(out.subarray(0, offset), row.term, seg);
+      kept += offset / REC_BYTES;
+    }
+    stmts.resetSegmentDead.run(kept, seg);
+  }
+
+  function maybeCompact() {
+    const row = stmts.dirtySegment.get();
+    if (row) compactSegment(row.seg);
+  }
+
+  /** Open a write transaction with a fresh writer, flush it, compact at most
+   * one over-dead segment, and commit — with the same bounded busy retry
+   * every other write path uses. */
+  function writeTransaction(body) {
+    return withBusyRetry(() => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const writer = newWriter();
+        const result = body(writer);
+        flushWriter(writer);
+        maybeCompact();
+        db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  function removeDoc(writer, doc) {
+    const row = stmts.docForRemoval.get(doc);
+    if (!row) return;
+    // The document's records stay in their segment's blobs as tombstones —
+    // scoring skips them because no `docs` row will be found for that id —
+    // and the segment's dead counter is what eventually triggers a rewrite.
+    if (row.nrec) stmts.addSegmentDead.run(row.nrec, row.seg);
+    if (row.dterms) {
+      for (const term of row.dterms.split("\n")) {
+        writer.dfDelta.set(term, (writer.dfDelta.get(term) ?? 0) - 1);
+      }
+    }
+    const seclens = u32ArrayOf(row.seclens);
+    writer.stats.docs -= 1;
+    writer.stats.len0 -= row.len0 ?? 0;
+    writer.stats.len1 -= row.len1 ?? 0;
+    writer.stats.len2 -= row.len2 ?? 0;
+    writer.stats.len3 -= row.len3 ?? 0;
+    writer.stats.secCount -= seclens.length;
+    for (let i = 0; i < seclens.length; i += 1) writer.stats.secLen -= seclens[i];
     stmts.deleteSectionsForDoc.run(doc);
     stmts.deleteLinksForDoc.run(doc);
     stmts.deleteDoc.run(doc);
@@ -407,35 +681,65 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     return concept.sections.length ? concept.sections : [null];
   }
 
-  function insertDocWithPostings(layerName, id, ord, fp, concept, layerNames) {
+  function insertDocWithPostings(writer, layerName, id, ord, fp, concept, layerNames) {
     const { fields, sections } = analyzeConceptFields(id, concept);
     analyzedCount += 1;
-    const lens = fields.map((f) => f.length);
+
+    const distinct = new Set();
+    let nrec = 0;
+    for (const field of fields) {
+      nrec += field.frequencies.size;
+      for (const term of field.frequencies.keys()) distinct.add(term);
+    }
+    const seclens = new Uint32Array(sections.length);
+    sections.forEach((section, idx) => {
+      seclens[idx] = section.length;
+      nrec += section.frequencies.size;
+      for (const term of section.frequencies.keys()) distinct.add(term);
+    });
+
+    const seg = segmentForInsert(writer);
+    const lens = fields.map((field) => field.length);
     const result = stmts.insertDoc.run(
       layerName, id, ord, fp,
       concept.frontmatter?.title ?? null,
       JSON.stringify(concept.frontmatter ?? {}),
-      conceptBody(concept),
       lens[0] ?? 0, lens[1] ?? 0, lens[2] ?? 0, lens[3] ?? 0,
+      seg, nrec, [...distinct].join("\n"),
+      Buffer.from(seclens.buffer, seclens.byteOffset, seclens.byteLength),
     );
-    const doc = result.lastInsertRowid;
-    const seen = new Set();
-    for (let field = 0; field < fields.length; field += 1) {
-      for (const [term, tf] of fields[field].frequencies) {
-        stmts.insertPosting.run(term, doc, field, tf);
-        seen.add(term);
-      }
+    const doc = Number(result.lastInsertRowid);
+    if (doc > 0xffffffff) {
+      // 4.29 billion document VERSIONS written to one store file. Practically
+      // unreachable (a 50k-doc vault would have to fully re-index 86,000
+      // times), but a silent wrap here would alias a new document onto an old
+      // one's postings, so it fails loudly instead.
+      throw new Error("search-store: document id space exhausted; delete the store file to rebuild");
+    }
+
+    // Records are pushed in (doc, kind, slot) order, and doc ids are
+    // monotonic, so appending to the open segment's blob keeps it sorted
+    // without ever sorting.
+    for (let kind = 0; kind < fields.length; kind += 1) {
+      for (const [term, tf] of fields[kind].frequencies) pushRecord(writer, seg, term, doc, kind, 0, tf);
     }
     const rawSections = rawSectionsFor(concept);
     sections.forEach((section, idx) => {
       const text = rawSections[idx] ? sectionText(rawSections[idx]) : "";
       stmts.insertSection.run(doc, idx, section.key ?? null, section.heading ?? null, text, section.length);
       for (const [term, tf] of section.frequencies) {
-        stmts.insertSectionPosting.run(term, doc, idx, tf);
-        seen.add(term);
+        pushRecord(writer, seg, term, doc, KIND_SECTION, idx & SLOT_MASK, tf);
       }
     });
-    for (const term of seen) stmts.bumpTermUp.run(term);
+
+    for (const term of distinct) writer.dfDelta.set(term, (writer.dfDelta.get(term) ?? 0) + 1);
+    writer.stats.docs += 1;
+    writer.stats.len0 += lens[0] ?? 0;
+    writer.stats.len1 += lens[1] ?? 0;
+    writer.stats.len2 += lens[2] ?? 0;
+    writer.stats.len3 += lens[3] ?? 0;
+    writer.stats.secCount += seclens.length;
+    for (let i = 0; i < seclens.length; i += 1) writer.stats.secLen += seclens[i];
 
     // Self-excluded, deduped, normalized outgoing targets — document order
     // preserved via `ord` so a later linksTo read reproduces it exactly.
@@ -447,7 +751,7 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     return doc;
   }
 
-  function syncLayer(view, layerNames) {
+  function syncLayer(writer, view, layerNames) {
     const identity = view.identity ?? null;
     const existingLayer = stmts.getLayer.get(view.name);
     if (
@@ -499,12 +803,12 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
         continue;
       }
       seen.add(id);
-      if (existing) removeDoc(existing.doc);
-      insertDocWithPostings(view.name, id, ord, fp, concept, layerNames);
+      if (existing) removeDoc(writer, existing.doc);
+      insertDocWithPostings(writer, view.name, id, ord, fp, concept, layerNames);
       ord += 1;
     }
     for (const [id, existing] of existingDocs) {
-      if (!seen.has(id)) removeDoc(existing.doc);
+      if (!seen.has(id)) removeDoc(writer, existing.doc);
     }
 
     stmts.upsertLayer.run(view.name, identity, view.level ?? 0, view.gen, proc);
@@ -537,7 +841,8 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
    * concurrent reader seeing a partially-synced layer mid-build (some
    * documents from the new listing, some still from the old one); it can
    * never see a half-written document, because insertDocWithPostings's own
-   * doc+postings+links insert happens inside one batch's transaction.
+   * doc+sections+links insert and the batch's posting-blob writes happen
+   * inside one batch's transaction.
    *
    * beginLayer records just enough to let upsertBatch/finishLayer proceed;
    * it does not touch the database. Call it once per layer before any
@@ -554,9 +859,9 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
    * `{ id, ord, concept, fileMeta }` — `fileMeta` is that one document's own
    * file metadata (or omitted for an unfingerprinted source, which falls
    * back to the same content-hash fingerprint syncLayer uses). Replaces
-   * docs/postings/links/df for exactly these ids, in one transaction, the
-   * same as syncLayer's own insert path — never touches a row for any other
-   * id.
+   * docs/sections/postings/links/df for exactly these ids, in one
+   * transaction, the same as syncLayer's own insert path — never touches a
+   * row for any other id.
    */
   function upsertBatch(name, items, layerNames) {
     if (!items.length) return;
@@ -565,31 +870,24 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     // write lock past a single attempt; same discipline as ensureSchema,
     // covering the general "two processes racing to write" case, not only
     // first-open schema creation.
-    withBusyRetry(() => {
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        for (const {
-          id, ord, concept, fileMeta,
-        } of items) {
-          const fp = fileMeta
-            ? JSON.stringify([fileMeta.rel, fileMeta.ext, fileMeta.size, fileMeta.mtimeMs, fileMeta.authoredDate ?? null])
-            : contentFingerprint(id, concept);
-          const existingRow = stmts.existingDocByLayerId.get(name, id);
-          if (existingRow && existingRow.fp === fp) {
-            // Same discipline as syncLayer: an unfingerprinted (remote)
-            // source is always reloaded, but identical content still hashes
-            // to the same fingerprint, so it is kept as-is rather than
-            // reanalyzed — only the position may need fixing.
-            if (existingRow.ord !== ord) stmts.updateDocOrd.run(ord, existingRow.doc);
-            continue;
-          }
-          if (existingRow) removeDoc(existingRow.doc);
-          insertDocWithPostings(name, id, ord, fp, concept, layerNames ?? new Set([name]));
+    writeTransaction((writer) => {
+      for (const {
+        id, ord, concept, fileMeta,
+      } of items) {
+        const fp = fileMeta
+          ? JSON.stringify([fileMeta.rel, fileMeta.ext, fileMeta.size, fileMeta.mtimeMs, fileMeta.authoredDate ?? null])
+          : contentFingerprint(id, concept);
+        const existingRow = stmts.existingDocByLayerId.get(name, id);
+        if (existingRow && existingRow.fp === fp) {
+          // Same discipline as syncLayer: an unfingerprinted (remote)
+          // source is always reloaded, but identical content still hashes
+          // to the same fingerprint, so it is kept as-is rather than
+          // reanalyzed — only the position may need fixing.
+          if (existingRow.ord !== ord) stmts.updateDocOrd.run(ord, existingRow.doc);
+          continue;
         }
-        db.exec("COMMIT");
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
+        if (existingRow) removeDoc(writer, existingRow.doc);
+        insertDocWithPostings(writer, name, id, ord, fp, concept, layerNames ?? new Set([name]));
       }
     });
   }
@@ -604,49 +902,34 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
    * same durability story as upsertBatch.
    */
   function finishLayer(state, { ids, gen, level }) {
-    withBusyRetry(() => {
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        const seen = new Set(ids);
-        const rows = stmts.docsForLayer.all(state.name);
-        for (const row of rows) {
-          if (!seen.has(row.id)) removeDoc(row.doc);
-        }
-        const byId = new Map(stmts.docsForLayer.all(state.name).map((row) => [row.id, row]));
-        ids.forEach((id, ord) => {
-          const row = byId.get(id);
-          if (row && row.ord !== ord) stmts.updateDocOrd.run(ord, row.doc);
-        });
-        db.exec("COMMIT");
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
+    writeTransaction((writer) => {
+      const seen = new Set(ids);
+      const rows = stmts.docsForLayer.all(state.name);
+      for (const row of rows) {
+        if (!seen.has(row.id)) removeDoc(writer, row.doc);
       }
+      const byId = new Map(stmts.docsForLayer.all(state.name).map((row) => [row.id, row]));
+      ids.forEach((id, ord) => {
+        const row = byId.get(id);
+        if (row && row.ord !== ord) stmts.updateDocOrd.run(ord, row.doc);
+      });
     });
     withBusyRetry(() => stmts.upsertLayer.run(state.name, state.identity, level ?? 0, gen, proc));
   }
 
   function sync(contributing) {
-    // BEGIN IMMEDIATE (not the plain deferred BEGIN this used to open with):
-    // grabbing the write lock up front means a concurrent writer surfaces as
-    // one clean SQLITE_BUSY at the BEGIN itself — caught by withBusyRetry —
-    // instead of partway through the loop below after some statements on
-    // this connection have already run.
-    withBusyRetry(() => {
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        const wanted = new Set(contributing.map((view) => view.name));
-        for (const view of contributing) syncLayer(view, wanted);
-        for (const { name } of stmts.allLayerNames.all()) {
-          if (!wanted.has(name)) {
-            for (const row of stmts.docsForLayer.all(name)) removeDoc(row.doc);
-            stmts.deleteLayer.run(name);
-          }
+    // BEGIN IMMEDIATE (not a plain deferred BEGIN): grabbing the write lock
+    // up front means a concurrent writer surfaces as one clean SQLITE_BUSY at
+    // the BEGIN itself — caught by withBusyRetry — instead of partway through
+    // the loop below after some statements on this connection have run.
+    writeTransaction((writer) => {
+      const wanted = new Set(contributing.map((view) => view.name));
+      for (const view of contributing) syncLayer(writer, view, wanted);
+      for (const { name } of stmts.allLayerNames.all()) {
+        if (!wanted.has(name)) {
+          for (const row of stmts.docsForLayer.all(name)) removeDoc(writer, row.doc);
+          stmts.deleteLayer.run(name);
         }
-        db.exec("COMMIT");
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
       }
     });
   }
@@ -655,14 +938,15 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
   // aggregate body figure — the mean SECTION length across every section in
   // the corpus (total section terms / total section count), matching
   // buildConceptIndex exactly: a 9-section runbook contributes 9 length
-  // samples to that average, not one.
+  // samples to that average, not one. Every input is a maintained integer
+  // counter, so the ratio is bit-identical to a fresh build's.
   function corpusStats(terms) {
-    const { n } = stmts.countDocs.get();
-    const sums = stmts.sumLens.get();
-    const sectionAgg = stmts.sectionAgg.get();
+    const totals = {};
+    for (const row of stmts.allStats.all()) totals[row.key] = row.value;
+    const n = totals.docs ?? 0;
     const averageLength = [
-      ...[sums.s0, sums.s1, sums.s2, sums.s3].map((sum) => (n ? (sum ?? 0) / n : 0)),
-      sectionAgg.cnt ? (sectionAgg.total ?? 0) / sectionAgg.cnt : 0,
+      ...[totals.len0, totals.len1, totals.len2, totals.len3].map((sum) => (n ? (sum ?? 0) / n : 0)),
+      totals.secCount ? (totals.secLen ?? 0) / totals.secCount : 0,
     ];
     const documentFrequency = new Map();
     for (const term of terms) {
@@ -672,49 +956,74 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     return { total: n, averageLength, documentFrequency };
   }
 
-  // doc -> { fixed: [{frequencies,length}] x FIXED_FIELD_COUNT, sections:
-  // Map<idx, {frequencies}> } for scoreBestSection, built ONLY for documents
-  // that have at least one posting (fixed-field OR section) among the query
-  // terms — the per-doc structures are transient, discarded after this
-  // search() call.
-  function buildCandidates(terms) {
+  /**
+   * Decode every posting blob touching a query term into per-candidate
+   * frequency structures — the whole point of the segmented layout.
+   *
+   * A candidate's fixed-field frequencies live in ONE flat Uint32Array of
+   * `FIXED_FIELD_COUNT * terms.length` slots; a matched section's live in a
+   * Uint32Array of `terms.length`. Nothing allocates per record. Records for
+   * documents that no longer exist (tombstones) produce candidates that no
+   * `docs` row will match, so they fall out at the row-join below.
+   */
+  function decodePostings(terms) {
+    const termCount = terms.length;
+    const termIndex = new Map();
+    terms.forEach((term, i) => termIndex.set(term, i));
     const candidates = new Map();
-    const ensure = (doc) => {
-      let c = candidates.get(doc);
-      if (!c) {
-        c = {
-          fixed: Array.from({ length: FIXED_FIELD_COUNT }, () => ({ frequencies: new Map(), length: 0 })),
-          sections: new Map(),
-        };
-        candidates.set(doc, c);
-      }
-      return c;
-    };
-    for (const term of terms) {
-      for (const { doc, field, tf } of stmts.postingsForTerm.all(term)) {
-        ensure(doc).fixed[field].frequencies.set(term, tf);
-      }
-      for (const { doc, idx, tf } of stmts.sectionPostingsForTerm.all(term)) {
-        const c = ensure(doc);
-        let section = c.sections.get(idx);
-        if (!section) {
-          section = { frequencies: new Map() };
-          c.sections.set(idx, section);
+    let decodedRecords = 0;
+
+    for (let ti = 0; ti < termCount; ti += 1) {
+      for (const row of stmts.postingsForTerm.all(terms[ti])) {
+        const data = row.data;
+        const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+        const total = (data.byteLength / REC_BYTES) | 0;
+        let lastDoc = -1;
+        let candidate = null;
+        for (let r = 0, offset = 0; r < total; r += 1, offset += REC_BYTES) {
+          const doc = view.getUint32(offset, true);
+          const packed = view.getUint32(offset + 4, true);
+          const tf = view.getUint32(offset + 8, true);
+          if (doc !== lastDoc) {
+            lastDoc = doc;
+            candidate = candidates.get(doc);
+            if (!candidate) {
+              candidate = { fixed: new Uint32Array(FIXED_FIELD_COUNT * termCount), sections: null };
+              candidates.set(doc, candidate);
+            }
+          }
+          const kind = packed >>> 24;
+          if (kind === KIND_SECTION) {
+            let sections = candidate.sections;
+            if (!sections) {
+              sections = new Map();
+              candidate.sections = sections;
+            }
+            const idx = packed & SLOT_MASK;
+            let frequencies = sections.get(idx);
+            if (!frequencies) {
+              frequencies = new Uint32Array(termCount);
+              sections.set(idx, frequencies);
+            }
+            frequencies[ti] = tf;
+          } else {
+            candidate.fixed[kind * termCount + ti] = tf;
+          }
         }
-        section.frequencies.set(term, tf);
+        decodedRecords += total;
       }
     }
-    return candidates;
+    return { candidates, termIndex, decodedRecords };
   }
 
   /**
    * The store's counterpart to search.mjs's scoreConceptSections: score every
-   * section of `doc` as its own body candidate and return the max, with the
-   * winning section's index and whether the winning score came from an
+   * section of a document as its own body candidate and return the max, with
+   * the winning section's index and whether the winning score came from an
    * actual section match (`matched`).
    *
    * Unlike scoreConceptSections, this does NOT need every section of the
-   * document — only the ones `candidate.sections` names (i.e. the ones with
+   * document — only the ones the decoded candidate names (i.e. the ones with
    * at least one query-term posting). Proof: a section's score is
    * baseScore + a NON-NEGATIVE per-matched-term contribution (idf > 0 for
    * any term with a posting, and a stored posting always has tf >= 1, so
@@ -728,18 +1037,25 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
    * an unmatched section "winning" by tying above every matched section.
    * Iterating matched sections in ascending idx order and comparing with
    * strict `>` reproduces scoreConceptSections's first-on-ties rule exactly.
+   *
+   * `fields` is a reusable 5-slot array whose last slot this mutates: one
+   * array for the whole search instead of one per section candidate.
    */
-  function scoreBestSection(index, fixedFields, candidate, terms, sectionLens) {
-    const matchedIdx = [...(candidate?.sections ?? [])].sort((a, b) => a[0] - b[0]);
-    if (matchedIdx.length === 0) {
-      const score = scoreEntry(index, { fields: [...fixedFields, EMPTY_SECTION_FIELD] }, terms);
-      return { score, sectionIndex: 0, matched: false };
+  function scoreBestSection(index, fields, entry, candidate, terms, termIndex, sectionLengths) {
+    const sections = candidate.sections;
+    if (!sections || sections.size === 0) {
+      fields[FIXED_FIELD_COUNT] = EMPTY_SECTION_FIELD;
+      return { score: scoreEntry(index, entry, terms), sectionIndex: 0, matched: false };
     }
+    const indexes = [...sections.keys()].sort((a, b) => a - b);
     let bestScore = -Infinity;
     let bestIndex = 0;
-    for (const [idx, section] of matchedIdx) {
-      const sectionField = { frequencies: section.frequencies, length: sectionLens.get(idx) ?? 0 };
-      const score = scoreEntry(index, { fields: [...fixedFields, sectionField] }, terms);
+    const field = { frequencies: null, length: 0 };
+    fields[FIXED_FIELD_COUNT] = field;
+    for (const idx of indexes) {
+      field.frequencies = new TermFrequencies(sections.get(idx), 0, termIndex);
+      field.length = sectionLengths[idx] ?? 0;
+      const score = scoreEntry(index, entry, terms);
       if (score > bestScore) {
         bestScore = score;
         bestIndex = idx;
@@ -783,6 +1099,14 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       if (stmts.docExists.get(target)) out.push(target);
     }
     return out;
+  }
+
+  /** A document's whole body, exactly as conceptBody concatenates it: the
+   * section texts joined with "\n". The store keeps no separate body column
+   * — that would double the largest thing in the file for a string it can
+   * rebuild from the rows it already has. */
+  function bodyFor(doc) {
+    return stmts.sectionTextsForDoc.all(doc).map((row) => row.text).join("\n");
   }
 
   function levelOrderer(contributing) {
@@ -831,13 +1155,30 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     return mergeConcepts(orderContributors(contributors)).frontmatter.type ?? "concept";
   }
 
+  function storeBytes() {
+    if (path === ":memory:") return null;
+    let total = 0;
+    for (const suffix of ["", "-wal"]) {
+      try {
+        total += statSync(`${path}${suffix}`).size;
+      } catch {
+        // -wal is absent between checkpoints, and the main file is absent
+        // only for an in-memory store (handled above) — either way, nothing
+        // to add.
+      }
+    }
+    return total;
+  }
+
   return {
     search(contributing, { query, limit = 10, source, type } = {}) {
       const rawTokens = tokenizeQuery(query);
       if (!query || typeof query !== "string" || rawTokens.length === 0) {
         throw new Error("search requires a non-empty query string with at least one searchable token");
       }
+      const syncStarted = performance.now();
       sync(contributing);
+      const syncMs = performance.now() - syncStarted;
       const terms = [...new Set(analyze(query))];
       const orderLayerNames = levelOrderer(contributing);
       const index = corpusStats(terms);
@@ -847,15 +1188,16 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
       // in every field, so scoreEntry would score it 0 and it would be
       // filtered anyway — restricting enumeration to candidates cannot change
       // which hits are returned, only how much of the corpus we touch to
-      // find out. This is the fix for the full-corpus-per-query cost: no
-      // `body` (or any other column) is read for a non-candidate document,
-      // ever.
-      const candidates = buildCandidates(terms);
-      if (candidates.size === 0) return [];
+      // find out. No text is read for a non-candidate document, ever.
+      const { candidates, termIndex, decodedRecords } = decodePostings(terms);
+      if (candidates.size === 0) {
+        lastStats = { candidateCount: 0, syncMs, decodedRecords };
+        return [];
+      }
 
       const rowsByDoc = new Map();
       for (const row of docsByIds(candidates.keys())) rowsByDoc.set(row.doc, row);
-      const sectionLensByDoc = sectionLensForDocs(candidates.keys());
+      lastStats = { candidateCount: rowsByDoc.size, syncMs, decodedRecords };
 
       // source filter: which of the CANDIDATE ids belong to that named layer,
       // right now — never a full listing of the layer.
@@ -881,16 +1223,25 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
           return ai !== bi ? ai - bi : a.ord - b.ord;
         });
 
+      // One 5-slot field array and one entry wrapper for the entire search:
+      // scoreEntry only reads them, and scoreBestSection rewrites the body
+      // slot per section candidate.
+      const fields = new Array(FIXED_FIELD_COUNT + 1);
+      const entry = { fields };
+
       const byId = new Map();
       for (const row of orderedRows) {
         if (sourceIdSet && !sourceIdSet.has(row.id)) continue;
         const candidate = candidates.get(row.doc);
-        const fixedFields = candidate.fixed.map((f, i) => ({
-          frequencies: f.frequencies,
-          length: [row.len0, row.len1, row.len2, row.len3][i],
-        }));
-        const sectionLens = sectionLensByDoc.get(row.doc) ?? new Map();
-        const best = scoreBestSection(index, fixedFields, candidate, terms, sectionLens);
+        const lens = [row.len0, row.len1, row.len2, row.len3];
+        for (let k = 0; k < FIXED_FIELD_COUNT; k += 1) {
+          fields[k] = {
+            frequencies: new TermFrequencies(candidate.fixed, k * terms.length, termIndex),
+            length: lens[k],
+          };
+        }
+        const sectionLengths = u32ArrayOf(row.seclens);
+        const best = scoreBestSection(index, fields, entry, candidate, terms, termIndex, sectionLengths);
         if (best.score <= 0) continue;
         const view = contributing[viewIndexByName.get(row.layer)];
         const title = row.title ?? null;
@@ -943,7 +1294,7 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
             snippetSource = srow.text;
             section = { key: srow.key, heading: srow.heading };
           } else {
-            snippetSource = stmts.bodyForDoc.get(doc).body;
+            snippetSource = bodyFor(doc);
             section = null;
           }
           bodyReadCount += 1;
@@ -964,6 +1315,16 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     upsertBatch,
     finishLayer,
 
+    /**
+     * What the last search() call cost, for diagnostics: how many candidate
+     * documents it scored, how long its sync took, and how many stored
+     * posting records it decoded. Read opportunistically (optional chaining)
+     * by callers that may hold either backend.
+     */
+    lastSearchStats() {
+      return { ...lastStats };
+    },
+
     close() {
       // Idempotent: unlike DatabaseSync itself (which throws on a second
       // close), createSearchIndex().close() tolerates repeat calls, and
@@ -975,11 +1336,19 @@ export function createSearchStore({ file, idleEvictMs } = {}) {
     },
 
     inspect() {
-      const { n: documents } = stmts.countDocs.get();
+      const totals = {};
+      for (const row of stmts.allStats.all()) totals[row.key] = row.value;
       const { n: terms } = db.prepare("SELECT COUNT(*) AS n FROM terms").get();
-      const { n: postings } = db.prepare("SELECT COUNT(*) AS n FROM postings").get();
+      const { live } = db.prepare("SELECT COALESCE(SUM(records - dead), 0) AS live FROM segments").get();
+      const { n: segments } = stmts.segmentCount.get();
       return {
-        documents, terms, postings, analyzed: analyzedCount, bodyReads: bodyReadCount,
+        documents: totals.docs ?? 0,
+        terms,
+        postings: Number(live),
+        analyzed: analyzedCount,
+        bodyReads: bodyReadCount,
+        segments,
+        storeBytes: storeBytes(),
       };
     },
   };

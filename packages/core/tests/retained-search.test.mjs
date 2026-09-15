@@ -19,77 +19,96 @@ async function fixture(t) {
   return { root, source };
 }
 
-test("repeated queries reuse parsed documents; edits, deletes and additions equal fresh ranking", async (t) => {
+// The whole point of the store-backed rework: parsed documents are NOT
+// retained in the JS heap between queries, so "loaded nothing" (not "reused
+// a retained parse") is the thing every test below proves.
+
+test("repeated queries load nothing once synced; edits, deletes and additions equal fresh ranking and cost exactly one read each", async (t) => {
   const { root, source } = await fixture(t);
-  let reads = 0;
-  const retained = createRetainedSearch([{ ...source, async loadConcept(...args) { reads++; return source.loadConcept(...args); } }]);
+  const retained = createRetainedSearch([source]);
   t.after(() => retained.close());
   await assert.rejects(retained.search({ query: "!!!" }), /non-empty query/);
-  assert.equal(reads, 0, "invalid queries never scan the corpus");
+  assert.equal(retained._debug.documentsRead, 0, "invalid queries never scan the corpus");
+
   const first = await retained.search({ query: "database" });
-  assert.equal(reads, 2);
+  assert.equal(retained._debug.documentsRead, 2, "first query analyzes every document once");
   assert.deepEqual(first.hits, await searchConcepts([source], { query: "database" }));
+
+  const readsAfterFirst = retained._debug.documentsRead;
   const next = await retained.search({ query: "migration" });
-  assert.equal(reads, 2, "a new query must not reread the corpus");
-  assert.equal(first.sources[0], next.sources[0], "unchanged listing preserves generation");
+  assert.equal(retained._debug.documentsRead, readsAfterFirst, "a new query over unchanged content loads zero documents");
+  assert.equal(next.sources[0], source, "the real adapter is returned, not a point-in-time snapshot wrapper");
+
   await writeFile(path.join(root, "database.md"), "# Database\n\n## Engine\n\nSQLite now stores the embedded database.");
   await utimes(path.join(root, "database.md"), new Date(), new Date(Date.now() + 1000));
   const edited = await retained.search({ query: "sqlite database" });
-  assert.equal(reads, 3, "one changed file costs one read");
+  assert.equal(retained._debug.documentsRead, readsAfterFirst + 1, "one changed file costs exactly one read");
   assert.deepEqual(edited.hits, await searchConcepts([source], { query: "sqlite database" }));
+
+  const readsAfterEdit = retained._debug.documentsRead;
   await rm(path.join(root, "deploy.md"));
   await writeFile(path.join(root, "new.md"), "# New\n\nNew SQLite migration guidance.");
   const changed = await retained.search({ query: "sqlite" });
-  assert.equal(reads, 4);
+  assert.equal(retained._debug.documentsRead, readsAfterEdit + 1, "one new file costs one read; the deletion costs none");
   assert.deepEqual(changed.hits, await searchConcepts([source], { query: "sqlite" }));
-  assert.equal(changed.sources[0].concepts.has("deploy"), false);
 });
 
-test("concurrent queries share a pass and idle eviction releases the retained generation", async (t) => {
+test("concurrent queries share one refresh pass", async (t) => {
   const { source } = await fixture(t);
   let lists = 0;
-  let reads = 0;
-  const retained = createRetainedSearch([{ ...source,
+  const retained = createRetainedSearch([{
+    ...source,
     async listEntries(options) { lists++; await sleep(5); return source.listEntries(options); },
-    async loadConcept(...args) { reads++; return source.loadConcept(...args); },
-  }], { idleEvictMs: 20 });
+  }]);
   t.after(() => retained.close());
-  await Promise.all([retained.search({ query: "database" }), retained.search({ query: "deploy" })]);
-  assert.equal(lists, 1);
-  assert.equal(reads, 2);
-  await sleep(50);
-  await retained.search({ query: "database" });
-  assert.equal(reads, 4, "idle eviction drops parsed content as well as scoring maps");
+  const [a, b] = await Promise.all([
+    retained.search({ query: "database" }),
+    retained.search({ query: "deploy" }),
+  ]);
+  assert.equal(lists, 1, "one listing pass serves both concurrent queries");
+  assert.equal(retained._debug.documentsRead, 2, "each of the two documents is loaded exactly once across both queries");
+  assert.deepEqual(a.hits, await searchConcepts([source], { query: "database" }));
+  assert.deepEqual(b.hits, await searchConcepts([source], { query: "deploy" }));
 });
 
-test("remote documents without fingerprints refresh and reuse only identical content", async (t) => {
+test("remote documents without fingerprints refresh every query and reuse only identical content (via the store's content hash)", async (t) => {
   let text = "Postgres database";
-  const source = { name: "remote", level: 1, async listConceptIds() { return ["db"]; },
-    async loadConcept() { return { frontmatter: {}, sections: [{ key: "body", text }] }; } };
+  const source = {
+    name: "remote",
+    level: 1,
+    async listConceptIds() { return ["db"]; },
+    async loadConcept() { return { frontmatter: {}, sections: [{ key: "body", text }] }; },
+  };
   const retained = createRetainedSearch([source]);
   t.after(() => retained.close());
   const before = await retained.search({ query: "database" });
+  assert.equal(retained._debug.documentsRead, 1);
   const same = await retained.search({ query: "database" });
-  assert.equal(before.sources[0], same.sources[0]);
+  // No fileMeta means the store can't prove the id unchanged without reading
+  // it, so it is reloaded every query — but the store's own content-hash
+  // fingerprint recognizes the identical body and does not re-analyze it.
+  assert.equal(retained._debug.documentsRead, 2, "an unfingerprinted source is reloaded every query");
+  assert.deepEqual(same.hits, before.hits);
   text = "SQLite database";
   const after = await retained.search({ query: "sqlite" });
-  assert.notEqual(before.sources[0], after.sources[0]);
+  assert.equal(retained._debug.documentsRead, 3);
   assert.deepEqual(after.hits, await searchConcepts([source], { query: "sqlite" }));
 });
 
 test("fingerprint includes authored date even when file bytes and stat do not change", async (t) => {
   let authoredDate = "2026-01-01";
-  let reads = 0;
-  const retained = createRetainedSearch([{ name: "history", level: 1,
+  const retained = createRetainedSearch([{
+    name: "history",
+    level: 1,
     async listEntries() { return [{ id: "a", rel: "a.md", ext: ".md", size: 10, mtimeMs: 1, authoredDate }]; },
-    async loadConcept() { reads++; return { frontmatter: { updated: authoredDate }, sections: [{ key: "body", text: "database" }] }; },
+    async loadConcept() { return { frontmatter: { updated: authoredDate }, sections: [{ key: "body", text: "database" }] }; },
   }]);
   t.after(() => retained.close());
   await retained.search({ query: "database" });
+  assert.equal(retained._debug.documentsRead, 1);
   authoredDate = "2026-02-01";
-  const after = await retained.search({ query: "database" });
-  assert.equal(reads, 2);
-  assert.equal(after.sources[0].concepts.get("a").frontmatter.updated, authoredDate);
+  await retained.search({ query: "database" });
+  assert.equal(retained._debug.documentsRead, 2, "an authored-date-only change (no byte or stat change) still costs exactly one read");
 });
 
 test("stdio retrieval is app-independent, profile-bound, current after edit", async (t) => {
@@ -132,28 +151,48 @@ test("stdio retrieval is app-independent, profile-bound, current after edit", as
   await new Promise((resolve) => child.once("exit", resolve));
 });
 
-test('a failed refresh still evicts the previously retained corpus after all concurrent callers settle', async t => {
+test("a failed refresh does not lose persisted content: recovery costs nothing extra when nothing changed", async (t) => {
   const { source } = await fixture(t);
   let fail = false;
-  let reads = 0;
-  const retained = createRetainedSearch([{ ...source,
+  const retained = createRetainedSearch([{
+    ...source,
     async listEntries(options) {
-      if (fail) { await sleep(30); throw new Error('listing unavailable'); }
+      if (fail) { await sleep(30); throw new Error("listing unavailable"); }
       return source.listEntries(options);
     },
-    async loadConcept(...args) { reads++; return source.loadConcept(...args); },
-  }], { idleEvictMs: 20 });
+  }]);
   t.after(() => retained.close());
-  await retained.search({ query: 'database' });
-  assert.equal(reads, 2);
+  await retained.search({ query: "database" });
+  assert.equal(retained._debug.documentsRead, 2);
   fail = true;
   await Promise.all([
-    assert.rejects(retained.search({ query: 'database' }), /listing unavailable/),
-    assert.rejects(retained.search({ query: 'deploy' }), /listing unavailable/),
+    assert.rejects(retained.search({ query: "database" }), /listing unavailable/),
+    assert.rejects(retained.search({ query: "deploy" }), /listing unavailable/),
   ]);
-  await sleep(60);
   fail = false;
-  const answer = await retained.search({ query: 'database' });
-  assert.equal(reads, 4, 'a failed last search cannot retain parsed documents indefinitely');
-  assert.deepEqual(answer.hits, await searchConcepts([source], { query: 'database' }));
+  const answer = await retained.search({ query: "database" });
+  assert.equal(retained._debug.documentsRead, 2, "content already durably indexed needs no re-read once the source recovers");
+  assert.deepEqual(answer.hits, await searchConcepts([source], { query: "database" }));
+});
+
+test("no parsed concept is retained across queries or a process restart", async (t) => {
+  const { root, source } = await fixture(t);
+  const storeFile = path.join(root, "search.sqlite");
+
+  const retained1 = createRetainedSearch([source], { file: storeFile });
+  const first = await retained1.search({ query: "database" });
+  assert.equal(retained1._debug.documentsRead, 2, "first query analyzes every document");
+  const before = retained1._debug.documentsRead;
+  await retained1.search({ query: "deploy" });
+  assert.equal(retained1._debug.documentsRead, before, "a second query over unchanged content loads zero documents");
+  retained1.close();
+
+  // A fresh instance over the SAME file — standing in for a new mcp-server
+  // process spawned against the same profile — must answer its very first
+  // query without re-parsing anything: the postings are already on disk.
+  const retained2 = createRetainedSearch([source], { file: storeFile });
+  t.after(() => retained2.close());
+  const restarted = await retained2.search({ query: "database" });
+  assert.equal(retained2._debug.documentsRead, 0, "a fresh instance over the same store file loads zero documents on its first query");
+  assert.deepEqual(restarted.hits, first.hits);
 });

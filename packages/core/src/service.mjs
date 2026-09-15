@@ -37,6 +37,7 @@ import { withDeadline } from "./control/util.mjs";
 import { mergeConcepts, resolveConcept } from "./resolver.mjs";
 import { tokenizeQuery } from "./search.mjs";
 import { createSearchIndex } from "./search-index.mjs";
+import { createSearchStore, isSearchStoreAvailable } from "./search-store.mjs";
 import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
 import { createTokenCountCache } from "./token-count-cache.mjs";
 import { resolveSettings, walkLimitsFrom } from "./settings.mjs";
@@ -605,7 +606,28 @@ export function createEngineService({
   const SEARCH_MEMO_CAP = 200; // distinct queries per content generation before the map is dropped, not the search
   // The incremental BM25F index behind /api/search (search-index.mjs): built
   // once, updated by delta as snapshots move, idle-evicted like corpusMemo.
-  const searchIndex = createSearchIndex();
+  // Prefer the SQLite-backed store: a restarted engine answers its first
+  // search from disk instead of re-parsing the whole vault, and no
+  // per-document term map has to live in the JS heap. Fall back to the
+  // in-memory index (identical `.search(contributing, opts)` contract) if
+  // node:sqlite isn't available in this runtime or the file fails to open —
+  // the rest of the code below never needs to know which one it got.
+  let searchIndex;
+  let usingSearchStore = false;
+  if (isSearchStoreAvailable()) {
+    try {
+      const searchStoreDir = path.join(MANIFEST_DIR, ".cache", "index");
+      fs.mkdirSync(searchStoreDir, { recursive: true });
+      searchIndex = createSearchStore({
+        file: path.join(searchStoreDir, `search.v1.${SERVICE_PROFILE_ID}.sqlite`),
+      });
+      usingSearchStore = true;
+    } catch (error) {
+      process.stderr.write(`[search-store] failed to open; falling back to in-memory search index: ${error.message}\n`);
+    }
+  }
+  if (!searchIndex) searchIndex = createSearchIndex();
+  void usingSearchStore; // kept for future diagnostics; /api/status shape is unaffected either way
   // { key, promise, evictTimer } — the resolved corpus behind /api/resolve-all
   // and /api/discrepancies. Same live-key correctness story as graphMemo, plus
   // a residency bound the others don't need: unlike graph rows (compact) or
@@ -2384,7 +2406,7 @@ export function createEngineService({
     // a search box on a big vault reads "no results" indistinguishably from a
     // genuinely empty vault for the whole first index.
     const { entries, manifest } = ensureIndexes();
-    const pinned = entries.map(pinEntry);
+    const pinned = entries.map((e) => ({ ...pinEntry(e), identity: layerIdentity(e.layer) }));
     const contributing = pinned.filter((p) => p.snap);
     const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
     const indexing = pending.length > 0;
@@ -2404,6 +2426,7 @@ export function createEngineService({
       // Wrapped in an async IIFE so the memo keeps holding promises.
       const snapshots = contributing.map((p) => ({
         name: p.source.name, level: p.source.level, gen: p.snap.gen, ids: p.snap.ids, concepts: p.snap.concepts,
+        identity: p.identity, fileMeta: p.snap.fileMeta,
       }));
       promise = (async () => searchIndex.search(snapshots, { query, limit, source, type }))().catch((err) => {
         if (searchMemo?.hits.get(cacheKey) === promise) searchMemo.hits.delete(cacheKey);

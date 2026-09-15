@@ -19,10 +19,22 @@ const root = await mkdtemp(path.join(tmpdir(), "cc-retrieval-bench-"));
 const base = createFilesSource({ name: "project", level: 1, root });
 let reads = 0;
 const source = { ...base, async loadConcept(...args) { reads++; return base.loadConcept(...args); } };
-const retained = createRetainedSearch([source]);
+// File-backed (not the default :memory:) so "cold after restart" below is a
+// real restart — a fresh createRetainedSearch reopening the same durable
+// store, the way a freshly spawned mcp-server process would.
+const storeFile = path.join(root, "retained-bench.sqlite");
+let retained = createRetainedSearch([source], { file: storeFile });
 const timings = [];
 const children = [];
 let corpusBytes = 0;
+// Peak RSS across the whole run — the engine's own live heap plus whatever
+// node:sqlite holds, sampled on a timer since a single before/after read can
+// miss a transient spike.
+let peakRssBytes = process.memoryUsage().rss;
+const rssTimer = setInterval(() => {
+  peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
+}, 25);
+rssTimer.unref?.();
 function client(manifest) {
   const entrypoint = fileURLToPath(new URL("../../../mcp-server.mjs", import.meta.url));
   const child = spawn(process.execPath, [entrypoint, "--manifest", manifest], { stdio: ["pipe", "pipe", "inherit"] });
@@ -93,8 +105,21 @@ try {
   assert.deepEqual(changed.hits, await searchConcepts([base], query));
   const clientsChanged = await measure("two stdio clients after one edit", () => Promise.all([a.search(query), b.search(query)]));
   for (const hits of clientsChanged) assert.deepEqual(hits, changed.hits);
-  console.log(JSON.stringify({ documents: count, corpusBytes, node: process.version, rankingEquivalent: true, timings }, null, 2));
+
+  // The measurement this rework exists for: close the retained search (as a
+  // process exit would) and open a fresh one over the SAME store file (as a
+  // freshly spawned engine or stdio MCP process would) — its first query
+  // should cost about a listing walk, not a full re-parse.
+  retained.close();
+  retained = createRetainedSearch([source], { file: storeFile });
+  const restartedCold = await measure("retained cold after restart", () => retained.search(query));
+  assert.deepEqual(restartedCold.hits, changed.hits);
+
+  console.log(JSON.stringify({
+    documents: count, corpusBytes, node: process.version, rankingEquivalent: true, peakRssBytes, timings,
+  }, null, 2));
 } finally {
+  clearInterval(rssTimer);
   for (const child of children) child.kill();
   retained.close();
   await rm(root, { recursive: true, force: true });

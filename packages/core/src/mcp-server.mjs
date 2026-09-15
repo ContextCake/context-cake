@@ -10,6 +10,7 @@
 
 import path from "node:path";
 import fsp from "node:fs/promises";
+import fsSync from "node:fs";
 import readline from "node:readline";
 import { markdownLinkSpans } from "./markdown-links.mjs";
 import { sectionText } from "./sections.mjs";
@@ -24,6 +25,7 @@ import { readContextManifest, manifestRevision } from "./manifest.mjs";
 import { applyContextResolutions, createContextResolutionStore, contextManifestFingerprint } from "./context-resolutions.mjs";
 import { createDiscrepancyRuleStore, parseRuleDocument } from "./discrepancy-rules.mjs";
 import { buildSources } from "./sources/index.mjs";
+import { layerIdentity } from "./index-keys.mjs";
 import { isTraversal } from "./sources/okf-local.mjs";
 import { commitPaths, push } from "./sources/git-core.mjs";
 import { appendFileInRoot, stageCapture, confirmCapture, resolveAuthor } from "./capture.mjs";
@@ -69,8 +71,28 @@ if ((args.capture || args.telemetry) && !liveLayer) {
 }
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
+// Same content-identity computation service.mjs uses (index-keys.mjs):
+// what a layer READS, name/level left out. Lets the retained search's SQLite
+// store (search.v1.<profile>.sqlite, beside the manifest) tell a genuine
+// content change apart from a folder simply being repointed under the same
+// layer name between two mcp-server invocations.
+const manifestLayersForIdentity = runtime
+  ? (runtime.runtimeManifest.layers ?? [])
+  : legacyManifestLayers(args);
+const layerIdentities = new Map(
+  manifestLayersForIdentity.map((layer) => [layer.name, layerIdentity(layer)]),
+);
+const searchStoreFile = runtime
+  ? (() => {
+    const dir = path.join(path.dirname(runtime.manifestPath), ".cache", "index");
+    try { fsSync.mkdirSync(dir, { recursive: true }); } catch { /* best effort; store open will surface the real error */ }
+    return path.join(dir, `search.v1.${selection.profileId}.sqlite`);
+  })()
+  : undefined; // legacy --personal/--shared: no manifest directory to persist beside; store runs :memory:
 const retrieval = createRetainedSearch(layers, {
   sourceBudgetMs: resolveSettings(runtime?.runtimeManifest ?? {}).sourceBudgetMs,
+  file: searchStoreFile,
+  identities: layerIdentities,
 });
 const discrepancyDecisions = runtime
   ? createConflictResolutionLog(runtime.manifestPath, { profileId: selection.profileId })
@@ -654,19 +676,20 @@ async function getLinks({ concept_id }) {
 
 // ---- helpers --------------------------------------------------------------
 
-function buildLegacyLayers(parsed) {
+function legacyManifestLayers(parsed) {
   if (parsed.personal && parsed.shared) {
-    return buildSources(
-      {
-        layers: [
-          { name: "personal", level: 3, source: "okf-local", path: path.resolve(parsed.personal) },
-          { name: "shared", level: 0, source: "okf-local", path: path.resolve(parsed.shared) },
-        ],
-      },
-      process.cwd(),
-    );
+    return [
+      { name: "personal", level: 3, source: "okf-local", path: path.resolve(parsed.personal) },
+      { name: "shared", level: 0, source: "okf-local", path: path.resolve(parsed.shared) },
+    ];
   }
   return [];
+}
+
+function buildLegacyLayers(parsed) {
+  const layersJson = legacyManifestLayers(parsed);
+  if (layersJson.length === 0) return [];
+  return buildSources({ layers: layersJson }, process.cwd());
 }
 
 async function layersWith(id) {

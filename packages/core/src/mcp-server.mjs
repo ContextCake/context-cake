@@ -12,8 +12,12 @@ const diagnostics = createDiagnostics({ role: 'mcp' });
 
 import path from "node:path";
 import fsp from "node:fs/promises";
+import fsSync from "node:fs";
 import readline from "node:readline";
-import { markdownLinkSpans } from "./markdown-links.mjs";
+import {
+  extractLinks, resolveLinkTarget as resolveLinkTargetPure, normalizeId as normalizeIdPure,
+  safeId as safeIdPure,
+} from "./markdown-links.mjs";
 import { sectionText } from "./sections.mjs";
 import { isNewerDay } from "./conflict-policy.mjs";
 import { resolveConcept } from "./resolver.mjs";
@@ -26,7 +30,7 @@ import { readContextManifest, manifestRevision } from "./manifest.mjs";
 import { applyContextResolutions, createContextResolutionStore, contextManifestFingerprint } from "./context-resolutions.mjs";
 import { createDiscrepancyRuleStore, parseRuleDocument } from "./discrepancy-rules.mjs";
 import { buildSources } from "./sources/index.mjs";
-import { isTraversal } from "./sources/okf-local.mjs";
+import { layerIdentity } from "./index-keys.mjs";
 import { commitPaths, push } from "./sources/git-core.mjs";
 import { appendFileInRoot, stageCapture, confirmCapture, resolveAuthor } from "./capture.mjs";
 import { slugify } from "./classify-context.mjs";
@@ -71,8 +75,29 @@ if ((args.capture || args.telemetry) && !liveLayer) {
 }
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
+const layerNameSet = new Set(layerByName.keys());
+// Same content-identity computation service.mjs uses (index-keys.mjs):
+// what a layer READS, name/level left out. Lets the retained search's SQLite
+// store (search.v1.<profile>.sqlite, beside the manifest) tell a genuine
+// content change apart from a folder simply being repointed under the same
+// layer name between two mcp-server invocations.
+const manifestLayersForIdentity = runtime
+  ? (runtime.runtimeManifest.layers ?? [])
+  : legacyManifestLayers(args);
+const layerIdentities = new Map(
+  manifestLayersForIdentity.map((layer) => [layer.name, layerIdentity(layer)]),
+);
+const searchStoreFile = runtime
+  ? (() => {
+    const dir = path.join(path.dirname(runtime.manifestPath), ".cache", "index");
+    try { fsSync.mkdirSync(dir, { recursive: true }); } catch { /* best effort; store open will surface the real error */ }
+    return path.join(dir, `search.v1.${selection.profileId}.sqlite`);
+  })()
+  : undefined; // legacy --personal/--shared: no manifest directory to persist beside; store runs :memory:
 const retrieval = createRetainedSearch(layers, {
   sourceBudgetMs: resolveSettings(runtime?.runtimeManifest ?? {}).sourceBudgetMs,
+  file: searchStoreFile,
+  identities: layerIdentities,
 });
 const discrepancyDecisions = runtime
   ? createConflictResolutionLog(runtime.manifestPath, { profileId: selection.profileId })
@@ -108,7 +133,7 @@ const readOnlyAnnotations = {
 const tools = [
   {
     name: "search",
-    description: "Search the layer cascade. Returns one entry per concept ID with the layers that contribute and a snippet. A hit whose layers disagree carries `contested: true` and `conflictSections` (how many resolved sections have dissent) — treat such a hit as unsettled and read the resolved concept before answering from the snippet.",
+    description: "Search the layer cascade. Returns one entry per concept ID with the layers that contribute and a snippet. Each hit's body is scored per SECTION (not as one whole-document field), so a long multi-section document is not penalized for its length everywhere it wasn't relevant; `section: { key, heading }` names the section that won (`null` if the match came from the title/id/description/tags instead), and the snippet is drawn from that section. Every hit carries `inbound` (how many distinct other concepts link to it — ranking already favors a well-linked hub over a lexically similar unlinked page, so a high `inbound` is a hint this is a canonical answer, not just a keyword match). The top 3 hits also carry `linksTo` (up to 5 of its own outgoing links that exist in the corpus) so you can see its immediate neighborhood without a second get_links call. A hit whose layers disagree carries `contested: true` and `conflictSections` (how many resolved sections have dissent) — treat such a hit as unsettled and read the resolved concept before answering from the snippet.",
     inputSchema: {
       type: "object",
       properties: {
@@ -387,7 +412,10 @@ async function handleMessage(message) {
 }
 
 async function callTool(name, toolArgs) {
-  if (name === "search") return await diagnostics.measure("search", () => search(toolArgs));
+  if (name === "search") {
+    const { hits } = await diagnostics.measure("search", () => search(toolArgs), { annotate: (result) => result?.diag });
+    return hits;
+  }
   if (name === "read_file") return await diagnostics.measure("read", () => readFileTool(toolArgs));
   if (name === "list_concepts") return await listConcepts(toolArgs);
   if (name === "get_links") return await getLinks(toolArgs);
@@ -470,9 +498,15 @@ async function confirmCaptureTool({ token }) {
 // ---- tools ----------------------------------------------------------------
 
 async function search({ query, limit = 10 }) {
-  const { hits, sources } = await retrieval.search({ query, limit });
+  const { hits, sources, stats } = await retrieval.search({ query, limit });
   await annotateContested(hits, sources);
-  return hits;
+  // Returns {hits, diag} rather than a bare array so per-query diagnostics
+  // reach diagnostics.measure()'s `annotate` callback through an explicit
+  // field, not a hidden property riding along on the array (fragile: any
+  // future `hits.map(...)`/clone before this reaches annotate would have
+  // silently dropped it with no error). callTool's "search" branch unwraps
+  // `.hits` for the tool's public response, which stays a bare array.
+  return { hits, diag: stats ? { ...stats, backend: retrieval.backend } : null };
 }
 
 // Contested annotation lives in the handler, not search.mjs — the ranking
@@ -622,8 +656,8 @@ async function getLinks({ concept_id }) {
   resolved = await applyRecordedContextResolution(resolved);
 
   const body = resolved.sections.map((s) => `${s.heading ?? ""}\n${s.content}`).join("\n");
-  const rawLinks = extractLinks(body).map((link) => {
-    const targetId = resolveLinkTarget(id, link.target);
+  const rawLinks = extractLinks(body, layerNameSet).map((link) => {
+    const targetId = resolveLinkTarget(id, link.target, layerNameSet);
     return { raw: link.raw, target: link.target, id: targetId };
   });
   const outgoing = await Promise.all(rawLinks.map(async (link) => ({
@@ -638,8 +672,8 @@ async function getLinks({ concept_id }) {
       const entry = await source.loadConcept(sourceId);
       if (!entry) continue;
       const sourceBody = entry.sections.map((s) => `${s.heading ?? ""}\n${sectionText(s)}`).join("\n");
-      for (const link of extractLinks(sourceBody)) {
-        if (resolveLinkTarget(sourceId, link.target) === id) {
+      for (const link of extractLinks(sourceBody, layerNameSet)) {
+        if (resolveLinkTarget(sourceId, link.target, layerNameSet) === id) {
           incoming.push({ id: sourceId, layer: source.name, raw: link.raw });
           break;
         }
@@ -656,19 +690,20 @@ async function getLinks({ concept_id }) {
 
 // ---- helpers --------------------------------------------------------------
 
-function buildLegacyLayers(parsed) {
+function legacyManifestLayers(parsed) {
   if (parsed.personal && parsed.shared) {
-    return buildSources(
-      {
-        layers: [
-          { name: "personal", level: 3, source: "okf-local", path: path.resolve(parsed.personal) },
-          { name: "shared", level: 0, source: "okf-local", path: path.resolve(parsed.shared) },
-        ],
-      },
-      process.cwd(),
-    );
+    return [
+      { name: "personal", level: 3, source: "okf-local", path: path.resolve(parsed.personal) },
+      { name: "shared", level: 0, source: "okf-local", path: path.resolve(parsed.shared) },
+    ];
   }
   return [];
+}
+
+function buildLegacyLayers(parsed) {
+  const layersJson = legacyManifestLayers(parsed);
+  if (layersJson.length === 0) return [];
+  return buildSources({ layers: layersJson }, process.cwd());
 }
 
 async function layersWith(id) {
@@ -684,40 +719,20 @@ function orderLayerNames(names) {
   return unique.sort((a, b) => (layerByName.get(b)?.level ?? 0) - (layerByName.get(a)?.level ?? 0));
 }
 
+// Thin wrappers over the shared pure resolution in markdown-links.mjs — kept
+// under these names because they're called throughout this file, and so this
+// module's own get_links stays the reference implementation extractLinks and
+// friends are proven against.
 function resolveLinkTarget(sourceId, target) {
-  const clean = stripDecoration(target);
-  if (!clean || isExternal(clean)) return null;
-
-  const prefix = clean.indexOf(":");
-  if (prefix !== -1) {
-    const name = clean.slice(0, prefix);
-    if (layerByName.has(name)) return safeId(clean.slice(prefix + 1));
-  }
-
-  const base = path.posix.dirname(sourceId);
-  const joined = clean.startsWith("/") ? clean.slice(1) : path.posix.join(base, clean);
-  return safeId(joined);
+  return resolveLinkTargetPure(sourceId, target, layerNameSet);
 }
 
 function safeId(value) {
-  try {
-    return normalizeId(value);
-  } catch {
-    return null;
-  }
+  return safeIdPure(value);
 }
 
 function normalizeId(value) {
-  if (!value || typeof value !== "string") throw new Error("concept_id is required");
-  const normalized = path.posix.normalize(stripDecoration(value).replace(/\\/g, "/").replace(/\.md$/i, ""));
-  if (isTraversal(normalized)) throw new Error(`Invalid concept ID: ${value}`);
-  return normalized;
-}
-
-function extractLinks(body) {
-  return markdownLinkSpans(body)
-    .map(({ raw, target }) => ({ raw, target }))
-    .filter((link) => link.target && !isExternal(stripDecoration(link.target)));
+  return normalizeIdPure(value);
 }
 
 function dedupeIncoming(rows) {
@@ -766,14 +781,6 @@ function renderDissent(dissent, sourceUpdated) {
   const newer = isNewerDay(dissent.updated, sourceUpdated) ? " — ⚠ newer than the effective value" : "";
   const body = dissent.content.split("\n").map((line) => (line ? `> ${line}` : ">")).join("\n");
   return `> ⚠ ${dissent.layer} disagrees (updated ${updated})${newer}:\n${body}`;
-}
-
-function stripDecoration(value) {
-  return value.split("#")[0].split("?")[0].trim();
-}
-
-function isExternal(value) {
-  return /^[a-z][a-z0-9+.-]*:/i.test(value) && !layerByName.has(value.slice(0, value.indexOf(":")));
 }
 
 function parseArgs(argv) {

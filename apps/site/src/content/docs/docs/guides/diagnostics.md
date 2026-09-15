@@ -14,6 +14,12 @@ Open **Diagnostics → Overview** in the Mac app (⌘6). The view shows current 
 health, indexing activity, memory pressure, and recent search/read observations.
 It reads existing engine state, never scans your documents to populate a chart.
 
+Retrieval observations include which search backend answered (persisted store or
+in-memory), whether each search was cold (it had to analyze or load documents) or
+warm (it answered from an already-current index), how many candidates it scored,
+and how long it took to sync the index before scoring. The overview also shows
+cold/warm counts and median durations for the current window.
+
 The observation window contains at most 200 events from the last 15 minutes in
 this desktop engine. It resets when the engine restarts. Sample counts and the
 actual observation interval are displayed. P95 requires at least 20 observations
@@ -60,8 +66,9 @@ or enable an exporter. Uninstrumented clients are not represented.
 ## Privacy and limits
 
 Telemetry includes closed operation/outcome labels, timings, counts, stable error
-codes, and opaque process/trace identifiers. It excludes prompts, document content,
-source paths, credentials, and raw exception messages. Native diagnostics can show
+codes, opaque process/trace identifiers, and closed retrieval labels (search
+backend, cold/warm phase, candidate count, index sync time). It excludes prompts,
+document content, source paths, credentials, and raw exception messages. Native diagnostics can show
 local source names and the engine's local activity log; those are not exported.
 
 Local Grafana uses loopback-only dynamic ports and anonymous Viewer access. Other

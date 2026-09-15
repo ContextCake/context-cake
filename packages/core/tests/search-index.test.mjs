@@ -26,18 +26,49 @@ const VOCAB = [
   "schema", "migration", "search", "ranking", "snapshot", "conflict",
 ];
 
-function makeConcept(rand, seed) {
+// A handful of markdown links to OTHER generated ids (may or may not exist —
+// existence shifts across the mutation sequence, which is exactly the
+// dangling-link case), plus an occasional self-link, so both differentials
+// exercise the inbound-link prior and linksTo, not just term scoring.
+function randomLinks(rand, id) {
+  const count = Math.floor(rand() * 3); // 0, 1, or 2 links
+  const parts = [];
+  for (let i = 0; i < count; i += 1) {
+    const target = rand() < 0.15 ? id : `concept-${Math.floor(rand() * 90)}`;
+    parts.push(`[link ${i}](${target}.md)`);
+  }
+  return parts.join(" ");
+}
+
+// 1-6 sections of varying length, each with its own key/heading, so the
+// differential exercises section-level scoring (max-over-sections, tie
+// rule, which winning section gets reported) the same way it exercises
+// term scoring and the link prior. Exactly one section (chosen per concept)
+// carries the marker term, so there is always a "correct" winning section
+// to check the differential against.
+const SECTION_NAMES = ["overview", "planning", "details", "notes", "risks", "followup"];
+
+function makeConcept(rand, seed, id) {
   const words = (count) => Array.from({ length: count }, () => VOCAB[Math.floor(rand() * VOCAB.length)]);
+  const sectionCount = 1 + Math.floor(rand() * 6); // 1..6
+  const markerSection = Math.floor(rand() * sectionCount);
+  const sections = Array.from({ length: sectionCount }, (_, i) => {
+    const name = SECTION_NAMES[i % SECTION_NAMES.length];
+    const length = 5 + Math.floor(rand() * 60); // varying length
+    const marker = i === markerSection ? ` marker-${seed}` : "";
+    return {
+      key: `${name}-${i}`,
+      heading: `## ${name} {#${name}-${i}}`,
+      text: `${words(length).join(" ")}${marker} ${randomLinks(rand, id)}`,
+    };
+  });
   return {
     frontmatter: {
       title: words(3).join(" "),
       description: rand() < 0.5 ? words(5).join(" ") : undefined,
       tags: rand() < 0.4 ? words(2).join(",") : undefined,
     },
-    sections: [
-      { key: "body", heading: "## Body {#body}", text: words(30 + Math.floor(rand() * 40)).join(" ") + ` marker-${seed}` },
-      ...(rand() < 0.5 ? [{ key: "notes", heading: "## Notes {#notes}", text: words(15).join(" ") }] : []),
-    ],
+    sections,
   };
 }
 
@@ -69,8 +100,8 @@ test("incremental index answers Object.is-equal to searchConcepts across a mutat
   // Two layers with overlapping ids so the best-layer merge is exercised.
   let seq = 0;
   const layerDocs = {
-    personal: new Map(Array.from({ length: 40 }, (_, i) => [`concept-${i}`, makeConcept(rand, seq++)])),
-    team: new Map(Array.from({ length: 25 }, (_, i) => [`concept-${i * 2}`, makeConcept(rand, seq++)])),
+    personal: new Map(Array.from({ length: 40 }, (_, i) => [`concept-${i}`, makeConcept(rand, seq++, `concept-${i}`)])),
+    team: new Map(Array.from({ length: 25 }, (_, i) => [`concept-${i * 2}`, makeConcept(rand, seq++, `concept-${i * 2}`)])),
   };
   let layers = [
     { name: "personal", level: 3, snap: makeSnapshot([...layerDocs.personal]) },
@@ -90,6 +121,9 @@ test("incremental index answers Object.is-equal to searchConcepts across a mutat
         assert.equal(incremental[i].snippet, reference[i].snippet, `${label} · "${query}" · hit ${i} snippet`);
         assert.deepEqual(incremental[i].layers, reference[i].layers, `${label} · "${query}" · hit ${i} layers`);
         assert.equal(incremental[i].title, reference[i].title, `${label} · "${query}" · hit ${i} title`);
+        assert.equal(incremental[i].inbound, reference[i].inbound, `${label} · "${query}" · hit ${i} inbound`);
+        assert.deepEqual(incremental[i].linksTo, reference[i].linksTo, `${label} · "${query}" · hit ${i} linksTo`);
+        assert.deepEqual(incremental[i].section, reference[i].section, `${label} · "${query}" · hit ${i} section`);
       }
     }
   };
@@ -110,9 +144,10 @@ test("incremental index answers Object.is-equal to searchConcepts across a mutat
       // Edit: a NEW object for one id (what a re-read produces).
       const ids = [...docs.keys()];
       const id = ids[Math.floor(rand() * ids.length)];
-      docs.set(id, makeConcept(rand, seq++));
+      docs.set(id, makeConcept(rand, seq++, id));
     } else if (roll < 0.7) {
-      docs.set(`concept-new-${seq}`, makeConcept(rand, seq++));
+      const newId = `concept-new-${seq}`;
+      docs.set(newId, makeConcept(rand, seq++, newId));
     } else if (docs.size > 3) {
       const ids = [...docs.keys()];
       docs.delete(ids[Math.floor(rand() * ids.length)]);
@@ -126,7 +161,7 @@ test("incremental index answers Object.is-equal to searchConcepts across a mutat
   await compare("layer removed");
 
   // And a new one arrives.
-  const company = new Map(Array.from({ length: 10 }, (_, i) => [`concept-${i * 3}`, makeConcept(rand, seq++)]));
+  const company = new Map(Array.from({ length: 10 }, (_, i) => [`concept-${i * 3}`, makeConcept(rand, seq++, `concept-${i * 3}`)]));
   layers = [...layers, { name: "company", level: 0, snap: makeSnapshot([...company]) }];
   await compare("layer added");
 
@@ -140,7 +175,7 @@ test("incremental index answers Object.is-equal to searchConcepts across a mutat
 test("eviction and rebuild land on the same answers", async () => {
   const rand = mulberry32(0xbeef);
   let seq = 100;
-  const docs = new Map(Array.from({ length: 20 }, (_, i) => [`n-${i}`, makeConcept(rand, seq++)]));
+  const docs = new Map(Array.from({ length: 20 }, (_, i) => [`n-${i}`, makeConcept(rand, seq++, `n-${i}`)]));
   const snap = makeSnapshot([...docs]);
   const layers = [{ name: "vault", level: 3, snap }];
   const contributing = () => layers.map((l) => ({ name: l.name, level: l.level, gen: l.snap.gen, ids: l.snap.ids, concepts: l.snap.concepts }));
@@ -173,16 +208,22 @@ test('source and effective type filters select before top-k without changing glo
     { name: 'specs', level: 3, ...makeSnapshot(team) },
   ];
   const query = 'build and test';
+  // linksTo is rank-WITHIN-THIS-CALL-dependent by design (top 3 of whatever
+  // the filter selected, not top 3 globally), so a filtered call's own top 3
+  // legitimately differs from the unfiltered `all` array's. Strip it before
+  // comparing a filtered result against a slice of `all` — everything else,
+  // including inbound, must still match exactly.
+  const withoutLinksTo = (hits) => hits.map(({ linksTo, ...hit }) => hit);
   const all = index.search(views, { query, limit: 100 });
   assert.ok(all.findIndex(hit => hit.id === 'buried') >= 20, 'fixture must reproduce the global top-20 false negative');
   const sourceIds = new Set(team.map(([id]) => id));
   const selected = index.search(views, { query, limit: 20, source: 'specs' });
-  assert.deepEqual(selected, all.filter(hit => sourceIds.has(hit.id)).slice(0, 20));
+  assert.deepEqual(withoutLinksTo(selected), withoutLinksTo(all.filter(hit => sourceIds.has(hit.id)).slice(0, 20)));
   assert.deepEqual(selected.find(hit => hit.id === 'shared').layers, ['personal'], 'membership includes a source whose own contribution has no query match');
   const types = new Map([['buried', 'spec'], ['shared', 'decision'], ['inherited', 'spec'], ['overridden', 'concept'], ['dated', 'spec']]);
   for (const type of ['spec', 'decision', 'concept', 'note', 'unknown']) {
-    assert.deepEqual(index.search(views, { query, limit: 20, type }), all.filter(hit => (types.get(hit.id) ?? 'note') === type).slice(0, 20));
-    assert.deepEqual(index.search(views, { query, limit: 20, type, source: 'specs' }), all.filter(hit => sourceIds.has(hit.id) && types.get(hit.id) === type).slice(0, 20));
+    assert.deepEqual(withoutLinksTo(index.search(views, { query, limit: 20, type })), withoutLinksTo(all.filter(hit => (types.get(hit.id) ?? 'note') === type).slice(0, 20)));
+    assert.deepEqual(withoutLinksTo(index.search(views, { query, limit: 20, type, source: 'specs' })), withoutLinksTo(all.filter(hit => sourceIds.has(hit.id) && types.get(hit.id) === type).slice(0, 20)));
   }
   assert.deepEqual(index.search(views, { query, source: 'missing' }), []);
   assert.deepEqual(index.search(views, { query, limit: 100 }), all, 'filter changes must leave the full index warm and unchanged');

@@ -38,6 +38,7 @@ import { withDeadline } from "./control/util.mjs";
 import { mergeConcepts, resolveConcept } from "./resolver.mjs";
 import { tokenizeQuery } from "./search.mjs";
 import { createSearchIndex } from "./search-index.mjs";
+import { createSearchStore, isSearchStoreAvailable } from "./search-store.mjs";
 import { countTokens, conceptText, warmTokenizer, TOKENIZER } from "./tokenize.mjs";
 import { createTokenCountCache } from "./token-count-cache.mjs";
 import { resolveSettings, walkLimitsFrom } from "./settings.mjs";
@@ -607,9 +608,37 @@ export function createEngineService({
   // flight join it instead of running the corpus scan twice.
   let searchMemo = null;
   const SEARCH_MEMO_CAP = 200; // distinct queries per content generation before the map is dropped, not the search
+  // Retrieval diagnostics phase detection (memory backend only): the sqlite
+  // store reports a real "documents (re-)analyzed since open" counter
+  // (inspect().analyzed), so a search is `cold` there iff that counter moved
+  // during this call. search-index.mjs has no such counter — its rebuild is
+  // driven entirely by whether the contributing snapshots' generations moved
+  // since the last search, which `contributingKey` already fingerprints, so
+  // that key changing is this backend's cold/warm signal instead.
+  let lastSearchContributingKey = null;
   // The incremental BM25F index behind /api/search (search-index.mjs): built
   // once, updated by delta as snapshots move, idle-evicted like corpusMemo.
-  const searchIndex = createSearchIndex();
+  // Prefer the SQLite-backed store: a restarted engine answers its first
+  // search from disk instead of re-parsing the whole vault, and no
+  // per-document term map has to live in the JS heap. Fall back to the
+  // in-memory index (identical `.search(contributing, opts)` contract) if
+  // node:sqlite isn't available in this runtime or the file fails to open —
+  // the rest of the code below never needs to know which one it got.
+  let searchIndex;
+  let usingSearchStore = false;
+  if (isSearchStoreAvailable()) {
+    try {
+      const searchStoreDir = path.join(MANIFEST_DIR, ".cache", "index");
+      fs.mkdirSync(searchStoreDir, { recursive: true });
+      searchIndex = createSearchStore({
+        file: path.join(searchStoreDir, `search.v1.${SERVICE_PROFILE_ID}.sqlite`),
+      });
+      usingSearchStore = true;
+    } catch (error) {
+      process.stderr.write(`[search-store] failed to open; falling back to in-memory search index: ${error.message}\n`);
+    }
+  }
+  if (!searchIndex) searchIndex = createSearchIndex();
   // { key, promise, evictTimer } — the resolved corpus behind /api/resolve-all
   // and /api/discrepancies. Same live-key correctness story as graphMemo, plus
   // a residency bound the others don't need: unlike graph rows (compact) or
@@ -1791,11 +1820,16 @@ export function createEngineService({
       }
 
       if (p === "/api/graph") { json(res, 200, await buildGraph(waitParam(url))); return true; }
-      if (p === "/api/diagnostics" && req.method === "GET") { json(res, 200, { ...diagnostics.snapshot(), telemetry: telemetryStatus(), health: statusApi(), indexing: indexingActivityApi() }); return true; }
+      if (p === "/api/diagnostics" && req.method === "GET") { json(res, 200, diagnosticsSnapshotApi()); return true; }
       if (p === "/api/status") { json(res, 200, statusApi()); return true; }
       if (p === "/api/resolve") { json(res, 200, await diagnostics.measure("read", () => resolveOne(url.searchParams.get("concept")))); return true; }
       if (p === "/api/resolve-all") { await streamResolveAll(res, await resolveAllApi(waitParam(url))); return true; }
-      if (p === "/api/search") { json(res, 200, await diagnostics.measure("search", () => searchApi(url, waitParam(url)))); return true; }
+      if (p === "/api/search") {
+        const result = await diagnostics.measure("search", () => searchApi(url, waitParam(url)), { annotate: (r) => r.diag });
+        const { diag, ...body } = result;
+        json(res, 200, body);
+        return true;
+      }
       if (p === "/api/discrepancy-assessment/models" && req.method === 'GET') {
         json(res, 200, await assessmentOps.models()); return true;
       }
@@ -2335,6 +2369,11 @@ export function createEngineService({
       // particular) can use this to throttle its own polling or show a
       // banner without adding its own watermark logic.
       memory: memory.level,
+      // "sqlite" | "memory" — which search backend answered /api/search: the
+      // persisted store (searchStoreDir above) when node:sqlite opened
+      // successfully, otherwise the in-memory index. Additive diagnostic
+      // field.
+      searchBackend: usingSearchStore ? "sqlite" : "memory",
       // Sources the user paused (POST /api/indexing/pause) — additive; "*"
       // means everything. A paused source is settled state, so ?wait= callers
       // and the console must be able to SEE why nothing is progressing.
@@ -2398,7 +2437,7 @@ export function createEngineService({
     // a search box on a big vault reads "no results" indistinguishably from a
     // genuinely empty vault for the whole first index.
     const { entries, manifest } = ensureIndexes();
-    const pinned = entries.map(pinEntry);
+    const pinned = entries.map((e) => ({ ...pinEntry(e), identity: layerIdentity(e.layer) }));
     const contributing = pinned.filter((p) => p.snap);
     const pending = pinned.filter((p) => p.progress.status === "indexing").map((p) => p.source.name);
     const indexing = pending.length > 0;
@@ -2407,19 +2446,38 @@ export function createEngineService({
     // instead, because the MCP tools it also backs treat that as caller
     // misuse. A search box gets the same honest empty answer any other
     // no-match query gets, not a 500.
-    if (tokenizeQuery(query).length === 0) return { hits: [], indexing, indexingSources: pending };
+    if (tokenizeQuery(query).length === 0) {
+      return {
+        hits: [], indexing, indexingSources: pending,
+        diag: { backend: usingSearchStore ? "sqlite" : "memory", phase: "warm", candidateCount: 0 },
+      };
+    }
     const key = contributingKey(contributing);
     if (!searchMemo || searchMemo.key !== key) searchMemo = { key, hits: new Map() };
     const cacheKey = JSON.stringify([query, limit, source, type]);
     let promise = searchMemo.hits.get(cacheKey);
+    // Cold/warm detection: `analyzed` (the sqlite store's "documents
+    // (re-)analyzed since open" counter) or `key` (the memory backend's
+    // generation fingerprint, see the field comment above) BEFORE this call
+    // builds/reuses the promise — a memoized hit for unchanged content must
+    // never read as cold just because it happens to be this call's first use
+    // of a new `key`.
+    const analyzedBefore = usingSearchStore ? (searchIndex.inspect?.()?.analyzed ?? 0) : null;
+    const keyBefore = lastSearchContributingKey;
     if (!promise) {
       // The incremental index replaces the per-query corpus rebuild
       // (search-index.mjs: same scores by construction, differential-tested).
       // Wrapped in an async IIFE so the memo keeps holding promises.
       const snapshots = contributing.map((p) => ({
         name: p.source.name, level: p.source.level, gen: p.snap.gen, ids: p.snap.ids, concepts: p.snap.concepts,
+        identity: p.identity, fileMeta: p.snap.fileMeta,
       }));
-      promise = (async () => searchIndex.search(snapshots, { query, limit, source, type }))().catch((err) => {
+      // The memo holds `{ hits, stats }`: a memoized answer must report the
+      // candidate count of ITS search, not whatever query last ran the index.
+      promise = (async () => {
+        const hits = searchIndex.search(snapshots, { query, limit, source, type });
+        return { hits, stats: searchIndex.lastSearchStats?.() ?? null };
+      })().catch((err) => {
         if (searchMemo?.hits.get(cacheKey) === promise) searchMemo.hits.delete(cacheKey);
         throw err;
       });
@@ -2429,8 +2487,70 @@ export function createEngineService({
       if (searchMemo.hits.size >= SEARCH_MEMO_CAP) searchMemo.hits.clear();
       searchMemo.hits.set(cacheKey, promise);
     }
-    const hits = await promise;
-    return { hits, indexing, indexingSources: pending };
+    const { hits, stats: searchStats } = await promise;
+    lastSearchContributingKey = key;
+    const backend = usingSearchStore ? "sqlite" : "memory";
+    let phase, documentsRead, documentsReused;
+    if (usingSearchStore) {
+      // One inspect() call, not two: it already returns analyzed and
+      // documents together, so the post-search snapshot only needs reading
+      // once. inspect() runs a COUNT(*) over the term index every call — at
+      // vault scale that's real cost to pay twice for nothing.
+      const after = searchIndex.inspect?.() ?? null;
+      const analyzedAfter = after?.analyzed ?? 0;
+      documentsRead = Math.max(0, analyzedAfter - (analyzedBefore ?? 0));
+      const totalDocuments = after?.documents ?? null;
+      documentsReused = totalDocuments === null ? null : Math.max(0, totalDocuments - documentsRead);
+      phase = documentsRead > 0 ? "cold" : "warm";
+    } else {
+      // The memory backend exposes no per-search analyzed counter (see the
+      // comment on lastSearchContributingKey) — documentsRead/Reused stay
+      // unknown for it rather than guessed from the candidate count, which
+      // is a scored-hit count, not a read/analyzed count.
+      documentsRead = null;
+      documentsReused = null;
+      phase = keyBefore === null || keyBefore !== key ? "cold" : "warm";
+    }
+    return {
+      hits, indexing, indexingSources: pending,
+      diag: {
+        backend, phase, documentsRead, documentsReused,
+        candidateCount: searchStats?.candidateCount ?? null,
+        storeSyncMs: searchStats?.syncMs ?? null,
+        decodedRecords: searchStats?.decodedRecords ?? null,
+      },
+    };
+  }
+
+  // GET /api/diagnostics: diagnostics.snapshot() plus an additive `retrieval`
+  // object. `searches`/`lastSearch` come straight from diagnostics.mjs's own
+  // bounded window (it already recorded every search event's phase); the
+  // rest — which backend, whether it's persisted, and its index size — needs
+  // the live searchIndex reference diagnostics.mjs deliberately doesn't hold,
+  // so it's merged in here. `searchIndex.inspect?.()` is optional-chained
+  // because the memory backend has none: its `index` summary stays null
+  // rather than guessed.
+  function diagnosticsSnapshotApi() {
+    const base = diagnostics.snapshot();
+    const idx = searchIndex.inspect?.() ?? null;
+    return {
+      ...base,
+      retrieval: {
+        ...base.retrieval,
+        backend: usingSearchStore ? "sqlite" : "memory",
+        persisted: usingSearchStore,
+        index: idx ? {
+          documents: idx.documents ?? null,
+          terms: idx.terms ?? null,
+          postings: idx.postings ?? null,
+          segments: idx.segments ?? null,
+          storeBytes: idx.storeBytes ?? null,
+        } : null,
+      },
+      telemetry: telemetryStatus(),
+      health: statusApi(),
+      indexing: indexingActivityApi(),
+    };
   }
 
   function decorateResolvedDispositions(resolved, decisions) {

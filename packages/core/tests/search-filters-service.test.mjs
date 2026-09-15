@@ -37,19 +37,108 @@ test('HTTP source/type filters recover hits below the global top-k and use disti
     assert.deepEqual(body.indexingSources, []);
     return body.hits;
   };
+  // linksTo is rank-WITHIN-THIS-CALL-dependent by design (top 3 of whatever
+  // the filter selected): 'buried' sits far below rank 3 in the unfiltered
+  // 26-hit answer but is the ONLY hit — rank 0 — once a filter narrows to
+  // it, so it legitimately gains linksTo there. Strip it before comparing a
+  // filtered answer against a slice of the unfiltered one.
+  const withoutLinksTo = hits => hits.map(({ linksTo, ...hit }) => hit);
   const global = await search();
   assert.equal(global.length, 20);
   assert.equal(global.some(hit => hit.id === 'buried'), false);
   const full = await search({ limit: '50' });
   const expected = full.filter(hit => hit.id === 'buried');
   assert.equal(expected.length, 1);
-  assert.deepEqual(await search({ source: 'specs' }), expected);
-  assert.deepEqual(await search({ type: 'spec' }), expected);
-  assert.deepEqual(await search({ source: 'specs', type: 'spec' }), expected);
+  assert.deepEqual(withoutLinksTo(await search({ source: 'specs' })), withoutLinksTo(expected));
+  assert.deepEqual(withoutLinksTo(await search({ type: 'spec' })), withoutLinksTo(expected));
+  assert.deepEqual(withoutLinksTo(await search({ source: 'specs', type: 'spec' })), withoutLinksTo(expected));
   assert.deepEqual(await search({ source: 'specs', type: 'note' }), []);
   assert.deepEqual(await search({ source: 'missing' }), []);
   assert.deepEqual(await search({ type: 'missing' }), []);
   assert.deepEqual(await search({ source: 'personal' }), global);
   assert.deepEqual(await search(), global, 'filter cache entries must not replace the unfiltered answer');
-  assert.deepEqual(await search({ source: 'specs' }), expected, 'repeat scoped searches use their own retained answer');
+  assert.deepEqual(withoutLinksTo(await search({ source: 'specs' })), withoutLinksTo(expected), 'repeat scoped searches use their own retained answer');
+});
+
+test('/api/diagnostics carries a retrieval summary and a search event records its phase', async t => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cc-search-diag-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const layerPath = path.join(root, 'personal');
+  await fsp.mkdir(layerPath);
+  await fsp.writeFile(path.join(layerPath, 'note.md'), doc('Build and test', 'note', 'build and test'));
+  const manifestPath = path.join(root, 'layers.json');
+  await fsp.writeFile(manifestPath, JSON.stringify({ layers: [{ name: 'personal', level: 3, path: layerPath }] }));
+  const service = createEngineService({ manifestPath });
+  const server = http.createServer(async (req, res) => {
+    if (await service.handleRequest(req, res)) return;
+    res.writeHead(404); res.end();
+  });
+  t.after(async () => {
+    service.close(); server.closeAllConnections();
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const searchUrl = new URL(`${base}/api/search`);
+  searchUrl.search = new URLSearchParams({ q: 'build and test', wait: '15000' });
+  const searchResponse = await fetch(searchUrl);
+  const searchBody = await searchResponse.json();
+  assert.equal(searchResponse.status, 200, JSON.stringify(searchBody));
+  // The response contract is unchanged: no `diag` leaks into the client body.
+  assert.equal('diag' in searchBody, false);
+
+  const diagBody = await (await fetch(`${base}/api/diagnostics`)).json();
+  assert.ok(diagBody.retrieval, 'retrieval object is present');
+  assert.ok(['sqlite', 'memory'].includes(diagBody.retrieval.backend));
+  assert.equal(typeof diagBody.retrieval.persisted, 'boolean');
+  assert.ok(diagBody.retrieval.index === null || typeof diagBody.retrieval.index === 'object');
+  assert.ok(diagBody.retrieval.searches);
+  assert.ok(diagBody.retrieval.searches.cold + diagBody.retrieval.searches.warm >= 1);
+
+  const searchEvent = diagBody.operations.find(op => op.operation === 'search');
+  assert.ok(searchEvent, 'a search event was recorded');
+  assert.ok(['cold', 'warm'].includes(searchEvent.phase));
+  assert.ok(['sqlite', 'memory'].includes(searchEvent.backend));
+});
+
+test('CONTEXTCAKE_DISABLE_SEARCH_STORE forces the in-memory fallback and /api/status reports it', async t => {
+  // Mirrors the same DI seam and rationale as retained-search.test.mjs's
+  // fallback test: on any Node this engine supports (node:sqlite unflagged
+  // from 22.13), the in-memory branch is otherwise unreachable and untested.
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cc-search-fallback-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const layerPath = path.join(root, 'personal');
+  await fsp.mkdir(layerPath);
+  await fsp.writeFile(path.join(layerPath, 'note.md'), doc('Build and test', 'note', 'build and test'));
+  const manifestPath = path.join(root, 'layers.json');
+  await fsp.writeFile(manifestPath, JSON.stringify({ layers: [{ name: 'personal', level: 3, path: layerPath }] }));
+
+  process.env.CONTEXTCAKE_DISABLE_SEARCH_STORE = '1';
+  t.after(() => { delete process.env.CONTEXTCAKE_DISABLE_SEARCH_STORE; });
+  const service = createEngineService({ manifestPath });
+  const server = http.createServer(async (req, res) => {
+    if (await service.handleRequest(req, res)) return;
+    res.writeHead(404); res.end();
+  });
+  t.after(async () => {
+    service.close(); server.closeAllConnections();
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+
+  const statusUrl = new URL(`http://127.0.0.1:${server.address().port}/api/status`);
+  const status = await (await fetch(statusUrl)).json();
+  assert.equal(status.searchBackend, 'memory', 'the env var must force the in-memory search index');
+
+  const searchUrl = new URL(`http://127.0.0.1:${server.address().port}/api/search`);
+  searchUrl.search = new URLSearchParams({ q: 'build and test', limit: '20', wait: '15000' });
+  const body = await (await fetch(searchUrl)).json();
+  assert.equal(body.hits.length, 1);
+  assert.equal(body.hits[0].id, 'note');
+
+  const diagUrl = new URL(`http://127.0.0.1:${server.address().port}/api/diagnostics`);
+  const diag = await (await fetch(diagUrl)).json();
+  assert.equal(diag.retrieval.backend, 'memory');
+  assert.equal(diag.retrieval.persisted, false);
+  assert.equal(diag.retrieval.index, null, 'the in-memory index has no size to report');
 });

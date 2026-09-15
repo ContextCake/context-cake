@@ -1,3 +1,6 @@
+import path from "node:path";
+import { isTraversal } from "./sources/okf-local.mjs";
+
 // Lossless spans for the inline Markdown and wiki links ContextCake supports.
 // Detection and repairs must consume this same parser: examples are content,
 // never outgoing links. Reference links are intentionally outside this contract.
@@ -210,4 +213,97 @@ function codeSpanEnds(text, mask) {
     next.set(run.length, run.end);
   }
   return ends;
+}
+
+// ---- link resolution --------------------------------------------------------
+//
+// The pure half of mcp-server.mjs's get_links target resolution, moved here so
+// search.mjs (the inbound-link prior) and get_links agree on what an "internal
+// link" resolves to, byte for byte, without either reimplementing the other.
+// get_links itself re-exports these rather than keeping its own copies.
+
+export function stripDecoration(value) {
+  return value.split("#")[0].split("?")[0].trim();
+}
+
+// A "scheme:" prefix is external UNLESS that scheme name is actually one of
+// the cascade's own layer names (`[[shared:systems/x]]`-style cross-layer
+// links) — callers that don't know the layer set can omit `layerNames`.
+export function isExternal(value, layerNames = EMPTY_SET) {
+  return /^[a-z][a-z0-9+.-]*:/i.test(value) && !layerNames.has(value.slice(0, value.indexOf(":")));
+}
+
+const EMPTY_SET = new Set();
+
+/** Concept ids only: `.md` stripped, path-normalized, traversal rejected. Throws on an invalid id. */
+export function normalizeId(value) {
+  if (!value || typeof value !== "string") throw new Error("concept_id is required");
+  const normalized = path.posix.normalize(stripDecoration(value).replace(/\\/g, "/").replace(/\.md$/i, ""));
+  if (isTraversal(normalized)) throw new Error(`Invalid concept ID: ${value}`);
+  return normalized;
+}
+
+/** normalizeId, but null instead of throwing — for link targets that may not resolve. */
+export function safeId(value) {
+  try {
+    return normalizeId(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Internal (non-external) link spans in a document body: {raw, target}.
+ * `layerNames` must be the SAME set passed to `resolveLinkTarget`/`isExternal`
+ * for these targets — otherwise a `layerName:path` cross-layer link (e.g.
+ * `[[shared:systems/api-gateway]]`) is misclassified as an external URI here
+ * and dropped before resolution ever sees it, even though resolution itself
+ * would have handled it correctly. Every caller must pass its real layer set.
+ */
+export function extractLinks(body, layerNames = EMPTY_SET) {
+  return markdownLinkSpans(body)
+    .map(({ raw, target }) => ({ raw, target }))
+    .filter((link) => link.target && !isExternal(stripDecoration(link.target), layerNames));
+}
+
+/**
+ * Resolve one link's `target` (as written from `sourceId`) to a concept id, or
+ * null if it doesn't resolve to one. Mirrors get_links exactly: an explicit
+ * `layerName:path` prefix, then a path relative to the source concept's
+ * directory (or absolute with a leading `/`).
+ */
+export function resolveLinkTarget(sourceId, target, layerNames = EMPTY_SET) {
+  const clean = stripDecoration(target);
+  if (!clean || isExternal(clean, layerNames)) return null;
+
+  const prefix = clean.indexOf(":");
+  if (prefix !== -1) {
+    const name = clean.slice(0, prefix);
+    if (layerNames.has(name)) return safeId(clean.slice(prefix + 1));
+  }
+
+  const base = path.posix.dirname(sourceId ?? "");
+  const joined = clean.startsWith("/") ? clean.slice(1) : path.posix.join(base, clean);
+  return safeId(joined);
+}
+
+/**
+ * Deduped, normalized, resolved internal link targets from a document body —
+ * the "outgoing" half of get_links' resolution, in one call. Used both for
+ * search.mjs's inbound-link prior (count how many distinct concepts link to
+ * each id) and for a hit's `linksTo`. Self-links are NOT filtered here (that
+ * is a property of how a count is used, not of what a document points at);
+ * callers that care exclude `sourceId` themselves.
+ */
+export function conceptLinkTargets(body, sourceId = "", layerNames = EMPTY_SET) {
+  const seen = new Set();
+  const out = [];
+  for (const link of extractLinks(body, layerNames)) {
+    const id = resolveLinkTarget(sourceId, link.target, layerNames);
+    if (id !== null && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
 }

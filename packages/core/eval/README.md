@@ -19,7 +19,7 @@ node packages/core/eval/run.mjs --record --label "why"    # accept a new number
 | Path | Role |
 |------|------|
 | `corpus/` | Three committed OKF layers — company (0), team (2), personal (3) — with deliberate cross-layer overrides |
-| `questions.json` | 38 natural-language questions, each with the concept ids that answer it and a `probes` note saying why the question exists |
+| `questions.json` | 51 natural-language questions, each with the concept ids that answer it and a `probes` note saying why the question exists |
 | `manifest.json` | Points the engine at the corpus; also usable by hand with `resolver.mjs` or `mcp-server.mjs` |
 | `run.mjs` | Runner and regression gate |
 | `baseline.json` | Current metrics plus the history of every superseded number |
@@ -36,10 +36,31 @@ node packages/core/eval/run.mjs --record --label "why"    # accept a new number
 
 ## Results so far
 
-| Scorer | recall@1 | recall@5 | mrr | conflict |
-|---|---|---|---|---|
-| Substring occurrence counting | 0.263 | 0.500 | 0.348 | 1.000 |
-| BM25F over Porter-stemmed tokens | 0.895 | 1.000 | 0.947 | 1.000 |
+| Scorer | Questions | recall@1 | recall@5 | mrr | conflict |
+|---|---|---|---|---|---|
+| Substring occurrence counting | 38 | 0.263 | 0.500 | 0.348 | 1.000 |
+| BM25F over Porter-stemmed tokens | 38 | 0.895 | 1.000 | 0.947 | 1.000 |
+| BM25F, + graph-prior/section-depth/paraphrase probes | 51 | 0.745 | 0.902 | 0.809 | 1.000 |
+| BM25F, + static inbound-link prior (weight 0.1) | 51 | 0.745 | 0.902 | 0.806 | 1.000 |
+| BM25F, + section-level body scoring | 51 | 0.765 | 0.902 | 0.818 | 1.000 |
+
+Section-level scoring (`docs/architecture/notes/section-retrieval.md`) scores
+each section as its own body candidate instead of diluting a match across the
+whole document; recall@1 and mrr both improve, and q03/q05 flip to rank 1.
+It is not a uniform win: q44 drops from rank 3 to rank 5 because its matching
+terms were scattered thin across `database-migration-guide`'s nine sections
+rather than concentrated in one, so cross-section frequency aggregation (which
+whole-document BM25 got "for free") no longer helps it against
+`standards/code-review`'s more concentrated match — still inside recall@5,
+and the honest cost of scoring sections independently.
+
+The link prior (`LINK_PRIOR_WEIGHT` in `search.mjs`) is deliberately small.
+At 0.1 it moves q40 from rank 3 to rank 2, leaves every original question
+where it was, and drops q46 (a section-depth probe) from rank 3 to 5. A
+weight of 0.3 flipped q39 and q41 to rank 1 but cost q06 its top rank and
+would give a real fifty-inbound hub a 2.2× multiplier. The eval corpus has one
+six-link hub, so the aggregate here is close to neutral by construction. See
+`docs/architecture/notes/link-prior.md` for the weight sweep and the reasoning.
 
 The old scorer counted `indexOf` hits with fixed field weights. Three things
 were wrong with it, and the eval separated them:
@@ -54,6 +75,18 @@ were wrong with it, and the eval separated them:
 `conflict` was already 1.000 before the rewrite. That is the honest read on the
 engine: the cascade and the conflict surfacing worked; retrieval was the broken
 half, and it was broken badly enough to hide the working half.
+
+The numbers dropped again on the third row for a different reason: 13 questions
+(q39-q51) were added *ahead of* three ranking changes — a graph prior, a
+section-level scorer, and (eventually) a hybrid/embedding pass — specifically to
+measure them before they exist. The original 38 questions are untouched and
+still resolve (recall@5 38/38, recall@1 actually improved slightly to 35/38 as
+a side effect of the larger corpus). The drop is entirely the new questions:
+4 probe a hub-vs-leaf graph prior the scorer doesn't have yet, 4 probe answers
+buried late in a long document that whole-document BM25 dilutes, and 5 are
+paraphrases with no shared stem between question and answer — those are
+expected lexical misses by design, not bugs. See `probes` on each of q39-q51
+for the current rank and what beats it.
 
 ## Adding questions
 

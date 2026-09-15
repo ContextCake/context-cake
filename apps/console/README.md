@@ -52,6 +52,10 @@ playground/service command documented in the repository instructions.
   Known section dates sort first; undated indexed documents fill the remaining
   places. Source health, precedence, and links to outstanding review work stay
   visible. The preview is not a recently-viewed history or complete update feed.
+- **Diagnostics** shows bounded source health, retrieval, indexing, and memory
+  observations in the Mac app, with optional app-managed Local Grafana. The Web
+  Demo renders a clearly labeled, read-only sample and never contacts localhost,
+  starts Docker, or creates the Grafana iframe.
 - **Trust → Captures** demonstrates review, stored, and discarded signal routing in demo
   mode; live/Desktop mode has no signal API yet and is read-only.
 - **Trust → Discrepancies** opens a decision inbox with status tabs and a
@@ -158,6 +162,8 @@ src/
   views/
     Canvas.tsx
     Overview.tsx
+    Diagnostics.tsx       native summary and Local Grafana surface; read-only sample in demo mode
+    DiagnosticActivity.tsx accessible retrieval activity chart and interval table
     Triage.tsx
     Conflicts.tsx         the Discrepancy Center root; its pieces live in views/conflicts/
     conflicts/            OverviewHeader, GroupedList, BulkBar, DecisionPanel, Evidence, Rules, filters

@@ -1,6 +1,6 @@
 ---
 title: Network access and privacy
-description: What anonymous usage metrics, update checks, and optional desktop account sync send, store, and leave on your Mac.
+description: What update checks, usage metrics, local diagnostics, optional Grafana telemetry, and account sync send, store, and leave on your Mac.
 ---
 
 The engine itself — `resolver.mjs`, `mcp-server.mjs`, and every other CLI tool — makes
@@ -201,12 +201,6 @@ registry are also excluded from settings sync. A Pack-managed layer can contribu
 Pack identity and active version as ordinary configuration metadata, while its absolute
 path is scrubbed exactly like every other local source path.
 
-## Related
-
-- [The trust boundary](/docs/concepts/trust-boundary) — the one place ContextCake
-  does execute code you didn't write directly (an `mcp` layer's `command`)
-- [Playground tour](/docs/guides/playground-tour) — where the settings menu lives
-
 ## Local diagnostics and telemetry
 
 Native diagnostics use bounded in-memory observations. Optional **Local Grafana —
@@ -219,6 +213,15 @@ forwarding are disabled. Any local process can reach the loopback Viewer/collect
 ports; they are not exposed on the LAN. Preferences live in device-local
 `local-observability.json`, outside manifests and account sync.
 
-The Web Demo does not contact visitor localhost or manage a stack. See the
+Beginning with version 0.9.0, the Web Demo shows labeled sample diagnostics. It
+does not contact visitor localhost, collect telemetry, or manage a stack. See the
 [diagnostics guide](/docs/guides/diagnostics) for process coverage, retention,
 clearing history, and delivery limitations.
+
+## Related
+
+- [The trust boundary](/docs/concepts/trust-boundary) — the one place ContextCake
+  does execute code you didn't write directly (an `mcp` layer's `command`)
+- [Playground tour](/docs/guides/playground-tour) — where the settings menu lives
+- [Diagnostics and Local Grafana](/docs/guides/diagnostics) — local observations,
+  telemetry, retention, and process coverage

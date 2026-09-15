@@ -25,7 +25,7 @@ export default defineConfig({
 				alt: 'ContextCake app icon',
 			},
 			description:
-				'Working context for AI teams. Keep policy, team practice, and local judgment in the same answer.',
+				'Project context for AI tools, with sources, dates, and disagreements intact.',
 			// The marketing 404 (src/pages/404.astro) owns /404 — don't inject Starlight's.
 			disable404Route: true,
 			social: [
@@ -61,6 +61,7 @@ export default defineConfig({
 				{
 					label: 'Guides',
 					items: [
+						{ label: 'Diagnostics and Local Grafana', slug: 'docs/guides/diagnostics' },
 						{ label: 'Browsing your context files', slug: 'docs/guides/browsing-your-files' },
 						{ label: 'Playground tour', slug: 'docs/guides/playground-tour' },
 						{ label: 'Foreign MCP sources', slug: 'docs/guides/foreign-mcp-sources' },

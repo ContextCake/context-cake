@@ -57,11 +57,11 @@ ContextCake keeps each scope separate, then resolves them at read time. The resu
 Inspect source health, retrieval performance, and indexing activity in native Mac
 diagnostics. Enable **Local Grafana — Experimental** for detailed dashboards and
 traces on your Mac. Native diagnostics need no Docker; optional Grafana does.
-Telemetry stays local in this version, with bounded export queues and 24-hour
-backend retention policies. Only participating processes are observed.
+Local Grafana telemetry stays local in this version, with bounded export queues
+and 24-hour backend retention policies. Only participating processes are observed.
 
-These features are in the current source build; a signed release is a separate
-step. [Diagnostics guide](apps/site/src/content/docs/docs/guides/diagnostics.md).
+These features begin in ContextCake 0.9.0. Until that signed download appears,
+they are available from the current source build. [Diagnostics guide](apps/site/src/content/docs/docs/guides/diagnostics.md).
 
 Authoritative source files stay in their configured locations. ContextCake also
 maintains indexes, optional disk caches, and repository clones. Source precedence

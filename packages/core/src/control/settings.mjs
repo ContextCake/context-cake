@@ -4,21 +4,26 @@
 // from the adapter's already-resolved view, so the HTTP service answers from
 // its cache and a CLI session from its own read — one shape, two adapters.
 
-import { mutateContextManifest } from "../manifest.mjs";
-import { settingsCatalog, validateSettingsPatch } from "../settings.mjs";
+import { manifestRevision, mutateContextManifest } from "../manifest.mjs";
+import { settingOrigins, settingsCatalog, validateSettingsPatch } from "../settings.mjs";
 import { ControlError } from "./errors.mjs";
+import { MANIFEST_REVISION, revisionPrecondition } from "./profiles.mjs";
 
+// `origins` names the tier (manifest > env > default) each value came from.
 export function settingsView({ manifest, settings }) {
-  return { settings, stored: manifest.settings ?? {}, catalog: settingsCatalog() };
+  const origins = Object.fromEntries(Object.entries(settingOrigins(manifest)).map(([key, entry]) => [key, entry.origin]));
+  return { settings, stored: manifest.settings ?? {}, origins, catalog: settingsCatalog() };
 }
 
-export function patchSettings(manifestPath, patch) {
+export function patchSettings(manifestPath, patch, { expectRevision = null } = {}) {
   let clean;
   try {
     clean = validateSettingsPatch(patch);
   } catch (err) {
     throw new ControlError("SETTINGS_INVALID", err.message, { status: 400 });
   }
+  // The revision written under the lock, for an adapter that reports it.
+  const result = {};
   try {
     mutateContextManifest(manifestPath, (manifest) => {
       const next = { ...(manifest.settings ?? {}) };
@@ -28,7 +33,9 @@ export function patchSettings(manifestPath, patch) {
       }
       if (Object.keys(next).length === 0) delete manifest.settings;
       else manifest.settings = next;
-    }, { allowMissing: false, allowTransitional: true });
+      Object.defineProperty(result, MANIFEST_REVISION, { value: manifestRevision(manifest), enumerable: false });
+    }, { allowMissing: false, allowTransitional: true, precondition: revisionPrecondition(expectRevision) });
+    return result;
   } catch (err) {
     // Settings deliberately stay a STRICT write — an invalid layer is not
     // this operation's to tolerate, and quietly rewriting a manifest read
@@ -37,6 +44,8 @@ export function patchSettings(manifestPath, patch) {
     // failure tells the user nothing about where to go. Removing the bad
     // source is the repair, and it has a surface of its own.
     if (err instanceof ControlError || err.status) throw err;
+    // A missing manifest or a busy lock is not an invalid source.
+    if (/^ContextCake manifest does not exist|^Timed out acquiring the ContextCake manifest lock/.test(err.message)) throw err;
     throw new ControlError(
       "MANIFEST_INVALID",
       `Settings were not saved: a source in your manifest is invalid, and saving would rewrite the file around it. Remove it in Sources first — ${err.message}`,

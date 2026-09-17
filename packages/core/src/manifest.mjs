@@ -9,6 +9,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { ControlError } from "./control/errors.mjs";
 
 export const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export const MANIFEST_LOCK_TIMEOUT_MS = 15_000;
@@ -212,18 +213,32 @@ function readTolerantManifest(manifestPath, { allowMissing, validatePacks }) {
  * layers array (the one getManifestProfileLayers would return) and each
  * quarantined record's `index` addresses that array directly.
  */
-export function repairContextManifest(manifestPath, mutate, { allowLegacy = true, allowTransitional = false } = {}) {
+export function repairContextManifest(manifestPath, mutate, {
+  allowLegacy = true,
+  allowTransitional = false,
+  profileId = null,
+  precondition = null,
+  afterWrite = null,
+} = {}) {
   const resolved = path.resolve(manifestPath);
   return withManifestLock(resolved, () => {
     // allowMissing is deliberately not an option: there is nothing to repair in
     // a manifest that does not exist.
     const { raw, quarantined } = readTolerantManifest(resolved, { allowMissing: false, validatePacks: true });
+    // Checked against the file as written, invalid layers included: that is
+    // the document a caller's expected revision was computed from.
+    precondition?.(raw);
     const before = layerCountsByContainer(raw);
-    const result = mutate({ manifest: raw, layers: defaultLayersInPlace(raw), quarantined });
+    const layers = profileId === null ? defaultLayersInPlace(raw) : profileLayersInPlace(raw, profileId);
+    const result = mutate({ manifest: raw, layers, quarantined, quarantineKey: quarantineProfileKey(raw, profileId) });
     for (const [container, count] of layerCountsByContainer(raw)) {
       if (count > (before.get(container) ?? 0)) throw new Error("A manifest repair may only remove layers.");
     }
     writeContextManifest(resolved, raw, { allowLegacy, allowTransitional });
+    // Still under the lock, after the file is saved: a step that must see the
+    // manifest as written (freeing a clone no layer references any more) and
+    // must not race the next writer.
+    afterWrite?.(raw);
     return result;
   });
 }
@@ -240,6 +255,29 @@ function defaultLayersInPlace(manifest) {
   }
   manifest.layers ??= [];
   return manifest.layers;
+}
+
+// profileLayersInPlace for a named profile, with the same "exists or throw"
+// rule getManifestProfileLayers applies. "default" is the default container.
+function profileLayersInPlace(manifest, profileId) {
+  if (profileId === "default") return defaultLayersInPlace(manifest);
+  if (classifyManifest(manifest) === "legacy") throw new Error(`Unknown ContextCake profile: ${profileId}`);
+  if (!Object.hasOwn(manifest.profiles ?? {}, profileId)) throw new Error(`Unknown ContextCake profile: ${profileId}`);
+  assertObject(manifest.profiles[profileId], `Profile ${profileId}`);
+  manifest.profiles[profileId].layers ??= [];
+  return manifest.profiles[profileId].layers;
+}
+
+/**
+ * The `profileId` a quarantined record carries for a profile's layers array
+ * (see quarantineInvalidLayers): the id itself in v2 and for the default
+ * container, `profiles.<id>` for a named profile of a transitional manifest.
+ * Lets a profile-aware caller pick its own rows out of `quarantined`.
+ */
+export function quarantineProfileKey(manifest, profileId = null) {
+  const id = profileId ?? "default";
+  if (id === "default") return "default";
+  return classifyManifest(manifest) === "transitional" ? `profiles.${id}` : id;
 }
 
 function layerCountsByContainer(manifest) {
@@ -515,6 +553,17 @@ export function writeContextManifest(manifestPath, manifest, {
   writeAtomicJson(path.resolve(manifestPath), manifest);
 }
 
+// Creates a manifest that must not exist yet. The exclusive link means a
+// manifest another process wrote after our check is never replaced; the lock
+// keeps a locked writer from seeing a half-created state.
+export function createContextManifest(manifestPath, manifest) {
+  validateContextManifest(manifest);
+  const resolved = path.resolve(manifestPath);
+  return withManifestLock(resolved, () => {
+    writeAtomicBytes(resolved, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`), { exclusiveTarget: true });
+  });
+}
+
 export function withManifestLock(manifestPath, mutate, {
   timeoutMs = MANIFEST_LOCK_TIMEOUT_MS,
   staleMs = MANIFEST_LOCK_STALE_MS,
@@ -564,10 +613,14 @@ export function mutateContextManifest(manifestPath, mutate, {
   allowMissing = true,
   allowLegacy = true,
   allowTransitional = false,
+  precondition = null,
 } = {}) {
   const resolved = path.resolve(manifestPath);
   return withManifestLock(resolved, () => {
     const manifest = readContextManifest(resolved, { allowMissing });
+    // Runs under the lock against the manifest about to be mutated, so an
+    // expected-revision check cannot race a concurrent writer.
+    precondition?.(manifest);
     const result = mutate(manifest);
     writeContextManifest(resolved, manifest, { allowLegacy, allowTransitional });
     return result;
@@ -579,23 +632,34 @@ export function migrateManifestToV2(manifestPath, {
   projectPath = null,
   now = () => new Date(),
   realpath = fs.realpathSync.native,
+  precondition = null,
 } = {}) {
   const resolved = path.resolve(manifestPath);
   return withManifestLock(resolved, () => {
     const raw = fs.readFileSync(resolved);
     const manifest = readContextManifest(resolved, { allowMissing: false });
+    precondition?.(manifest);
     const beforeMode = classifyManifest(manifest);
     if (newProfile) validateNewProfile(newProfile, manifest);
 
+    // profileId is allocated here, under the lock, so two concurrent creates
+    // cannot both pick the same free id. revision is the manifest as written.
     if (beforeMode === "v2") {
       const candidate = structuredClone(manifest);
-      applyNewProfile(candidate, newProfile, projectPath, realpath);
+      const profileId = applyNewProfile(candidate, newProfile, projectPath, realpath);
       if (newProfile) writeContextManifest(resolved, candidate, { allowLegacy: false });
-      return { action: newProfile ? "profile-created" : "already-v2", mode: "v2", backupPath: null, backupHash: null };
+      return {
+        action: newProfile ? "profile-created" : "already-v2",
+        mode: "v2",
+        backupPath: null,
+        backupHash: null,
+        profileId,
+        revision: manifestRevision(newProfile ? candidate : manifest),
+      };
     }
 
     const candidate = normalizeToV2(manifest);
-    applyNewProfile(candidate, newProfile, projectPath, realpath);
+    const profileId = applyNewProfile(candidate, newProfile, projectPath, realpath);
     validateContextManifest(candidate);
 
     const backupHash = crypto.createHash("sha256").update(raw).digest("hex");
@@ -603,7 +667,7 @@ export function migrateManifestToV2(manifestPath, {
     const backupPath = `${resolved}.pre-profiles.${stamp}.${backupHash}.json`;
     writeVerifiedBackup(backupPath, raw, backupHash);
     writeContextManifest(resolved, candidate, { allowLegacy: false });
-    return { action: "migrated", mode: "v2", backupPath, backupHash };
+    return { action: "migrated", mode: "v2", backupPath, backupHash, profileId, revision: manifestRevision(candidate) };
   });
 }
 
@@ -694,10 +758,10 @@ export function manifestLevel(layer) {
  * refuses to write a manifest where the two disagree (`pack-layer-drift`,
  * below). So every place a pack layer's level moves has to move the
  * assignment with it, or the strict write dies on the operation's own change.
- * Default profile only — that is the only profile the source operations
- * touch. Returns whether an assignment was updated.
+ * `profileId` names the profile whose assignment moves (default when
+ * omitted). Returns whether an assignment was updated.
  */
-export function syncPackAssignmentLevel(manifest, layer) {
+export function syncPackAssignmentLevel(manifest, layer, profileId = null) {
   if (typeof layer?.origin !== "string" || !layer.origin.startsWith("pack:")) return false;
   const match = /^pack:([^@]+)@/.exec(layer.origin);
   if (!match) return false;
@@ -705,8 +769,9 @@ export function syncPackAssignmentLevel(manifest, layer) {
   if (!record || typeof record !== "object" || !Array.isArray(record.assignments)) return false;
   // Legacy manifests key the default profile as `null`; v2 as "default" (with
   // a tolerated null spelling that validation warns about but accepts).
+  const wanted = profileId ?? "default";
   const assignment = record.assignments.find((entry) => (
-    entry && typeof entry === "object" && (entry.profile ?? "default") === "default" && entry.layerName === layer.name
+    entry && typeof entry === "object" && (entry.profile ?? "default") === wanted && entry.layerName === layer.name
   ));
   if (!assignment) return false;
   assignment.level = layer.level;
@@ -949,11 +1014,11 @@ function normalizeToV2(manifest) {
 function applyNewProfile(manifest, newProfile, projectPath, realpath) {
   if (!newProfile) {
     if (projectPath) throw new Error("A project mapping requires a new profile.");
-    return;
+    return null;
   }
   const id = newProfile.id ?? createProfileId(newProfile.label, Object.keys(manifest.profiles));
   assertProfileId(id);
-  if (Object.hasOwn(manifest.profiles, id)) throw new Error(`ContextCake profile already exists: ${id}`);
+  if (Object.hasOwn(manifest.profiles, id)) throw new ControlError("PROFILE_EXISTS", `ContextCake profile already exists: ${id}`, { status: 409 });
   manifest.profiles[id] = {
     label: normalizeProfileLabel(newProfile.label),
     layers: structuredClone(newProfile.layers ?? []),
@@ -964,18 +1029,19 @@ function applyNewProfile(manifest, newProfile, projectPath, realpath) {
     for (const [existingRoot, existingId] of Object.entries(manifest.projects ?? {})) {
       let existingCanonical;
       try { existingCanonical = canonicalExistingPath(existingRoot, realpath, "Project mapping"); } catch { continue; }
-      if (existingCanonical === canonical && existingId !== id) throw new Error(`Project mapping already belongs to profile ${existingId}: ${existingRoot}`);
+      if (existingCanonical === canonical && existingId !== id) throw new ControlError("PROJECT_MAPPED", `Project mapping already belongs to profile ${existingId}: ${existingRoot}`, { status: 409 });
     }
     manifest.projects ??= {};
     manifest.projects[canonical] = id;
   }
+  return id;
 }
 
 function validateNewProfile(profile, manifest) {
   assertObject(profile, "New profile");
   normalizeProfileLabel(profile.label);
   if (profile.id !== undefined) assertProfileId(profile.id);
-  if (profile.id && Object.hasOwn(manifest.profiles ?? {}, profile.id)) throw new Error(`ContextCake profile already exists: ${profile.id}`);
+  if (profile.id && Object.hasOwn(manifest.profiles ?? {}, profile.id)) throw new ControlError("PROFILE_EXISTS", `ContextCake profile already exists: ${profile.id}`, { status: 409 });
   validateLayers(profile.layers ?? [], "new profile");
   if (profile.pendingSources) validatePendingSources(profile.pendingSources, "new profile");
 }

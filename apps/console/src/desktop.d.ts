@@ -71,6 +71,10 @@ interface CliResult {
    * ephemeral and must never reach a harness configuration.
    */
   shimPath: string | null
+  /** Where the PATH link lives: /usr/local/bin/contextcake on macOS, ~/.local/bin/contextcake on Linux. Absent in older apps. */
+  linkPath?: string
+  /** The first `contextcake` on the app's PATH, and whether it is this app's shim. Absent in older apps. */
+  onPath?: { path: string; isThisApp: boolean } | null
 }
 
 declare global {
@@ -92,6 +96,8 @@ declare global {
   type UpdateStatus =
     | { state: 'unsupported' | 'idle' | 'checking' | 'not-available' }
     | { state: 'downloading'; version?: string; percent?: number }
+    /** A package-managed install (.deb) found a newer release: link to it, never install. */
+    | { state: 'available'; version?: string; url: string }
     | { state: 'downloaded'; version?: string }
     | { state: 'error'; error?: string }
 
@@ -99,6 +105,8 @@ declare global {
     __CC_DESKTOP?: {
       observability?: Record<'status' | 'setup' | 'start' | 'stop' | 'restart' | 'disable' | 'clear' | 'docker', () => Promise<{ enabled: boolean; state: string; origin?: string | null; failure?: string | null; restartClients?: boolean }>> & { open: (options?: {traceId?: string; range?: string; theme?: string}) => Promise<{enabled: boolean; state: string; origin?: string | null; failure?: string | null}> }
       windowRole?: 'main' | 'settings'
+      /** Node's process.platform in the desktop app ('darwin', 'linux'). Absent in older apps. */
+      platform?: string
       /** Fetch the per-launch engine bearer through the desktop's trusted IPC gate. */
       getApiToken: () => Promise<string>
       /** Desktop app version. */
@@ -210,6 +218,11 @@ declare global {
       list(): Promise<GithubConnection[]>
       addToken(token: string, host?: string): Promise<GithubConnection>
       disconnect(alias: string): Promise<{ removed: boolean }>
+      /**
+       * Whether a connection survives a restart. 'memory' means no usable OS
+       * keyring (Linux without one). Optional: older apps lack it.
+       */
+      storage?(): Promise<{ mode: 'persistent' | 'memory' }>
     }
     __CC_AUTH?: {
       getState(): Promise<DesktopAuthState>

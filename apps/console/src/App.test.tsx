@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { StoreProvider } from './store'
 import { ThemeModeProvider } from './theme-mode'
+import { shortcut } from './platform'
 
 let container: HTMLDivElement
 let root: Root
@@ -233,7 +234,7 @@ describe('Mac-first application shell', () => {
 
     const shell = container.querySelector('.cc-app-shell')
     expect(shell).toBeTruthy()
-    const settings = button('Settings⌘,')
+    const settings = button(`Settings${shortcut(',')}`)
     settings.getBoundingClientRect = () => ({
       x: -300, y: 0, left: -300, top: 0, right: -260, bottom: 40, width: 40, height: 40, toJSON: () => ({}),
     })
@@ -320,7 +321,7 @@ describe('Mac-first application shell', () => {
     }
     await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    await act(async () => button('Settings⌘,').click())
+    await act(async () => button(`Settings${shortcut(',')}`).click())
     expect(openSettings).toHaveBeenCalledWith()
     expect(container.querySelector('.cc-settings-screen')).toBeNull()
   })
@@ -335,7 +336,7 @@ describe('Mac-first application shell', () => {
 
     await act(async () => button('Use with agent').click())
     expect(container.querySelector('[aria-label="Ask ContextCake"]')).toBeTruthy()
-    await act(async () => button('Settings⌘,').click())
+    await act(async () => button(`Settings${shortcut(',')}`).click())
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))

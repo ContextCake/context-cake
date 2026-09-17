@@ -152,6 +152,13 @@ test("Windows refuses a line break in an argument, since cmd.exe ends the comman
   }
 });
 
+test("Windows refuses a NUL in an argument before it reaches cmd.exe", () => {
+  assert.throws(
+    () => resolveSpawnCommand("npx", ["a\0b"], { platform: "win32", env: winEnv(), isFile: probe(["C:\\Program Files\\nodejs\\npx.cmd"]) }),
+    /NUL/,
+  );
+});
+
 // The real thing, on the Windows CI job: a shim in a folder with spaces and
 // parentheses, forwarding %* the way the npm, pnpm, and yarn shims do.
 test("Windows: a real .cmd shim receives hostile arguments intact and runs nothing else", { skip: process.platform !== "win32" && "needs cmd.exe" }, () => {

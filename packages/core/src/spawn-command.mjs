@@ -30,6 +30,9 @@ export function resolveSpawnCommand(command, args, { platform = process.platform
   for (const arg of args) {
     // cmd.exe ends the command at a line break, so there is no way to pass one.
     if (/[\r\n]/.test(arg)) throw new Error("MCP command arguments cannot contain a line break on Windows when the command is a .cmd or .bat file");
+    // Node would refuse it at spawn anyway; refusing here keeps every argument
+    // rule for the cmd.exe path in one place.
+    if (arg.includes("\0")) throw new Error("MCP command arguments cannot contain a NUL character");
   }
 
   // cmd.exe parses the line once to run the batch file. The batch file then

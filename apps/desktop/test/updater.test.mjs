@@ -4,7 +4,7 @@ import { register } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { app, autoUpdater, boxes, calls, preferences } from './fixtures/updater-stub.mjs'
+import { app, autoUpdater, boxes, calls, dialogAnswer, feed, opened, preferences } from './fixtures/updater-stub.mjs'
 
 const stubUrl = new URL('./fixtures/updater-stub.mjs', import.meta.url).href
 register(`data:text/javascript,${encodeURIComponent(`
@@ -64,10 +64,57 @@ test('release metadata enables normal events, scheduled checks, manual checks an
   assert.equal(boxes.at(-1).message, "You're up to date.")
 })
 
+test('a .deb install only checks: no download, no install on quit, and a link to the release', async () => {
+  // electron-builder writes package-type into a deb's resources.
+  fs.writeFileSync(path.join(resources, 'package-type'), 'deb')
+  const notifications = []
+  updater.registerRendererUpdates((channel, status) => notifications.push(status))
+  const before = { ...calls }
+  feed.latest = '0.8.0'
+  try {
+    // A manual check while automatic checks are off must still not download.
+    autoUpdater.autoDownload = true
+    const checked = await updater.checkForUpdatesFromRenderer()
+    assert.equal(autoUpdater.autoDownload, false)
+    assert.equal(autoUpdater.autoInstallOnAppQuit, false)
+    assert.deepEqual(checked, { state: 'available', version: '0.8.0', url: 'https://github.com/ContextCake/context-cake/releases/tag/app-v0.8.0' })
+    assert.ok(notifications.some((status) => status.state === 'available'))
+    assert.ok(!notifications.some((status) => status.state === 'downloading'))
+
+    // The scheduled check uses a plain check, never the download-and-notify path.
+    preferences.updateCheck = true
+    updater.initUpdater()
+    assert.equal(calls.background, before.background)
+    assert.equal(calls.manual, before.manual + 2)
+
+    // The menu check offers the download page, and opening it installs nothing.
+    dialogAnswer.response = 0
+    await updater.checkInteractive(null)
+    assert.equal(boxes.at(-1).message, 'ContextCake 0.8.0 is available.')
+    assert.deepEqual(boxes.at(-1).buttons, ['Open Download Page', 'Later'])
+    assert.deepEqual(opened, ['https://github.com/ContextCake/context-cake/releases/tag/app-v0.8.0'])
+
+    // Even a stray downloaded event cannot make Update Now quit and install.
+    autoUpdater.emit('update-downloaded', { version: '0.8.0' })
+    assert.deepEqual(await updater.installNow(null), { installed: false })
+    assert.equal(calls.install, 0)
+  } finally {
+    app.emit('before-quit')
+    dialogAnswer.response = 1
+    feed.latest = '0.7.5'
+    fs.rmSync(path.join(resources, 'package-type'))
+  }
+
+  // Without the marker the same app self-updates again.
+  await updater.checkForUpdatesFromRenderer()
+  assert.equal(autoUpdater.autoDownload, true)
+  assert.equal(autoUpdater.autoInstallOnAppQuit, true)
+})
+
 test('unpackaged development builds remain unsupported even with metadata', async () => {
   app.isPackaged = false
+  const before = { ...calls }
   assert.deepEqual(await updater.checkForUpdatesFromRenderer(), { state: 'unsupported', reason: 'development-build' })
   updater.initUpdater()
-  assert.equal(calls.background, 1)
-  assert.equal(calls.manual, 2)
+  assert.deepEqual(calls, before)
 })

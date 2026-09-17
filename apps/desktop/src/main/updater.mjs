@@ -2,14 +2,45 @@
 // the single authoritative version source (specs/contextcake-distribution/
 // design.md §7). Privacy: the check hits github.com with version/platform
 // only, and readSettings().updateCheck turns it off entirely.
-import { app, dialog } from 'electron'
+import { app, dialog, shell } from 'electron'
 import electronUpdater from 'electron-updater'
 import { readSettings } from './settings.mjs'
 import { statSync } from 'node:fs'
 import path from 'node:path'
+import { readPackageType } from './package-type.mjs'
 
 const { autoUpdater } = electronUpdater
 const SIX_HOURS = 6 * 60 * 60 * 1000
+
+// ---- Package-managed installs (.deb) ----------------------------------------
+//
+// A .deb belongs to the system's package manager. electron-updater's
+// DebUpdater would download the next .deb and run `dpkg -i` through pkexec or
+// sudo, which is neither ours to do nor verified against a key we hold
+// (distribution design §11.4). So when electron-builder recorded the install
+// as a deb, the updater only checks: it never downloads, never installs on
+// quit, and reports `available` with a link to the release instead.
+const NOTIFY_ONLY_PACKAGES = new Set(['deb'])
+
+function notifyOnly() {
+  return app.isPackaged && NOTIFY_ONLY_PACKAGES.has(readPackageType(process.resourcesPath))
+}
+
+export function releaseUrl(version) {
+  return `https://github.com/ContextCake/context-cake/releases/tag/app-v${version}`
+}
+
+// Set before every check, not once: autoDownload defaults to true, and a manual
+// check can run while automatic checks (initUpdater) are switched off.
+function configureUpdater() {
+  if (notifyOnly()) {
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = false
+  } else {
+    autoUpdater.autoDownload = true
+    autoUpdater.autoInstallOnAppQuit = true
+  }
+}
 
 let timer = null
 let quitHookRegistered = false
@@ -65,12 +96,16 @@ export function initUpdater() {
   }
   if (timer) return
 
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  configureUpdater()
 
   const check = () => {
     if (!readSettings().updateCheck) return
-    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+    configureUpdater()
+    // checkForUpdatesAndNotify's OS notification announces a finished
+    // download, which a notify-only install never has; its status comes
+    // through the `update-available` event instead.
+    const run = notifyOnly() ? autoUpdater.checkForUpdates() : autoUpdater.checkForUpdatesAndNotify()
+    Promise.resolve(run).catch((err) => {
       console.error('[updater]', err?.message ?? err)
     })
   }
@@ -95,6 +130,7 @@ export async function checkInteractive(win) {
     return
   }
   try {
+    configureUpdater()
     const result = await autoUpdater.checkForUpdates()
     const latest = result?.updateInfo?.version
     if (!latest || latest === app.getVersion()) {
@@ -103,6 +139,18 @@ export async function checkInteractive(win) {
         message: `You're up to date.`,
         detail: `ContextCake ${app.getVersion()} is the latest version.`,
       })
+      return
+    }
+    if (notifyOnly()) {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'info',
+        message: `ContextCake ${latest} is available.`,
+        detail: 'This copy was installed from a .deb package, so your package manager installs updates. Download the new package, then install it the way you installed this one.',
+        buttons: ['Open Download Page', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      if (response === 0) await shell.openExternal(releaseUrl(latest))
       return
     }
     const { response } = await dialog.showMessageBox(win, {
@@ -139,7 +187,9 @@ export function registerRendererUpdates(notifyFn) {
   rendererListenersRegistered = true
   status = { state: 'idle' }
   autoUpdater.on('checking-for-update', () => setStatus({ state: 'checking' }))
-  autoUpdater.on('update-available', (info) => setStatus({ state: 'downloading', version: info?.version, percent: 0 }))
+  autoUpdater.on('update-available', (info) => setStatus(notifyOnly()
+    ? { state: 'available', version: info?.version, url: releaseUrl(info?.version) }
+    : { state: 'downloading', version: info?.version, percent: 0 }))
   autoUpdater.on('update-not-available', () => setStatus({ state: 'not-available' }))
   autoUpdater.on('download-progress', (progress) => setStatus({ state: 'downloading', version: status.version, percent: Math.round(progress?.percent ?? 0) }))
   autoUpdater.on('update-downloaded', (info) => setStatus({ state: 'downloaded', version: info?.version ?? status.version }))
@@ -161,6 +211,7 @@ export async function checkForUpdatesFromRenderer() {
   if (unsupported) return setStatus(unsupported)
   setStatus({ state: 'checking' })
   try {
+    configureUpdater()
     await autoUpdater.checkForUpdates()
     return status
   } catch (err) {
@@ -177,7 +228,7 @@ export async function checkForUpdatesFromRenderer() {
  * unconfirmed way to force the app to quit.
  */
 export async function installNow(win) {
-  if (unsupportedBuildStatus() || status.state !== 'downloaded') return { installed: false }
+  if (unsupportedBuildStatus() || notifyOnly() || status.state !== 'downloaded') return { installed: false }
   const { response } = await dialog.showMessageBox(win, {
     type: 'info',
     message: `ContextCake ${status.version ? `${status.version} ` : ''}is ready to install.`,

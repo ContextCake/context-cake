@@ -8,6 +8,7 @@
 // injects `gitCredentialsForUrl(url) => secrets[]`, the same one-way flow as
 // buildSources' token map — these operations never read a keychain.
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -17,17 +18,22 @@ import { promisify } from "node:util";
 import { probeDocs } from "../sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "../sources/files.mjs";
 import { createMcpSource } from "../sources/mcp.mjs";
+import { buildSources } from "../sources/index.mjs";
 import {
   classifyManifest,
   getManifestProfileLayers,
   manifestLevel,
   mutateContextManifest,
+  quarantineProfileKey,
   readContextManifest,
   readContextManifestQuarantined,
   repairContextManifest,
   syncPackAssignmentLevel,
+  validateContextManifest,
+  withManifestLockAsync,
 } from "../manifest.mjs";
 import { ControlError } from "./errors.mjs";
+import { revisionPrecondition } from "./profiles.mjs";
 import { withDeadline } from "./util.mjs";
 
 // Re-exported for the callers (and tests) that reached it here before it
@@ -152,6 +158,54 @@ function defaultProfileContainer(manifest) {
   return classifyManifest(manifest) === "v2" ? manifest.profiles.default : manifest;
 }
 
+// The object that holds a profile's `pendingSources`. Every operation takes a
+// `profileId` (null = default, the only one the HTTP service reads) and never
+// derives one itself; getManifestProfileLayers checks the id exists first.
+function profileContainer(manifest, profileId) {
+  if ((profileId ?? "default") === "default") return defaultProfileContainer(manifest);
+  return manifest.profiles[profileId];
+}
+
+// A stale --expect-revision fails before a probe or a clone does any work.
+// The same check runs again under the lock, where it counts.
+function precheckRevision(manifestPath, expectRevision) {
+  const precondition = revisionPrecondition(expectRevision);
+  if (!precondition) return null;
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  } catch {
+    return precondition; // unreadable: the operation's own read reports it
+  }
+  precondition(raw);
+  return precondition;
+}
+
+function isTokenEnvAuth(auth) {
+  return Boolean(auth) && typeof auth === "object" && !Array.isArray(auth)
+    && Object.keys(auth).length === 1 && typeof auth.tokenEnv === "string"
+    && /^[A-Za-z_][A-Za-z0-9_]*$/.test(auth.tokenEnv);
+}
+
+function isScrubMarker(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === 1 && typeof value.__scrubbed === "string";
+}
+
+// Plain errors a caller maps to its own codes (MANIFEST_LOCKED,
+// PROFILE_NOT_FOUND). Never rewrap them as "the manifest is invalid".
+function isLockOrProfileError(err) {
+  return /^Unknown ContextCake profile|^Timed out acquiring the ContextCake manifest lock/.test(String(err?.message ?? ""));
+}
+
+function cloneDirOccupied(dir) {
+  return new ControlError("CLONE_DIR_OCCUPIED", `${dir} exists but is not a git clone. Move it aside and try again.`, { status: 409, detail: { dir } });
+}
+
+// Carries a staged clone from the probe to the locked promote without letting
+// it reach the manifest: a symbol key is never serialized.
+const PROMOTE = Symbol("promote");
+
 function removePendingSource(container, name) {
   if (!Array.isArray(container.pendingSources)) return;
   container.pendingSources = container.pendingSources.filter((pending) => pending?.name !== name);
@@ -197,7 +251,7 @@ export async function probeFolder(abs, extensions) {
 // degraded with the real error, instead of an offline laptop blocking setup.
 // The env override exists for the network-free test suite only; the manifest
 // layer this operation writes never carries an apiBase.
-async function probeGithubRest(slug) {
+async function probeGithubRest(slug, token = null) {
   const base = process.env.CONTEXTCAKE_GITHUB_PROBE_BASE || "https://api.github.com";
   let res;
   try {
@@ -206,6 +260,7 @@ async function probeGithubRest(slug) {
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "contextcake",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       redirect: "follow",
       signal: AbortSignal.timeout(10_000), // mirrors the adapter's request timeout
@@ -214,6 +269,7 @@ async function probeGithubRest(slug) {
     return; // unreachable — fail open, the first index reports health honestly
   }
   if (res.status === 404 || res.status === 403) {
+    if (token) throw new ControlError("REPO_NOT_FOUND", "repo not found, or the token cannot read it", { status: 400 });
     throw new ControlError("REPO_NOT_PUBLIC", "repo not found or not public — for private repos use the Private repo (git) option", { status: 400 });
   }
 }
@@ -262,17 +318,44 @@ function looksLikeAuthFailure(text) {
   return /authentication failed|could not read (username|password)|terminal prompts disabled|repository not found|403|401/i.test(text);
 }
 
-export function createSourceOperations({ manifestPath, gitCredentialsForUrl = () => [] }) {
+/**
+ * Adapter policy is fixed per adapter, not per request:
+ *
+ *   retainClones   `source remove` keeps a managed clone it no longer needs
+ *                  (control-plane spec §5.12) and reports it; pruneClones is
+ *                  the separate, confirmed delete. The HTTP service keeps its
+ *                  old behavior (delete an unreferenced clone) because the app
+ *                  has no prune yet.
+ *   acceptTokenEnv a `github-rest` add may name `auth: {tokenEnv}`, the
+ *                  headless credential path. The app's public-repo form still
+ *                  refuses auth (see addSource).
+ *   env            where that tokenEnv value is read for the add-time probe.
+ *
+ * Per-call context is each operation's last argument:
+ * `{ profileId, expectRevision }`, where a null profileId means default.
+ */
+export function createSourceOperations({
+  manifestPath,
+  gitCredentialsForUrl = () => [],
+  retainClones = false,
+  acceptTokenEnv = false,
+  env = process.env,
+}) {
   const MANIFEST = path.resolve(manifestPath);
   const MANIFEST_DIR = path.dirname(MANIFEST);
   // Git-backed sources clone next to the manifest that declares them.
   const CACHE_DIR = path.join(MANIFEST_DIR, ".cache", "repos");
+  // A fresh clone lands here first, and moves into CACHE_DIR only after the
+  // manifest is revalidated under the lock (§5.12). Same filesystem, so the
+  // move is a rename.
+  const STAGING_DIR = path.join(CACHE_DIR, ".staging");
 
-  async function addSource(b) {
+  async function addSource(b, { profileId = null, expectRevision = null } = {}) {
     const name = String(b.name ?? "").trim();
     if (!/^[a-zA-Z0-9 _-]{1,40}$/.test(name)) throw new ControlError("NAME_INVALID", "Name: letters/numbers/space/_/- (max 40)", { status: 400 });
+    const precondition = precheckRevision(MANIFEST, expectRevision);
     const initialManifest = readContextManifest(MANIFEST, { allowMissing: false });
-    if (getManifestProfileLayers(initialManifest).some((l) => l.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
+    if (getManifestProfileLayers(initialManifest, profileId).some((l) => l.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
     // Two ways to say where the new layer sits, never both: `level` is the raw
     // manifest integer (omitted → 1, unchanged); `position` is a 1-based rank
     // in the cascade (1 = wins over everything, N+1 = bottom), turned into
@@ -298,6 +381,9 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
 
     let layer;
     let folder = null;
+    let tokenEnvSet = null;
+    // A fresh clone waiting in STAGING_DIR for the locked promote below.
+    let promote = null;
     if (b.kind === "local" || b.kind === "files") {
       if (!b.path) throw new ControlError("PATH_REQUIRED", "Local source needs a path", { status: 400 });
       const given = expandHome(String(b.path).trim());
@@ -326,7 +412,11 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
       // rejected rather than silently ignored. Private repos take the git-clone
       // kind in the wizard; authenticated REST layers remain an explicit
       // manifest feature because they must name the intended credential alias.
-      if (b.auth !== undefined || b.apiBase !== undefined) {
+      // The exception is a headless adapter (acceptTokenEnv) naming an
+      // environment variable. That reference never waits on a keychain alias
+      // the app has not injected, so it cannot read anonymously by surprise.
+      const tokenEnvAuth = acceptTokenEnv && isTokenEnvAuth(b.auth) ? b.auth : null;
+      if ((b.auth !== undefined && !tokenEnvAuth) || b.apiBase !== undefined) {
         throw new ControlError("REST_AUTH_REJECTED", "A public-repo source reads anonymously — remove auth/apiBase. For private repos use the Private repo (git) option.", { status: 400 });
       }
       const slug = String(b.repo ?? "").trim();
@@ -337,7 +427,11 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
       if (b.paths !== undefined && (!Array.isArray(b.paths) || b.paths.some((p) => typeof p !== "string"))) {
         throw new ControlError("PATHS_INVALID", "paths must be an array of strings", { status: 400 });
       }
-      await probeGithubRest(slug);
+      const token = tokenEnvAuth ? (env[tokenEnvAuth.tokenEnv] || null) : null;
+      // A variable unset here may still be set where the source is served, so
+      // skip the probe rather than call a private repo missing.
+      if (!tokenEnvAuth || token) await probeGithubRest(slug, token);
+      if (tokenEnvAuth) tokenEnvSet = Boolean(token);
       layer = {
         name,
         level,
@@ -345,45 +439,80 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
         repo: slug,
         ...(b.ref ? { ref: String(b.ref) } : {}),
         ...(Array.isArray(b.paths) && b.paths.length ? { paths: b.paths } : {}),
+        ...(tokenEnvAuth ? { auth: { tokenEnv: tokenEnvAuth.tokenEnv } } : {}),
         cache: { ttlSeconds: 900 },
       };
     } else if (b.kind === "github") {
       const { url, slug } = normalizeRepo(String(b.repo ?? ""));
       const dir = path.join(CACHE_DIR, slug);
-      await gitCloneOrPull(url, dir, b.ref ? String(b.ref) : null);
       const sub = b.subdir ? trimSlashes(String(b.subdir)) : "";
       // The sub-directory must stay inside the clone — otherwise this field would
-      // set a new sandbox root (layer.path) pointing anywhere on disk.
+      // set a new sandbox root (layer.path) pointing anywhere on disk. Pure path
+      // math, so it is checked before anything is cloned.
       let abs = dir;
       if (sub) {
         abs = path.resolve(dir, sub);
         if (abs !== dir && !abs.startsWith(dir + path.sep)) throw new ControlError("SUBDIR_ESCAPES", "Sub-directory escapes the repository", { status: 400 });
       }
-      folder = await probeFolder(abs, [".md"]);
+      const ref = b.ref ? String(b.ref) : null;
+      if (fs.existsSync(path.join(dir, ".git"))) {
+        // Another layer already reads this clone: refresh it in place.
+        await gitCloneOrPull(url, dir, ref);
+        folder = await probeFolder(abs, [".md"]);
+      } else {
+        if (fs.existsSync(dir)) throw cloneDirOccupied(dir);
+        const staged = path.join(STAGING_DIR, `${slug}-${randomUUID().slice(0, 8)}`);
+        fs.mkdirSync(STAGING_DIR, { recursive: true });
+        await gitCloneOrPull(url, staged, ref);
+        promote = { staged, dir };
+        try {
+          folder = await probeFolder(path.join(staged, path.relative(dir, abs)), [".md"]);
+        } catch (err) {
+          fs.rmSync(staged, { recursive: true, force: true });
+          throw err;
+        }
+      }
       layer = { name, level, path: path.relative(MANIFEST_DIR, abs), origin: url, ref: b.ref || null };
     } else {
       throw new ControlError("KIND_UNKNOWN", `Unknown source kind: ${b.kind}`, { status: 400 });
     }
 
-    const placed = mutateContextManifest(MANIFEST, (manifest) => {
-      const layers = getManifestProfileLayers(manifest);
-      if (layers.some((candidate) => candidate.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
-      let order = null;
-      if (position !== null) {
-        // Insert into the CURRENT cascade order (by level, not array order —
-        // position is a rank), clamped to the bottom, then re-level the whole
-        // list. Existing layers get renumbered N..1 around the newcomer.
-        const ordered = cascadeOrder(layers);
-        ordered.splice(Math.min(position, ordered.length + 1) - 1, 0, layer);
-        order = applyCascadeLevels(manifest, ordered);
-      }
-      layers.push(layer);
-      // A synced source whose machine-local path/command was scrubbed waits in
-      // pendingSources. Configuring that source locally promotes it to a runnable
-      // layer without leaving a duplicate metadata-only record behind.
-      removePendingSource(defaultProfileContainer(manifest), name);
-      return order;
-    }, { allowMissing: false, allowTransitional: true });
+    let placed;
+    try {
+      placed = mutateContextManifest(MANIFEST, (manifest) => {
+        const layers = getManifestProfileLayers(manifest, profileId);
+        if (layers.some((candidate) => candidate.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
+        let order = null;
+        if (position !== null) {
+          // Insert into the CURRENT cascade order (by level, not array order —
+          // position is a rank), clamped to the bottom, then re-level the whole
+          // list. Existing layers get renumbered N..1 around the newcomer.
+          const ordered = cascadeOrder(layers);
+          ordered.splice(Math.min(position, ordered.length + 1) - 1, 0, layer);
+          order = applyCascadeLevels(manifest, ordered, profileId);
+        }
+        layers.push(layer);
+        // A synced source whose machine-local path/command was scrubbed waits in
+        // pendingSources. Configuring that source locally promotes it to a runnable
+        // layer without leaving a duplicate metadata-only record behind.
+        removePendingSource(profileContainer(manifest, profileId), name);
+        // The last step before the write, on a manifest revalidated under the
+        // lock: move the staged clone into place. When a concurrent add already
+        // promoted the same repository, read that clone and drop ours. If the
+        // write below fails, a promoted clone stays behind unreferenced for
+        // pruneClones to find; it is never deleted here.
+        if (promote) {
+          if (fs.existsSync(path.join(promote.dir, ".git"))) fs.rmSync(promote.staged, { recursive: true, force: true });
+          else if (fs.existsSync(promote.dir)) throw cloneDirOccupied(promote.dir);
+          else fs.renameSync(promote.staged, promote.dir);
+        }
+        return order;
+      }, { allowMissing: false, allowTransitional: true, precondition });
+    } finally {
+      // Refused under the lock (stale revision, name taken): the staged clone
+      // never became anyone's, so it goes.
+      if (promote && fs.existsSync(promote.staged)) fs.rmSync(promote.staged, { recursive: true, force: true });
+    }
     return {
       ok: true,
       added: name,
@@ -391,16 +520,17 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
       indexing: true, // counts arrive via /api/graph as the index lands
       ...(placed ? { order: placed } : {}),
       ...(folder ? { hasDocuments: folder.found, scanComplete: folder.complete } : {}),
+      ...(tokenEnvSet !== null ? { tokenEnvSet } : {}),
     };
   }
 
   // Write the levels assignCascadeLevels chose onto the layer objects, keeping
   // every Pack assignment in step. Returns the [{name, level}] list.
-  function applyCascadeLevels(manifest, orderedLayers) {
+  function applyCascadeLevels(manifest, orderedLayers, profileId = null) {
     const assigned = assignCascadeLevels(orderedLayers);
     orderedLayers.forEach((layer, index) => {
       layer.level = assigned[index].level;
-      syncPackAssignmentLevel(manifest, layer);
+      syncPackAssignmentLevel(manifest, layer, profileId);
     });
     return assigned;
   }
@@ -418,7 +548,7 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
    * answers with, listing what blocks it. Re-leveling never re-indexes:
    * `level` is a presentation field outside the index identity.
    */
-  function reorderSources(body) {
+  function reorderSources(body, { profileId = null, expectRevision = null } = {}) {
     // A `null` body parses fine and would otherwise be a TypeError (500) at
     // the destructure; it is just another shape of "no order given".
     const order = body && typeof body === "object" ? body.order : undefined;
@@ -432,11 +562,11 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
     // Tolerant read first: the strict read inside the mutation would throw the
     // engine's raw validation error at a manifest holding a bad layer, and the
     // caller is owed the same "which rows block this" answer removal gives.
-    refuseIfQuarantined();
+    refuseIfQuarantined(profileId);
     let assigned;
     try {
       assigned = mutateContextManifest(MANIFEST, (manifest) => {
-        const layers = getManifestProfileLayers(manifest);
+        const layers = getManifestProfileLayers(manifest, profileId);
         const names = new Set(layers.map((layer) => layer.name));
         const unknown = order.filter((name) => !names.has(name));
         const missing = layers.map((layer) => layer.name).filter((name) => !order.includes(name));
@@ -447,16 +577,17 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
           throw new ControlError("ORDER_INVALID", `order must name every source in the profile exactly once (${parts.join("; ")})`, { status: 400, detail: { unknown, missing, duplicate: [] } });
         }
         const byName = new Map(layers.map((layer) => [layer.name, layer]));
-        return applyCascadeLevels(manifest, order.map((name) => byName.get(name)));
-      }, { allowMissing: false, allowTransitional: true });
+        return applyCascadeLevels(manifest, order.map((name) => byName.get(name)), profileId);
+      }, { allowMissing: false, allowTransitional: true, precondition: revisionPrecondition(expectRevision) });
     } catch (err) {
       if (err instanceof ControlError || err.status) throw err;
+      if (isLockOrProfileError(err)) throw err;
       // The strict read (or the strict write) refused the manifest for a
       // reason no default-profile row explains — a bad layer in ANOTHER
       // profile, two layers sharing a name, a dangling Pack — or a row went
       // bad between the tolerant read above and the lock. Neither is an
       // internal failure; say which, the way removal and settings do.
-      refuseIfQuarantined();
+      refuseIfQuarantined(profileId);
       throw manifestInvalidError(MANIFEST, "reordered", err.message);
     }
     return { ok: true, order: assigned };
@@ -466,14 +597,16 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
   // by the name the graph shows it under (like REMOVE_BLOCKED). A read that
   // cannot even quarantine (whole-manifest failure) throws the engine's own
   // error, which the caller maps to MANIFEST_INVALID.
-  function refuseIfQuarantined() {
+  function refuseIfQuarantined(profileId = null) {
+    let manifest;
     let quarantined;
     try {
-      ({ quarantined } = readContextManifestQuarantined(MANIFEST, { allowMissing: false }));
+      ({ manifest, quarantined } = readContextManifestQuarantined(MANIFEST, { allowMissing: false }));
     } catch (err) {
       throw manifestInvalidError(MANIFEST, "reordered", err.message);
     }
-    const blocking = quarantined.filter((entry) => entry.profileId === "default");
+    const key = quarantineProfileKey(manifest, profileId);
+    const blocking = quarantined.filter((entry) => entry.profileId === key);
     if (blocking.length) {
       const listed = formatBlocking(blocking);
       throw new ControlError("REORDER_BLOCKED", `Nothing was reordered: ${blocking.length} source${blocking.length === 1 ? " is" : "s are"} invalid and cannot be given a position. Remove ${blocking.length === 1 ? "it" : "them"} first — ${listed}`, { status: 409, detail: { blocking: blocking.map((entry) => ({ name: entry.name, error: entry.error })) } });
@@ -495,19 +628,23 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
    * transaction is the only shape that both fixes the file and keeps the write
    * strict. The 409 below says so when a client asked for too little.
    */
-  function removeSources(names) {
+  //
+  // `pendingOnly` is `source pending-dismiss`: the same all-or-nothing
+  // transaction, limited to pending entries so a typo cannot take a runnable
+  // source with it.
+  function removeSources(names, { profileId = null, expectRevision = null, pendingOnly = false } = {}) {
     const wanted = [...new Set(names.filter((name) => typeof name === "string" && name))];
     if (wanted.length === 0) throw new ControlError("NAME_REQUIRED", "Provide ?name=", { status: 400 });
     const removed = [];
     let survivors = [];
     let blocking = [];
     try {
-      repairContextManifest(MANIFEST, ({ manifest, layers, quarantined }) => {
-        const container = defaultProfileContainer(manifest);
-        // Quarantined rows for the profile this service reads. A layer
+      repairContextManifest(MANIFEST, ({ manifest, layers, quarantined, quarantineKey }) => {
+        const container = profileContainer(manifest, profileId);
+        // Quarantined rows for the profile this operation reads. A layer
         // quarantined out of some OTHER profile has no row here to have been
         // clicked, and removing it is not this route's business.
-        const broken = quarantined.filter((entry) => entry.profileId === "default");
+        const broken = quarantined.filter((entry) => entry.profileId === quarantineKey);
         // A set, because these become splices: two names resolving to one index
         // would take a second, innocent layer with them.
         const doomed = new Set();
@@ -515,6 +652,10 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
           const pendingBefore = container.pendingSources?.length ?? 0;
           removePendingSource(container, name);
           const droppedPending = (container.pendingSources?.length ?? 0) !== pendingBefore;
+          if (pendingOnly) {
+            if (!droppedPending) throw new ControlError("PENDING_NOT_FOUND", `No pending source named "${name}"`, { status: 404 });
+            continue;
+          }
           const index = layers.findIndex((layer) => layer.name === name);
           if (index >= 0) { doomed.add(index); continue; }
           // A quarantined row is matched on the name the graph gave it, which
@@ -534,9 +675,10 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
         // entry the caller did NOT ask to remove.
         blocking = broken.filter((entry) => !doomed.has(entry.index));
         survivors = allManifestLayers(manifest); // every profile — a shared clone must survive
-      }, { allowTransitional: true });
+      }, { allowTransitional: true, profileId, precondition: revisionPrecondition(expectRevision) });
     } catch (err) {
       if (err.status) throw err;
+      if (isLockOrProfileError(err)) throw err;
       if (blocking.length > 0) {
         const listed = formatBlocking(blocking);
         throw new ControlError("REMOVE_BLOCKED", `Nothing was removed: ${blocking.length} other source${blocking.length === 1 ? " is" : "s are"} also invalid, and the manifest cannot be saved while ${blocking.length === 1 ? "it remains" : "they remain"}. Remove ${blocking.length === 1 ? "it" : "them"} in the same request — ${listed}`, { status: 409 });
@@ -548,8 +690,12 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
       // defect.
       throw new ControlError("MANIFEST_UNREPAIRABLE", `Nothing was removed: the manifest is invalid in a way this app cannot repair. Edit ${MANIFEST} by hand — ${err.message}`, { status: 409 });
     }
-    for (const layer of removed) cleanupCloneDir(layer, survivors);
-    return { ok: true, removed: wanted[0], removedNames: wanted };
+    const retained = [];
+    for (const layer of removed) {
+      const dir = cleanupCloneDir(layer, survivors);
+      if (dir && !retained.includes(dir)) retained.push(dir);
+    }
+    return { ok: true, removed: wanted[0], removedNames: wanted, ...(retained.length ? { retainedClones: retained } : {}) };
   }
 
   // Every layer the manifest still declares, across the legacy array and every
@@ -566,16 +712,21 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
   // one repo. Every other kind points at the user's own folder and is never
   // touched. Best effort: an undeletable orphan dir is not worth failing the
   // remove that already happened.
+  //
+  // Under retainClones nothing is deleted: the orphan's path comes back so the
+  // caller can say it was kept and point at pruneClones.
   function cleanupCloneDir(layer, survivors) {
     const dir = cloneDirOf(layer);
-    if (!dir) return;
+    if (!dir) return null;
     const inUse = survivors.some((candidate) => {
       if (typeof candidate?.path !== "string") return false;
       const resolved = path.resolve(MANIFEST_DIR, candidate.path);
       return resolved === dir || resolved.startsWith(dir + path.sep);
     });
-    if (inUse) return;
+    if (inUse) return null;
+    if (retainClones) return fs.existsSync(dir) ? dir : null;
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* orphan dir stays; the manifest entry is already gone */ }
+    return null;
   }
 
   // The clone directory a layer's origin maps to — null unless the layer is a
@@ -592,7 +743,7 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
     return dir;
   }
 
-  async function patchSource(b) {
+  async function patchSource(b, { profileId = null, expectRevision = null } = {}) {
     // A path change is validated before the manifest is touched, with the same
     // cheap probe the add path uses — folder-missing and not-a-folder fail the
     // request, size never does. The kind is re-checked inside the mutation
@@ -608,13 +759,14 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
       nextLevel = parseLevel(b.level);
       if (nextLevel === null) throw new ControlError("LEVEL_INVALID", "level must be an integer", { status: 400 });
     }
+    const precondition = precheckRevision(MANIFEST, expectRevision);
     let nextPath;
     let probed = null;
     if (b.path !== undefined) {
       // Typed before it is coerced: String(["/etc"]) is "/etc", so an array
       // would otherwise walk straight through the trim and the probe.
       if (typeof b.path !== "string") throw new ControlError("PATH_REQUIRED", "Give this source a folder path", { status: 400 });
-      const layer = getManifestProfileLayers(readContextManifest(MANIFEST, { allowMissing: false })).find((candidate) => candidate.name === b.name);
+      const layer = getManifestProfileLayers(readContextManifest(MANIFEST, { allowMissing: false }), profileId).find((candidate) => candidate.name === b.name);
       if (!layer) throw new ControlError("SOURCE_NOT_FOUND", `No source named "${b.name}"`, { status: 404 });
       const refusal = pathPatchRefusal(layer);
       if (refusal) throw new ControlError("PATCH_REFUSED", refusal, { status: 400 });
@@ -624,7 +776,7 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
       probed = await probeFolder(path.resolve(MANIFEST_DIR, nextPath), kind === "files" ? FILES_EXTENSIONS : [".md"]);
     }
     mutateContextManifest(MANIFEST, (manifest) => {
-      const layers = getManifestProfileLayers(manifest);
+      const layers = getManifestProfileLayers(manifest, profileId);
       const layer = layers.find((candidate) => candidate.name === b.name);
       if (!layer) throw new ControlError("SOURCE_NOT_FOUND", `No source named "${b.name}"`, { status: 404 });
       if (nextPath !== undefined) {
@@ -636,14 +788,14 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
         layer.level = nextLevel;
         // A Pack layer's level lives in two places; moving one without the
         // other makes the strict write refuse this very patch.
-        syncPackAssignmentLevel(manifest, layer);
+        syncPackAssignmentLevel(manifest, layer, profileId);
       }
       if (b.newName && b.newName !== b.name) {
         if (!/^[a-zA-Z0-9 _-]{1,40}$/.test(b.newName)) throw new ControlError("NAME_INVALID", "Invalid new name", { status: 400 });
         if (layers.some((candidate) => candidate.name === b.newName)) throw new ControlError("NAME_EXISTS", "Name already exists", { status: 409 });
         layer.name = b.newName;
       }
-    }, { allowMissing: false, allowTransitional: true });
+    }, { allowMissing: false, allowTransitional: true, precondition });
     // A new folder is a new content IDENTITY, so adoptIndexes finds no entry to
     // carry over and the source re-indexes from scratch. That is the correct
     // outcome, not a shortcoming of adoption: the snapshot it would have
@@ -736,5 +888,436 @@ export function createSourceOperations({ manifestPath, gitCredentialsForUrl = ()
     }
   }
 
-  return { addSource, removeSources, patchSource, reorderSources, gitCloneOrPull };
+  /**
+   * Sync one source (POST /api/sources/sync, `contextcake source sync`). The
+   * caller owns the adapters: `layers` and `sources` are the selected
+   * profile's, already built, and `invalidate(name)` / `reload()` are how the
+   * caller's own index learns that content moved. Throws SYNC_FAILED (502)
+   * with the health detail when the remote could not be read.
+   */
+  async function syncSource(name, { layers = [], sources = [], invalidate = () => {}, reload = () => {} } = {}) {
+    if (!name) throw new ControlError("NAME_REQUIRED", "Provide ?name=", { status: 400 });
+    const layer = layers.find((l) => l.name === name);
+    if (!layer) throw new ControlError("SOURCE_NOT_FOUND", `No source named "${name}"`, { status: 404 });
+    if (layer.source === "github") {
+      const source = sources.find((candidate) => candidate.name === name);
+      if (!source || typeof source.sync !== "function") {
+        throw new ControlError("SYNC_UNSUPPORTED", `"${name}" does not support Sync`, { status: 400 });
+      }
+      const lastSynced = await source.sync();
+      // sync() invalidates both the outer cache and the adapter's internal
+      // index. Refresh now so a successful answer means the remote index has
+      // actually bypassed TTL rather than merely being marked dirty.
+      const concepts = (await source.listConceptIds()).length;
+      // Remote adapters swallow API failures on purpose — one unreachable repo
+      // must never fail a resolve — which makes an outage look exactly like an
+      // empty repo from out here: no throw, no concepts. Everywhere else that's
+      // the right trade; here it isn't, because the user asked about this one
+      // repo and is owed the answer. health() is the out-of-band channel for it,
+      // and sync() cleared it first, so what it reports belongs to this sync.
+      const health = typeof source.health === "function" ? source.health() : null;
+      const detail = {
+        synced: name,
+        concepts,
+        lastSynced: source.lastSynced ?? lastSynced ?? null, // when this attempt ran
+        lastSuccessAt: health?.lastSuccessAt ?? null, // when the index last actually loaded
+        lastError: health?.lastError ?? null,
+        lastErrorAt: health?.lastErrorAt ?? null,
+      };
+      if (health && !health.ok) {
+        throw new ControlError("SYNC_FAILED", `Sync failed: ${health.lastError}`, { status: 502, retryable: true, detail: { ...detail, ok: false } });
+      }
+      return { ok: true, ...detail };
+    }
+    if (layer.live === true) {
+      // The live team layer: withGitSync's sync() lands any queued (offline)
+      // commits — decisions committed while the remote was unreachable
+      // included — then force-refreshes the tree. The re-index that follows
+      // is what makes a teammate's pushed change visible.
+      const source = sources.find((candidate) => candidate.name === name);
+      if (!source || typeof source.sync !== "function") throw new ControlError("SYNC_UNSUPPORTED", `"${name}" does not support Sync`, { status: 400 });
+      const lastSynced = await source.sync();
+      invalidate(name);
+      return { ok: true, synced: name, lastSynced };
+    }
+    if (!layer.origin) throw new ControlError("SYNC_UNSUPPORTED", `"${name}" is not a git-backed source`, { status: 400 });
+    const { url, slug } = normalizeRepo(layer.origin);
+    await gitCloneOrPull(url, path.join(CACHE_DIR, slug), layer.ref ?? null);
+    reload();
+    return { ok: true, synced: name };
+  }
+
+  // ---- config-only reads ------------------------------------------------------
+  //
+  // Nothing below opens an adapter. Reads are quarantined like the service's:
+  // a malformed layer comes back as a row with its error, never as a failure
+  // of the whole listing.
+
+  function sourceRecord(layer, rank) {
+    const kind = layer.source ?? "okf-local";
+    const record = { name: layer.name, kind, level: manifestLevel(layer), rank };
+    if (typeof layer.path === "string") {
+      record.path = layer.path;
+      record.resolvedPath = path.resolve(MANIFEST_DIR, layer.path);
+    }
+    for (const key of ["repo", "ref", "paths", "apiBase", "command", "args", "origin", "cache", "git", "auth"]) {
+      if (layer[key] !== undefined && layer[key] !== null) record[key] = structuredClone(layer[key]);
+    }
+    if (layer.live === true) record.live = true;
+    const clone = cloneDirOf(layer);
+    if (clone) record.clone = { dir: clone, exists: fs.existsSync(clone) };
+    return record;
+  }
+
+  // What a pending source still needs on this machine: every field settings
+  // sync scrubbed, plus the one field its kind cannot run without.
+  function pendingRecord(entry) {
+    const kind = typeof entry?.source === "string" ? entry.source : "okf-local";
+    const record = { name: entry.name, kind, level: manifestLevel(entry), missing: missingFields(entry) };
+    for (const key of ["repo", "ref", "origin"]) {
+      if (typeof entry[key] === "string") record[key] = entry[key];
+    }
+    return record;
+  }
+
+  function readForListing(profileId) {
+    let read;
+    try {
+      read = readContextManifestQuarantined(MANIFEST, { allowMissing: false });
+    } catch (err) {
+      if (/^ContextCake manifest does not exist/.test(err.message)) throw err;
+      throw new ControlError("MANIFEST_INVALID", err.message, { status: 422 });
+    }
+    const layers = getManifestProfileLayers(read.manifest, profileId);
+    const key = quarantineProfileKey(read.manifest, profileId);
+    return { ...read, layers, broken: read.quarantined.filter((entry) => entry.profileId === key) };
+  }
+
+  function listSources({ profileId = null } = {}) {
+    const { manifest, layers, broken } = readForListing(profileId);
+    const ordered = cascadeOrder(layers);
+    return {
+      sources: ordered.map((layer, index) => sourceRecord(layer, index + 1)),
+      quarantined: broken.map(({ name, kind, level, error }) => ({ name, kind, level, error })),
+      pending: (profileContainer(manifest, profileId).pendingSources ?? []).map(pendingRecord),
+    };
+  }
+
+  function listPendingSources({ profileId = null } = {}) {
+    return listSources({ profileId }).pending;
+  }
+
+  /**
+   * Turn a pending source into a runnable layer by supplying what this
+   * machine has to provide: `path`, `command` + `args`, `auth` (tokenEnv, when
+   * the adapter accepts it), `level`. Every other field the entry carries
+   * (cache, git, live, ref) is kept. Nothing is activated implicitly: the
+   * caller names the source, the probes the add path runs still run, and an
+   * MCP command still needs `trusted: true`.
+   */
+  async function configurePendingSource(name, supplied = {}, { profileId = null, expectRevision = null } = {}) {
+    const precondition = precheckRevision(MANIFEST, expectRevision);
+    const { manifest: current } = readForListing(profileId);
+    const entry = (profileContainer(current, profileId).pendingSources ?? []).find((candidate) => candidate?.name === name);
+    if (!entry) throw new ControlError("PENDING_NOT_FOUND", `No pending source named "${name}"`, { status: 404 });
+    const layer = structuredClone(entry);
+    const kind = layer.source ?? "okf-local";
+    if (supplied.path !== undefined) {
+      const given = expandHome(String(supplied.path).trim());
+      if (!given) throw new ControlError("PATH_REQUIRED", "Give this source a folder path", { status: 400 });
+      layer.path = given;
+    }
+    if (supplied.command !== undefined) {
+      layer.command = String(supplied.command);
+      // A new command replaces the whole invocation: arguments nobody
+      // supplied are none, not the scrubbed ones.
+      if (supplied.args === undefined) delete layer.args;
+    }
+    if (supplied.args !== undefined) layer.args = supplied.args.map(String);
+    if (supplied.auth !== undefined) {
+      if (!acceptTokenEnv || !isTokenEnvAuth(supplied.auth)) {
+        throw new ControlError("REST_AUTH_REJECTED", "Only an environment variable reference ({tokenEnv}) can be supplied here.", { status: 400 });
+      }
+      layer.auth = { tokenEnv: supplied.auth.tokenEnv };
+    }
+    if (supplied.level !== undefined) {
+      const level = parseLevel(supplied.level);
+      if (level === null) throw new ControlError("LEVEL_INVALID", "level must be an integer", { status: 400 });
+      layer.level = level;
+    } else if (manifestLevel(layer) === null) {
+      layer.level = 1;
+    }
+    const missing = missingFields(layer);
+    if (missing.length) {
+      throw new ControlError("PENDING_INCOMPLETE", `"${name}" still needs: ${missing.map((entry) => entry.field).join(", ")}`, { status: 400, detail: { missing } });
+    }
+    // Validate the result as the strict write will, before anything is probed.
+    const candidate = structuredClone(current);
+    getManifestProfileLayers(candidate, profileId).push(structuredClone(layer));
+    removePendingSource(profileContainer(candidate, profileId), name);
+    try {
+      validateContextManifest(candidate);
+    } catch (err) {
+      throw new ControlError("PENDING_INVALID", `"${name}" cannot run as configured: ${err.message}`, { status: 400 });
+    }
+
+    let folder = null;
+    if (kind === "okf-local" || kind === "files") {
+      folder = await probeFolder(path.resolve(MANIFEST_DIR, layer.path), kind === "files" ? FILES_EXTENSIONS : [".md"]);
+    } else if (kind === "mcp") {
+      if (supplied.trusted !== true) {
+        throw new ControlError("MCP_TRUST_REQUIRED", "Confirm that this MCP command came from a trusted source", { status: 400 });
+      }
+      const probeArgs = (layer.args ?? []).map((a) => (a.startsWith("./") || a.startsWith("../") ? path.resolve(MANIFEST_DIR, a) : a));
+      await probeMcp({ name, level: layer.level, command: layer.command, args: probeArgs });
+    } else if (kind === "github" && !layer.apiBase) {
+      // A keychain alias cannot be resolved here; only probe what can be.
+      const token = isTokenEnvAuth(layer.auth) ? (env[layer.auth.tokenEnv] || null) : null;
+      if (layer.auth === undefined || token) await probeGithubRest(layer.repo, token);
+    }
+
+    try {
+      mutateContextManifest(MANIFEST, (manifest) => {
+        const layers = getManifestProfileLayers(manifest, profileId);
+        const container = profileContainer(manifest, profileId);
+        if (!(container.pendingSources ?? []).some((pending) => pending?.name === name)) {
+          throw new ControlError("PENDING_NOT_FOUND", `No pending source named "${name}"`, { status: 404 });
+        }
+        if (layers.some((existing) => existing.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
+        layers.push(layer);
+        removePendingSource(container, name);
+      }, { allowMissing: false, allowTransitional: true, precondition });
+    } catch (err) {
+      if (err instanceof ControlError || err.status || isLockOrProfileError(err)) throw err;
+      throw new ControlError("MANIFEST_INVALID", `Nothing was configured: the manifest is invalid, and saving would rewrite it around the problem. Remove the invalid source first — ${err.message}`, { status: 409 });
+    }
+    return {
+      ok: true,
+      configured: name,
+      kind,
+      level: layer.level,
+      ...(folder ? { hasDocuments: folder.found, scanComplete: folder.complete } : {}),
+    };
+  }
+
+  // ---- managed clones -----------------------------------------------------------
+
+  // Every directory the manifest could still need, read from the raw file so
+  // a quarantined layer and a pending source keep their clones too: any
+  // string `path` anywhere, and the clone directory any `origin` maps to.
+  // Conservative on purpose; a clone kept too long costs disk, one deleted
+  // too early costs data.
+  function referencedPaths() {
+    let raw;
+    try {
+      raw = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
+    } catch (err) {
+      if (err.code === "ENOENT") return [];
+      throw new ControlError("MANIFEST_INVALID", `Nothing was pruned: the manifest could not be read, so no clone can be proven unused — ${err.message}`, { status: 422 });
+    }
+    const out = [];
+    const visit = (node) => {
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) { for (const child of node) visit(child); return; }
+      if (typeof node.path === "string") out.push(path.resolve(MANIFEST_DIR, expandHome(node.path)));
+      if (typeof node.origin === "string") {
+        try { out.push(path.join(CACHE_DIR, normalizeRepo(node.origin).slug)); } catch { /* not a git origin */ }
+      }
+      for (const child of Object.values(node)) visit(child);
+    };
+    visit(raw);
+    return out;
+  }
+
+  function isReferenced(dir, paths) {
+    return paths.some((candidate) => candidate === dir || candidate.startsWith(dir + path.sep) || dir.startsWith(candidate + path.sep));
+  }
+
+  // "clean", or why a clone must be kept. Anything git cannot answer counts
+  // as a reason to keep it.
+  async function cloneState(dir) {
+    if (!fs.existsSync(path.join(dir, ".git"))) return "unreadable";
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+    const git = (args) => execFileP("git", ["-C", dir, ...args], { timeout: 30_000, env });
+    try {
+      if ((await git(["status", "--porcelain"])).stdout.trim()) return "dirty";
+      if ((await git(["stash", "list"])).stdout.trim()) return "dirty";
+      // Commits reachable from HEAD or a local branch that no remote-tracking
+      // ref or tag has: work that exists only here.
+      const ahead = await git(["rev-list", "--count", "HEAD", "--branches", "--not", "--remotes", "--tags"]);
+      if (Number(ahead.stdout.trim()) > 0) return "unpushed";
+      return "clean";
+    } catch {
+      return "unreadable";
+    }
+  }
+
+  // A staging directory younger than this may belong to an add still cloning.
+  const STAGING_STALE_MS = 60 * 60 * 1000;
+
+  async function surveyClones() {
+    const paths = referencedPaths();
+    const removable = [];
+    const kept = [];
+    const list = (dir) => {
+      try { return fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { return []; }
+    };
+    for (const entry of list(CACHE_DIR)) {
+      if (entry.name.startsWith(".")) continue;
+      const dir = path.join(CACHE_DIR, entry.name);
+      if (isReferenced(dir, paths)) { kept.push({ dir, reason: "referenced" }); continue; }
+      const state = await cloneState(dir);
+      if (state === "clean") removable.push({ dir });
+      else kept.push({ dir, reason: state });
+    }
+    // A staged clone was never a source: nobody has edited it. Old ones are
+    // what a crashed add left behind.
+    for (const entry of list(STAGING_DIR)) {
+      const dir = path.join(STAGING_DIR, entry.name);
+      let age = 0;
+      try { age = Date.now() - fs.statSync(dir).mtimeMs; } catch { continue; }
+      if (age >= STAGING_STALE_MS) removable.push({ dir, staging: true });
+    }
+    return { removable, kept };
+  }
+
+  /**
+   * Delete managed clones no source needs (§5.12). Without `confirm` it only
+   * reports. A referenced clone is never removed, and neither is one with
+   * uncommitted changes, a stash, commits no remote has, or a state git
+   * cannot report. Both checks run again under the manifest lock right
+   * before each delete.
+   */
+  async function pruneClones({ confirm = false } = {}) {
+    const survey = await surveyClones();
+    if (!confirm) return { cacheDir: CACHE_DIR, ...survey, removed: [], confirmed: false };
+    return withManifestLockAsync(MANIFEST, async () => {
+      const paths = referencedPaths();
+      const kept = [...survey.kept];
+      const removed = [];
+      for (const candidate of survey.removable) {
+        if (!candidate.staging) {
+          if (isReferenced(candidate.dir, paths)) { kept.push({ dir: candidate.dir, reason: "referenced" }); continue; }
+          const state = await cloneState(candidate.dir);
+          if (state !== "clean") { kept.push({ dir: candidate.dir, reason: state }); continue; }
+        }
+        fs.rmSync(candidate.dir, { recursive: true, force: true });
+        removed.push(candidate);
+      }
+      return { cacheDir: CACHE_DIR, removable: [], kept, removed, confirmed: true };
+    });
+  }
+
+  return {
+    addSource,
+    removeSources,
+    patchSource,
+    reorderSources,
+    gitCloneOrPull,
+    syncSource,
+    listSources,
+    listPendingSources,
+    configurePendingSource,
+    pruneClones,
+    cacheDir: CACHE_DIR,
+  };
+}
+
+// Fields a source cannot run without on this machine: scrubbed values, and
+// the one field its kind needs.
+function missingFields(entry) {
+  const kind = typeof entry?.source === "string" ? entry.source : "okf-local";
+  const missing = [];
+  for (const [field, value] of Object.entries(entry ?? {})) {
+    if (isScrubMarker(value)) missing.push({ field, reason: value.__scrubbed });
+  }
+  const required = kind === "mcp" ? "command" : kind === "github" ? "repo" : (kind === "okf-local" || kind === "files") ? "path" : null;
+  if (required && entry?.[required] === undefined) missing.push({ field: required, reason: "absent" });
+  return missing;
+}
+
+/**
+ * One selected-profile session for an operational command (§5.4): build the
+ * adapters for that profile's layers (or just `names`), hand them to `fn`,
+ * and close every source, and so every MCP child, in `finally`, whatever
+ * `fn` did. A layer that fails to build becomes an entry with `error`, and a
+ * quarantined layer an entry with `quarantined: true`, so a test can report
+ * them instead of failing outright.
+ */
+export async function withSourceSession({ manifestPath, profileId = null, names = null }, fn) {
+  const resolved = path.resolve(manifestPath);
+  const manifestDir = path.dirname(resolved);
+  let read;
+  try {
+    read = readContextManifestQuarantined(resolved, { allowMissing: false });
+  } catch (err) {
+    if (/^ContextCake manifest does not exist/.test(err.message)) throw err;
+    throw new ControlError("MANIFEST_INVALID", err.message, { status: 422 });
+  }
+  const { manifest, quarantined } = read;
+  const layers = getManifestProfileLayers(manifest, profileId);
+  const key = quarantineProfileKey(manifest, profileId);
+  let broken = quarantined.filter((entry) => entry.profileId === key);
+  let selected = layers;
+  if (names?.length) {
+    const unknown = names.filter((name) => !layers.some((layer) => layer.name === name) && !broken.some((entry) => entry.name === name));
+    if (unknown.length) throw new ControlError("SOURCE_NOT_FOUND", `No source named ${unknown.map((name) => `"${name}"`).join(", ")}`, { status: 404, detail: { unknown } });
+    selected = layers.filter((layer) => names.includes(layer.name));
+    broken = broken.filter((entry) => names.includes(entry.name));
+  }
+  const runtime = { ...(manifest.settings ? { settings: manifest.settings } : {}) };
+  const entries = [];
+  try {
+    for (const layer of selected) {
+      try {
+        const [source] = buildSources({ ...runtime, layers: [layer] }, manifestDir, { profileId: profileId ?? "default" });
+        entries.push({ layer, source });
+      } catch (error) {
+        entries.push({ layer, source: null, error: error.message });
+      }
+    }
+    for (const entry of broken) entries.push({ layer: { name: entry.name, level: entry.level, source: entry.kind }, source: null, error: entry.error, quarantined: true });
+    return await fn({ manifest, layers: selected, entries });
+  } finally {
+    await Promise.allSettled(entries.map(({ source }) => Promise.resolve().then(() => source?.close?.())));
+  }
+}
+
+/**
+ * Read every source in a session once and report what came back: concept
+ * count, health, and why a source could not be read. `coverage` follows the
+ * envelope's shape; it is incomplete when any source failed.
+ */
+export async function testSources(entries, { timeoutMs = 30_000 } = {}) {
+  const results = await Promise.all(entries.map(async (entry) => {
+    const kind = entry.layer.source ?? "okf-local";
+    const base = { name: entry.layer.name, kind, level: manifestLevel(entry.layer) };
+    if (!entry.source) return { ...base, ok: false, concepts: 0, error: entry.error, ...(entry.quarantined ? { quarantined: true } : {}) };
+    const started = Date.now();
+    const controller = new AbortController();
+    const notes = { skipped: [], unreadable: [] };
+    try {
+      const ids = await withDeadline(
+        entry.source.listConceptIds({ signal: controller.signal, notes }),
+        timeoutMs,
+        `timed out after ${timeoutMs}ms`,
+        () => controller.abort(new Error("source test timed out")),
+      );
+      const health = typeof entry.source.health === "function" ? entry.source.health() : null;
+      const ok = !health || health.ok !== false;
+      return {
+        ...base,
+        ok,
+        concepts: ids.length,
+        durationMs: Date.now() - started,
+        ...(ok ? {} : { error: health.lastError }),
+        ...(notes.truncated ? { truncated: notes.truncated } : {}),
+        ...(notes.unreadable.length ? { unreadable: notes.unreadable.length } : {}),
+      };
+    } catch (error) {
+      return { ...base, ok: false, concepts: 0, durationMs: Date.now() - started, error: error.message };
+    }
+  }));
+  const degraded = results.filter((result) => !result.ok).map((result) => ({ source: result.name, reason: result.error ?? "unreadable" }));
+  return { sources: results, coverage: { complete: degraded.length === 0, degraded } };
 }

@@ -36,8 +36,14 @@ function requireOrder(items) {
 // carry send the visitor to the source route instead.
 const platforms = availablePlatforms(appRelease)
 if (!platforms.length) throw new Error('Release record must list at least one available platform')
-requireText(appRelease.tag, 'Install page must identify the published Mac release')
-for (const row of platformsFor(appRelease, 'mac')) {
+requireText(appRelease.tag, 'Install page must identify the published release')
+if (!installationDocsHtml.includes('Linux app (.deb)')) throw new Error('Installation docs must keep the Linux .deb section')
+if (platformsFor(appRelease, 'linux').length === 0 && !installationDocsHtml.includes('has no Linux package')) {
+  throw new Error(`Installation docs must say ${appRelease.tag} has no Linux package`)
+}
+// Mac and Linux rows alike: the table is the only thing that decides which OS
+// a download belongs to.
+for (const row of platforms) {
   requireText(`Download for ${row.label}`, `Install page must offer the ${row.platformName} download`)
   requireText(`href="${row.downloadPath}"`, `Install page must use the ${row.downloadPath} route`)
   requireText(row.installer.name, `Install page must name ${row.installer.name}`)

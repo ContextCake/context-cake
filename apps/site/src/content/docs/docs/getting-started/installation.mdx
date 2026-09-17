@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install the Mac app for guided setup, or use the versioned source route for an inspectable evaluation.
+description: Install the Mac app or the Linux .deb for guided setup, or use the versioned source route for an inspectable evaluation.
 ---
 
 import AppDownloadTable from '../../../../components/AppDownloadTable.astro';
@@ -40,6 +40,34 @@ needs it.
 
 Each [release page](https://github.com/ContextCake/context-cake/releases/latest)
 contains the matching ZIP and checksums.
+
+## Linux app (.deb)
+
+<AppDownloadTable os="linux" />
+
+The package is for x64 Debian and Ubuntu. Install it with apt, which also
+installs the libraries it needs:
+
+```bash
+sudo apt install ./ContextCake-*-amd64.deb
+```
+
+Open ContextCake from your applications menu. The setup steps match the macOS app
+above. The app lives in `/opt/ContextCake` and keeps settings and the source
+list in `~/.config/contextcake` (or `$XDG_CONFIG_HOME/contextcake`), the folder
+the command-line tool reads. Chromium's sandbox stays on: on Ubuntu 24.04 and
+later the package installs an AppArmor profile that allows it.
+
+- **Updates:** the app checks for new releases and links the download. It never
+  installs one. Install the new `.deb` the same way.
+- **Command-line tool:** **Help → Install Command Line Tool** links `contextcake`
+  into `~/.local/bin`, with no sudo. If that folder is not on your `PATH` yet,
+  log out and back in, or add it to your shell profile.
+- **Credentials:** GitHub tokens are encrypted with your desktop keyring, such as
+  GNOME Keyring or KWallet. Without one, the app keeps tokens in memory until it
+  quits, and **Settings → Connections** says so.
+
+Other distributions and architectures can use the source route below.
 
 ## Prerequisites for the source route
 

@@ -24,9 +24,9 @@
     "test:isolation": "node scripts/engine-isolation-test.mjs",
     "supabase:config": "node scripts/generate-supabase-config.mjs",
     "prepack": "npm run supabase:config",
-    "pack": "npm run renderer && electron-builder --mac --arm64 --dir",
+    "pack": "npm run renderer && electron-builder --mac --dir",
     "predist": "npm run supabase:config",
-    "dist": "npm run renderer && electron-builder --mac --arm64"
+    "dist": "npm run renderer && electron-builder --mac"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.116.0",

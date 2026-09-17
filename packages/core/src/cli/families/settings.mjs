@@ -7,6 +7,7 @@
 // headless GitHub source names a variable with `source add --token-env`.
 
 import { ControlError, manifestControlError } from "../../control/errors.mjs";
+import { MANIFEST_REVISION } from "../../control/profiles.mjs";
 import { patchSettings, settingsView } from "../../control/settings.mjs";
 import { readContextManifestQuarantined } from "../../manifest.mjs";
 import { SETTING_DEFS, SETTING_KEYS, resolveSettings } from "../../settings.mjs";
@@ -77,11 +78,13 @@ function settingLine(entry) {
 // engine will now use.
 function patch(ctx, body) {
   ctx.readManifest({ tolerant: true });
+  let result;
   try {
-    patchSettings(ctx.manifestPath, body, { expectRevision: ctx.flags.expectRevision });
+    result = patchSettings(ctx.manifestPath, body, { expectRevision: ctx.flags.expectRevision });
   } catch (error) {
     throw manifestControlError(error);
   }
+  ctx.noteManifestWrite(result[MANIFEST_REVISION]);
 }
 
 // ctx.readManifest caches the copy from before the write, so read again.

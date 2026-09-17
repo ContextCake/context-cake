@@ -41,6 +41,27 @@ export function guardMcpArgs(args) {
   }
 }
 
+// The dispatcher's global flags mean something only to table commands. The
+// older entrypoints parse any unknown `--x` as taking the next argument, so
+// `write --json --dry-run` used to read `--dry-run` as the value of --json and
+// then write for real. Refuse them unless the entrypoint implements the flag
+// itself (spawn.globalFlags, e.g. doctor's --json). The scan ignores
+// position on purpose: a global flag's name is never a sensible value either.
+const DISPATCHER_FLAGS = ["json", "quiet", "timeout", "no-input", "expect-revision", "require-complete", "cwd"];
+
+function guardGlobalFlags(command, args) {
+  const own = new Set(command.spawn.globalFlags ?? []);
+  for (const arg of args) {
+    if (arg === "--") break;
+    const name = arg.startsWith("--") ? arg.slice(2).split("=")[0] : null;
+    if (!name || !DISPATCHER_FLAGS.includes(name) || own.has(name)) continue;
+    if (name === "timeout" && command.mutation !== "read") {
+      throw new ControlError("TIMEOUT_REFUSED", `${command.id} changes state, so it does not accept --timeout.`, { status: 400 });
+    }
+    throw new ControlError("INVALID_INPUT", `${command.id} does not accept --${name}. It runs an older entrypoint with its own options; see 'contextcake ${command.id} --help'.`, { status: 400 });
+  }
+}
+
 function missingManifest(manifestPath) {
   return new ControlError("MANIFEST_NOT_FOUND", `No manifest at ${manifestPath}. Run 'contextcake init' to create one, or pass --manifest.`, {
     status: 404,
@@ -54,6 +75,7 @@ export function prepareSpawnArgs(command, argv, { manifestPath }) {
   const spec = command.spawn;
   const args = [...argv];
   if (command.id === "mcp") guardMcpArgs(args);
+  else guardGlobalFlags(command, args);
   const isHelp = args.some((arg) => HELP_WORDS.has(arg));
   if (spec.manifest === "inject") {
     const explicit = args.includes("--manifest") || args.includes("--personal") || args.includes("--legacy-paths");

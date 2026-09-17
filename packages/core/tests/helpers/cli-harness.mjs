@@ -8,13 +8,15 @@
 //   assert.equal(r.json.data.created, true);
 //
 // With --json, `json` is the parsed envelope and the harness has already
-// asserted the stdout contract: exactly one JSON document, nothing else.
+// asserted the stdout contract: exactly one JSON document, nothing else, and
+// on failure an error code the command declares in its `errors`.
 
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runCli } from "../../src/cli.mjs";
+import { TABLE, runCli } from "../../src/cli.mjs";
+import { resolveCommand } from "../../src/cli/table.mjs";
 
 function capture() {
   let text = "";
@@ -78,6 +80,12 @@ export async function runContextcake(argv, home, { env = {}, cwd = home.cwd, ...
     if (!json.ok) {
       assert.equal(json.data, null);
       assert.equal(json.error.exitCode, exitCode, "envelope exitCode must match the process exit code");
+      // help --json promises a command's possible error codes; an undeclared
+      // code reaching an agent is a contract bug, caught here in every test.
+      const { command } = resolveCommand(options.table ?? TABLE, argv);
+      if (command?.run) {
+        assert.ok(command.errors.includes(json.error.code), `${command.id} answered ${json.error.code}, which it does not declare in errors`);
+      }
     }
   }
   return { exitCode, signal, stdout: stdout.text, stderr: stderr.text, json };

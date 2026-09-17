@@ -30,7 +30,7 @@ function npmEnv(dir) {
 // Sends each request once the previous answer arrived, then closes stdin.
 function mcpSession(bin, args, env, requests) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { env, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(bin, args, { env, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32' })
     const responses = []
     let buffer = ''
     let stderr = ''
@@ -85,7 +85,9 @@ test('the packed npm tarball installs and runs help, init, and MCP with no app p
       CONTEXTCAKE_CACHE_DIR: path.join(dir, 'cache'),
       CONTEXTCAKE_MANIFEST: '',
     }
-    const run = (args) => execFileSync(bin, args, { env, encoding: 'utf8' })
+    // A Windows `.cmd` shim only runs through a shell.
+    const shell = process.platform === 'win32'
+    const run = (args) => execFileSync(bin, args, { env, encoding: 'utf8', shell })
 
     assert.equal(run(['--version']).trim(), version)
     const help = JSON.parse(run(['help', '--json']))

@@ -164,8 +164,9 @@ test("source test exits 6 on a source it cannot read and still reports every sou
   const tested = await runContextcake(["source", "test", "--json"], home);
   assert.equal(tested.exitCode, 6, tested.stdout);
   assert.equal(tested.json.error.code, "INCOMPLETE_COVERAGE");
-  assert.deepEqual(tested.json.error.details.coverage.degraded.map((entry) => entry.source), ["gone"]);
-  assert.deepEqual(tested.json.error.details.sources.map((row) => [row.name, row.ok]), [["good", true], ["gone", false]]);
+  assert.deepEqual(tested.json.error.details.complete, false);
+  assert.deepEqual(tested.json.error.details.degraded.map((entry) => entry.source), ["gone"]);
+  assert.match(tested.json.error.details.degraded[0].reason, /no longer exists|ENOENT|not found/i);
 
   const one = await runContextcake(["source", "test", "good", "--json"], home);
   assert.equal(one.exitCode, 0);
@@ -269,6 +270,18 @@ test("a stale revision refuses every source mutation, and a fresh one is accepte
   assert.equal(await fs.readFile(home.manifestPath, "utf8"), before);
   const accepted = await runContextcake(["source", "level", "notes", "4", "--expect-revision", fresh, "--json"], home);
   assert.equal(accepted.exitCode, 0, accepted.stdout);
+  // Every write reports the revision it wrote, so the next call can expect it.
+  for (const argv of [
+    ["source", "update", "notes", "--rename", "n2"],
+    ["source", "reorder", "n2"],
+    ["source", "remove", "n2"],
+  ]) {
+    const before = (await runContextcake(["source", "list", "--json"], home)).json.context.manifestRevision;
+    const done = await runContextcake([...argv, "--expect-revision", before, "--json"], home);
+    assert.equal(done.exitCode, 0, `${argv.join(" ")}: ${done.stdout}`);
+    assert.equal(done.json.context.manifestRevision, manifestRevisionOf(await readJson(home.manifestPath)), argv.join(" "));
+  }
+  assert.equal((await runContextcake(["source", "add", "notes", "--path", notes], home)).exitCode, 0);
   // --timeout is refused on a write before anything runs.
   const timed = await runContextcake(["source", "level", "notes", "5", "--timeout", "5s", "--json"], home);
   assert.equal(timed.exitCode, 2);
@@ -309,7 +322,7 @@ test("an invalid layer is listed, blocks reorder, and is removed all-or-nothing"
 
   const tested = await runContextcake(["source", "test", "--json"], home);
   assert.equal(tested.exitCode, 6);
-  assert.deepEqual(tested.json.error.details.sources.filter((row) => row.quarantined).map((row) => row.name), ["broken", "worse"]);
+  assert.deepEqual(tested.json.error.details.degraded.map((entry) => entry.source), ["broken", "worse"]);
 
   const both = await runContextcake(["source", "remove", "broken", "worse", "--json"], home);
   assert.equal(both.exitCode, 0, both.stdout);

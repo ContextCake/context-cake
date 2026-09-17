@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
 import test from "node:test";
+import { manifestRevisionOf } from "../src/cli/context.mjs";
 import { SETTING_KEYS } from "../src/settings.mjs";
 import { createEngineService } from "../src/service.mjs";
 import { cliHome, runContextcake, writeManifest } from "./helpers/cli-harness.mjs";
@@ -46,6 +47,7 @@ test("settings list, get, set, and reset follow manifest > env > default", async
   assert.equal(set.json.data.value, 6);
   assert.equal(set.json.data.origin, "manifest", "the manifest wins over the environment");
   assert.deepEqual((await readJson(home.manifestPath)).settings, { maxConcurrentIndexing: 6 });
+  assert.equal(set.json.context.manifestRevision, manifestRevisionOf(await readJson(home.manifestPath)));
 
   const reset = await runContextcake(["settings", "reset", "maxConcurrentIndexing", "--json"], home);
   assert.equal(reset.exitCode, 0, reset.stdout);

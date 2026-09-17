@@ -75,6 +75,7 @@ const SUITES = [
   { group: "unit", name: "discrepancy-batch", ...node("discrepancy-batch.test.mjs") },
   { group: "unit", name: "cli-contract", ...node("cli-contract.test.mjs") },
   { group: "unit", name: "cli-profile", ...node("cli-profile.test.mjs") },
+  { group: "unit", name: "cli-process", ...node("cli-process.test.mjs") },
   { group: "unit", name: "cli-source", ...node("cli-source.test.mjs") },
   { group: "unit", name: "cli-settings", ...node("cli-settings.test.mjs") },
 

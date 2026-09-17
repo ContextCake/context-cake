@@ -4,10 +4,10 @@
 // from the adapter's already-resolved view, so the HTTP service answers from
 // its cache and a CLI session from its own read — one shape, two adapters.
 
-import { mutateContextManifest } from "../manifest.mjs";
+import { manifestRevision, mutateContextManifest } from "../manifest.mjs";
 import { settingOrigins, settingsCatalog, validateSettingsPatch } from "../settings.mjs";
 import { ControlError } from "./errors.mjs";
-import { revisionPrecondition } from "./profiles.mjs";
+import { MANIFEST_REVISION, revisionPrecondition } from "./profiles.mjs";
 
 // `origins` names the tier (manifest > env > default) each value came from.
 export function settingsView({ manifest, settings }) {
@@ -22,6 +22,8 @@ export function patchSettings(manifestPath, patch, { expectRevision = null } = {
   } catch (err) {
     throw new ControlError("SETTINGS_INVALID", err.message, { status: 400 });
   }
+  // The revision written under the lock, for an adapter that reports it.
+  const result = {};
   try {
     mutateContextManifest(manifestPath, (manifest) => {
       const next = { ...(manifest.settings ?? {}) };
@@ -31,7 +33,9 @@ export function patchSettings(manifestPath, patch, { expectRevision = null } = {
       }
       if (Object.keys(next).length === 0) delete manifest.settings;
       else manifest.settings = next;
+      Object.defineProperty(result, MANIFEST_REVISION, { value: manifestRevision(manifest), enumerable: false });
     }, { allowMissing: false, allowTransitional: true, precondition: revisionPrecondition(expectRevision) });
+    return result;
   } catch (err) {
     // Settings deliberately stay a STRICT write — an invalid layer is not
     // this operation's to tolerate, and quietly rewriting a manifest read

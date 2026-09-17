@@ -23,6 +23,7 @@ import {
   classifyManifest,
   getManifestProfileLayers,
   manifestLevel,
+  manifestRevision,
   mutateContextManifest,
   quarantineProfileKey,
   readContextManifest,
@@ -33,7 +34,7 @@ import {
   withManifestLockAsync,
 } from "../manifest.mjs";
 import { ControlError } from "./errors.mjs";
-import { revisionPrecondition } from "./profiles.mjs";
+import { MANIFEST_REVISION, revisionPrecondition } from "./profiles.mjs";
 import { withDeadline } from "./util.mjs";
 
 // Re-exported for the callers (and tests) that reached it here before it
@@ -179,6 +180,18 @@ function precheckRevision(manifestPath, expectRevision) {
   }
   precondition(raw);
   return precondition;
+}
+
+// The revision of the manifest a mutation is about to write, taken inside the
+// lock (control/profiles.mjs MANIFEST_REVISION). Through a JSON round trip,
+// because a field set to undefined is dropped on disk but not by stableJson.
+function writtenRevision(manifest) {
+  return manifestRevision(JSON.parse(JSON.stringify(manifest)));
+}
+
+function withRevision(result, revision) {
+  if (revision) Object.defineProperty(result, MANIFEST_REVISION, { value: revision, enumerable: false });
+  return result;
 }
 
 function isTokenEnvAuth(auth) {
@@ -350,7 +363,9 @@ export function createSourceOperations({
   // move is a rename.
   const STAGING_DIR = path.join(CACHE_DIR, ".staging");
 
-  async function addSource(b, { profileId = null, expectRevision = null } = {}) {
+  // `signal` (optional) is checked once, before the locked write: a probe or
+  // clone that outlived a caller's timeout or interrupt never lands.
+  async function addSource(b, { profileId = null, expectRevision = null, signal = null } = {}) {
     const name = String(b.name ?? "").trim();
     if (!/^[a-zA-Z0-9 _-]{1,40}$/.test(name)) throw new ControlError("NAME_INVALID", "Name: letters/numbers/space/_/- (max 40)", { status: 400 });
     const precondition = precheckRevision(MANIFEST, expectRevision);
@@ -478,7 +493,9 @@ export function createSourceOperations({
     }
 
     let placed;
+    let written = null;
     try {
+      signal?.throwIfAborted();
       placed = mutateContextManifest(MANIFEST, (manifest) => {
         const layers = getManifestProfileLayers(manifest, profileId);
         if (layers.some((candidate) => candidate.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
@@ -506,6 +523,7 @@ export function createSourceOperations({
           else if (fs.existsSync(promote.dir)) throw cloneDirOccupied(promote.dir);
           else fs.renameSync(promote.staged, promote.dir);
         }
+        written = writtenRevision(manifest);
         return order;
       }, { allowMissing: false, allowTransitional: true, precondition });
     } finally {
@@ -513,7 +531,7 @@ export function createSourceOperations({
       // never became anyone's, so it goes.
       if (promote && fs.existsSync(promote.staged)) fs.rmSync(promote.staged, { recursive: true, force: true });
     }
-    return {
+    return withRevision({
       ok: true,
       added: name,
       level: layer.level,
@@ -521,7 +539,7 @@ export function createSourceOperations({
       ...(placed ? { order: placed } : {}),
       ...(folder ? { hasDocuments: folder.found, scanComplete: folder.complete } : {}),
       ...(tokenEnvSet !== null ? { tokenEnvSet } : {}),
-    };
+    }, written);
   }
 
   // Write the levels assignCascadeLevels chose onto the layer objects, keeping
@@ -564,6 +582,7 @@ export function createSourceOperations({
     // caller is owed the same "which rows block this" answer removal gives.
     refuseIfQuarantined(profileId);
     let assigned;
+    let written = null;
     try {
       assigned = mutateContextManifest(MANIFEST, (manifest) => {
         const layers = getManifestProfileLayers(manifest, profileId);
@@ -577,7 +596,9 @@ export function createSourceOperations({
           throw new ControlError("ORDER_INVALID", `order must name every source in the profile exactly once (${parts.join("; ")})`, { status: 400, detail: { unknown, missing, duplicate: [] } });
         }
         const byName = new Map(layers.map((layer) => [layer.name, layer]));
-        return applyCascadeLevels(manifest, order.map((name) => byName.get(name)), profileId);
+        const levels = applyCascadeLevels(manifest, order.map((name) => byName.get(name)), profileId);
+        written = writtenRevision(manifest);
+        return levels;
       }, { allowMissing: false, allowTransitional: true, precondition: revisionPrecondition(expectRevision) });
     } catch (err) {
       if (err instanceof ControlError || err.status) throw err;
@@ -590,7 +611,7 @@ export function createSourceOperations({
       refuseIfQuarantined(profileId);
       throw manifestInvalidError(MANIFEST, "reordered", err.message);
     }
-    return { ok: true, order: assigned };
+    return withRevision({ ok: true, order: assigned }, written);
   }
 
   // The reorder's 409: every quarantined row in the default profile, listed
@@ -638,6 +659,7 @@ export function createSourceOperations({
     const removed = [];
     let survivors = [];
     let blocking = [];
+    let written = null;
     try {
       repairContextManifest(MANIFEST, ({ manifest, layers, quarantined, quarantineKey }) => {
         const container = profileContainer(manifest, profileId);
@@ -675,6 +697,7 @@ export function createSourceOperations({
         // entry the caller did NOT ask to remove.
         blocking = broken.filter((entry) => !doomed.has(entry.index));
         survivors = allManifestLayers(manifest); // every profile — a shared clone must survive
+        written = writtenRevision(manifest);
       }, { allowTransitional: true, profileId, precondition: revisionPrecondition(expectRevision) });
     } catch (err) {
       if (err.status) throw err;
@@ -695,7 +718,7 @@ export function createSourceOperations({
       const dir = cleanupCloneDir(layer, survivors);
       if (dir && !retained.includes(dir)) retained.push(dir);
     }
-    return { ok: true, removed: wanted[0], removedNames: wanted, ...(retained.length ? { retainedClones: retained } : {}) };
+    return withRevision({ ok: true, removed: wanted[0], removedNames: wanted, ...(retained.length ? { retainedClones: retained } : {}) }, written);
   }
 
   // Every layer the manifest still declares, across the legacy array and every
@@ -775,6 +798,7 @@ export function createSourceOperations({
       const kind = layer.source ?? "okf-local";
       probed = await probeFolder(path.resolve(MANIFEST_DIR, nextPath), kind === "files" ? FILES_EXTENSIONS : [".md"]);
     }
+    let written = null;
     mutateContextManifest(MANIFEST, (manifest) => {
       const layers = getManifestProfileLayers(manifest, profileId);
       const layer = layers.find((candidate) => candidate.name === b.name);
@@ -795,6 +819,7 @@ export function createSourceOperations({
         if (layers.some((candidate) => candidate.name === b.newName)) throw new ControlError("NAME_EXISTS", "Name already exists", { status: 409 });
         layer.name = b.newName;
       }
+      written = writtenRevision(manifest);
     }, { allowMissing: false, allowTransitional: true, precondition });
     // A new folder is a new content IDENTITY, so adoptIndexes finds no entry to
     // carry over and the source re-indexes from scratch. That is the correct
@@ -803,7 +828,7 @@ export function createSourceOperations({
     // it would answer with documents the user just pointed away from. The
     // client is told to expect a re-index rather than left to infer it from a
     // row that flipped back to "indexing".
-    return { ok: true, ...(probed ? { reindexing: true, hasDocuments: probed.found, scanComplete: probed.complete } : {}) };
+    return withRevision({ ok: true, ...(probed ? { reindexing: true, hasDocuments: probed.found, scanComplete: probed.complete } : {}) }, written);
   }
 
   async function gitCloneOrPull(url, dir, ref) {
@@ -1015,7 +1040,7 @@ export function createSourceOperations({
    * caller names the source, the probes the add path runs still run, and an
    * MCP command still needs `trusted: true`.
    */
-  async function configurePendingSource(name, supplied = {}, { profileId = null, expectRevision = null } = {}) {
+  async function configurePendingSource(name, supplied = {}, { profileId = null, expectRevision = null, signal = null } = {}) {
     const precondition = precheckRevision(MANIFEST, expectRevision);
     const { manifest: current } = readForListing(profileId);
     const entry = (profileContainer(current, profileId).pendingSources ?? []).find((candidate) => candidate?.name === name);
@@ -1076,6 +1101,8 @@ export function createSourceOperations({
       if (layer.auth === undefined || token) await probeGithubRest(layer.repo, token);
     }
 
+    signal?.throwIfAborted();
+    let written = null;
     try {
       mutateContextManifest(MANIFEST, (manifest) => {
         const layers = getManifestProfileLayers(manifest, profileId);
@@ -1086,18 +1113,19 @@ export function createSourceOperations({
         if (layers.some((existing) => existing.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
         layers.push(layer);
         removePendingSource(container, name);
+        written = writtenRevision(manifest);
       }, { allowMissing: false, allowTransitional: true, precondition });
     } catch (err) {
       if (err instanceof ControlError || err.status || isLockOrProfileError(err)) throw err;
       throw new ControlError("MANIFEST_INVALID", `Nothing was configured: the manifest is invalid, and saving would rewrite it around the problem. Remove the invalid source first — ${err.message}`, { status: 409 });
     }
-    return {
+    return withRevision({
       ok: true,
       configured: name,
       kind,
       level: layer.level,
       ...(folder ? { hasDocuments: folder.found, scanComplete: folder.complete } : {}),
-    };
+    }, written);
   }
 
   // ---- managed clones -----------------------------------------------------------
@@ -1288,13 +1316,19 @@ export async function withSourceSession({ manifestPath, profileId = null, names 
  * count, health, and why a source could not be read. `coverage` follows the
  * envelope's shape; it is incomplete when any source failed.
  */
-export async function testSources(entries, { timeoutMs = 30_000 } = {}) {
+export async function testSources(entries, { timeoutMs = 30_000, signal = null } = {}) {
   const results = await Promise.all(entries.map(async (entry) => {
     const kind = entry.layer.source ?? "okf-local";
     const base = { name: entry.layer.name, kind, level: manifestLevel(entry.layer) };
     if (!entry.source) return { ...base, ok: false, concepts: 0, error: entry.error, ...(entry.quarantined ? { quarantined: true } : {}) };
     const started = Date.now();
+    // Aborts on this source's deadline or on the caller's signal (a CLI
+    // --timeout or interrupt), whichever comes first.
     const controller = new AbortController();
+    if (signal) {
+      if (signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+    }
     const notes = { skipped: [], unreadable: [] };
     try {
       const ids = await withDeadline(

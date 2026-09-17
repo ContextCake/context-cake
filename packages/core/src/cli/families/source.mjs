@@ -17,6 +17,7 @@ import {
   withSourceSession,
 } from "../../control/sources.mjs";
 import { ControlError, manifestControlError } from "../../control/errors.mjs";
+import { MANIFEST_REVISION } from "../../control/profiles.mjs";
 import { defineFamily } from "../table.mjs";
 
 // What each CLI kind is called by the operation (the app's add-form kinds).
@@ -89,6 +90,14 @@ async function call(fn) {
   } catch (error) {
     throw manifestControlError(error);
   }
+}
+
+// A manifest write: the envelope reports the revision the operation wrote
+// under the lock, never a later read that could see someone else's write.
+async function written(ctx, fn) {
+  const data = await call(fn);
+  ctx.noteManifestWrite(data[MANIFEST_REVISION]);
+  return data;
 }
 
 function invalid(message) {
@@ -275,7 +284,7 @@ export default defineFamily({
         // A relative folder means relative to where the command runs, not to
         // the manifest the operation resolves against.
         if (body.path !== undefined && !body.path.startsWith("~")) body.path = ctx.resolvePath(body.path);
-        const data = await call(() => operations(ctx).addSource(body, { profileId: selection.profileId, expectRevision: flags.expectRevision }));
+        const data = await written(ctx, () => operations(ctx).addSource(body, { profileId: selection.profileId, expectRevision: flags.expectRevision, signal: ctx.signal }));
         warnFolder(ctx, data);
         if (data.tokenEnvSet === false) {
           ctx.warn("TOKEN_ENV_UNSET", `${flags.tokenEnv} is not set here, so the repository was not checked. Set it wherever this source is read.`, { tokenEnv: flags.tokenEnv });
@@ -311,7 +320,7 @@ export default defineFamily({
         if (path !== undefined) body.path = path.startsWith("~") ? path : ctx.resolvePath(path);
         if (rename !== undefined) body.newName = rename;
         if (level !== undefined) body.level = level;
-        const data = await call(() => operations(ctx).patchSource(body, { profileId: selection.profileId, expectRevision }));
+        const data = await written(ctx, () => operations(ctx).patchSource(body, { profileId: selection.profileId, expectRevision }));
         warnFolder(ctx, data);
         return { data, text: `Updated ${rename ?? ctx.args.name}.${data.reindexing ? " It will be read again from the new folder." : ""}` };
       },
@@ -331,7 +340,7 @@ export default defineFamily({
       output: { type: "object", required: ["ok"], properties: { ok: { const: true } } },
       async run(ctx) {
         const selection = selectProfile(ctx);
-        const data = await call(() => operations(ctx).patchSource({ name: ctx.args.name, level: ctx.args.level }, { profileId: selection.profileId, expectRevision: ctx.flags.expectRevision }));
+        const data = await written(ctx, () => operations(ctx).patchSource({ name: ctx.args.name, level: ctx.args.level }, { profileId: selection.profileId, expectRevision: ctx.flags.expectRevision }));
         return { data, text: `${ctx.args.name} is now at level ${ctx.args.level}.` };
       },
     },
@@ -351,7 +360,7 @@ export default defineFamily({
       },
       async run(ctx) {
         const selection = selectProfile(ctx);
-        const data = await call(() => operations(ctx).reorderSources({ order: ctx.args.names }, { profileId: selection.profileId, expectRevision: ctx.flags.expectRevision }));
+        const data = await written(ctx, () => operations(ctx).reorderSources({ order: ctx.args.names }, { profileId: selection.profileId, expectRevision: ctx.flags.expectRevision }));
         return { data, text: levelText(data) };
       },
     },
@@ -376,7 +385,7 @@ export default defineFamily({
       },
       async run(ctx) {
         const selection = selectProfile(ctx);
-        const data = await call(() => operations(ctx).removeSources(ctx.args.names, { profileId: selection.profileId, expectRevision: ctx.flags.expectRevision }));
+        const data = await written(ctx, () => operations(ctx).removeSources(ctx.args.names, { profileId: selection.profileId, expectRevision: ctx.flags.expectRevision }));
         const lines = [`Removed ${data.removedNames.join(", ")}.`];
         if (data.retainedClones) {
           lines.push(`Kept ${data.retainedClones.length} managed clone(s) no source uses: ${data.retainedClones.join(", ")}`);
@@ -392,6 +401,7 @@ export default defineFamily({
       manifest: "required",
       profile: true,
       coverage: true,
+      requireComplete: true,
       positionals: [{ name: "names", variadic: true, description: "Sources to test. Defaults to every source in the profile." }],
       flags: { "source-timeout": { type: "integer", description: "Milliseconds each source may take. Default 30000." } },
       errors: ["SOURCE_NOT_FOUND"],
@@ -429,24 +439,15 @@ export default defineFamily({
             for (const { layer } of entries) {
               if (layer.source === "mcp" && typeof layer.command === "string") warnExecutable(ctx, layer.command, layer.args ?? []);
             }
-            return testSources(entries, { timeoutMs });
+            return testSources(entries, { timeoutMs, signal: ctx.signal });
           },
         ));
         const data = { sources: result.sources };
         const text = result.sources.length
           ? result.sources.map((row) => `${row.ok ? "ok  " : "FAIL"} ${row.name}\t${row.concepts} concept(s)${row.error ? `\t${row.error}` : ""}`).join("\n")
           : "No sources in this profile.";
-        // An explicit test is a question about health, so a partial answer is
-        // a failure (§5.2), with every result still in the details.
-        if (!result.coverage.complete) {
-          const error = new ControlError("INCOMPLETE_COVERAGE", `${result.coverage.degraded.length} source(s) could not be read.`, {
-            status: 503,
-            retryable: true,
-            detail: { coverage: result.coverage, sources: result.sources },
-          });
-          error.text = text;
-          throw error;
-        }
+        // requireComplete: an explicit test is a question about health, so a
+        // partial answer exits 6 with the degraded sources in the details (§5.2).
         return { data, text, coverage: result.coverage };
       },
     },
@@ -576,7 +577,7 @@ export default defineFamily({
         if (auth) supplied.auth = auth;
         if (flags.level !== undefined) supplied.level = flags.level;
         if (supplied.command !== undefined) warnExecutable(ctx, supplied.command, supplied.args ?? []);
-        const data = await call(() => operations(ctx).configurePendingSource(ctx.args.name, supplied, { profileId: selection.profileId, expectRevision: flags.expectRevision }));
+        const data = await written(ctx, () => operations(ctx).configurePendingSource(ctx.args.name, supplied, { profileId: selection.profileId, expectRevision: flags.expectRevision, signal: ctx.signal }));
         warnFolder(ctx, data);
         ctx.suggest("source.test", `contextcake source test ${JSON.stringify(data.configured)}`, "Read the source once and report what came back.");
         return { data, text: `Configured ${data.configured} (${data.kind}) at level ${data.level}.` };
@@ -598,7 +599,7 @@ export default defineFamily({
       },
       async run(ctx) {
         const selection = selectProfile(ctx);
-        const data = await call(() => operations(ctx).removeSources(ctx.args.names, { profileId: selection.profileId, expectRevision: ctx.flags.expectRevision, pendingOnly: true }));
+        const data = await written(ctx, () => operations(ctx).removeSources(ctx.args.names, { profileId: selection.profileId, expectRevision: ctx.flags.expectRevision, pendingOnly: true }));
         return { data, text: `Dismissed ${data.removedNames.join(", ")}.` };
       },
     },

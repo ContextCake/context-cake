@@ -7,6 +7,8 @@ on:
     paths:
       - 'apps/site/**'
       - '.github/workflows/site-deploy.yml'
+      # The site release sync reads the platform table.
+      - 'scripts/release-platforms.mjs'
   workflow_dispatch:
 
 permissions:

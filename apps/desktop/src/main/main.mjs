@@ -1954,6 +1954,9 @@ async function smokeCheck() {
     if (res.ok && unauth.status === 401 && okName && okHeapDetail && okEngineLog) {
       console.log(
         `SMOKE OK ${service.origin} api=200 unauth=401 userData=${userDataName}`
+        // The release smoke of the installed .deb requires sandbox=on: CI's
+        // dev-binary runs set ELECTRON_DISABLE_SANDBOX, a shipped app never does.
+        + ` sandbox=${app.commandLine.hasSwitch('no-sandbox') || process.env.ELECTRON_DISABLE_SANDBOX ? 'off' : 'on'}`
         + ` lag=${lag}ms indexing=${graph?.indexing === true}`
         + ` engineP50=${latency.p50}ms engineP95=${latency.p95}ms engineMax=${latency.max}ms`
         + ` engineProbes=${latency.probes} engineFailures=${latency.failures}`

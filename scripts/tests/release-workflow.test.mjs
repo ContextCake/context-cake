@@ -36,15 +36,35 @@ test('the release splits into build-mac, an Intel smoke, and one publish job', (
   assert.match(appRelease, /build-mac:[\s\S]*?runs-on: macos-14[\s\S]*?needs:\s*\n\s*- release-preflight/)
   assert.match(appRelease, /smoke-mac-x64:[\s\S]*?runs-on: macos-15-intel[\s\S]*?needs:\s*\n\s*- build-mac/)
   assert.match(appRelease, /smoke-mac-x64:[\s\S]*?--id mac-x64[\s\S]*?CC_SMOKE=1 "\$BIN" \| tee smoke\.log\s*\n\s*grep -q "SMOKE OK" smoke\.log/)
-  assert.match(appRelease, /publish:[\s\S]*?runs-on: ubuntu-latest[\s\S]*?needs:\s*\n\s*- build-mac\s*\n\s*- smoke-mac-x64/)
+  assert.match(appRelease, /publish:[\s\S]*?runs-on: ubuntu-latest[\s\S]*?needs:\s*\n\s*- build-mac\s*\n\s*- smoke-mac-x64\s*\n\s*- build-linux/)
   assert.match(appRelease, /check dist\/mac-arm64 arm64\s*\n\s*check dist\/mac x86_64/)
   assert.match(appRelease, /for DIR in dist\/mac-arm64 dist\/mac; do[\s\S]*?spctl -a -vv -t install "\$APP"[\s\S]*?xcrun stapler validate "\$APP"/)
   assert.match(appRelease, /npm run dist -- --publish never --config\.mac\.notarize=true/)
 })
 
+test('build-linux builds, installs, and smokes the .deb with the sandbox on before publish', () => {
+  const job = /\n  build-linux:\n([\s\S]*?)\n  publish:\n/.exec(appRelease)?.[1]
+  assert.ok(job, 'app-release.yml has a build-linux job before publish')
+  assert.match(job, /runs-on: ubuntu-24\.04/)
+  assert.match(job, /needs:\s*\n\s*- release-preflight/)
+  // The maintainer is a repository variable, and every run stops without it.
+  assert.match(job, /CC_DEB_MAINTAINER: \$\{\{ vars\.DEB_MAINTAINER \}\}/)
+  assert.match(job, /Require the \.deb maintainer\s*\n\s*run: \|\s*\n\s*if \[ -z "\$CC_DEB_MAINTAINER" \]; then[\s\S]*?exit 1/)
+  assert.doesNotMatch(job, /Require the \.deb maintainer\s*\n\s*if:/)
+  assert.match(job, /npm run dist:linux -- --publish never/)
+  assert.match(job, /release-platforms\.mjs --check apps\/desktop\/dist --version "\$VERSION" --stage build --os linux/)
+  assert.match(job, /sudo apt-get install -y --no-install-recommends "\.\/apps\/desktop\/dist\/\$DEB"/)
+  // The sandbox stays on: no switch, no env override, and the smoke must say so.
+  assert.match(job, /env -u ELECTRON_DISABLE_SANDBOX CC_SMOKE=1 xvfb-run -a \/opt\/ContextCake\/contextcake-desktop/)
+  assert.match(job, /grep -q "SMOKE OK" smoke\.log\s*\n\s*grep -q "sandbox=on" smoke\.log/)
+  assert.doesNotMatch(appRelease, /--no-sandbox/)
+  assert.match(job, /name: desktop-linux[\s\S]*?path: release-linux/)
+  assert.match(appRelease, /publish:[\s\S]*?name: desktop-linux\s*\n\s*path: release-dist/)
+})
+
 test('every artifact name in the release workflow comes from the platform table', () => {
   // No step spells an installer, an update file, or a per-platform ping by hand.
-  assert.doesNotMatch(appRelease, /arm64\.dmg|x64\.dmg|-mac\.zip|\*\.dmg|\*\.zip|install-ping-mac/)
+  assert.doesNotMatch(appRelease, /arm64\.dmg|x64\.dmg|-mac\.zip|\*\.dmg|\*\.zip|install-ping-mac|amd64\.deb|\*\.deb|latest-linux|install-ping-linux/)
   assert.match(appRelease, /release-platforms\.mjs --check apps\/desktop\/dist --version "\$VERSION" --stage build --os mac/)
   assert.match(appRelease, /release-platforms\.mjs --check release-dist --version "\$VERSION" --stage build\n/)
   assert.match(appRelease, /release-platforms\.mjs --check release-dist --version "\$VERSION" --stage publish/)

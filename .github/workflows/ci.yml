@@ -223,6 +223,13 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # Fetch the Electron binary now. Otherwise the first test to run it
+      # downloads and unpacks it while test files running beside it try to
+      # spawn the same file, and Linux answers ETXTBSY.
+      - name: Install the Electron binary
+        working-directory: apps/desktop
+        run: node node_modules/electron/install.js
+
       - name: Navigation guard test
         working-directory: apps/desktop
         run: xvfb-run -a npm run test:navigation

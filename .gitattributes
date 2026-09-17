@@ -1,0 +1,24 @@
+# Check out LF everywhere, Windows included. The bash suites, the eval corpus,
+# and content checksums all assume LF; a CRLF checkout breaks each of them.
+* text=auto eol=lf
+
+# Binary: never convert, never diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.gz binary
+*.tgz binary
+*.dmg binary
+*.mcpb binary
+*.sqlite binary
+*.db binary

@@ -3,6 +3,8 @@ title: Installation
 description: Install the Mac app for guided setup, or use the versioned source route for an inspectable evaluation.
 ---
 
+import AppDownloadTable from '../../../../components/AppDownloadTable.astro';
+
 The fastest way to try ContextCake on macOS is the signed, notarized app. ContextCake also runs directly from **versioned source**. The recommended source route is a
 verified source archive; shallow Git and GitHub CLI checkouts are available when
 you already use source-control tooling. The engine is dependency-free: there is
@@ -15,7 +17,9 @@ local setup path.
 
 ## macOS app (recommended)
 
-Download the `.dmg` from the [latest release](https://github.com/ContextCake/context-cake/releases/latest), open it, and drag ContextCake to Applications. Open it from Applications; macOS may ask you to confirm the first launch. The app is Apple silicon (arm64) only — on an Intel Mac, use the source route below.
+<AppDownloadTable />
+
+Open the DMG and drag ContextCake to Applications. Open it from Applications; macOS may ask you to confirm the first launch.
 
 The app's activation path is:
 

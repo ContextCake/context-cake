@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { HIDDEN_COMMERCE_ROUTES, HIDDEN_REDIRECT_LINES, isCommerceVisible, readSiteFlags } from './site-flags.mjs'
+import { availablePlatforms, formatFileSize, platformsFor, sourceRouteHeading, sourceRouteNames, joinOr } from '../src/data/app-downloads.mjs'
 
 const html = await readFile(new URL('../dist/install/index.html', import.meta.url), 'utf8')
 const homeHtml = await readFile(new URL('../dist/index.html', import.meta.url), 'utf8')
@@ -30,9 +31,26 @@ function requireOrder(items) {
   }
 }
 
-requireText('Download for Mac', 'Mac download must remain the primary install action')
+// One download per platform row the published release carries, each with its
+// file name, size, and checksum (site spec, /install). Rows the release does not
+// carry send the visitor to the source route instead.
+const platforms = availablePlatforms(appRelease)
+if (!platforms.length) throw new Error('Release record must list at least one available platform')
 requireText(appRelease.tag, 'Install page must identify the published Mac release')
-requireText('href="/download/mac"', 'Install page must use the stable Mac download route')
+for (const row of platformsFor(appRelease, 'mac')) {
+  requireText(`Download for ${row.label}`, `Install page must offer the ${row.platformName} download`)
+  requireText(`href="${row.downloadPath}"`, `Install page must use the ${row.downloadPath} route`)
+  requireText(row.installer.name, `Install page must name ${row.installer.name}`)
+  requireText(formatFileSize(row.installer.bytes), `Install page must show the size of ${row.installer.name}`)
+  requireText(row.installer.sha256, `Install page must show the SHA-256 of ${row.installer.name}`)
+  if (!installationDocsHtml.includes(row.installer.sha256) || !installationDocsHtml.includes(`href="${row.downloadPath}"`)) {
+    throw new Error(`Installation docs must list the ${row.platformName} download with its checksum`)
+  }
+}
+for (const row of appRelease.platforms.filter((candidate) => !candidate.available)) {
+  forbidText(`href="${row.downloadPath}"`, `Install page must not link ${row.downloadPath}: ${appRelease.tag} has no ${row.platformName} download`)
+}
+requireText(`Using ${joinOr(sourceRouteNames(appRelease))}?`, 'Install page must send platforms without a download to the source route')
 requireText('href="/install" aria-current="page"', 'Install navigation must expose the current route')
 requireText('Show source installation', 'Versioned source installation must remain available')
 requireText(`app-v${sourceRelease.version}`, 'Source installation must use an app release tag')
@@ -67,7 +85,7 @@ requireOrder([
   'Choose a folder with Markdown files',
   'Connect your AI tool',
   'Run the test prompt',
-  'Run the source version on Intel Mac, Linux, or WSL.',
+  sourceRouteHeading(appRelease),
 ])
 
 forbidText('The next distribution layer', 'Planned distribution channels must not displace activation')
@@ -80,15 +98,26 @@ forbidText('nopostinstall', 'Inline code whitespace collapsed in production HTML
 const downloadPages = [['home', homeHtml], ['install', html]]
 if (commerceVisible) downloadPages.push(['pricing', pricingHtml])
 for (const [label, page] of downloadPages) {
-  if (!page.includes('href="/download/mac"')) throw new Error(`${label} page must use the stable Mac download route`)
-  if (/href="https:\/\/github\.com\/ContextCake\/context-cake\/releases\/download\/app-v[^\"]+ContextCake-[^\"]+-arm64\.dmg"/.test(page)) {
+  if (!page.includes(`href="${platforms[0].downloadPath}"`)) throw new Error(`${label} page must use the ${platforms[0].downloadPath} download route`)
+  if (/href="https:\/\/github\.com\/ContextCake\/context-cake\/releases\/download\/app-v[^\"]+ContextCake-[^\"]+\.dmg"/.test(page)) {
     throw new Error(`${label} page must not embed a versioned GitHub DMG URL`)
   }
 }
 if (!homeHtml.includes('Download for Mac')) throw new Error('Homepage Mac action must name the platform')
+for (const row of platforms.slice(1)) {
+  if (!homeHtml.includes(`href="${row.downloadPath}"`)) throw new Error(`Homepage must link the ${row.platformName} download`)
+}
 if (commerceVisible && !pricingHtml.includes('Download for Mac')) throw new Error('Pricing Mac action must name the platform')
-if (!redirects.includes(`/download/mac ${appRelease.artifacts.dmg.url} 302`)) {
-  throw new Error('Stable Mac redirect must target the published DMG')
+// Every available row redirects, and /download/mac keeps pointing at Apple silicon.
+for (const row of platforms) {
+  for (const route of [row.downloadPath, ...row.downloadAliases]) {
+    if (!redirects.includes(`${route} ${row.installer.url} 302`)) {
+      throw new Error(`${route} redirect must target the published ${row.installer.name}`)
+    }
+  }
+}
+if (!redirects.includes('/download/mac ') || !appRelease.platforms.find((row) => row.id === 'mac-arm64')?.downloadAliases.includes('/download/mac')) {
+  throw new Error('/download/mac must keep redirecting to the Apple silicon DMG for existing links')
 }
 
 if (!commerceVisible) {
@@ -151,4 +180,4 @@ for (const cue of diagnosticsDemoCues) {
   }
 }
 
-console.log(`install page verification passed (published Mac release + source fallback; commerce ${commerceVisible ? 'visible' : 'hidden'})`)
+console.log(`install page verification passed (${appRelease.tag}: ${platforms.map((row) => row.id).join(', ')} + source fallback; commerce ${commerceVisible ? 'visible' : 'hidden'})`)

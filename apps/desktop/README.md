@@ -53,7 +53,7 @@ npm run dist       # DMG + zip in dist/ (ad-hoc signed without Apple secrets; CI
 | `src/preload.cjs` | Sandboxed, fixed-purpose bridges for preferences, UI state, windows, data reload, auth, folder selection, and CLI actions |
 | `src/cli/cli.mjs` | `contextcake` dispatcher over the bundled engine entrypoints |
 | `resources/bin/contextcake` | Shell shim installed for the CLI |
-| `electron-builder.yml` | Packaging: DMG/zip, arm64, hardened runtime, protocols |
+| `electron-builder.yml` | Packaging: DMG/zip for arm64 and x64 (names from `scripts/release-platforms.mjs`), hardened runtime, protocols |
 
 ## User data
 

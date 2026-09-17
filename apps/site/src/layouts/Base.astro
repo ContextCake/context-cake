@@ -12,7 +12,7 @@ import '../styles/tokens.css';
 import Icon from '../components/Icon.astro';
 import appIconUrl from '../../../../assets/brand/contextcake-app-icon.svg?url';
 import { COMMERCE_VISIBLE } from '../config/flags';
-import { appReleaseUrl, appVersion } from '../data/app-release';
+import { appPlatforms, appReleaseUrl, appVersion } from '../data/app-release';
 
 interface Props {
 	title: string;
@@ -65,7 +65,7 @@ const footerColumns = [
 	{
 		heading: 'Product',
 		links: visibleLinks([
-			{ label: 'Download for Apple silicon', href: '/download/mac' },
+			...appPlatforms.map((row) => ({ label: `Download for ${row.platformName}`, href: row.downloadPath })),
 			{ label: 'Demo', href: '/demo' },
 			{ label: 'Packs', href: '/packs' },
 			{ label: 'Pricing', href: '/pricing' },

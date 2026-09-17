@@ -2,6 +2,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { HIDDEN_REDIRECT_LINES, assertSiteFlags, isCommerceVisible } from './site-flags.mjs'
+import { RELEASE_PLATFORMS } from '../../../scripts/release-platforms.mjs'
 
 const REPOSITORY = 'ContextCake/context-cake'
 const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases`
@@ -58,64 +59,96 @@ function requireReleaseAsset(release, name) {
   return asset
 }
 
+function artifactRecord(asset, checksums) {
+  if (!checksums.has(asset.name)) throw new Error(`SHA256SUMS is missing ${asset.name}`)
+  return {
+    name: asset.name,
+    url: asset.browser_download_url,
+    sha256: checksums.get(asset.name),
+    bytes: asset.size,
+  }
+}
+
+// One record row per platform-table row. The site follows the newest PUBLISHED
+// release, and releases made before a row existed do not carry it (0.9.x has
+// Apple silicon only), so such a row is recorded as unavailable.
+//
+// "Made before the row existed" means the release shows no trace of the row at
+// all: no installer, no update file, no install-ping asset, and no SHA256SUMS
+// line. Any trace means the release was built with the row, so a missing file
+// is a broken or half-uploaded release, and the sync fails rather than deploy
+// a site that quietly drops a download. The release workflow itself refuses to
+// publish a release missing a row.
 export function buildAppReleaseRecord(release, checksumText) {
   const parts = versionParts(release.tag_name)
   if (!parts || release.draft || release.prerelease) {
     throw new Error('Release record requires a published stable app-vX.Y.Z release')
   }
   const version = parts.join('.')
-  const dmgName = `ContextCake-${version}-arm64.dmg`
-  const zipName = `ContextCake-${version}-arm64-mac.zip`
-  const dmg = requireReleaseAsset(release, dmgName)
-  const updaterZip = requireReleaseAsset(release, zipName)
   const checksumsAsset = requireReleaseAsset(release, 'SHA256SUMS')
   const checksums = parseChecksums(checksumText)
-  for (const name of [dmgName, zipName]) {
-    if (!checksums.has(name)) throw new Error(`SHA256SUMS is missing ${name}`)
+  const hasAsset = (name) => release.assets?.some((candidate) => candidate.name === name)
+
+  const platforms = RELEASE_PLATFORMS.map((row) => {
+    const installerName = row.installerName(version)
+    const updaterName = row.updaterName(version)
+    const available = hasAsset(installerName)
+    const traces = [
+      hasAsset(row.pingAsset) && row.pingAsset,
+      updaterName && hasAsset(updaterName) && updaterName,
+      checksums.has(installerName) && `SHA256SUMS line for ${installerName}`,
+      updaterName && checksums.has(updaterName) && `SHA256SUMS line for ${updaterName}`,
+    ].filter(Boolean)
+    if (!available && traces.length) {
+      throw new Error(`${release.tag_name} is missing release asset ${installerName} for ${row.id} but has ${traces.join(', ')}`)
+    }
+    return {
+      id: row.id,
+      os: row.os,
+      arch: row.arch,
+      osLabel: row.osLabel,
+      label: row.label,
+      platformName: row.platformName,
+      updates: row.updates,
+      downloadPath: row.downloadPath,
+      downloadAliases: [...row.downloadAliases],
+      available,
+      installer: available ? artifactRecord(requireReleaseAsset(release, installerName), checksums) : null,
+      updater: available && updaterName ? artifactRecord(requireReleaseAsset(release, updaterName), checksums) : null,
+    }
+  })
+  if (!platforms.some((row) => row.available)) {
+    throw new Error(`${release.tag_name} has no installer for any release platform`)
   }
 
   const mcpbName = `ContextCake-${version}.mcpb`
-  const mcpbCandidate = release.assets?.find((candidate) => candidate.name === mcpbName)
-  if (mcpbCandidate && !checksums.has(mcpbName)) {
-    throw new Error(`SHA256SUMS is missing ${mcpbName}`)
-  }
-  const mcpb = mcpbCandidate ? requireReleaseAsset(release, mcpbName) : null
+  const mcpb = hasAsset(mcpbName) ? artifactRecord(requireReleaseAsset(release, mcpbName), checksums) : null
 
   return {
     channel: 'stable',
     version,
     tag: release.tag_name,
     publishedAt: release.published_at,
-    architectures: ['arm64'],
     releaseUrl: release.html_url,
     checksumsUrl: checksumsAsset.browser_download_url,
-    artifacts: {
-      dmg: {
-        name: dmg.name,
-        url: dmg.browser_download_url,
-        sha256: checksums.get(dmgName),
-        bytes: dmg.size,
-      },
-      updaterZip: {
-        name: updaterZip.name,
-        url: updaterZip.browser_download_url,
-        sha256: checksums.get(zipName),
-        bytes: updaterZip.size,
-      },
-      ...(mcpb ? {
-        mcpb: {
-          name: mcpb.name,
-          url: mcpb.browser_download_url,
-          sha256: checksums.get(mcpbName),
-          bytes: mcpb.size,
-        },
-      } : {}),
-    },
+    platforms,
+    ...(mcpb ? { mcpb } : {}),
   }
 }
 
-export function renderDownloadRedirect(record) {
-  return `/download/mac ${record.artifacts.dmg.url} 302\n`
+// Every file the record links to, for the download probe.
+export function recordArtifacts(record) {
+  const rows = record.platforms.filter((row) => row.available)
+  return [...rows.flatMap((row) => [row.installer, row.updater]), record.mcpb].filter(Boolean)
+}
+
+// One redirect per available platform, plus its older aliases (/download/mac
+// keeps pointing at Apple silicon). An unavailable platform gets no route.
+export function renderDownloadRedirects(record) {
+  return record.platforms
+    .filter((row) => row.available)
+    .flatMap((row) => [row.downloadPath, ...row.downloadAliases].map((route) => `${route} ${row.installer.url} 302\n`))
+    .join('')
 }
 
 // The whole public/_redirects file. It is derived, never hand-edited: every
@@ -127,7 +160,7 @@ export function renderDownloadRedirect(record) {
 // /creators pages are meta-refresh stubs; HIDDEN_REDIRECT_LINES make Cloudflare
 // answer a real 302 before the stub is ever served.
 export function renderRedirects(record, flags = {}) {
-  const lines = [renderDownloadRedirect(record)]
+  const lines = [renderDownloadRedirects(record)]
   if (!isCommerceVisible(flags)) {
     lines.push(...HIDDEN_REDIRECT_LINES.map((line) => `${line}\n`))
   }
@@ -217,7 +250,7 @@ export async function fetchAppReleaseRecord({ tag, token, fetchImpl = globalThis
   )
   const record = buildAppReleaseRecord(release, await checksumResponse.text())
 
-  for (const artifact of Object.values(record.artifacts)) {
+  for (const artifact of recordArtifacts(record)) {
     const response = await requestWithRetry(fetchImpl, artifact.url, {
       method: 'GET',
       redirect: 'manual',
@@ -256,7 +289,8 @@ async function main() {
   const record = await fetchAppReleaseRecord({ tag, token: process.env.GITHUB_TOKEN })
   await writeAppReleaseRecord(record)
   const transition = previous.tag === record.tag ? record.tag : `${previous.tag} -> ${record.tag}`
-  console.log(`Synced published Mac release ${transition}`)
+  const platforms = record.platforms.filter((row) => row.available).map((row) => row.id).join(', ')
+  console.log(`Synced published app release ${transition} (${platforms})`)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

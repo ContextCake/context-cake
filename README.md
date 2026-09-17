@@ -37,7 +37,7 @@
 
 Get the signed, notarized app from the **[latest release](https://github.com/ContextCake/context-cake/releases/latest)**: open the DMG, drag ContextCake to Applications, and the app walks you through adding your first sources and connecting your AI client. Each release page carries the matching ZIP and SHA-256 checksums.
 
-The app is Apple silicon (arm64) only. On an Intel Mac or Linux, run the engine from source instead — see the [quick start](#quick-start) below.
+The [install page](https://contextcake.com/install) lists a download for each Mac the current release supports. Releases before the Intel build shipped are Apple silicon only. On Linux, or on a Mac the release does not cover, run the engine from source instead — see the [quick start](#quick-start) below.
 
 ## Why ContextCake?
 

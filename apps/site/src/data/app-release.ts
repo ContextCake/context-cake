@@ -1,12 +1,29 @@
 import rawRelease from './app-release.json';
+import { platformsFor, sourceRouteHeading, sourceRouteNames, joinOr } from './app-downloads.mjs';
 
 type Artifact = { name: string; url: string; sha256: string; bytes: number };
+export type ReleasePlatform = {
+	id: string;
+	os: string;
+	arch: string;
+	osLabel: string;
+	label: string;
+	platformName: string;
+	updates: string;
+	downloadPath: string;
+	downloadAliases: string[];
+	available: boolean;
+	installer: Artifact | null;
+	updater: Artifact | null;
+};
+export type AvailablePlatform = ReleasePlatform & { available: true; installer: Artifact };
 type PublishedAppRelease = {
 	version: string;
 	tag: string;
 	releaseUrl: string;
 	checksumsUrl: string;
-	artifacts: { dmg: Artifact; updaterZip: Artifact; mcpb?: Artifact };
+	platforms: ReleasePlatform[];
+	mcpb?: Artifact;
 };
 const release = rawRelease as PublishedAppRelease;
 
@@ -14,14 +31,25 @@ const release = rawRelease as PublishedAppRelease;
 // from the newest app release that actually exists on GitHub. Production
 // workflows refresh this record before building; local/offline builds use the
 // committed last-known-good copy instead of inventing a future download URL.
+// The rows come from scripts/release-platforms.mjs by way of that sync.
 export const appVersion = release.version;
 export const appTag = release.tag;
-export const appDownloadUrl = '/download/mac';
-export const appArtifactUrl = release.artifacts.dmg.url;
-export const appDownloadName = release.artifacts.dmg.name;
-export const appDownloadSha256 = release.artifacts.dmg.sha256;
-export const appDownloadBytes = release.artifacts.dmg.bytes;
 export const appReleaseUrl = release.releaseUrl;
 export const appChecksumsUrl = release.checksumsUrl;
 export const latestReleaseUrl = release.releaseUrl;
-export const appMcpb = release.artifacts.mcpb;
+export const appMcpb = release.mcpb;
+
+// Every platform this release can be downloaded for, in table order.
+export const appPlatforms = release.platforms.filter((row) => row.available) as AvailablePlatform[];
+if (!appPlatforms.length) {
+	throw new Error('app-release.json must list at least one available platform');
+}
+export const macDownloads = platformsFor(release, 'mac') as AvailablePlatform[];
+
+// The first row is the default one-click download (Apple silicon today).
+export const primaryDownload = appPlatforms[0];
+export const appDownloadUrl = primaryDownload.downloadPath;
+
+export const sourceRoutePlatforms: string[] = sourceRouteNames(release);
+export const sourceRouteList: string = joinOr(sourceRoutePlatforms);
+export const sourceRouteTitle: string = sourceRouteHeading(release);

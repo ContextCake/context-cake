@@ -353,7 +353,7 @@ auditable CLI — never in tools an agent can invoke implicitly.
   publishing disabled, no lifecycle scripts, and a minimal `files`
   allowlist verified via `npm pack --dry-run` in CI — and SHALL update the
   site's install messaging in the same release (the "Why a source archive?"
-  section of `apps/site/src/content/docs/docs/getting-started/installation.md`
+  section of `apps/site/src/content/docs/docs/getting-started/installation.mdx`
   and `apps/site/src/pages/install.astro`, which currently explain why npm is
   unavailable).
 - [ ] WHEN a wave publishes THE SYSTEM SHALL include only contract-complete

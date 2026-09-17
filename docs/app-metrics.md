@@ -22,10 +22,10 @@ for 90 days.
 
 | Metric | Source | Interpretation |
 |---|---|---|
-| DMG downloads | GitHub `*.dmg` asset `download_count` | Direct installer downloads. Repeat downloads count again. |
-| ZIP/update downloads | GitHub `*.zip` asset `download_count` | ZIP downloads, including native updater traffic. Not a unique-person count. |
+| Installer downloads | GitHub `download_count` of each platform row's installer (`scripts/release-platforms.mjs`), reported per row | Direct installer downloads. Repeat downloads count again. |
+| Update downloads | GitHub `download_count` of each row's update file (the Mac zip) | Downloads including native updater traffic. Not a unique-person count. |
 | MCPB downloads | GitHub `*.mcpb` asset `download_count` | Claude Desktop bundle downloads. Repeat downloads count again. |
-| Confirmed first launches | GitHub `install-ping.txt` asset `download_count` | One successful packaged-app launch per persistent ContextCake data directory after tracking shipped. The app version is part of the release URL. |
+| Confirmed first launches | GitHub `install-ping-<row id>.txt` asset `download_count`, per platform row; `install-ping.txt` in releases before the table, counted as Apple silicon | One successful packaged-app launch per persistent ContextCake data directory after tracking shipped. The app version and platform row are part of the release URL. |
 | Confirmed MCPB activations | GitHub `mcpb-install-ping.txt` asset `download_count` | One successful MCPB server start per local marker, only after the bundle's explicit opt-in is enabled. |
 | npm downloads | npm public download API | Per-package-version downloads over npm's reported window. This is not a person count. |
 | Homebrew installs | Homebrew public 30-day cask aggregate | Anonymous cask installs when the cask appears in Homebrew's public report. It may be absent for a new or unsupported tap. |
@@ -56,7 +56,7 @@ cannot be removed because ContextCake has no identifier that could connect that
 count back to a person or device.
 
 After an allowed first launch, the app downloads the release's tiny
-`install-ping.txt` asset once and writes `install-metric-v1.json` in
+ping asset for its own platform row (for example `install-ping-mac-x64.txt`) once and writes `install-metric-v1.json` in
 ContextCake's application-support directory so it does not report again.
 
 A failed request does not affect startup and may be retried on a later launch
@@ -65,7 +65,7 @@ are separate settings.
 
 These are directional product metrics, not billing or unique-user records. A
 fresh application-support directory can count again, public release assets can
-be downloaded outside the app, and older releases without `install-ping.txt`
+be downloaded outside the app, and older releases without a ping asset
 cannot report first launches. The first release that includes the counter will
 also count existing users when they update and launch it, so that release is an
 installed-base baseline rather than a new-install cohort.

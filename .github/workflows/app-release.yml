@@ -1,7 +1,17 @@
-# ContextCake release: build, sign, notarize, staple, publish the Mac app, then
-# deploy the matching public Web Demo and install site from the same tagged commit.
+# ContextCake release: build, sign, notarize, and staple the app for every row
+# of the release platform table, publish them as one GitHub Release, then deploy
+# the matching public Web Demo and install site from the same tagged commit.
 #
 # Trigger: push of an `app-v*` tag whose commit is an ancestor of main.
+# Dry run: `workflow_dispatch` builds and verifies every platform row but never
+# publishes a release or deploys a site. Only a tag push publishes.
+#
+# Signing: only an `app-v*` tag push or a dispatch from `main` signs and
+# notarizes (build-mac's SIGNING_ALLOWED), and only those runs enter the
+# `release` environment. A dispatch from any other branch builds unsigned, so
+# unreviewed code never comes out of this workflow carrying the Developer ID.
+# A signed dry run keeps no signed binary: the Mac artifact lives one day and a
+# final job deletes it, and the dry-run upload holds only checksums and feeds.
 # Secrets (see specs/contextcake-distribution/design.md §8):
 #   CSC_LINK / CSC_KEY_PASSWORD          — Developer ID Application cert (.p12, base64)
 #   APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER — notarytool App Store Connect key
@@ -13,6 +23,15 @@
 # unsigned inspection artifacts but does NOT create a GitHub Release;
 # unnotarized builds are never distributed (distribution spec §7).
 #
+# Job order (design §11.5): build-mac → smoke-mac-x64 → publish → public-surfaces,
+# plus remove-dry-run-binaries after a signed dry run.
+# Artifact names come from scripts/release-platforms.mjs and
+# scripts/release-assets.mjs; no step here spells one out. build-mac hashes its
+# files right after Gatekeeper and passes the digests as a job output; publish
+# refuses bytes that no longer match them, checks every table row before and
+# after it writes SHA256SUMS, uploads to a DRAFT release, checks the draft's
+# assets against the table, and only then makes the release public.
+#
 # Releases ship WITHOUT accounts: the packaging step no longer receives
 # Supabase configuration, so the published app has no sign-in. To build one
 # that does, set CC_ACCOUNTS=1 plus SUPABASE_URL/SUPABASE_ANON_KEY. See
@@ -23,6 +42,13 @@ on:
   push:
     tags:
       - "app-v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify every platform row without publishing or deploying. Must stay true: only an app-v tag push publishes."
+        type: boolean
+        required: true
+        default: true
 
 jobs:
   release-preflight:
@@ -30,7 +56,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
+      - name: Refuse a publishing dispatch
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true
+        run: |
+          echo "::error::A manual run is always a dry run. Publish by pushing an app-v tag on main."
+          exit 1
+
       - name: Require public-surface deployment credentials
+        if: github.event_name == 'push'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -45,14 +78,22 @@ jobs:
               "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$project"
           done
 
-  release:
+  build-mac:
+    name: build, sign, and notarize Mac (arm64 + x64)
     runs-on: macos-14
     needs:
       - release-preflight
+    # Only runs allowed to sign enter the environment that holds the signing
+    # secrets; every other run gets no environment.
+    environment: ${{ ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/app-v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && 'release' || '' }}
     permissions:
-      contents: write
+      contents: read
+    env:
+      SIGNING_ALLOWED: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/app-v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
     outputs:
       signed: ${{ steps.creds.outputs.signed }}
+      version: ${{ steps.version.outputs.version }}
+      checksums: ${{ steps.digests.outputs.checksums }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -60,6 +101,7 @@ jobs:
           fetch-depth: 0
 
       - name: Verify tag is on main and matches package version
+        if: github.event_name == 'push'
         run: |
           git fetch origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
@@ -76,12 +118,22 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME implies version $TAG_VERSION but apps/desktop/package.json is $PKG_VERSION"
             exit 1
           fi
+
+      - name: Resolve release version
+        id: version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#app-v}"
+          else
+            VERSION="$(node -p 'require("./apps/desktop/package.json").version')"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # The signed app, standalone CLI package, and MCPB use exactly one
           # release identity. A mismatch makes an otherwise valid artifact
           # impossible to support or audit, so stop before the expensive Mac build.
-          TAG_VERSION="$TAG_VERSION" node --input-type=module -e '
+          VERSION="$VERSION" node --input-type=module -e '
             import { assertVersionAlignment } from "./scripts/distribution-artifacts.mjs";
-            await assertVersionAlignment(process.env.TAG_VERSION);
+            await assertVersionAlignment(process.env.VERSION);
           '
 
       - name: Verify no release gate is open
@@ -91,6 +143,10 @@ jobs:
           # checks in #44 came to be deferred through three releases. The
           # gates live in docs/release-gates.md; an open one stops the build.
           if grep -q '^## Open:' docs/release-gates.md; then
+            if [ "$GITHUB_EVENT_NAME" != "push" ]; then
+              echo "::warning::Release gate open in docs/release-gates.md. A dry run continues; a tagged release would stop here."
+              exit 0
+            fi
             echo "::error::Release gate open in docs/release-gates.md:"
             grep '^## Open:' docs/release-gates.md >&2
             echo "Close the gate (move it under '## Closed:' with its evidence) or, to ship anyway, say so explicitly in that file." >&2
@@ -102,8 +158,13 @@ jobs:
         with:
           node-version: 22
 
+      - name: Build unsigned outside app-v tags and main
+        if: env.SIGNING_ALLOWED != 'true'
+        run: echo "::notice::$GITHUB_EVENT_NAME on $GITHUB_REF builds unsigned. Only an app-v tag push or a dispatch from main signs."
+
       - name: Detect signing secrets
         id: creds
+        if: env.SIGNING_ALLOWED == 'true'
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -155,6 +216,8 @@ jobs:
         run: |
           echo "$APPLE_API_KEY" > "$RUNNER_TEMP/notary-key.p8"
 
+      # `npm run dist` builds every arch electron-builder.yml lists for mac
+      # (arm64 and x64), each with its DMG and zip, and one latest-mac.yml.
       - name: Build, sign, notarize
         if: steps.creds.outputs.signed == 'true'
         working-directory: apps/desktop
@@ -167,77 +230,264 @@ jobs:
           export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"
           # --publish never: on a tag build electron-builder would otherwise try
           # to auto-publish (and fail without GH_TOKEN, or create a duplicate
-          # v* release). The gh CLI step below is the sole publisher.
+          # v* release). The publish job's gh CLI step is the sole publisher.
           npm run dist -- --publish never --config.mac.notarize=true
 
       - name: Build (unsigned — no release)
         if: steps.creds.outputs.signed != 'true'
         working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run dist -- --publish never
+
+      # electron-builder writes the arm64 app to dist/mac-arm64 and the x64
+      # app to dist/mac (x64 is its default arch, so it gets no suffix).
+      - name: Check each app is native to its architecture
+        working-directory: apps/desktop
+        run: |
+          check() {
+            APP=$(find "$1" -maxdepth 1 -name "*.app" | head -1)
+            if [ -z "$APP" ]; then echo "::error::No app bundle in $1"; exit 1; fi
+            ARCHS=$(lipo -archs "$APP/Contents/MacOS/ContextCake")
+            if [ "$ARCHS" != "$2" ]; then echo "::error::$APP is '$ARCHS', expected '$2'"; exit 1; fi
+            echo "$APP: $ARCHS"
+          }
+          check dist/mac-arm64 arm64
+          check dist/mac x86_64
 
       - name: Gatekeeper assessment
         if: steps.creds.outputs.signed == 'true'
         working-directory: apps/desktop
         run: |
-          APP=$(find dist/mac-arm64 -maxdepth 1 -name "*.app" | head -1)
-          codesign --verify --deep --strict "$APP"
-          spctl -a -vv -t install "$APP"
-          xcrun stapler validate "$APP"
+          for DIR in dist/mac-arm64 dist/mac; do
+            APP=$(find "$DIR" -maxdepth 1 -name "*.app" | head -1)
+            codesign --verify --deep --strict "$APP"
+            spctl -a -vv -t install "$APP"
+            xcrun stapler validate "$APP"
+          done
 
-      - name: Build verified distribution channel artifacts
-        working-directory: apps/desktop
+      - name: Verify every Mac platform row was built
         env:
-          TAG_VERSION: ${{ github.ref_name }}
-        run: |
-          node ../../scripts/build-distribution-artifacts.mjs \
-            --version "${TAG_VERSION#app-v}" \
-            --dist dist
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/release-platforms.mjs --check apps/desktop/dist --version "$VERSION" --stage build --os mac
 
-      - name: Checksums
-        working-directory: apps/desktop/dist
-        run: |
-          shasum -a 256 *.dmg *.zip *.mcpb *.tgz > SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Prepare anonymous install counter
-        if: steps.creds.outputs.signed == 'true'
-        working-directory: apps/desktop/dist
-        run: |
-          cp ../release-assets/install-ping.txt install-ping.txt
-          cp ../release-assets/mcpb-install-ping.txt mcpb-install-ping.txt
-
-      - name: Publish GitHub Release
-        if: steps.creds.outputs.signed == 'true'
+      # Hash here, where the bytes were built and checked, before they cross
+      # into jobs that unzip and run them. publish refuses anything that no
+      # longer matches.
+      - name: Record build digests
+        id: digests
         env:
-          GH_TOKEN: ${{ github.token }}
-        working-directory: apps/desktop/dist
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "ContextCake ${GITHUB_REF_NAME#app-v}" \
-            --generate-notes \
-            *.dmg *.zip *.mcpb *.tgz contextcake.rb contextcake-mcp-server.json latest-mac.yml SHA256SUMS install-ping.txt mcpb-install-ping.txt
+          NAMES=$(node scripts/release-platforms.mjs --list checksummed --version "$VERSION" --os mac)
+          DIGESTS=$(cd apps/desktop/dist && shasum -a 256 $NAMES)
+          echo "$DIGESTS"
+          {
+            echo "checksums<<EOF_BUILD_DIGESTS"
+            echo "$DIGESTS"
+            echo "EOF_BUILD_DIGESTS"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Upload artifacts (unsigned build)
-        if: steps.creds.outputs.signed != 'true'
+      - name: Stage Mac artifacts from the platform table
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p release-mac
+          for KIND in installers updaters feeds; do
+            for NAME in $(node scripts/release-platforms.mjs --list "$KIND" --version "$VERSION" --os mac); do
+              cp "apps/desktop/dist/$NAME" "release-mac/$NAME"
+            done
+          done
+          ls -l release-mac
+
+      - name: Upload Mac artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: contextcake-mac-unsigned
-          path: |
-            apps/desktop/dist/*.dmg
-            apps/desktop/dist/*.zip
-            apps/desktop/dist/*.mcpb
-            apps/desktop/dist/*.tgz
-            apps/desktop/dist/contextcake.rb
-            apps/desktop/dist/contextcake-mcp-server.json
-            apps/desktop/dist/latest-mac.yml
+          name: desktop-mac
+          path: release-mac
+          if-no-files-found: error
+          # Only this run's later jobs read it. A signed dry run also deletes it.
+          retention-days: 1
+
+  # The build runs on Apple silicon, so the x64 app has not run anywhere yet.
+  # Launch the exact zip the updater and the Intel DMG ship on a real Intel Mac.
+  smoke-mac-x64:
+    name: smoke the x64 app on Intel macOS
+    runs-on: macos-15-intel
+    needs:
+      - build-mac
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Download Mac artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-mac
+          path: release-mac
+
+      - name: Verify the Intel files match the build digests
+        env:
+          VERSION: ${{ needs.build-mac.outputs.version }}
+          BUILD_DIGESTS: ${{ needs.build-mac.outputs.checksums }}
+        run: |
+          printf '%s\n' "$BUILD_DIGESTS" > "$RUNNER_TEMP/build.sha256"
+          node scripts/release-platforms.mjs --check release-mac --version "$VERSION" --stage build --id mac-x64 --digests "$RUNNER_TEMP/build.sha256"
+
+      - name: Unpack the Intel update zip
+        env:
+          VERSION: ${{ needs.build-mac.outputs.version }}
+        run: |
+          ZIP="release-mac/$(node scripts/release-platforms.mjs --list updaters --version "$VERSION" --id mac-x64)"
+          ditto -x -k "$ZIP" smoke-app
+
+      - name: Gatekeeper assessment of the Intel update zip
+        if: needs.build-mac.outputs.signed == 'true'
+        run: |
+          codesign --verify --deep --strict smoke-app/ContextCake.app
+          spctl -a -vv -t install smoke-app/ContextCake.app
+
+      - name: Launch the Intel build
+        shell: bash
+        run: |
+          BIN=smoke-app/ContextCake.app/Contents/MacOS/ContextCake
+          test "$(uname -m)" = x86_64
+          test "$(lipo -archs "$BIN")" = x86_64
+          CC_SMOKE=1 "$BIN" | tee smoke.log
+          grep -q "SMOKE OK" smoke.log
+
+  publish:
+    name: publish every platform row
+    runs-on: ubuntu-latest
+    needs:
+      - build-mac
+      - smoke-mac-x64
+    permissions:
+      contents: write
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+    env:
+      VERSION: ${{ needs.build-mac.outputs.version }}
+      BUILD_DIGESTS: ${{ needs.build-mac.outputs.checksums }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Download Mac artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-mac
+          path: release-dist
+
+      # Every row, not only this OS: a release attaches every platform or none.
+      # The digests come from the build jobs' outputs, not from the artifact.
+      - name: Verify every platform row was built and is unchanged
+        run: |
+          printf '%s\n' "$BUILD_DIGESTS" > "$RUNNER_TEMP/build.sha256"
+          node scripts/release-platforms.mjs --check release-dist --version "$VERSION" --stage build --digests "$RUNNER_TEMP/build.sha256"
+
+      - name: Build verified distribution channel artifacts
+        run: node scripts/build-distribution-artifacts.mjs --version "$VERSION" --dist release-dist
+
+      - name: Prepare anonymous install counters
+        run: |
+          for NAME in $(node scripts/release-platforms.mjs --list pings --version "$VERSION"); do
+            cp apps/desktop/release-assets/install-ping.txt "release-dist/$NAME"
+          done
+          cp apps/desktop/release-assets/mcpb-install-ping.txt release-dist/mcpb-install-ping.txt
+
+      - name: Checksums
+        run: |
+          NAMES="$(node scripts/release-platforms.mjs --list checksummed --version "$VERSION") ContextCake-$VERSION.mcpb contextcake-$VERSION.tgz"
+          (cd release-dist && sha256sum $NAMES > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Verify the release is complete
+        run: node scripts/release-platforms.mjs --check release-dist --version "$VERSION" --stage publish --digests "$RUNNER_TEMP/build.sha256"
+
+      # The release stays a draft, invisible to the site sync and the updater,
+      # until GitHub reports every expected asset at its local size.
+      - name: Publish GitHub Release
+        id: release
+        if: needs.build-mac.outputs.signed == 'true' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t ASSETS < <(node scripts/release-assets.mjs --version "$VERSION")
+          (cd release-dist && gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "ContextCake ${GITHUB_REF_NAME#app-v}" \
+            --generate-notes \
+            "${ASSETS[@]}")
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets > "$RUNNER_TEMP/draft-assets.json"
+          node scripts/release-assets.mjs --version "$VERSION" --dist release-dist --verify-uploaded "$RUNNER_TEMP/draft-assets.json"
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "released=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload inspection artifacts (unsigned build)
+        if: needs.build-mac.outputs.signed != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: contextcake-release-inspection
+          path: release-dist
           retention-days: 7
+
+      # A signed dry run never leaves a signed binary behind: checksums, feeds,
+      # and metadata only.
+      - name: Upload dry-run checksums and feeds (signed dry run)
+        if: needs.build-mac.outputs.signed == 'true' && github.event_name != 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: contextcake-release-dry-run
+          path: |
+            release-dist/SHA256SUMS
+            release-dist/*.yml
+            release-dist/contextcake.rb
+            release-dist/contextcake-mcp-server.json
+            ${{ runner.temp }}/build.sha256
+          retention-days: 1
+
+  remove-dry-run-binaries:
+    name: delete signed dry-run binaries
+    runs-on: ubuntu-latest
+    needs:
+      - build-mac
+      - smoke-mac-x64
+      - publish
+    if: always() && needs.build-mac.outputs.signed == 'true' && github.event_name != 'push'
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the signed Mac artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[] | select(.name == "desktop-mac") | .id')
+          for ID in $IDS; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ID"
+            echo "deleted artifact $ID"
+          done
 
   public-surfaces:
     name: deploy matching Web Demo and site
     runs-on: ubuntu-latest
     needs:
-      - release
-    if: needs.release.outputs.signed == 'true'
+      - publish
+    if: needs.publish.outputs.released == 'true'
     permissions:
       contents: read
       deployments: write

@@ -4,6 +4,20 @@ import { loadHomebrewCaskInstalls, loadNpmVersionDownloads, loadReleases, render
 
 const releases = [
   {
+    tag_name: 'app-v0.10.0',
+    published_at: '2026-09-20T12:00:00Z',
+    assets: [
+      { name: 'ContextCake-0.10.0-arm64.dmg', download_count: 10 },
+      { name: 'ContextCake-0.10.0-arm64-mac.zip', download_count: 5 },
+      { name: 'ContextCake-0.10.0-x64.dmg', download_count: 3 },
+      { name: 'ContextCake-0.10.0-x64-mac.zip', download_count: 2 },
+      { name: 'install-ping-mac-arm64.txt', download_count: 6 },
+      { name: 'install-ping-mac-x64.txt', download_count: 1 },
+      // A stray asset with a matching extension is not a platform download.
+      { name: 'notes.zip', download_count: 40 },
+    ],
+  },
+  {
     tag_name: 'app-v0.4.0',
     published_at: '2026-08-03T12:00:00Z',
     assets: [
@@ -26,21 +40,29 @@ const releases = [
   { tag_name: 'v0.2.0', assets: [{ name: 'source.tgz', download_count: 99 }] },
 ]
 
-test('summarizes app release assets without pretending downloads are unique people', () => {
+test('counts downloads and first launches per platform row, not per file extension', () => {
   const report = summarizeAppMetrics(releases)
   assert.deepEqual(report.totals, {
-    dmgDownloads: 9,
-    zipDownloads: 4,
+    installerDownloads: 22,
+    updaterDownloads: 11,
     mcpbDownloads: 6,
-    confirmedFirstLaunches: 4,
-    trackedInstallReleases: 1,
+    confirmedFirstLaunches: 11,
+    trackedInstallReleases: 2,
     confirmedMcpbActivations: 2,
     trackedMcpbReleases: 1,
+    platforms: {
+      'mac-arm64': { installerDownloads: 19, updaterDownloads: 9, confirmedFirstLaunches: 10 },
+      'mac-x64': { installerDownloads: 3, updaterDownloads: 2, confirmedFirstLaunches: 1 },
+    },
   })
-  assert.deepEqual(report.releases.map((row) => row.confirmedFirstLaunches), [4, null])
+  assert.deepEqual(report.releases.map((row) => row.confirmedFirstLaunches), [7, 4, null])
+  // The pre-table counter belongs to the only platform those releases shipped.
+  assert.deepEqual(report.releases[1].platforms['mac-arm64'], { installerDownloads: 7, updaterDownloads: 3, confirmedFirstLaunches: 4 })
+  assert.deepEqual(report.releases[1].platforms['mac-x64'], { installerDownloads: 0, updaterDownloads: 0, confirmedFirstLaunches: null })
 
   const markdown = renderMarkdown(report)
-  assert.match(markdown, /DMG downloads: \*\*9\*\*/)
+  assert.match(markdown, /Installer downloads: \*\*22\*\*/)
+  assert.match(markdown, /Mac \(Intel\): \*\*3\*\* installer downloads, \*\*2\*\* update downloads, \*\*1\*\* first launches/)
   assert.match(markdown, /app-v0\.3\.0 \| 2 \| 1 \| 0 \| not tracked/)
   assert.match(markdown, /directional, not unique-person counts/)
   assert.doesNotMatch(markdown, /app-v9\.9\.9/)

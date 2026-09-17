@@ -26,6 +26,8 @@ import path from 'node:path'
 
 // Backends that do not protect the bytes: a fixed key, or none chosen yet.
 const WEAK_BACKENDS = new Set(['basic_text'])
+// Unreadable copies kept for manual recovery; older ones are removed.
+const MAX_UNREADABLE_COPIES = 3
 
 export function createEncryptedStorage({
   configDir,
@@ -55,9 +57,26 @@ export function createEncryptedStorage({
   // treated as empty: the next write would otherwise replace it, and a keyring
   // that is only locked or reset for now would cost the user every stored
   // credential for good. The copy keeps the bytes for a manual recovery.
+  //
+  // If the move fails, writes are refused until a later read succeeds: an
+  // unreadable file that could not be moved must not be overwritten either.
+  let unreadableInPlace = false
   const setAside = () => {
     const stamp = now().toISOString().replace(/[:.]/g, '-')
-    try { fs.renameSync(file, `${file}.unreadable-${stamp}`) } catch { /* already gone */ }
+    try {
+      fs.renameSync(file, `${file}.unreadable-${stamp}`)
+    } catch (error) {
+      unreadableInPlace = error?.code !== 'ENOENT'
+      return
+    }
+    unreadableInPlace = false
+    const prefix = `${fileName}.unreadable-`
+    try {
+      const copies = fs.readdirSync(configDir).filter((name) => name.startsWith(prefix)).sort()
+      for (const name of copies.slice(0, Math.max(0, copies.length - MAX_UNREADABLE_COPIES))) {
+        try { fs.rmSync(path.join(configDir, name)) } catch { /* keep what cannot be removed */ }
+      }
+    } catch { /* pruning is best effort */ }
   }
 
   const readMap = () => {
@@ -67,12 +86,16 @@ export function createEncryptedStorage({
       encrypted = fs.readFileSync(file)
     } catch {
       // Missing (or unreadable as a file at all) reads as "nothing stored".
+      unreadableInPlace = false
       return {}
     }
     try {
       const plaintext = safeStorage.decryptString(encrypted)
       const parsed = JSON.parse(plaintext)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        unreadableInPlace = false
+        return parsed
+      }
     } catch {
       // Stale or foreign key material, or corrupt bytes: handled below.
     }
@@ -86,6 +109,9 @@ export function createEncryptedStorage({
       for (const [key, value] of Object.entries(values)) memory.set(key, value)
       return
     }
+    if (unreadableInPlace) {
+      throw new Error(`${file} could not be decrypted and could not be moved aside, so ContextCake did not overwrite it.`)
+    }
     fs.mkdirSync(configDir, { recursive: true })
     const encrypted = safeStorage.encryptString(JSON.stringify(values))
     const temporary = `${file}.tmp`
@@ -94,8 +120,12 @@ export function createEncryptedStorage({
     try { fs.chmodSync(file, 0o600) } catch { /* best effort on non-POSIX test hosts */ }
   }
 
+  // Memory-only mode never touches disk. A file there came from an earlier
+  // session that had a keyring; this session cannot read it, and deleting it
+  // would lose it for the next session that can.
   const clear = () => {
     memory.clear()
+    if (!encryptionAvailable()) return
     try { fs.rmSync(file) } catch (err) {
       if (err?.code !== 'ENOENT') throw err
     }

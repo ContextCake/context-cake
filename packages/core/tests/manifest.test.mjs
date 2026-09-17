@@ -475,7 +475,8 @@ test("transitional migration preserves runnable data, quarantines incomplete sou
   assert.equal(result.backupHash, crypto.createHash("sha256").update(raw).digest("hex"));
   assert.match(result.backupPath, /\.pre-profiles\.20260729T123456Z\.[a-f0-9]{64}\.json$/);
   assert.equal(verifyManifestBackup(result.backupPath, result.backupHash), true);
-  assert.equal(fs.statSync(result.backupPath).mode & 0o777, 0o600);
+  // Windows has no POSIX permission bits: stat reports 0o666 whatever was asked.
+  if (process.platform !== "win32") assert.equal(fs.statSync(result.backupPath).mode & 0o777, 0o600);
 
   const migrated = readContextManifest(manifestPath);
   assert.equal(classifyManifest(migrated), "v2");
@@ -489,7 +490,7 @@ test("transitional migration preserves runnable data, quarantines incomplete sou
   assert.equal(migrated.packs.demo.assignments[0].profile, "default");
   assert.deepEqual(migrated.profiles["new-project"], { label: "New Project", layers: [] });
   assert.equal(migrated.projects[fs.realpathSync.native(projectPath)], "new-project");
-  assert.equal(fs.statSync(manifestPath).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(fs.statSync(manifestPath).mode & 0o777, 0o600);
 
   const beforeSecondRun = fs.readFileSync(manifestPath, "utf8");
   const second = migrateManifestToV2(manifestPath);

@@ -23,6 +23,13 @@ const execFileP = promisify(execFile);
 const SECRET = "gh" + "u_" + "C".repeat(36);
 const SECOND_SECRET = "gh" + "u_" + "D".repeat(36);
 
+// The stand-in below cannot run on Windows. The engine starts git without a
+// shell, and Node's PATH lookup there only finds `.exe` and `.com` files, so
+// neither this script nor a `git.cmd` would be picked over the real git. The
+// argv and environment it checks are built the same way on every OS; the
+// real-git tests at the bottom still run on Windows.
+const FAKE_GIT = { skip: process.platform === "win32" && "a script cannot stand in for git.exe" };
+
 // A stand-in for git that records exactly how it was invoked, then fakes a
 // successful clone (or a private-repo rejection).
 const SHIM = `#!/bin/sh
@@ -58,7 +65,7 @@ async function withService(run, { tokens, fail = false, rejectToken = null } = {
   fs.writeFileSync(manifestPath, JSON.stringify({ layers: [] }));
 
   const saved = { PATH: process.env.PATH, TRACE: process.env.GIT_TRACE };
-  process.env.PATH = `${binDir}:${process.env.PATH}`;
+  process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH}`;
   process.env.CC_TEST_LOG = log;
   // Already set in the user's shell is the realistic case: it must not survive
   // into a credentialed git invocation.
@@ -97,7 +104,7 @@ const tokensFor = (gitHost) => ({
   "github.com/octocat": { secret: SECRET, host: "api.github.com", gitHost },
 });
 
-test("a connected credential is offered to a matching host, and never through argv", async () => {
+test("a connected credential is offered to a matching host, and never through argv", FAKE_GIT, async () => {
   await withService(async ({ base, readLog }) => {
     const res = await addSource(base, { kind: "github", name: "priv", level: 2, repo: "acme/private" });
     assert.equal(res.status, 200, await res.text());
@@ -128,7 +135,7 @@ test("a connected credential is offered to a matching host, and never through ar
   }, { tokens: tokensFor("github.com") });
 });
 
-test("a credential for another host is never offered to this remote", async () => {
+test("a credential for another host is never offered to this remote", FAKE_GIT, async () => {
   await withService(async ({ base, readLog }) => {
     const res = await addSource(base, { kind: "github", name: "priv", level: 2, repo: "acme/private" });
     assert.equal(res.status, 200, await res.text());
@@ -141,7 +148,7 @@ test("a credential for another host is never offered to this remote", async () =
   }, { tokens: tokensFor("ghe.acme.com") });
 });
 
-test("a second account on the same host is tried after the first lacks access", async () => {
+test("a second account on the same host is tried after the first lacks access", FAKE_GIT, async () => {
   const tokens = {
     "github.com/first": { secret: SECRET, host: "api.github.com", gitHost: "github.com" },
     "github.com/second": { secret: SECOND_SECRET, host: "api.github.com", gitHost: "github.com" },
@@ -156,7 +163,7 @@ test("a second account on the same host is tried after the first lacks access", 
   }, { tokens, rejectToken: SECRET });
 });
 
-test("an auth failure is reported as needing a connection, not as raw git noise", async () => {
+test("an auth failure is reported as needing a connection, not as raw git noise", FAKE_GIT, async () => {
   await withService(async ({ base, dir }) => {
     const res = await addSource(base, { kind: "github", name: "priv", level: 2, repo: "acme/private" });
     assert.equal(res.status, 502);
@@ -171,7 +178,7 @@ test("an auth failure is reported as needing a connection, not as raw git noise"
   }, { tokens: {}, fail: true });
 });
 
-test("a failure with a credential attached blames access, and never quotes the token", async () => {
+test("a failure with a credential attached blames access, and never quotes the token", FAKE_GIT, async () => {
   await withService(async ({ base }) => {
     const res = await addSource(base, { kind: "github", name: "priv", level: 2, repo: "acme/private" });
     assert.equal(res.status, 502);

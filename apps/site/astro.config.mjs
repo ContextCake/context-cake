@@ -19,6 +19,9 @@ export default defineConfig({
 		}),
 		starlight({
 			title: 'ContextCake',
+			editLink: {
+				baseUrl: 'https://github.com/ContextCake/context-cake/edit/main/apps/site/',
+			},
 			favicon: '/favicon.svg?v=stacked-1',
 			logo: {
 				src: '../../assets/brand/contextcake-app-icon.svg',

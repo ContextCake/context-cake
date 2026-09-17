@@ -12,6 +12,7 @@ import '../styles/tokens.css';
 import Icon from '../components/Icon.astro';
 import appIconUrl from '../../../../assets/brand/contextcake-app-icon.svg?url';
 import { COMMERCE_VISIBLE } from '../config/flags';
+import { appReleaseUrl, appVersion } from '../data/app-release';
 
 interface Props {
 	title: string;
@@ -53,18 +54,23 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
 const ogImage = new URL('/og.png', Astro.site).href;
 
 const repoUrl = 'https://github.com/ContextCake/context-cake';
+const contributingUrl = `${repoUrl}/blob/main/CONTRIBUTING.md`;
+const issuesUrl = `${repoUrl}/issues/new/choose`;
+const securityUrl = `${repoUrl}/security/policy`;
+const licenseUrl = `${repoUrl}/blob/main/LICENSE`;
 const year = new Date().getFullYear();
 
-// Footer navigation: every href is a real route (marketing pages + Starlight docs).
+// Footer navigation: every href is a real internal or public project destination.
 const footerColumns = [
 	{
 		heading: 'Product',
 		links: visibleLinks([
+			{ label: 'Download for Apple silicon', href: '/download/mac' },
 			{ label: 'Demo', href: '/demo' },
 			{ label: 'Packs', href: '/packs' },
 			{ label: 'Pricing', href: '/pricing' },
 			{ label: 'Create a Pack', href: '/creators' },
-			{ label: 'Install', href: '/install' },
+			{ label: 'Install options', href: '/install' },
 			{ label: 'Changelog', href: '/changelog' },
 		]),
 	},
@@ -72,19 +78,17 @@ const footerColumns = [
 		heading: 'Documentation',
 		links: [
 			{ label: 'Overview', href: '/docs' },
-			{ label: 'Installation', href: '/docs/getting-started/installation' },
 			{ label: 'Your first cascade', href: '/docs/getting-started/first-cascade' },
-			{ label: 'Diagnostics', href: '/docs/guides/diagnostics' },
 			{ label: 'MCP tools', href: '/docs/reference/mcp-tools' },
+			{ label: 'Trust boundary', href: '/docs/concepts/trust-boundary' },
 		],
 	},
 	{
-		heading: 'Concepts',
+		heading: 'Open source',
 		links: [
-			{ label: 'The layer cake', href: '/docs/concepts/layer-cake' },
-			{ label: 'Merge semantics', href: '/docs/concepts/merge-semantics' },
-			{ label: 'Conflicts & provenance', href: '/docs/concepts/conflicts-and-provenance' },
-			{ label: 'The trust boundary', href: '/docs/concepts/trust-boundary' },
+			{ label: 'Contributing', href: contributingUrl },
+			{ label: 'Report an issue', href: issuesUrl },
+			{ label: 'Security', href: securityUrl },
 		],
 	},
 ];
@@ -205,7 +209,7 @@ const footerColumns = [
 						</p>
 						<a class="footer-repo" href={repoUrl} rel="noreferrer">
 							<Icon name="github" size={17} strokeWidth={2} />
-							<span>Star on GitHub</span>
+							<span>View source</span>
 						</a>
 					</div>
 					<nav class="footer-nav" aria-label="Footer">
@@ -222,9 +226,12 @@ const footerColumns = [
 					</nav>
 				</div>
 				<div class="footer-bottom">
-					<p class="footer-legal">
-						© {year} ContextCake · Open source, MIT licensed
-					</p>
+					<p class="footer-legal">© {year} ContextCake</p>
+					<nav class="footer-meta" aria-label="Legal and release information">
+						<a href="/docs/reference/updates-and-privacy">Network &amp; privacy</a>
+						<a href={licenseUrl}>MIT License</a>
+						<a href={appReleaseUrl}>Mac release v{appVersion}</a>
+					</nav>
 				</div>
 			</div>
 		</footer>
@@ -524,6 +531,19 @@ const footerColumns = [
 	}
 	.footer-legal {
 		margin: 0;
+	}
+	.footer-meta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.65rem 1.15rem;
+	}
+	.footer-meta a {
+		color: inherit;
+		text-decoration: none;
+		transition: color var(--cc-transition);
+	}
+	.footer-meta a:hover {
+		color: var(--cc-text);
 	}
 	@media (max-width: 780px) {
 		.footer-top {

@@ -88,12 +88,26 @@ function fromEnv(def) {
 
 /** The effective settings for a manifest: manifest value, else env, else default. */
 export function resolveSettings(manifest = {}) {
+  return Object.fromEntries(Object.entries(settingOrigins(manifest)).map(([key, entry]) => [key, entry.value]));
+}
+
+/**
+ * The same resolution as resolveSettings, saying which tier won for each key:
+ * `{ value, origin: "manifest" | "env" | "default" }`. One pass decides both,
+ * so the reported origin can never disagree with the value the engine uses.
+ */
+export function settingOrigins(manifest = {}) {
   const stored = manifest?.settings ?? {};
   const out = {};
   for (const [key, def] of Object.entries(SETTING_DEFS)) {
     const value = Number(stored[key]);
     const inRange = Number.isFinite(value) && value >= def.min && value <= def.max;
-    out[key] = inRange ? Math.round(value) : (fromEnv(def) ?? def.default);
+    if (inRange) {
+      out[key] = { value: Math.round(value), origin: "manifest" };
+      continue;
+    }
+    const env = fromEnv(def);
+    out[key] = env === null ? { value: def.default, origin: "default" } : { value: env, origin: "env" };
   }
   return out;
 }
@@ -137,5 +151,6 @@ export function settingsCatalog() {
     min: def.min,
     max: def.max,
     default: def.default,
+    env: def.env,
   }));
 }

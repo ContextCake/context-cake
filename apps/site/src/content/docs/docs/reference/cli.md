@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: Flags and output shapes for resolver, doctor, profiles, concept and file queries, Packs, ingest, write, promote, and mcp-server.
+description: Flags and output shapes for resolver, doctor, profiles, sources, settings, concept and file queries, Packs, ingest, write, promote, and mcp-server.
 ---
 
 Every tool is a standalone Node.js script run with `node <tool>.mjs`. The engine is
@@ -112,6 +112,54 @@ unknown flag), `3` not found, and `4` when a command needs `--confirm` (so a
 `delete` preview exits 4). This is a deliberate pre-1.0 change for the
 `contextcake` command. `node profile.mjs` from a checkout keeps the bare JSON
 and its old exit codes.
+
+## source
+
+Manages the selected profile's sources. Experimental.
+
+```bash
+contextcake source list [--json]
+contextcake source show <name>
+contextcake source add <name> --path <folder> [--kind okf-local|files] [--level <n> | --position <n>]
+contextcake source add <name> --repo <owner/name> [--ref <ref>] [--include <path>] [--token-env <NAME>]
+contextcake source add <name> --kind git --repo <owner/name or URL> [--ref <ref>] [--subdir <path>]
+contextcake source add <name> --command <executable> --trusted [-- <args>...]
+contextcake source update <name> [--path <folder>] [--rename <new>] [--level <n>]
+contextcake source level <name> <level>
+contextcake source reorder <name>...
+contextcake source remove <name>...
+contextcake source test [<name>...]
+contextcake source sync <name>
+contextcake source prune [--confirm]
+contextcake source pending-list
+contextcake source pending-configure <name> [--path <folder>] [--command <executable> --trusted] [--token-env <NAME> [--api-base <url>]]
+contextcake source pending-dismiss <name>...
+```
+
+`list` and `show` never open a source, and list an invalid entry as a row with
+its error. `add` checks a folder exists, a public repo answers, and an MCP
+command answers `tools/list`; it does not index. An MCP source runs its command
+as you, so `add` needs `--trusted` and always warns. `reorder` takes every
+source in the profile, first wins, and refuses while an invalid entry exists.
+`remove` refuses to save while other invalid entries remain; name them all.
+`remove` keeps a managed clone; `prune --confirm` deletes clones no source uses,
+and never one with changed, untracked, or ignored files, a stash, an unfinished
+merge, or commits no remote has. `test` reads each source once and exits 6 if
+any could not be read. `pending-configure` shows where a GitHub source reads
+from; to give it a token when that is not `api.github.com`, restate the address
+with `--api-base`.
+
+## settings
+
+```bash
+contextcake settings list [--json]
+contextcake settings get <key>
+contextcake settings set <key> <value>
+contextcake settings reset <key>... | --all
+```
+
+A value stored in the manifest wins over its environment variable, which wins
+over the default. `list` and `get` report which one applied. Experimental.
 
 ## ingest.mjs
 

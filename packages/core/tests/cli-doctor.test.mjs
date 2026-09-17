@@ -8,7 +8,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { buildTable, defineFamily } from "../src/cli/table.mjs";
+import { buildTable } from "../src/cli/table.mjs";
 import { FAMILIES } from "../src/cli/families/index.mjs";
 import { findInstalls } from "../src/control/installs.mjs";
 import { cliHome, runContextcake, writeManifest } from "./helpers/cli-harness.mjs";
@@ -203,19 +203,14 @@ test("fix commands are suggested only when this build has them", async (t) => {
   const home = await cliHome(t);
   const notes = path.join(home.dir, "notes");
   await writeManifest(home, { profiles: { default: { label: "Default", layers: [{ name: "notes", source: "files", path: notes, level: 1 }] } } });
-  const withoutSource = await runContextcake(["doctor", "--json"], home, { env: { PATH: "" } });
+  // A build without the source family never suggests its commands.
+  const withoutSourceTable = buildTable(FAMILIES.filter((family) => family.name !== "source"));
+  const withoutSource = await runContextcake(["doctor", "--json"], home, { env: { PATH: "" }, table: withoutSourceTable });
   assert.equal(withoutSource.exitCode, 8);
   assert.ok(!withoutSource.json.nextActions.some((action) => action.command.startsWith("source.")));
 
-  // A build with a source family gets the concrete commands.
-  const source = defineFamily({
-    name: "source",
-    stability: "experimental",
-    summary: "stand-in",
-    commands: ["update", "remove", "test", "add"].map((name) => ({ name, summary: name, mutation: "read", run: () => ({ data: null }) })),
-  });
-  const table = buildTable([...FAMILIES, source]);
-  const withSource = await runContextcake(["doctor", "--json"], home, { env: { PATH: "" }, table });
+  // This build ships the source family, so doctor names its real commands.
+  const withSource = await runContextcake(["doctor", "--json"], home, { env: { PATH: "" } });
   assert.deepEqual(withSource.json.nextActions.map((action) => action.run), [
     "contextcake source update notes --path <folder>",
     "contextcake source remove notes",

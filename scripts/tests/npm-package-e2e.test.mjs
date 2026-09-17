@@ -2,8 +2,9 @@
 // tarball into a throwaway prefix with scripts ignored, and drive the installed
 // `contextcake` binary with no app and no repo checkout behind it.
 //
-// Runs in the ubuntu `engine` CI job (release group). Later Wave A families
-// extend the same flow: `source add`, then `list_concepts` over MCP.
+// Runs in the ubuntu `engine` CI job (release group). The flow is the one a
+// user without the app follows: init, `source add`, then `list_concepts` over
+// MCP.
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -99,13 +100,14 @@ test('the packed npm tarball installs and runs help, init, and MCP with no app p
     assert.equal(init.data.manifestPath, path.join(configDir, 'manifest.json'))
     assert.match(init.context.manifestRevision, /^sha256:[a-f0-9]{64}$/)
 
-    // The manifest init created is served as-is. Until the source family
-    // lands, a source is written directly so MCP has something to serve.
+    // A folder added through the CLI, the way a user without the app would.
     await mkdir(content)
     await writeFile(path.join(content, 'hello.md'), '# Hello\n\nFrom the packed CLI.\n')
-    const manifest = JSON.parse(await readFile(init.data.manifestPath, 'utf8'))
-    manifest.profiles.default.layers.push({ name: 'notes', source: 'files', path: content, level: 1 })
-    await writeFile(init.data.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    const added = JSON.parse(run(['source', 'add', 'notes', '--path', content, '--expect-revision', init.context.manifestRevision, '--json']))
+    assert.equal(added.ok, true)
+    assert.equal(added.data.hasDocuments, true)
+    const tested = JSON.parse(run(['source', 'test', '--json']))
+    assert.deepEqual(tested.coverage, { complete: true, degraded: [] })
 
     // The query family answers from the installed engine, search store included.
     const search = JSON.parse(run(['concept', 'search', 'packed', '--json']))
@@ -121,12 +123,16 @@ test('the packed npm tarball installs and runs help, init, and MCP with no app p
     const session = await mcpSession(bin, ['mcp'], env, [
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e', version: '0' } } },
       { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'list_concepts', arguments: {} } },
     ])
     assert.equal(session.code, 0, session.stderr)
-    const [initialize, tools] = session.responses
+    const [initialize, tools, concepts] = session.responses
     assert.equal(initialize.result.serverInfo.name, 'contextcake')
     const names = tools.result.tools.map((tool) => tool.name)
     for (const name of ['search', 'read_file', 'list_concepts', 'get_links']) assert.ok(names.includes(name), `missing ${name}`)
+    // The concept from the folder `source add` wrote is what MCP serves.
+    assert.ok(!concepts.result.isError, JSON.stringify(concepts))
+    assert.match(concepts.result.content.map((part) => part.text).join('\n'), /\bhello\b/)
 
     // The policy fixtures shipped: ingest reads context-policy.json on start.
     const ingestOut = path.join(dir, 'signals.json')

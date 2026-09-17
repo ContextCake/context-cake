@@ -26,7 +26,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { buildSourcesQuarantined, createErrorSource, resolveTokenState } from "./sources/index.mjs";
 import { MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
-import { createSourceOperations, normalizeRepo } from "./control/sources.mjs";
+import { createSourceOperations } from "./control/sources.mjs";
 import { createDiscrepancyOperations } from "./control/discrepancies.mjs";
 import { createContextResolutionOperations } from "./control/context-resolutions.mjs";
 import { blockedContextResolutionKeys as contextResolutionRuleBlocks, discrepancyRevision, fingerprint } from "./discrepancies.mjs";
@@ -504,8 +504,6 @@ export function createEngineService({
   const MANIFEST = path.resolve(manifestPath);
   const MANIFEST_DIR = path.dirname(MANIFEST);
   const CONSOLE_DIR = consoleDist ? path.resolve(consoleDist) : null;
-  // Git-backed sources clone next to the manifest that declares them.
-  const CACHE_DIR = path.join(MANIFEST_DIR, ".cache", "repos");
   // Persistent BPE token counts (token-count-cache.mjs): restarts re-read a
   // vault but never re-encode unchanged text. Shared with the CLI's second
   // engine by design — the file tolerates concurrent writers.
@@ -2883,57 +2881,17 @@ export function createEngineService({
     return result;
   }
 
+  // Parsing shim over control/sources.mjs syncSource: the service hands in
+  // its own adapters and says how its index learns that content moved.
   async function syncSourceApi(name) {
-    if (!name) throw httpError(400, "Provide ?name=");
+    if (!name) return sourceOps.syncSource(name);
     const { manifest, sources } = openSources();
-    const layer = (manifest.layers ?? []).find((l) => l.name === name);
-    if (!layer) throw httpError(404, `No source named "${name}"`);
-    if (layer.source === "github") {
-      const source = sources.find((candidate) => candidate.name === name);
-      if (!source || typeof source.sync !== "function") {
-        throw httpError(400, `"${name}" does not support Sync`);
-      }
-      const lastSynced = await source.sync();
-      // sync() invalidates both the outer cache and the adapter's internal
-      // index. Refresh now so a successful API response means the remote index
-      // has actually bypassed TTL rather than merely being marked dirty.
-      const concepts = (await source.listConceptIds()).length;
-      // Remote adapters swallow API failures on purpose — one unreachable repo
-      // must never fail a resolve — which makes an outage look exactly like an
-      // empty repo from out here: no throw, no concepts. Everywhere else that's
-      // the right trade; here it isn't, because the user asked about this one
-      // repo and is owed the answer. health() is the out-of-band channel for it,
-      // and sync() cleared it first, so what it reports belongs to this sync.
-      const health = typeof source.health === "function" ? source.health() : null;
-      const detail = {
-        synced: name,
-        concepts,
-        lastSynced: source.lastSynced ?? lastSynced ?? null, // when this attempt ran
-        lastSuccessAt: health?.lastSuccessAt ?? null, // when the index last actually loaded
-        lastError: health?.lastError ?? null,
-        lastErrorAt: health?.lastErrorAt ?? null,
-      };
-      if (health && !health.ok) {
-        throw httpError(502, `Sync failed: ${health.lastError}`, { ...detail, ok: false });
-      }
-      return { ok: true, ...detail };
-    }
-    if (layer.live === true) {
-      // The live team layer: withGitSync's sync() lands any queued (offline)
-      // commits — decisions committed while the remote was unreachable
-      // included — then force-refreshes the tree. The re-index that follows
-      // is what makes a teammate's pushed change visible.
-      const source = sources.find((candidate) => candidate.name === name);
-      if (!source || typeof source.sync !== "function") throw httpError(400, `"${name}" does not support Sync`);
-      const lastSynced = await source.sync();
-      invalidateIndex(name);
-      return { ok: true, synced: name, lastSynced };
-    }
-    if (!layer.origin) throw httpError(400, `"${name}" is not a git-backed source`);
-    const { url, slug } = normalizeRepo(layer.origin);
-    await sourceOps.gitCloneOrPull(url, path.join(CACHE_DIR, slug), layer.ref ?? null);
-    reload();
-    return { ok: true, synced: name };
+    return sourceOps.syncSource(name, {
+      layers: manifest.layers ?? [],
+      sources,
+      invalidate: (layerName) => invalidateIndex(layerName),
+      reload: () => reload(),
+    });
   }
 
   // Which stored credential, if any, may be offered to a given clone URL.

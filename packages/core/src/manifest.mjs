@@ -213,18 +213,32 @@ function readTolerantManifest(manifestPath, { allowMissing, validatePacks }) {
  * layers array (the one getManifestProfileLayers would return) and each
  * quarantined record's `index` addresses that array directly.
  */
-export function repairContextManifest(manifestPath, mutate, { allowLegacy = true, allowTransitional = false } = {}) {
+export function repairContextManifest(manifestPath, mutate, {
+  allowLegacy = true,
+  allowTransitional = false,
+  profileId = null,
+  precondition = null,
+  afterWrite = null,
+} = {}) {
   const resolved = path.resolve(manifestPath);
   return withManifestLock(resolved, () => {
     // allowMissing is deliberately not an option: there is nothing to repair in
     // a manifest that does not exist.
     const { raw, quarantined } = readTolerantManifest(resolved, { allowMissing: false, validatePacks: true });
+    // Checked against the file as written, invalid layers included: that is
+    // the document a caller's expected revision was computed from.
+    precondition?.(raw);
     const before = layerCountsByContainer(raw);
-    const result = mutate({ manifest: raw, layers: defaultLayersInPlace(raw), quarantined });
+    const layers = profileId === null ? defaultLayersInPlace(raw) : profileLayersInPlace(raw, profileId);
+    const result = mutate({ manifest: raw, layers, quarantined, quarantineKey: quarantineProfileKey(raw, profileId) });
     for (const [container, count] of layerCountsByContainer(raw)) {
       if (count > (before.get(container) ?? 0)) throw new Error("A manifest repair may only remove layers.");
     }
     writeContextManifest(resolved, raw, { allowLegacy, allowTransitional });
+    // Still under the lock, after the file is saved: a step that must see the
+    // manifest as written (freeing a clone no layer references any more) and
+    // must not race the next writer.
+    afterWrite?.(raw);
     return result;
   });
 }
@@ -241,6 +255,29 @@ function defaultLayersInPlace(manifest) {
   }
   manifest.layers ??= [];
   return manifest.layers;
+}
+
+// profileLayersInPlace for a named profile, with the same "exists or throw"
+// rule getManifestProfileLayers applies. "default" is the default container.
+function profileLayersInPlace(manifest, profileId) {
+  if (profileId === "default") return defaultLayersInPlace(manifest);
+  if (classifyManifest(manifest) === "legacy") throw new Error(`Unknown ContextCake profile: ${profileId}`);
+  if (!Object.hasOwn(manifest.profiles ?? {}, profileId)) throw new Error(`Unknown ContextCake profile: ${profileId}`);
+  assertObject(manifest.profiles[profileId], `Profile ${profileId}`);
+  manifest.profiles[profileId].layers ??= [];
+  return manifest.profiles[profileId].layers;
+}
+
+/**
+ * The `profileId` a quarantined record carries for a profile's layers array
+ * (see quarantineInvalidLayers): the id itself in v2 and for the default
+ * container, `profiles.<id>` for a named profile of a transitional manifest.
+ * Lets a profile-aware caller pick its own rows out of `quarantined`.
+ */
+export function quarantineProfileKey(manifest, profileId = null) {
+  const id = profileId ?? "default";
+  if (id === "default") return "default";
+  return classifyManifest(manifest) === "transitional" ? `profiles.${id}` : id;
 }
 
 function layerCountsByContainer(manifest) {
@@ -721,10 +758,10 @@ export function manifestLevel(layer) {
  * refuses to write a manifest where the two disagree (`pack-layer-drift`,
  * below). So every place a pack layer's level moves has to move the
  * assignment with it, or the strict write dies on the operation's own change.
- * Default profile only — that is the only profile the source operations
- * touch. Returns whether an assignment was updated.
+ * `profileId` names the profile whose assignment moves (default when
+ * omitted). Returns whether an assignment was updated.
  */
-export function syncPackAssignmentLevel(manifest, layer) {
+export function syncPackAssignmentLevel(manifest, layer, profileId = null) {
   if (typeof layer?.origin !== "string" || !layer.origin.startsWith("pack:")) return false;
   const match = /^pack:([^@]+)@/.exec(layer.origin);
   if (!match) return false;
@@ -732,8 +769,9 @@ export function syncPackAssignmentLevel(manifest, layer) {
   if (!record || typeof record !== "object" || !Array.isArray(record.assignments)) return false;
   // Legacy manifests key the default profile as `null`; v2 as "default" (with
   // a tolerated null spelling that validation warns about but accepts).
+  const wanted = profileId ?? "default";
   const assignment = record.assignments.find((entry) => (
-    entry && typeof entry === "object" && (entry.profile ?? "default") === "default" && entry.layerName === layer.name
+    entry && typeof entry === "object" && (entry.profile ?? "default") === wanted && entry.layerName === layer.name
   ));
   if (!assignment) return false;
   assignment.level = layer.level;

@@ -51,7 +51,7 @@ export default defineFamily({
           ctx.warn("MANIFEST_NOT_V2", `The existing ${mode} manifest was left unchanged; init never migrates.`, { mode });
           ctx.suggest("profile.create", "contextcake profile create <label>", "Creating a profile migrates the manifest to v2 with a verified backup.");
         }
-        ctx.suggest("source.add", "contextcake source add <path>", "Add a folder of Markdown as a source.");
+        ctx.suggest("source.add", "contextcake source add <name> --path <folder>", "Add a folder of Markdown as a source.");
         ctx.suggest("mcp", "contextcake mcp", "Serve the manifest to an MCP client.");
         const data = { manifestPath, created, mode };
         const text = created

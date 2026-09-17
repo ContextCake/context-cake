@@ -4,7 +4,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { manifestRevision, readContextManifest, selectManifestProfile } from "../manifest.mjs";
+import { manifestRevision, readContextManifest, readContextManifestQuarantined, selectManifestProfile } from "../manifest.mjs";
 import { resolvePaths } from "../platform-paths.mjs";
 import { ControlError, manifestControlError } from "../control/errors.mjs";
 import { createRedactor, manifestSecretValues } from "../control/redact.mjs";
@@ -36,6 +36,7 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
   const warnings = [];
   const nextActions = [];
   let manifest = null;
+  let quarantined = [];
   let criticalDepth = 0;
   // Aborted by the dispatcher on --timeout or an interrupt. The reason is the
   // ControlError (TIMEOUT or INTERRUPTED) the command should answer with.
@@ -96,7 +97,11 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
     // Reads and validates the manifest once; missing and invalid manifests
     // become typed errors with the init hint. Adds every tokenEnv value the
     // manifest names to the redaction list before anything can print.
-    readManifest({ validatePacks = false } = {}) {
+    // `tolerant: true` is the service's read path (readContextManifestQuarantined):
+    // a malformed layer is lifted out into ctx.quarantined instead of failing
+    // the command, so a listing can show it and a removal can repair it. The
+    // first call decides; selectProfile() reuses whichever read happened.
+    readManifest({ validatePacks = false, tolerant = false } = {}) {
       if (manifest) return manifest;
       if (!manifestPath) throw new Error(`${command.id} declared manifest: "none" but read the manifest.`);
       if (!fs.existsSync(manifestPath)) {
@@ -106,13 +111,26 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
         });
       }
       try {
-        manifest = readContextManifest(manifestPath, { allowMissing: false, validatePacks });
+        if (tolerant) {
+          ({ manifest, quarantined } = readContextManifestQuarantined(manifestPath, { allowMissing: false, validatePacks }));
+        } else {
+          manifest = readContextManifest(manifestPath, { allowMissing: false, validatePacks });
+        }
       } catch (error) {
         throw manifestControlError(error);
       }
       ctx.addSecrets(manifestSecretValues(manifest, env));
-      context.manifestRevision = manifestRevisionOf(manifest);
+      // A quarantined read hands back a manifest without the bad layers; the
+      // revision a caller expects is the file's. A write between the two reads
+      // can only make a later --expect-revision refuse, never pass wrongly.
+      context.manifestRevision = quarantined.length
+        ? manifestRevisionOf(JSON.parse(fs.readFileSync(manifestPath, "utf8")))
+        : manifestRevisionOf(manifest);
       return manifest;
+    },
+
+    get quarantined() {
+      return quarantined;
     },
 
     // Profile selection precedence (spec §5.3): --profile, then the project

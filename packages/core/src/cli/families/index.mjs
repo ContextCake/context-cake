@@ -9,10 +9,14 @@ import { ingest, mcp, pack, promote, resolve, write } from "./engine.mjs";
 import file from "./file.mjs";
 import init from "./init.mjs";
 import profile from "./profile.mjs";
+import settings from "./settings.mjs";
+import source from "./source.mjs";
 
 export const FAMILIES = [
   init,
   profile,
+  source,
+  settings,
   concept,
   file,
   doctor,

@@ -31,8 +31,19 @@ For public-facing copy, also read `specs/contextcake-site/voice.md`.
 - Colors/fonts ONLY via `var(--cc-*)` tokens from `src/styles/tokens.css`. The layer
   colors are product semantics (personal amber / team teal / company indigo).
 - Install story is **signed Mac app first**. Keep the checksum-pinned `app-v*`
-  source snapshot as an audit, Linux/WSL, and contribution fallback.
-  Never add an `npm install` step for the engine.
+  source snapshot as an audit and contribution route. The engine stays
+  dependency-free: never add an `npm install` step to the source route.
+- **The npm CLI route renders from `src/data/npm-release.json`, never by hand.**
+  `scripts/sync-npm-release.mjs` runs after the app sync in `site-deploy.yml` and the
+  release's public-surfaces job, and sets `published: true` only when the public
+  registry has the app record's version. A 404 or network failure writes
+  `published: false` and the build goes on. `site-deploy.yml` also runs when the
+  "Publish ContextCake npm package" workflow succeeds, so the route appears without an
+  edit. Commit only the `{"published": false}` default (a test checks it); to preview
+  the published state, write a local record for the app version and build, then
+  restore it. Commands live once in `src/data/npm-cli.mjs` for the pages and
+  `scripts/verify-install-page.mjs`. In MDX, switch copy with `<NpmGate when=...>`,
+  and keep headings out of its slot: the page outline lists them even when hidden.
 - **Downloads render from the release record's platform rows.** `src/data/app-release.json`
   has one row per row of `scripts/release-platforms.mjs`, marked `available` when the
   published release attached that installer. Pages, the footer, and the installation doc

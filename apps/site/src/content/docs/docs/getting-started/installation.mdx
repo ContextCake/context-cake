@@ -4,6 +4,8 @@ description: Install the Mac app or the Linux .deb for guided setup, or use the 
 ---
 
 import AppDownloadTable from '../../../../components/AppDownloadTable.astro';
+import NpmCliDocs from '../../../../components/NpmCliDocs.astro';
+import NpmGate from '../../../../components/NpmGate.astro';
 
 The fastest way to try ContextCake on macOS is the signed, notarized app. ContextCake also runs directly from **versioned source**. The recommended source route is a
 verified source archive; shallow Git and GitHub CLI checkouts are available when
@@ -67,7 +69,18 @@ later the package installs an AppArmor profile that allows it.
   GNOME Keyring or KWallet. Without one, the app keeps tokens in memory until it
   quits, and **Settings → Connections** says so.
 
+<NpmGate when="unpublished">
+
 Other distributions and architectures can use the source route below.
+
+</NpmGate>
+<NpmGate when="published">
+
+Other distributions and architectures can use the CLI below.
+
+</NpmGate>
+
+<NpmCliDocs />
 
 ## Prerequisites for the source route
 
@@ -176,15 +189,35 @@ hijacked maintainer accounts and `postinstall` payloads. A knowledge engine your
 agents read from should have a supply chain you can audit: a source archive is
 small, inspectable, and runnable as plain Node.js.
 
+<NpmGate when="published">
+
+The npm package keeps to the same rules. It is the tarball attached to the
+signed GitHub release, published from GitHub Actions through npm trusted
+publishing with provenance. It has no dependencies and no install scripts. Use
+it when you want the CLI without the app. Use the source archive when you want
+to read every file before you run anything.
+
+</NpmGate>
+
 The signed macOS app is the recommended guided route. When the current release
 includes the verified Claude Desktop `.mcpb` bundle, the [Install page](/install)
 shows its checksum-pinned download and manifest setup. A Homebrew cask will
 appear only after the first-party tap has been published and tested.
 
+<NpmGate when="unpublished">
+
 The npm/npx channel is intentionally held behind npm trusted publishing (OIDC),
 provenance, two-factor authentication, a script-free package, and an audited
 file allowlist. It will be documented only after that gate passes. Windows users
 can use the terminal route in WSL today.
+
+</NpmGate>
+<NpmGate when="published">
+
+Windows users can run the npm CLI or the source route in WSL. Native Windows
+works on a best-effort basis.
+
+</NpmGate>
 
 ## Next
 

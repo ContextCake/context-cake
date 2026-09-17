@@ -288,6 +288,25 @@ test('renderer uses the candidate package version while the site uses a publishe
   assert.match(siteDeploy, /Sync published app release[\s\S]*?node scripts\/sync-app-release\.mjs/)
 })
 
+test('the site offers the npm CLI only once npm has the release, and redeploys when it does', () => {
+  // Both production site builds sync the npm record after the app record.
+  assert.match(appRelease, /sync-app-release\.mjs --tag "\$GITHUB_REF_NAME"[\s\S]*?- name: Sync published npm release\n\s*working-directory: apps\/site\n\s*run: node scripts\/sync-npm-release\.mjs[\s\S]*?- name: Build release site/)
+  const siteJobs = parseWorkflowJobs(siteDeploy)
+  const names = siteJobs.validate.steps.map((step) => step.name)
+  assert.ok(names.indexOf('Sync published app release') < names.indexOf('Sync published npm release'))
+  assert.ok(names.indexOf('Sync published npm release') < names.indexOf('Build'))
+  // The npm sync needs no token: the registry read is public.
+  assert.doesNotMatch(siteJobs.validate.steps.find((step) => step.name === 'Sync published npm release').text, /TOKEN/)
+
+  // A successful npm publish redeploys the site; a failed one does not.
+  assert.match(npmPublish, /^name: Publish ContextCake npm package$/m)
+  assert.match(siteDeploy, /workflow_run:\n\s*workflows:\n\s*- Publish ContextCake npm package\n\s*types:\n\s*- completed/)
+  assert.equal(siteJobs.validate.if, "github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'")
+  assert.deepEqual(siteJobs.deploy.needs, ['validate'])
+  // Permissions stay what a deploy already needed.
+  assert.match(siteDeploy, /\npermissions:\n  contents: read\n  deployments: write\n\n/)
+})
+
 test('main-branch Web Demo deploys remain previews, not production releases', () => {
   assert.match(webDemoPreview, /^name: Web Demo Preview Deploy/m)
   assert.match(webDemoPreview, /preview-\$\{safe_branch\}/)

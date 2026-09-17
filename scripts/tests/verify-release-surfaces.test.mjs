@@ -85,6 +85,38 @@ test('rejects a deployed site that is missing a platform row', async () => {
   )
 })
 
+function siteWithInstall(page) {
+  const routes = downloadRoutes()
+  return async (url) => {
+    if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
+    if (url.pathname === '/install/') return response(page)
+    if (routes.has(url.pathname)) return redirect(routes.get(url.pathname))
+    if (url.pathname === '/demo/') return response('<iframe src="https://contextcake-console.pages.dev/"></iframe>')
+    throw new Error(`unexpected URL ${url}`)
+  }
+}
+
+test('the npm route follows the npm record the site was built from', async () => {
+  const published = { published: true, version: '1.2.3', tarballIntegrity: 'sha512-x' }
+  const withNpm = `${installHtml} <section id="cli-install"><button data-code="npm install -g contextcake@1.2.3">`
+  await verifyReleaseSurfaces({ ...release, npmRelease: published, fetchImpl: siteWithInstall(withNpm) })
+  await verifyReleaseSurfaces({ ...release, fetchImpl: siteWithInstall(installHtml) })
+
+  await assert.rejects(
+    verifyReleaseSurfaces({ ...release, npmRelease: published, fetchImpl: siteWithInstall(installHtml) }),
+    /does not offer npm install -g contextcake@1\.2\.3/,
+  )
+  await assert.rejects(
+    verifyReleaseSurfaces({ ...release, fetchImpl: siteWithInstall(withNpm) }),
+    /offers the npm CLI but npm has no contextcake@1\.2\.3/,
+  )
+  // A record for an older version is no route for this release.
+  await assert.rejects(
+    verifyReleaseSurfaces({ ...release, npmRelease: { ...published, version: '1.2.2' }, fetchImpl: siteWithInstall(withNpm) }),
+    /offers the npm CLI/,
+  )
+})
+
 test('rejects a deployed Web Demo from another commit', async () => {
   await assert.rejects(
     verifyReleaseSurfaces({

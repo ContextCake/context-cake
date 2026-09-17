@@ -676,6 +676,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/sync-app-release.mjs --tag "$GITHUB_REF_NAME"
 
+      # npm publishes by hand after this release, so this usually records no
+      # npm route; site-deploy.yml redeploys once the npm publish succeeds.
+      - name: Sync published npm release
+        working-directory: apps/site
+        run: node scripts/sync-npm-release.mjs
+
       - name: Build release site
         working-directory: apps/site
         run: npm run build

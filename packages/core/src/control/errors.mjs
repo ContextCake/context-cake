@@ -97,6 +97,8 @@ export const CODE_CATEGORIES = Object.freeze({
   SOURCE_EXISTS: "conflict",
   NAME_EXISTS: "conflict",
   CLONE_DIR_OCCUPIED: "conflict",
+  CLONE_MISSING: "conflict",
+  API_BASE_UNCONFIRMED: "permission",
   REORDER_BLOCKED: "conflict",
   REMOVE_BLOCKED: "conflict",
   MCP_TRUST_REQUIRED: "permission",

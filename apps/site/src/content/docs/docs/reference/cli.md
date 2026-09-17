@@ -132,7 +132,7 @@ contextcake source test [<name>...]
 contextcake source sync <name>
 contextcake source prune [--confirm]
 contextcake source pending-list
-contextcake source pending-configure <name> [--path <folder>] [--command <executable> --trusted] [--token-env <NAME>]
+contextcake source pending-configure <name> [--path <folder>] [--command <executable> --trusted] [--token-env <NAME> [--api-base <url>]]
 contextcake source pending-dismiss <name>...
 ```
 
@@ -143,8 +143,11 @@ as you, so `add` needs `--trusted` and always warns. `reorder` takes every
 source in the profile, first wins, and refuses while an invalid entry exists.
 `remove` refuses to save while other invalid entries remain; name them all.
 `remove` keeps a managed clone; `prune --confirm` deletes clones no source uses,
-and never one with uncommitted changes or commits no remote has. `test` reads
-each source once and exits 6 if any could not be read.
+and never one with changed, untracked, or ignored files, a stash, an unfinished
+merge, or commits no remote has. `test` reads each source once and exits 6 if
+any could not be read. `pending-configure` shows where a GitHub source reads
+from; to give it a token when that is not `api.github.com`, restate the address
+with `--api-base`.
 
 ## settings
 

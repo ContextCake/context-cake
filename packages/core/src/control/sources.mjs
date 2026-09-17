@@ -19,12 +19,14 @@ import { probeDocs } from "../sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "../sources/files.mjs";
 import { createMcpSource } from "../sources/mcp.mjs";
 import { buildSources } from "../sources/index.mjs";
+import { DEFAULT_API_BASE as DEFAULT_GITHUB_API_BASE } from "../sources/github.mjs";
 import {
   classifyManifest,
   getManifestProfileLayers,
   manifestLevel,
   manifestRevision,
   mutateContextManifest,
+  stableJson,
   quarantineProfileKey,
   readContextManifest,
   readContextManifestQuarantined,
@@ -194,6 +196,32 @@ function withRevision(result, revision) {
   return result;
 }
 
+function normalizedApiBase(value) {
+  return String(value).trim().replace(/\/+$/, "").toLowerCase();
+}
+
+// A credential goes wherever `apiBase` points, and settings sync carries
+// `apiBase` across machines unscrubbed. So a GitHub source that will hold a
+// credential and names a non-default host is only activated when the caller
+// restates that host (`apiBase`), proving they saw it. A restated host that
+// differs from the entry is refused too: configuring never changes where a
+// source reads from.
+function refuseUnconfirmedApiBase(name, layer, restated) {
+  if ((layer.source ?? "okf-local") !== "github") return;
+  if (restated !== undefined && normalizedApiBase(restated) !== normalizedApiBase(layer.apiBase ?? DEFAULT_GITHUB_API_BASE)) {
+    throw new ControlError("API_BASE_UNCONFIRMED", `"${name}" reads from ${layer.apiBase ?? DEFAULT_GITHUB_API_BASE}, not ${restated}.`, { status: 403, detail: { apiBase: layer.apiBase ?? DEFAULT_GITHUB_API_BASE } });
+  }
+  if (layer.auth == null || typeof layer.apiBase !== "string") return;
+  if (normalizedApiBase(layer.apiBase) === normalizedApiBase(DEFAULT_GITHUB_API_BASE)) return;
+  if (restated === undefined) {
+    throw new ControlError(
+      "API_BASE_UNCONFIRMED",
+      `"${name}" would send its token to ${layer.apiBase}, not GitHub. Pass that exact address as the API base to confirm it.`,
+      { status: 403, detail: { apiBase: layer.apiBase } },
+    );
+  }
+}
+
 function isTokenEnvAuth(auth) {
   return Boolean(auth) && typeof auth === "object" && !Array.isArray(auth)
     && Object.keys(auth).length === 1 && typeof auth.tokenEnv === "string"
@@ -209,6 +237,34 @@ function isScrubMarker(value) {
 // PROFILE_NOT_FOUND). Never rewrap them as "the manifest is invalid".
 function isLockOrProfileError(err) {
   return /^Unknown ContextCake profile|^Timed out acquiring the ContextCake manifest lock/.test(String(err?.message ?? ""));
+}
+
+// Git with the user's and the system's configuration switched off and every
+// GIT_* override (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE) dropped, for
+// read-only questions about a managed clone. A global setting such as
+// status.showUntrackedFiles=no must not be able to hide a user's files from
+// a check that decides whether to delete them.
+function isolatedGitEnv() {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!/^GIT_/i.test(key)) env[key] = value;
+  }
+  return { ...env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
+}
+
+// Two repository URLs can map to one slug (`a__b` from `a/b` and `a__b`), so
+// a clone found at the slug's directory is reused only when its recorded
+// origin is the URL asked for.
+async function refuseForeignClone(dir, url) {
+  let origin = null;
+  try {
+    origin = (await execFileP("git", ["-C", dir, "config", "--get", "remote.origin.url"], { timeout: 10_000, env: isolatedGitEnv() })).stdout.trim();
+  } catch {
+    origin = null;
+  }
+  if (origin !== url) {
+    throw new ControlError("CLONE_DIR_OCCUPIED", `${dir} holds a clone of ${origin ?? "an unknown repository"}, not ${url}. Move it aside and try again.`, { status: 409, detail: { dir, origin, expected: url } });
+  }
 }
 
 function cloneDirOccupied(dir) {
@@ -265,7 +321,11 @@ export async function probeFolder(abs, extensions) {
 // The env override exists for the network-free test suite only; the manifest
 // layer this operation writes never carries an apiBase.
 async function probeGithubRest(slug, token = null) {
-  const base = process.env.CONTEXTCAKE_GITHUB_PROBE_BASE || "https://api.github.com";
+  const override = process.env.CONTEXTCAKE_GITHUB_PROBE_BASE;
+  const base = override || "https://api.github.com";
+  // An environment variable alone must never redirect a real token: the
+  // override is for network-free tests, which opt in to sending one.
+  if (override && process.env.CONTEXTCAKE_GITHUB_PROBE_SEND_TOKEN !== "1") token = null;
   let res;
   try {
     res = await fetch(`${base}/repos/${slug}`, {
@@ -362,6 +422,10 @@ export function createSourceOperations({
   // manifest is revalidated under the lock (§5.12). Same filesystem, so the
   // move is a rename.
   const STAGING_DIR = path.join(CACHE_DIR, ".staging");
+  // Clones on their way to deletion. A prune or remove renames a clone here
+  // under the lock and deletes it after; nothing in here is ever deleted
+  // without that check, so a crash can leave data here but never lose it.
+  const TRASH_DIR = path.join(CACHE_DIR, ".trash");
 
   // `signal` (optional) is checked once, before the locked write: a probe or
   // clone that outlived a caller's timeout or interrupt never lands.
@@ -397,8 +461,10 @@ export function createSourceOperations({
     let layer;
     let folder = null;
     let tokenEnvSet = null;
-    // A fresh clone waiting in STAGING_DIR for the locked promote below.
+    // A fresh clone waiting in STAGING_DIR for the locked promote below, or
+    // the existing clone this add reads, re-checked under the same lock.
     let promote = null;
+    let reused = null;
     if (b.kind === "local" || b.kind === "files") {
       if (!b.path) throw new ControlError("PATH_REQUIRED", "Local source needs a path", { status: 400 });
       const given = expandHome(String(b.path).trim());
@@ -471,9 +537,12 @@ export function createSourceOperations({
       }
       const ref = b.ref ? String(b.ref) : null;
       if (fs.existsSync(path.join(dir, ".git"))) {
-        // Another layer already reads this clone: refresh it in place.
+        // Another layer already reads this clone: refresh it in place. Two
+        // URLs can share a slug, so the clone must be of this repository.
+        await refuseForeignClone(dir, url);
         await gitCloneOrPull(url, dir, ref, signal);
         folder = await probeFolder(abs, [".md"]);
+        reused = dir;
       } else {
         if (fs.existsSync(dir)) throw cloneDirOccupied(dir);
         const staged = path.join(STAGING_DIR, `${slug}-${randomUUID().slice(0, 8)}`);
@@ -522,6 +591,10 @@ export function createSourceOperations({
           if (fs.existsSync(path.join(promote.dir, ".git"))) fs.rmSync(promote.staged, { recursive: true, force: true });
           else if (fs.existsSync(promote.dir)) throw cloneDirOccupied(promote.dir);
           else fs.renameSync(promote.staged, promote.dir);
+        }
+        // A prune or a remove can free the shared clone after the pull above.
+        if (reused && !fs.existsSync(path.join(reused, ".git"))) {
+          throw new ControlError("CLONE_MISSING", `The clone at ${reused} was removed while this source was being added. Try again.`, { status: 409, retryable: true, detail: { dir: reused } });
         }
         written = writtenRevision(manifest);
         return order;
@@ -657,7 +730,8 @@ export function createSourceOperations({
     const wanted = [...new Set(names.filter((name) => typeof name === "string" && name))];
     if (wanted.length === 0) throw new ControlError("NAME_REQUIRED", "Provide ?name=", { status: 400 });
     const removed = [];
-    let survivors = [];
+    const retained = [];
+    const trash = [];
     let blocking = [];
     let written = null;
     try {
@@ -696,9 +770,20 @@ export function createSourceOperations({
         // What the write is about to reject on, if it rejects: every invalid
         // entry the caller did NOT ask to remove.
         blocking = broken.filter((entry) => !doomed.has(entry.index));
-        survivors = allManifestLayers(manifest); // every profile — a shared clone must survive
         written = writtenRevision(manifest);
-      }, { allowTransitional: true, profileId, precondition: revisionPrecondition(expectRevision) });
+      }, {
+        allowTransitional: true,
+        profileId,
+        precondition: revisionPrecondition(expectRevision),
+        // Every profile's references count: a shared clone must survive.
+        afterWrite: (manifest) => {
+          for (const layer of removed) {
+            const outcome = releaseCloneDir(layer, manifest);
+            if (outcome?.retained && !retained.includes(outcome.retained)) retained.push(outcome.retained);
+            if (outcome?.trash) trash.push(outcome.trash);
+          }
+        },
+      });
     } catch (err) {
       if (err.status) throw err;
       if (isLockOrProfileError(err)) throw err;
@@ -713,20 +798,10 @@ export function createSourceOperations({
       // defect.
       throw new ControlError("MANIFEST_UNREPAIRABLE", `Nothing was removed: the manifest is invalid in a way this app cannot repair. Edit ${MANIFEST} by hand — ${err.message}`, { status: 409 });
     }
-    const retained = [];
-    for (const layer of removed) {
-      const dir = cleanupCloneDir(layer, survivors);
-      if (dir && !retained.includes(dir)) retained.push(dir);
+    for (const dir of trash) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* left in the trash folder */ }
     }
     return withRevision({ ok: true, removed: wanted[0], removedNames: wanted, ...(retained.length ? { retainedClones: retained } : {}) }, written);
-  }
-
-  // Every layer the manifest still declares, across the legacy array and every
-  // profile — the audience whose paths can keep a clone directory alive.
-  function allManifestLayers(manifest) {
-    const out = [...(manifest.layers ?? [])];
-    for (const profile of Object.values(manifest.profiles ?? {})) out.push(...(profile.layers ?? []));
-    return out;
   }
 
   // A wizard-cloned repo lives in app-managed disk under .cache/repos, so
@@ -736,20 +811,29 @@ export function createSourceOperations({
   // touched. Best effort: an undeletable orphan dir is not worth failing the
   // remove that already happened.
   //
-  // Under retainClones nothing is deleted: the orphan's path comes back so the
-  // caller can say it was kept and point at pruneClones.
-  function cleanupCloneDir(layer, survivors) {
+  // Runs under the manifest lock, after the write, against the manifest as
+  // written: no other writer can reference the clone between this check and
+  // the move. Under retainClones nothing moves; the orphan's path comes back
+  // so the caller can say it was kept and point at pruneClones. Otherwise the
+  // clone is renamed into TRASH_DIR here (fast) and deleted by the caller once
+  // the lock is released.
+  function releaseCloneDir(layer, written) {
     const dir = cloneDirOf(layer);
-    if (!dir) return null;
-    const inUse = survivors.some((candidate) => {
-      if (typeof candidate?.path !== "string") return false;
-      const resolved = path.resolve(MANIFEST_DIR, candidate.path);
-      return resolved === dir || resolved.startsWith(dir + path.sep);
-    });
-    if (inUse) return null;
-    if (retainClones) return fs.existsSync(dir) ? dir : null;
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* orphan dir stays; the manifest entry is already gone */ }
-    return null;
+    if (!dir || !fs.existsSync(dir)) return null;
+    if (isReferenced(dir, collectReferences(written))) return null;
+    if (retainClones) return { retained: dir };
+    try {
+      return { trash: moveAside(dir, TRASH_DIR) };
+    } catch {
+      return null; // orphan dir stays; the manifest entry is already gone
+    }
+  }
+
+  function moveAside(dir, parent) {
+    fs.mkdirSync(parent, { recursive: true });
+    const target = path.join(parent, `${path.basename(dir)}-${randomUUID().slice(0, 8)}`);
+    fs.renameSync(dir, target);
+    return target;
   }
 
   // The clone directory a layer's origin maps to — null unless the layer is a
@@ -854,6 +938,7 @@ export function createSourceOperations({
     let lastError = null;
     for (let i = 0; i < attempts.length; i += 1) {
       const secret = attempts[i];
+      const created = !pulling && !fs.existsSync(dir);
       const config = [];
       const env = { ...process.env };
       for (const key of Object.keys(env)) {
@@ -884,7 +969,7 @@ export function createSourceOperations({
         // Stopped by the caller: its reason, not a git failure. A partial
         // clone is removed below, as for any failed clone.
         if (signal?.aborted) {
-          if (!pulling) {
+          if (created) {
             try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
           }
           throw signal.reason;
@@ -894,8 +979,9 @@ export function createSourceOperations({
         // A failed or timed-out clone may leave a partial app-managed
         // directory. Remove it even after the final attempt so a later user
         // retry does not fail with "destination path already exists" instead
-        // of retrying the remote.
-        if (!pulling) {
+        // of retrying the remote. Only a directory this call created: a folder
+        // that was already there is never removed, whatever it holds.
+        if (created) {
           try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* the git failure remains the useful error */ }
         }
         if (!retryingAnotherAccount) break;
@@ -975,7 +1061,13 @@ export function createSourceOperations({
     }
     if (!layer.origin) throw new ControlError("SYNC_UNSUPPORTED", `"${name}" is not a git-backed source`, { status: 400 });
     const { url, slug } = normalizeRepo(layer.origin);
-    await gitCloneOrPull(url, path.join(CACHE_DIR, slug), layer.ref ?? null, signal);
+    const dir = path.join(CACHE_DIR, slug);
+    // Pull a clone, or clone into an empty slot. A directory there that is not
+    // a clone of this repository belongs to someone else: refuse, never
+    // overwrite or delete it.
+    if (fs.existsSync(path.join(dir, ".git"))) await refuseForeignClone(dir, url);
+    else if (fs.existsSync(dir)) throw cloneDirOccupied(dir);
+    await gitCloneOrPull(url, dir, layer.ref ?? null, signal);
     reload();
     return { ok: true, synced: name };
   }
@@ -1007,9 +1099,13 @@ export function createSourceOperations({
   function pendingRecord(entry) {
     const kind = typeof entry?.source === "string" ? entry.source : "okf-local";
     const record = { name: entry.name, kind, level: manifestLevel(entry), missing: missingFields(entry) };
-    for (const key of ["repo", "ref", "origin"]) {
+    // apiBase is where a credential would be sent. It is never hidden, because
+    // settings sync does not scrub it and configuring a token is the moment
+    // it matters.
+    for (const key of ["repo", "ref", "origin", "apiBase"]) {
       if (typeof entry[key] === "string") record[key] = entry[key];
     }
+    if (entry.auth !== undefined && !isScrubMarker(entry.auth)) record.auth = structuredClone(entry.auth);
     return record;
   }
 
@@ -1084,6 +1180,7 @@ export function createSourceOperations({
     if (missing.length) {
       throw new ControlError("PENDING_INCOMPLETE", `"${name}" still needs: ${missing.map((entry) => entry.field).join(", ")}`, { status: 400, detail: { missing } });
     }
+    refuseUnconfirmedApiBase(name, layer, supplied.apiBase);
     // Validate the result as the strict write will, before anything is probed.
     const candidate = structuredClone(current);
     getManifestProfileLayers(candidate, profileId).push(structuredClone(layer));
@@ -1115,8 +1212,11 @@ export function createSourceOperations({
       mutateContextManifest(MANIFEST, (manifest) => {
         const layers = getManifestProfileLayers(manifest, profileId);
         const container = profileContainer(manifest, profileId);
-        if (!(container.pendingSources ?? []).some((pending) => pending?.name === name)) {
-          throw new ControlError("PENDING_NOT_FOUND", `No pending source named "${name}"`, { status: 404 });
+        const now = (container.pendingSources ?? []).find((pending) => pending?.name === name);
+        if (!now) throw new ControlError("PENDING_NOT_FOUND", `No pending source named "${name}"`, { status: 404 });
+        // What was checked above (the apiBase above all) is what gets written.
+        if (stableJson(now) !== stableJson(entry)) {
+          throw new ControlError("STALE", `Pending source "${name}" changed while it was being configured. Look at it again and retry.`, { status: 409, retryable: true });
         }
         if (layers.some((existing) => existing.name === name)) throw new ControlError("SOURCE_EXISTS", `A source named "${name}" already exists`, { status: 409 });
         layers.push(layer);
@@ -1151,36 +1251,68 @@ export function createSourceOperations({
       if (err.code === "ENOENT") return [];
       throw new ControlError("MANIFEST_INVALID", `Nothing was pruned: the manifest could not be read, so no clone can be proven unused — ${err.message}`, { status: 422 });
     }
+    return collectReferences(raw);
+  }
+
+  function collectReferences(manifest) {
     const out = [];
     const visit = (node) => {
       if (!node || typeof node !== "object") return;
       if (Array.isArray(node)) { for (const child of node) visit(child); return; }
-      if (typeof node.path === "string") out.push(path.resolve(MANIFEST_DIR, expandHome(node.path)));
+      if (typeof node.path === "string") out.push(...pathForms(path.resolve(MANIFEST_DIR, expandHome(node.path))));
       if (typeof node.origin === "string") {
-        try { out.push(path.join(CACHE_DIR, normalizeRepo(node.origin).slug)); } catch { /* not a git origin */ }
+        try { out.push(...pathForms(path.join(CACHE_DIR, normalizeRepo(node.origin).slug))); } catch { /* not a git origin */ }
       }
       for (const child of Object.values(node)) visit(child);
     };
-    visit(raw);
+    visit(manifest);
     return out;
   }
 
-  function isReferenced(dir, paths) {
-    return paths.some((candidate) => candidate === dir || candidate.startsWith(dir + path.sep) || dir.startsWith(candidate + path.sep));
+  // A path as written and, when it exists, as the filesystem resolves it, so
+  // a symlinked manifest folder or layer path still matches its clone.
+  function pathForms(p) {
+    try {
+      const real = fs.realpathSync.native(p);
+      return real === p ? [p] : [p, real];
+    } catch {
+      return [p];
+    }
   }
 
+  // A clone is referenced when any source reads it or a folder inside it.
+  function isReferenced(dir, paths) {
+    const forms = pathForms(dir);
+    return paths.some((candidate) => forms.some((form) => candidate === form || candidate.startsWith(form + path.sep)));
+  }
+
+  // State git keeps outside the work tree while an operation is unfinished.
+  const IN_PROGRESS_MARKERS = ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply", "sequencer"];
+
   // "clean", or why a clone must be kept. Anything git cannot answer counts
-  // as a reason to keep it.
+  // as a reason to keep it. Git runs with the user's configuration switched
+  // off (isolatedGitEnv) and every hiding knob forced open: untracked files
+  // in full, ignored files (by .gitignore or info/exclude) listed, index
+  // flags that hide edits checked, and commits counted from the reflog too.
   async function cloneState(dir) {
-    if (!fs.existsSync(path.join(dir, ".git"))) return "unreadable";
-    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
-    const git = (args) => execFileP("git", ["-C", dir, ...args], { timeout: 30_000, env });
+    const gitDir = path.join(dir, ".git");
     try {
-      if ((await git(["status", "--porcelain"])).stdout.trim()) return "dirty";
+      if (!fs.statSync(gitDir).isDirectory()) return "unreadable";
+    } catch {
+      return "unreadable";
+    }
+    if (IN_PROGRESS_MARKERS.some((marker) => fs.existsSync(path.join(gitDir, marker)))) return "in-progress";
+    const env = isolatedGitEnv();
+    const git = (args) => execFileP("git", ["-c", "status.showUntrackedFiles=all", "-c", "core.untrackedCache=false", "-C", dir, ...args], { timeout: 30_000, env, maxBuffer: 4 * 1024 * 1024 });
+    try {
+      if ((await git(["status", "--porcelain=v1", "--untracked-files=all", "--ignored=traditional"])).stdout.trim()) return "dirty";
+      // assume-unchanged (a lowercase tag) and skip-worktree (S) hide edits
+      // from status.
+      if ((await git(["ls-files", "-v"])).stdout.split("\n").some((line) => /^[a-zS] /.test(line))) return "dirty";
       if ((await git(["stash", "list"])).stdout.trim()) return "dirty";
-      // Commits reachable from HEAD or a local branch that no remote-tracking
-      // ref or tag has: work that exists only here.
-      const ahead = await git(["rev-list", "--count", "HEAD", "--branches", "--not", "--remotes", "--tags"]);
+      // Commits reachable from any ref or reflog entry that no remote-tracking
+      // ref or tag has: work that exists only here, even after a reset.
+      const ahead = await git(["rev-list", "--count", "--all", "--reflog", "--not", "--remotes", "--tags"]);
       if (Number(ahead.stdout.trim()) > 0) return "unpushed";
       return "clean";
     } catch {
@@ -1220,28 +1352,49 @@ export function createSourceOperations({
   /**
    * Delete managed clones no source needs (§5.12). Without `confirm` it only
    * reports. A referenced clone is never removed, and neither is one with
-   * uncommitted changes, a stash, commits no remote has, or a state git
-   * cannot report. Both checks run again under the manifest lock right
-   * before each delete.
+   * local changes (see cloneState) or a state git cannot report.
+   *
+   * The lock is held only for the cheap part: re-reading references and
+   * renaming each doomed clone into TRASH_DIR, out of the path an add would
+   * use. The git checks run again on the moved clone after the lock is
+   * released, and only a clone that is still clean is deleted. One that
+   * changed goes back where it was, or stays in the trash folder, reported,
+   * if its old place was taken meanwhile.
    */
   async function pruneClones({ confirm = false } = {}) {
     const survey = await surveyClones();
     if (!confirm) return { cacheDir: CACHE_DIR, ...survey, removed: [], confirmed: false };
-    return withManifestLockAsync(MANIFEST, async () => {
+    const kept = [...survey.kept];
+    const aside = [];
+    await withManifestLockAsync(MANIFEST, async () => {
       const paths = referencedPaths();
-      const kept = [...survey.kept];
-      const removed = [];
       for (const candidate of survey.removable) {
-        if (!candidate.staging) {
-          if (isReferenced(candidate.dir, paths)) { kept.push({ dir: candidate.dir, reason: "referenced" }); continue; }
-          const state = await cloneState(candidate.dir);
-          if (state !== "clean") { kept.push({ dir: candidate.dir, reason: state }); continue; }
+        if (!candidate.staging && isReferenced(candidate.dir, paths)) {
+          kept.push({ dir: candidate.dir, reason: "referenced" });
+          continue;
         }
-        fs.rmSync(candidate.dir, { recursive: true, force: true });
-        removed.push(candidate);
+        try {
+          aside.push({ ...candidate, moved: moveAside(candidate.dir, TRASH_DIR) });
+        } catch {
+          kept.push({ dir: candidate.dir, reason: "unreadable" });
+        }
       }
-      return { cacheDir: CACHE_DIR, removable: [], kept, removed, confirmed: true };
     });
+    const removed = [];
+    for (const entry of aside) {
+      const state = entry.staging ? "clean" : await cloneState(entry.moved);
+      if (state === "clean") {
+        fs.rmSync(entry.moved, { recursive: true, force: true });
+        removed.push(entry.staging ? { dir: entry.dir, staging: true } : { dir: entry.dir });
+        continue;
+      }
+      let restored = false;
+      if (!fs.existsSync(entry.dir)) {
+        try { fs.renameSync(entry.moved, entry.dir); restored = true; } catch { /* stays in the trash folder */ }
+      }
+      kept.push({ dir: entry.dir, reason: state, ...(restored ? {} : { movedTo: entry.moved }) });
+    }
+    return { cacheDir: CACHE_DIR, removable: [], kept, removed, confirmed: true };
   }
 
   return {
@@ -1264,9 +1417,17 @@ export function createSourceOperations({
 function missingFields(entry) {
   const kind = typeof entry?.source === "string" ? entry.source : "okf-local";
   const missing = [];
-  for (const [field, value] of Object.entries(entry ?? {})) {
-    if (isScrubMarker(value)) missing.push({ field, reason: value.__scrubbed });
-  }
+  // Scrub markers can sit at any depth (`cache.dir`, `git.remote`), and a
+  // nested one leaves the source just as unable to run as a top-level one.
+  const visit = (node, prefix) => {
+    if (!node || typeof node !== "object") return;
+    for (const [key, value] of Object.entries(node)) {
+      const field = prefix ? `${prefix}.${key}` : key;
+      if (isScrubMarker(value)) missing.push({ field, reason: value.__scrubbed });
+      else if (value && typeof value === "object") visit(value, field);
+    }
+  };
+  visit(entry, "");
   const required = kind === "mcp" ? "command" : kind === "github" ? "repo" : (kind === "okf-local" || kind === "files") ? "path" : null;
   if (required && entry?.[required] === undefined) missing.push({ field: required, reason: "absent" });
   return missing;
@@ -1344,9 +1505,10 @@ export async function testSources(entries, { timeoutMs = 30_000, signal = null }
     // Aborts on this source's deadline or on the caller's signal (a CLI
     // --timeout or interrupt), whichever comes first.
     const controller = new AbortController();
+    const forward = () => controller.abort(signal.reason);
     if (signal) {
       if (signal.aborted) controller.abort(signal.reason);
-      else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+      else signal.addEventListener("abort", forward, { once: true });
     }
     const notes = { skipped: [], unreadable: [] };
     try {
@@ -1369,6 +1531,8 @@ export async function testSources(entries, { timeoutMs = 30_000, signal = null }
       };
     } catch (error) {
       return { ...base, ok: false, concepts: 0, durationMs: Date.now() - started, error: error.message };
+    } finally {
+      signal?.removeEventListener("abort", forward);
     }
   }));
   const degraded = results.filter((result) => !result.ok).map((result) => ({ source: result.name, reason: result.error ?? "unreadable" }));

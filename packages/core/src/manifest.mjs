@@ -218,6 +218,7 @@ export function repairContextManifest(manifestPath, mutate, {
   allowTransitional = false,
   profileId = null,
   precondition = null,
+  afterWrite = null,
 } = {}) {
   const resolved = path.resolve(manifestPath);
   return withManifestLock(resolved, () => {
@@ -234,6 +235,10 @@ export function repairContextManifest(manifestPath, mutate, {
       if (count > (before.get(container) ?? 0)) throw new Error("A manifest repair may only remove layers.");
     }
     writeContextManifest(resolved, raw, { allowLegacy, allowTransitional });
+    // Still under the lock, after the file is saved: a step that must see the
+    // manifest as written (freeing a clone no layer references any more) and
+    // must not race the next writer.
+    afterWrite?.(raw);
     return result;
   });
 }

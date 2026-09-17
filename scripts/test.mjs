@@ -81,6 +81,7 @@ const SUITES = [
 
   // Write path, sync, and the servers. These bind ports and shell out to git.
   { group: "integration", name: "profile-runtime", ...sh("profile-runtime-test.sh") },
+  { group: "integration", name: "source-clones", ...node("source-clones.test.mjs") },
   { group: "integration", name: "context-resolution-service", ...node("context-resolution-service.test.mjs") },
   { group: "integration", name: "pack", ...sh("pack-test.sh") },
   { group: "integration", name: "git-sync", ...sh("git-sync-test.sh") },

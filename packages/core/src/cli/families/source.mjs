@@ -59,6 +59,8 @@ const PENDING_RECORD = {
     kind: { type: "string" },
     level: { type: ["integer", "null"] },
     missing: { type: "array", items: { type: "object", required: ["field", "reason"] } },
+    apiBase: { type: "string", description: "Where a GitHub source, and any token it holds, is sent." },
+    auth: { description: "A credential reference, never a secret." },
   },
 };
 
@@ -66,7 +68,7 @@ const ADD_ERRORS = [
   "NAME_INVALID", "SOURCE_EXISTS", "LEVEL_INVALID", "POSITION_INVALID", "LEVEL_AND_POSITION",
   "PATH_REQUIRED", "FOLDER_NOT_FOUND", "NOT_A_FOLDER", "KIND_UNKNOWN",
   "REPO_INVALID", "PATHS_INVALID", "REPO_NOT_PUBLIC", "REPO_NOT_FOUND", "REST_AUTH_REJECTED",
-  "SUBDIR_ESCAPES", "GIT_FAILED", "CLONE_DIR_OCCUPIED",
+  "SUBDIR_ESCAPES", "GIT_FAILED", "CLONE_DIR_OCCUPIED", "CLONE_MISSING",
   "MCP_COMMAND_REQUIRED", "MCP_TRUST_REQUIRED", "MCP_CONTRACT", "MCP_UNREACHABLE",
 ];
 
@@ -458,7 +460,7 @@ export default defineFamily({
       manifest: "required",
       profile: true,
       positionals: [{ name: "name", required: true, description: "Source name." }],
-      errors: ["SOURCE_NOT_FOUND", "SYNC_UNSUPPORTED", "SYNC_FAILED", "GIT_FAILED", "REPO_INVALID"],
+      errors: ["SOURCE_NOT_FOUND", "SYNC_UNSUPPORTED", "SYNC_FAILED", "GIT_FAILED", "REPO_INVALID", "CLONE_DIR_OCCUPIED"],
       output: {
         type: "object",
         required: ["ok", "synced"],
@@ -496,7 +498,7 @@ export default defineFamily({
         properties: {
           cacheDir: { type: "string" },
           removable: { type: "array", items: { type: "object", required: ["dir"] } },
-          kept: { type: "array", items: { type: "object", required: ["dir", "reason"], properties: { reason: { enum: ["referenced", "dirty", "unpushed", "unreadable"] } } } },
+          kept: { type: "array", items: { type: "object", required: ["dir", "reason"], properties: { reason: { enum: ["referenced", "dirty", "unpushed", "in-progress", "unreadable"] }, movedTo: { type: "string" } } } },
           removed: { type: "array", items: { type: "object", required: ["dir"] } },
           confirmed: { type: "boolean" },
         },
@@ -550,10 +552,11 @@ export default defineFamily({
         command: { type: "string", description: "MCP command on this machine. Replaces the whole invocation." },
         trusted: { type: "boolean", description: "Confirm the MCP command came from a trusted source." },
         "token-env": { type: "string", description: "Environment variable holding a GitHub token." },
+        "api-base": { type: "string", description: "Restate the API address a GitHub source with a token reads from. Required when it is not api.github.com." },
         level: { type: "integer", description: "Raw cascade level. Defaults to the pending entry's, else 1." },
       },
       errors: [
-        "PENDING_NOT_FOUND", "PENDING_INCOMPLETE", "PENDING_INVALID", "SOURCE_EXISTS", "LEVEL_INVALID", "PATH_REQUIRED",
+        "PENDING_NOT_FOUND", "PENDING_INCOMPLETE", "PENDING_INVALID", "API_BASE_UNCONFIRMED", "STALE", "SOURCE_EXISTS", "LEVEL_INVALID", "PATH_REQUIRED",
         "FOLDER_NOT_FOUND", "NOT_A_FOLDER", "REST_AUTH_REJECTED", "REPO_NOT_PUBLIC", "REPO_NOT_FOUND",
         "MCP_TRUST_REQUIRED", "MCP_CONTRACT", "MCP_UNREACHABLE",
       ],
@@ -576,6 +579,7 @@ export default defineFamily({
         const auth = tokenEnvAuth(ctx);
         if (auth) supplied.auth = auth;
         if (flags.level !== undefined) supplied.level = flags.level;
+        if (flags.apiBase !== undefined) supplied.apiBase = flags.apiBase;
         if (supplied.command !== undefined) warnExecutable(ctx, supplied.command, supplied.args ?? []);
         const data = await written(ctx, () => operations(ctx).configurePendingSource(ctx.args.name, supplied, { profileId: selection.profileId, expectRevision: flags.expectRevision, signal: ctx.signal }));
         warnFolder(ctx, data);

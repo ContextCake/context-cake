@@ -1,0 +1,15 @@
+---
+// Renders its content only in one npm state: `published` once npm has the app
+// release's version (src/data/npm-release.json), `unpublished` before that.
+// Lets a docs page switch copy without a hand edit when npm publishes.
+// Keep headings out of the slot: Starlight lists them in the page outline even
+// when the slot does not render.
+import { npmCli } from '../data/npm-release';
+
+interface Props {
+	when: 'published' | 'unpublished';
+}
+const { when } = Astro.props;
+const show = when === 'published' ? npmCli !== null : npmCli === null;
+---
+{show && <slot />}

@@ -3,7 +3,10 @@
 //
 // Config-only: nothing here opens a source adapter. Every mutation runs inside
 // the manifest lock, and takes an optional `expectRevision` checked against
-// the manifest read under that lock (design §5).
+// the manifest read under that lock (design §5). A mutation's result carries
+// the revision it wrote under MANIFEST_REVISION (a symbol, so it never shows
+// up in JSON output); read operations accept the `manifest` an adapter already
+// read, so an envelope never describes a different file than the answer.
 //
 // The original six operations keep the messages profile-runtime-test.sh and
 // scripted users already match on; only the error class changed, from Error
@@ -26,6 +29,9 @@ import {
 } from "../manifest.mjs";
 import { listStaleSidecarDirs, retireSidecarDir, sidecarDir } from "../sidecar-state.mjs";
 import { ControlError, manifestControlError } from "./errors.mjs";
+
+// The sha256 hex of the manifest a mutation wrote, attached to its result.
+export const MANIFEST_REVISION = Symbol("contextcake.manifestRevision");
 
 // The scrub marker settings sync already uses for a machine-local command:
 // validation accepts it, and a source carrying it can never run.
@@ -54,6 +60,11 @@ export function revisionPrecondition(expectRevision) {
   };
 }
 
+function withRevision(result, revision) {
+  Object.defineProperty(result, MANIFEST_REVISION, { value: revision, enumerable: false });
+  return result;
+}
+
 function guard(operation) {
   try {
     return operation();
@@ -64,6 +75,18 @@ function guard(operation) {
 
 function readManifest(manifestPath) {
   return guard(() => readContextManifest(manifestPath, { allowMissing: false, validatePacks: false }));
+}
+
+// Runs mutate under the lock and returns [result, revision of what was written].
+function mutate(manifestPath, fn, expectRevision) {
+  let revision = null;
+  const result = guard(() => mutateContextManifest(manifestPath, (manifest) => {
+    const value = fn(manifest);
+    // mutateContextManifest writes this same object right after we return.
+    revision = manifestRevision(manifest);
+    return value;
+  }, { allowMissing: false, precondition: revisionPrecondition(expectRevision) }));
+  return [result, revision];
 }
 
 function label(value) {
@@ -103,9 +126,9 @@ function canonicalProjectPath(value) {
   return fs.realpathSync.native(absolute);
 }
 
-export function currentProfile({ manifestPath, profile = null, cwd = process.cwd() }) {
-  const manifest = readManifest(manifestPath);
-  const selected = guard(() => selectManifestProfile(manifest, { requestedProfile: profile ?? null, cwd }));
+export function currentProfile({ manifestPath, manifest = null, profile = null, cwd = process.cwd() }) {
+  const source = manifest ?? readManifest(manifestPath);
+  const selected = guard(() => selectManifestProfile(source, { requestedProfile: profile ?? null, cwd }));
   return {
     id: selected.profileId,
     label: selected.profileLabel,
@@ -117,34 +140,35 @@ export function currentProfile({ manifestPath, profile = null, cwd = process.cwd
   };
 }
 
-export function listProfiles({ manifestPath }) {
-  const manifest = readManifest(manifestPath);
-  return guard(() => listManifestProfiles(manifest));
+export function listProfiles({ manifestPath, manifest = null }) {
+  const source = manifest ?? readManifest(manifestPath);
+  return guard(() => listManifestProfiles(source));
 }
 
 export function createProfile({ manifestPath, label: requested, project = null, expectRevision = null }) {
   const profileLabel = label(requested);
-  const precondition = revisionPrecondition(expectRevision);
-  const before = guard(() => readContextManifest(manifestPath, { allowMissing: false }));
-  const id = createProfileId(profileLabel, Object.keys(before.profiles ?? {}));
+  const projectPath = project ? path.resolve(project) : null;
+  if (projectPath) canonicalProjectPath(projectPath);
+  // The id is allocated inside migrateManifestToV2's lock, never from a read
+  // taken before it.
   const result = guard(() => migrateManifestToV2(manifestPath, {
-    newProfile: { id, label: profileLabel, layers: [] },
-    projectPath: project ? path.resolve(project) : null,
-    precondition,
+    newProfile: { label: profileLabel, layers: [] },
+    projectPath,
+    precondition: revisionPrecondition(expectRevision),
   }));
-  return {
-    created: id,
+  return withRevision({
+    created: result.profileId,
     label: profileLabel,
     action: result.action,
-    ...(project ? { project: fs.realpathSync.native(path.resolve(project)) } : {}),
+    ...(projectPath ? { project: fs.realpathSync.native(projectPath) } : {}),
     ...(result.backupPath ? { backupPath: result.backupPath, backupHash: result.backupHash } : {}),
-  };
+  }, result.revision);
 }
 
 export function mapProject({ manifestPath, profileId, projectPath, expectRevision = null }) {
   if (!profileId || !projectPath) throw usage("Usage: profile map <id> <path> --manifest <file>");
   const canonical = canonicalProjectPath(projectPath);
-  guard(() => mutateContextManifest(manifestPath, (manifest) => {
+  const [, revision] = mutate(manifestPath, (manifest) => {
     requireV2(manifest, "Project mappings");
     requireProfile(manifest, profileId);
     manifest.projects ??= {};
@@ -158,8 +182,8 @@ export function mapProject({ manifestPath, profileId, projectPath, expectRevisio
       delete manifest.projects[configuredRoot];
     }
     manifest.projects[canonical] = profileId;
-  }, { allowMissing: false, precondition: revisionPrecondition(expectRevision) }));
-  return { mapped: canonical, profileId };
+  }, expectRevision);
+  return withRevision({ mapped: canonical, profileId }, revision);
 }
 
 export function unmapProject({ manifestPath, projectPath, expectRevision = null }) {
@@ -168,7 +192,7 @@ export function unmapProject({ manifestPath, projectPath, expectRevision = null 
   let canonical = null;
   try { canonical = fs.realpathSync.native(absolute); } catch { /* stale mapping can still be removed by exact path */ }
   let removed = null;
-  guard(() => mutateContextManifest(manifestPath, (manifest) => {
+  const [, revision] = mutate(manifestPath, (manifest) => {
     requireV2(manifest, "Project mappings");
     for (const configuredRoot of Object.keys(manifest.projects ?? {})) {
       let matches = path.normalize(configuredRoot) === path.normalize(absolute);
@@ -181,8 +205,8 @@ export function unmapProject({ manifestPath, projectPath, expectRevision = null 
       break;
     }
     if (!removed) throw new ControlError("MAPPING_NOT_FOUND", `No project mapping for: ${absolute}`, { status: 404 });
-  }, { allowMissing: false, precondition: revisionPrecondition(expectRevision) }));
-  return { unmapped: removed };
+  }, expectRevision);
+  return withRevision({ unmapped: removed }, revision);
 }
 
 function deletionPreview(manifest, profileId) {
@@ -195,9 +219,12 @@ function deletionPreview(manifest, profileId) {
 }
 
 // Without `confirm` this only previews; the adapter decides how a preview
-// exits. With it, the manifest references go and the profile's sidecar state
-// is retired (renamed, never deleted) in the same lock, rolled back if the
-// manifest write fails.
+// exits. With it, the manifest is written first and the profile's sidecar
+// state is retired (renamed, never deleted) afterwards, still under the lock.
+// That order means a crash or a failed rename can only ever leave state behind
+// for a profile that is gone, which purge-state finds; it can never leave a
+// live profile with its state moved away. A failed retire is reported as
+// `stateNotRetired`, not thrown: the deletion itself succeeded.
 export function deleteProfile({ manifestPath, profileId, confirm = false, expectRevision = null, now = new Date() }) {
   if (!profileId) throw usage("Usage: profile delete <id> --manifest <file> [--confirm]");
   if (profileId === "default") throw new ControlError("PROFILE_PROTECTED", "The default profile cannot be deleted.", { status: 409 });
@@ -207,7 +234,7 @@ export function deleteProfile({ manifestPath, profileId, confirm = false, expect
   const preview = deletionPreview(manifest, profileId);
   if (!confirm) return { ...preview, deleted: false, confirmationRequired: true };
   const precondition = revisionPrecondition(expectRevision);
-  const retiredState = guard(() => withManifestLock(path.resolve(manifestPath), () => {
+  const outcome = guard(() => withManifestLock(path.resolve(manifestPath), () => {
     const candidate = readContextManifest(manifestPath, { allowMissing: false });
     precondition?.(candidate);
     requireV2(candidate, "Profile deletion");
@@ -219,28 +246,32 @@ export function deleteProfile({ manifestPath, profileId, confirm = false, expect
     for (const record of Object.values(candidate.packs ?? {})) {
       record.assignments = (record.assignments ?? []).filter((assignment) => assignment.profile !== profileId);
     }
-    const retired = retireSidecarDir(manifestPath, profileId, { now });
+    writeContextManifest(manifestPath, candidate);
+    const revision = manifestRevision(candidate);
     try {
-      writeContextManifest(manifestPath, candidate);
+      return { revision, retiredState: retireSidecarDir(manifestPath, profileId, { now }) };
     } catch (error) {
-      if (retired) fs.renameSync(retired, sidecarDir(manifestPath, profileId));
-      throw error;
+      return { revision, stateNotRetired: `${error.code ?? "ERROR"}: ${error.message}` };
     }
-    return retired;
   }));
-  return { ...preview, deleted: true, ...(retiredState ? { retiredState } : {}) };
+  return withRevision({
+    ...preview,
+    deleted: true,
+    ...(outcome.retiredState ? { retiredState: outcome.retiredState } : {}),
+    ...(outcome.stateNotRetired ? { stateNotRetired: outcome.stateNotRetired } : {}),
+  }, outcome.revision);
 }
 
-export function showProfile({ manifestPath, profile = null, cwd = process.cwd() }) {
-  const manifest = readManifest(manifestPath);
-  const selected = guard(() => selectManifestProfile(manifest, { requestedProfile: profile ?? null, cwd }));
+export function showProfile({ manifestPath, manifest = null, profile = null, cwd = process.cwd() }) {
+  const source = manifest ?? readManifest(manifestPath);
+  const selected = guard(() => selectManifestProfile(source, { requestedProfile: profile ?? null, cwd }));
   const mode = selected.mode;
-  const record = mode === "v2" ? manifest.profiles[selected.profileId] : null;
-  const pending = mode === "v2" ? (record.pendingSources ?? []) : (manifest.pendingSources ?? []);
+  const record = mode === "v2" ? source.profiles[selected.profileId] : null;
+  const pending = mode === "v2" ? (record.pendingSources ?? []) : (source.pendingSources ?? []);
   const projects = mode === "v2"
-    ? Object.keys(manifest.projects ?? {}).filter((root) => manifest.projects[root] === selected.profileId).sort()
+    ? Object.keys(source.projects ?? {}).filter((root) => source.projects[root] === selected.profileId).sort()
     : [];
-  const packs = Object.entries(manifest.packs ?? {})
+  const packs = Object.entries(source.packs ?? {})
     .flatMap(([packId, entry]) => (entry.assignments ?? [])
       .filter((assignment) => (assignment.profile ?? "default") === selected.profileId)
       .map((assignment) => ({ packId, layerName: assignment.layerName, version: assignment.activeVersion, level: Number(assignment.level) })));
@@ -257,7 +288,7 @@ export function showProfile({ manifestPath, profile = null, cwd = process.cwd() 
       level: Number(layer.level),
       ...(layer.live === true ? { live: true } : {}),
     })),
-    pendingSources: pending.map((source) => ({ name: source.name, kind: typeof source.source === "string" ? source.source : "okf-local" })),
+    pendingSources: pending.map((entry) => ({ name: entry.name, kind: typeof entry.source === "string" ? entry.source : "okf-local" })),
     projects,
     packs,
     state: { dir: stateDir, exists: fs.existsSync(stateDir) },
@@ -269,14 +300,14 @@ export function renameProfile({ manifestPath, profileId, label: requested, expec
   if (!profileId) throw usage("Usage: profile rename <id> <label>");
   const next = label(requested);
   let previous = null;
-  guard(() => mutateContextManifest(manifestPath, (manifest) => {
+  const [, revision] = mutate(manifestPath, (manifest) => {
     requireV2(manifest, "Profile rename");
     requireProfile(manifest, profileId);
     const profile = manifest.profiles[profileId];
     previous = profile.label ?? (profileId === "default" ? "Default" : profileId);
     profile.label = next;
-  }, { allowMissing: false, precondition: revisionPrecondition(expectRevision) }));
-  return { id: profileId, label: next, previousLabel: previous };
+  }, expectRevision);
+  return withRevision({ id: profileId, label: next, previousLabel: previous }, revision);
 }
 
 // A clone copies configuration: runnable sources, pending sources, and Pack
@@ -291,7 +322,7 @@ export function cloneProfile({ manifestPath, profileId, label: requested, expect
   let created = null;
   let copied = 0;
   const pendingExecutables = [];
-  guard(() => mutateContextManifest(manifestPath, (manifest) => {
+  const [, revision] = mutate(manifestPath, (manifest) => {
     requireV2(manifest, "Profile clone");
     requireProfile(manifest, profileId);
     const source = manifest.profiles[profileId];
@@ -320,28 +351,30 @@ export function cloneProfile({ manifestPath, profileId, label: requested, expect
       if (!assignment || !layers.some((layer) => layer.name === assignment.layerName)) continue;
       record.assignments.push({ ...structuredClone(assignment), profile: created });
     }
-  }, { allowMissing: false, precondition: revisionPrecondition(expectRevision) }));
-  return { created, label: cloneLabel, from: profileId, sourceCount: copied, pendingExecutables };
+  }, expectRevision);
+  return withRevision({ created, label: cloneLabel, from: profileId, sourceCount: copied, pendingExecutables }, revision);
 }
 
-// The destructive step after `delete`: removes state no profile owns. Refuses
-// while the profile exists, so live decisions can only go through delete first.
+// The destructive step after `delete`: removes state no profile owns. The
+// ownership check and the deletion share the manifest lock, so a profile
+// re-created with the same id cannot lose its new state in between.
 export function purgeProfileState({ manifestPath, profileId, confirm = false }) {
   if (!profileId) throw usage("Usage: profile purge-state <id> --confirm");
-  const manifest = readManifest(manifestPath);
-  let dirs;
   try {
-    dirs = listStaleSidecarDirs(manifestPath, profileId);
-  } catch (error) {
-    if (/Invalid profile id/.test(error.message)) throw usage(`Invalid ContextCake profile id: ${profileId}`);
-    throw error;
+    sidecarDir(manifestPath, profileId);
+  } catch {
+    throw usage(`Invalid ContextCake profile id: ${profileId}`);
   }
-  if (profileId === "default" || Object.hasOwn(manifest.profiles ?? {}, profileId)) {
-    throw new ControlError("PROFILE_ACTIVE", `Profile ${profileId} still exists. Delete it first; purge-state only removes state no profile owns.`, { status: 409 });
-  }
-  if (!confirm) return { profileId, dirs, purged: false, confirmationRequired: dirs.length > 0 };
-  for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
-  return { profileId, dirs, purged: true };
+  return guard(() => withManifestLock(path.resolve(manifestPath), () => {
+    const manifest = readContextManifest(manifestPath, { allowMissing: false, validatePacks: false });
+    if (profileId === "default" || Object.hasOwn(manifest.profiles ?? {}, profileId)) {
+      throw new ControlError("PROFILE_ACTIVE", `Profile ${profileId} still exists. Delete it first; purge-state only removes state no profile owns.`, { status: 409 });
+    }
+    const dirs = listStaleSidecarDirs(manifestPath, profileId);
+    if (!confirm) return { profileId, dirs, purged: false, confirmationRequired: dirs.length > 0 };
+    for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
+    return { profileId, dirs, purged: true };
+  }));
 }
 
 // Human text for the adapters. Kept beside the operations so the dispatcher
@@ -357,5 +390,7 @@ export const PROFILE_TEXT = {
   map: (result) => `Mapped ${result.mapped} -> ${result.profileId}`,
   unmap: (result) => `Removed mapping ${result.unmapped}`,
   deletePreview: (preview) => `Delete ${preview.profileId}? ${preview.mappings.length} project mapping(s), ${preview.packAssignments.length} Pack assignment(s), and the profile reference will be removed.\nUnderlying source, Pack, overlay, cache, and live-repository files will remain.\nRe-run with --confirm.`,
-  deleted: (result) => `Deleted profile ${result.profileId}. Underlying files were not removed.${result.retiredState ? `\nProfile state retired to ${result.retiredState}` : ""}`,
+  deleted: (result) => `Deleted profile ${result.profileId}. Underlying files were not removed.`
+    + `${result.retiredState ? `\nProfile state retired to ${result.retiredState}` : ""}`
+    + `${result.stateNotRetired ? `\nProfile state was not retired (${result.stateNotRetired}); 'profile purge-state ${result.profileId}' can still remove it.` : ""}`,
 };

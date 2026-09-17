@@ -244,9 +244,9 @@ test("mcp accepts only its serving flags and never writes an error to stdout", a
 
 test("spawned commands get the default manifest injected and the wrapSpawn hook", async (t) => {
   const home = await cliHome(t);
-  const missing = await runContextcake(["resolve", "--concept", "x", "--json"], home);
+  const missing = await runContextcake(["resolve", "--concept", "x"], home);
   assert.equal(missing.exitCode, 3);
-  assert.equal(missing.json.error.code, "MANIFEST_NOT_FOUND");
+  assert.match(missing.stderr, /No manifest at .*contextcake init/);
 
   await writeManifest(home, { profiles: { default: { label: "Default", layers: [] } } });
   const calls = [];
@@ -339,40 +339,6 @@ test("nextActions never name a command this build does not have", async (t) => {
   assert.deepEqual(result.json.nextActions.map((action) => action.command), ["hint.me"]);
 });
 
-test("an interrupt exits 130, but waits for a critical section to finish", async (t) => {
-  const home = await cliHome(t);
-  let finished = false;
-  let interrupt;
-  const family = defineFamily({
-    name: "long",
-    stability: "experimental",
-    summary: "long",
-    commands: [
-      { name: "wait", summary: "wait", mutation: "read", run: () => new Promise(() => {}) },
-      {
-        name: "journal",
-        summary: "journal",
-        mutation: "write",
-        async run(ctx) {
-          await ctx.critical(async () => {
-            interrupt();
-            await new Promise((resolve) => setTimeout(resolve, 50));
-            finished = true;
-          });
-          return new Promise(() => {});
-        },
-      },
-    ],
-  });
-  const table = testTable(family);
-  const waiting = await runContextcake(["long", "wait", "--json"], home, { table, interrupt: new Promise((resolve) => setTimeout(resolve, 10)) });
-  assert.equal(waiting.exitCode, 130);
-  assert.equal(waiting.json.error.code, "INTERRUPTED");
-
-  const critical = await runContextcake(["long", "journal", "--json"], home, { table, interrupt: new Promise((resolve) => { interrupt = resolve; }) });
-  assert.equal(critical.exitCode, 130);
-  assert.equal(finished, true, "the interrupt landed only after the critical section settled");
-});
 
 test("redaction covers credential values, provider token shapes, and Authorization headers", () => {
   const { redact, redactString } = createRedactor(["plain-looking-secret-value"]);
@@ -430,6 +396,8 @@ test("hostile secret-shaped errors never reach stdout or stderr", async (t) => {
       summary: "hostile",
       mutation: "read",
       manifest: "required",
+      errors: ["UPSTREAM_FAILED"],
+      errorCategories: { UPSTREAM_FAILED: "unavailable" },
       run(ctx) {
         ctx.readManifest();
         ctx.log(`log line with ${envSecret} and ${logToken}`);
@@ -464,4 +432,148 @@ test("human output prints the text and warnings go to stderr unless --quiet", as
   assert.match(loud.stderr, /warning: .*never migrates/);
   const quiet = await runContextcake(["init", "--quiet"], home);
   assert.equal(quiet.stderr, "");
+});
+
+test("an interrupt ends a read with 130 and aborts ctx.signal; a write runs to completion", async (t) => {
+  const home = await cliHome(t);
+  let readAborted = false;
+  let writeSawAbort = false;
+  let writeFinished = false;
+  let interruptWrite;
+  const family = defineFamily({
+    name: "long",
+    stability: "experimental",
+    summary: "long",
+    commands: [
+      {
+        name: "wait",
+        summary: "wait",
+        mutation: "read",
+        run: (ctx) => new Promise(() => { ctx.signal.addEventListener("abort", () => { readAborted = true; }); }),
+      },
+      {
+        name: "journal",
+        summary: "journal",
+        mutation: "write",
+        // No ctx.critical here on purpose: a family that forgets it must still
+        // never report INTERRUPTED over a mutation that goes on to land.
+        async run(ctx) {
+          interruptWrite();
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          writeSawAbort = ctx.signal.aborted;
+          writeFinished = true;
+          return { data: { written: true } };
+        },
+      },
+    ],
+  });
+  const table = testTable(family);
+  const waiting = await runContextcake(["long", "wait", "--json"], home, { table, interrupt: new Promise((resolve) => setTimeout(resolve, 10)) });
+  assert.equal(waiting.exitCode, 130);
+  assert.equal(waiting.json.error.code, "INTERRUPTED");
+  assert.equal(readAborted, true, "ctx.signal aborts so the read can stop its work");
+
+  const write = await runContextcake(["long", "journal", "--json"], home, { table, interrupt: new Promise((resolve) => { interruptWrite = resolve; }) });
+  assert.equal(writeFinished, true);
+  assert.equal(writeSawAbort, true, "the write could see the interrupt through ctx.signal");
+  assert.equal(write.exitCode, 0, "the answer reports what happened: the write landed");
+  assert.deepEqual(write.json.data, { written: true });
+});
+
+test("spawned entrypoints never receive global flags they do not implement", async (t) => {
+  const home = await cliHome(t);
+  await writeManifest(home, { profiles: { default: { label: "Default", layers: [] } } });
+  const cases = [
+    [["write", "--signals", "s.json", "--json", "--dry-run"], "INVALID_INPUT"],
+    [["write", "--signals", "s.json", "--quiet"], "INVALID_INPUT"],
+    [["write", "--signals", "s.json", "--timeout", "5s"], "TIMEOUT_REFUSED"],
+    [["promote", "--timeout=5s"], "TIMEOUT_REFUSED"],
+    [["pack", "list", "--no-input"], "INVALID_INPUT"],
+    [["ingest", "--expect-revision", "sha256:x"], "INVALID_INPUT"],
+    [["resolve", "--concept", "a", "--json"], "INVALID_INPUT"],
+    [["resolve", "--concept", "a", "--timeout", "1s"], "INVALID_INPUT"],
+  ];
+  for (const [argv, code] of cases) {
+    let spawned = false;
+    const result = await runContextcake([...argv], home, { wrapSpawn: () => { spawned = true; return { args: ["-e", ""], env: {} }; } });
+    assert.equal(result.exitCode, 2, argv.join(" "));
+    assert.equal(spawned, false, `${argv.join(" ")} must not start the entrypoint`);
+    if (result.json) assert.equal(result.json.error.code, code);
+    else assert.match(result.stderr, code === "TIMEOUT_REFUSED" ? /timeout/ : /does not accept/);
+  }
+  // doctor implements --json itself, so it passes through.
+  const doctor = TABLE.byId.get("doctor");
+  assert.deepEqual(prepareSpawnArgs(doctor, ["--json"], { manifestPath: home.manifestPath }), ["--manifest", home.manifestPath, "--json"]);
+  // Position does not matter: the older parsers would swallow the next
+  // argument either way. After `--` nothing is a flag.
+  const write = TABLE.byId.get("write");
+  assert.throws(() => prepareSpawnArgs(write, ["--signals", "--json"], { manifestPath: home.manifestPath }), /does not accept --json/);
+  assert.deepEqual(prepareSpawnArgs(write, ["--", "--json"], { manifestPath: home.manifestPath }).slice(2), ["--", "--json"]);
+});
+
+test("redaction keeps Dates, URLs, Buffers, Errors, and shared references intact", () => {
+  const { redact } = createRedactor([]);
+  const shared = { name: "notes" };
+  const when = new Date("2026-09-16T00:00:00Z");
+  const out = redact({
+    when,
+    url: new URL("https://example.com/a?b=c"),
+    bytes: Buffer.from("hi"),
+    failure: Object.assign(new Error("boom"), { code: "EBOOM" }),
+    sources: [shared],
+    degraded: [shared],
+  });
+  assert.equal(out.when, when.toJSON());
+  assert.equal(out.url, "https://example.com/a?b=c");
+  assert.deepEqual(out.bytes, { type: "Buffer", data: [104, 105] });
+  assert.equal(out.failure.message, "boom");
+  assert.equal(out.failure.code, "EBOOM");
+  assert.deepEqual(out.sources, [{ name: "notes" }]);
+  assert.deepEqual(out.degraded, [{ name: "notes" }]);
+  const loop = { a: 1 };
+  loop.self = loop;
+  assert.equal(redact(loop).self, "[circular]");
+});
+
+test("a mutation reports the revision it wrote, not whatever is on disk afterwards", async (t) => {
+  const home = await cliHome(t);
+  await writeManifest(home, { profiles: { default: { label: "Default", layers: [] } } });
+  const written = `sha256:${"a".repeat(64)}`;
+  const family = defineFamily({
+    name: "race",
+    stability: "experimental",
+    summary: "race",
+    commands: [{
+      name: "write",
+      summary: "race",
+      mutation: "write",
+      manifest: "required",
+      async run(ctx) {
+        ctx.readManifest();
+        ctx.noteManifestWrite(written.slice("sha256:".length));
+        // Another writer lands after our lock was released.
+        await fs.writeFile(home.manifestPath, JSON.stringify({ profiles: { default: { label: "Other", layers: [] } } }));
+        return { data: null };
+      },
+    }],
+  });
+  const result = await runContextcake(["race", "write", "--json"], home, { table: testTable(family) });
+  assert.equal(result.json.context.manifestRevision, written);
+});
+
+test("a command that must see every source exits 6 on partial coverage without --require-complete", async (t) => {
+  const home = await cliHome(t);
+  const coverage = { complete: false, degraded: [{ source: "remote", reason: "timeout" }] };
+  const family = defineFamily({
+    name: "probe",
+    stability: "experimental",
+    summary: "probe",
+    commands: [{ name: "test", summary: "probe", mutation: "read", coverage: true, requireComplete: true, run: () => ({ data: [], coverage }) }],
+  });
+  const result = await runContextcake(["probe", "test", "--json"], home, { table: testTable(family) });
+  assert.equal(result.exitCode, 6);
+  assert.equal(result.json.error.code, "INCOMPLETE_COVERAGE");
+  const [described] = (await runContextcake(["help", "--json"], home, { table: testTable(family) })).json.data.commands;
+  assert.equal(described.requireComplete, true);
+  assert.throws(() => defineFamily({ name: "bad", stability: "experimental", summary: "b", commands: [{ name: "x", summary: "x", mutation: "read", requireComplete: true, run: () => ({ data: null }) }] }), /requireComplete needs coverage/);
 });

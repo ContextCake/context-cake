@@ -28,7 +28,7 @@ export const GLOBAL_FLAGS = {
   profile: { type: "string", description: "Profile id. Wins over the project mapping for --cwd.", when: (c) => c.profile },
   cwd: { type: "string", description: "Select the profile mapped to this folder instead of the working directory.", when: (c) => c.profile },
   "expect-revision": { type: "string", description: "Refuse unless the manifest still has this revision (sha256:...).", when: (c) => c.preconditions.includes("manifest-revision") },
-  "require-complete": { type: "boolean", description: "Exit 6 instead of 0 when a source could not be read.", when: (c) => c.coverage },
+  "require-complete": { type: "boolean", description: "Exit 6 instead of 0 when a source could not be read.", when: (c) => c.coverage && !c.requireComplete },
 };
 
 // Every command can fail these ways; traits add the rest.
@@ -66,6 +66,10 @@ function normalizeCommand(family, command) {
   if (Boolean(command.run) === Boolean(command.spawn)) fail("define exactly one of run or spawn");
   const coverage = command.coverage === true;
   if (coverage && command.mutation !== "read") fail("only read commands may report coverage (spec §5.2)");
+  // An explicit check (`source test`, `source sync`) must fail on partial
+  // coverage even without --require-complete (spec §5.2).
+  const requireComplete = command.requireComplete === true;
+  if (requireComplete && !coverage) fail("requireComplete needs coverage: true");
   const preconditions = [...(command.preconditions ?? [])];
   if (preconditions.includes("manifest-revision") && command.mutation === "read") fail("a read command has no revision to expect");
 
@@ -91,6 +95,7 @@ function normalizeCommand(family, command) {
     manifest,
     profile: command.profile === true,
     coverage,
+    requireComplete,
     acceptsTimeout: command.mutation === "read" || command.acceptsTimeout === true,
     preconditions,
     positionals,
@@ -199,6 +204,7 @@ export function describeCommand(command) {
     ],
     errors: command.spawn ? [] : command.errors.map((code) => errorSchema(command, code)),
     coverage: command.coverage,
+    requireComplete: command.requireComplete,
     timeout: command.spawn ? "passthrough" : (command.acceptsTimeout ? "accepted" : "refused"),
     dataSchema: command.spawn ? null : command.output,
   };

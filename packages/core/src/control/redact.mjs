@@ -41,19 +41,34 @@ export function createRedactor(secretValues = []) {
       .replace(URL_USERINFO, (_match, scheme) => `${scheme}${REDACTED}@`);
   }
 
-  function redact(value, key = "", seen = new WeakSet()) {
+  // The walk yields what JSON.stringify would print, then redacts it: toJSON
+  // is honored (Date, URL, Buffer), an Error keeps its name, message, and
+  // code, and `ancestors` holds only the current path, so a value referenced
+  // twice prints twice and only a true cycle becomes "[circular]".
+  function redact(value, key = "", ancestors = new Set()) {
+    if (value && typeof value === "object" && !(value instanceof Error) && typeof value.toJSON === "function") {
+      value = value.toJSON(key);
+    }
     if (typeof value === "string") {
       return SECRET_KEY.test(key) && value.length > 0 ? REDACTED : redactString(value);
     }
     if (!value || typeof value !== "object") return value;
-    if (seen.has(value)) return "[circular]";
-    seen.add(value);
-    if (Array.isArray(value)) return value.map((entry) => redact(entry, key, seen));
-    const out = {};
-    for (const [childKey, childValue] of Object.entries(value)) {
-      out[redactString(childKey)] = redact(childValue, childKey, seen);
+    if (ancestors.has(value)) return "[circular]";
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) return value.map((entry) => redact(entry, key, ancestors));
+      const source = value instanceof Error
+        ? { name: value.name, message: value.message, ...(value.code !== undefined ? { code: value.code } : {}), ...value }
+        : value;
+      const out = {};
+      for (const [childKey, childValue] of Object.entries(source)) {
+        if (childValue === undefined || typeof childValue === "function") continue;
+        out[redactString(childKey)] = redact(childValue, childKey, ancestors);
+      }
+      return out;
+    } finally {
+      ancestors.delete(value);
     }
-    return out;
   }
 
   return { redact, redactString };

@@ -19,6 +19,7 @@ export const doctor = spawned("doctor", "check profile configuration and source 
   manifest: "inject",
   // doctor reports a missing manifest itself, as NOT_FOUND in its own JSON.
   requireManifest: false,
+  globalFlags: ["json"],
 });
 export const mcp = spawned("mcp", "serve the resolved graph over stdio MCP", "serve", { entry: "mcp-server.mjs", manifest: "inject" });
 export const resolve = spawned("resolve", "resolve a concept across layers", "read", { entry: "resolver.mjs", manifest: "inject" });

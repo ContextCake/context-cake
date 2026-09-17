@@ -1,12 +1,13 @@
 // `contextcake init` and the profile family (control-plane spec §5.3, §5.13).
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { EMPTY_V2_MANIFEST } from "../src/cli/families/init.mjs";
 import { manifestRevisionOf } from "../src/cli/context.mjs";
+import { MANIFEST_REVISION, createProfile, currentProfile, listProfiles, renameProfile, showProfile } from "../src/control/profiles.mjs";
 import { readContextManifest, selectManifestProfile } from "../src/manifest.mjs";
 import { sidecarDir, sidecarRoot } from "../src/sidecar-state.mjs";
 import { cliHome, runContextcake, writeManifest } from "./helpers/cli-harness.mjs";
@@ -278,4 +279,95 @@ test("raw profile-cli.mjs delete also retires state and keeps exit 2 for the pre
   const body = JSON.parse(confirmed.stdout);
   assert.equal(body.deleted, true);
   await fs.access(body.retiredState);
+});
+
+test("profile create answers PROJECT_MAPPED, not MANIFEST_INVALID, for a folder another profile owns", async (t) => {
+  const home = await v2Home(t, { work: { label: "Work", layers: [] } });
+  const project = path.join(home.dir, "project");
+  await fs.mkdir(project);
+  assert.equal((await runContextcake(["profile", "map", "work", project], home)).exitCode, 0);
+  const before = await fs.readFile(home.manifestPath, "utf8");
+  const created = await runContextcake(["profile", "create", "Other", "--project", project, "--json"], home);
+  assert.equal(created.exitCode, 4);
+  assert.equal(created.json.error.code, "PROJECT_MAPPED");
+  assert.equal(await fs.readFile(home.manifestPath, "utf8"), before);
+  const missing = await runContextcake(["profile", "create", "Other", "--project", path.join(home.dir, "absent"), "--json"], home);
+  assert.equal(missing.exitCode, 3);
+});
+
+test("read operations answer from the manifest the envelope read, not a second disk read", async (t) => {
+  const home = await v2Home(t, { work: { label: "Work", layers: [] } });
+  const manifest = readContextManifest(home.manifestPath, { validatePacks: false });
+  const elsewhere = path.join(home.dir, "never-written.json");
+  assert.equal(currentProfile({ manifest, manifestPath: elsewhere, profile: "work", cwd: home.dir }).id, "work");
+  assert.equal(listProfiles({ manifest, manifestPath: elsewhere }).length, 2);
+  assert.equal(showProfile({ manifest, manifestPath: elsewhere, profile: "work", cwd: home.dir }).label, "Work");
+});
+
+test("profile mutations report the revision of the manifest they wrote", async (t) => {
+  const home = await v2Home(t, { work: { label: "Work", layers: [] } });
+  const renamed = renameProfile({ manifestPath: home.manifestPath, profileId: "work", label: "Day" });
+  assert.equal(`sha256:${renamed[MANIFEST_REVISION]}`, manifestRevisionOf(await readJson(home.manifestPath)));
+  assert.ok(!Object.keys(renamed).includes(String(MANIFEST_REVISION)), "the revision never appears in the operation's data");
+  const created = createProfile({ manifestPath: home.manifestPath, label: "Next" });
+  assert.equal(`sha256:${created[MANIFEST_REVISION]}`, manifestRevisionOf(await readJson(home.manifestPath)));
+});
+
+test("profile delete writes the manifest before retiring state, so a failed retire never keeps the profile", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
+  const home = await v2Home(t, { work: { label: "Work", layers: [] } });
+  const state = sidecarDir(home.manifestPath, "work");
+  await fs.mkdir(state, { recursive: true });
+  const profilesDir = path.dirname(state);
+  await fs.chmod(profilesDir, 0o500);
+  let deleted;
+  try {
+    deleted = await runContextcake(["profile", "delete", "work", "--confirm", "--json"], home);
+  } finally {
+    await fs.chmod(profilesDir, 0o700);
+  }
+  assert.equal(deleted.exitCode, 0, deleted.stdout);
+  assert.equal(deleted.json.data.deleted, true);
+  assert.ok(!(await readJson(home.manifestPath)).profiles.work);
+  assert.ok(deleted.json.warnings.some((warning) => warning.code === "STATE_NOT_RETIRED"));
+  await fs.access(state); // left in place; purge-state can still find it
+  const listed = await runContextcake(["profile", "purge-state", "work", "--json"], home);
+  assert.deepEqual(listed.json.error.details.dirs, [state]);
+});
+
+test("profile purge-state checks and deletes under the manifest lock", async (t) => {
+  const home = await v2Home(t, { work: { label: "Work", layers: [] } });
+  await fs.mkdir(sidecarDir(home.manifestPath, "work"), { recursive: true });
+  const deleted = await runContextcake(["profile", "delete", "work", "--confirm", "--json"], home);
+  const retired = deleted.json.data.retiredState;
+  const marker = path.join(home.dir, "locked");
+  const liveState = path.join(sidecarDir(home.manifestPath, "work"), "live.json");
+  // Another process holds the lock, then re-creates `work` with live state
+  // before releasing it.
+  const manifestModule = new URL("../src/manifest.mjs", import.meta.url).href;
+  const script = `
+    import fs from "node:fs";
+    import path from "node:path";
+    import { readContextManifest, withManifestLock, writeContextManifest } from ${JSON.stringify(manifestModule)};
+    const [manifestPath, marker, liveState] = process.argv.slice(1);
+    withManifestLock(manifestPath, () => {
+      fs.writeFileSync(marker, "locked");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
+      const manifest = readContextManifest(manifestPath);
+      manifest.profiles.work = { label: "Work again", layers: [] };
+      writeContextManifest(manifestPath, manifest);
+      fs.mkdirSync(path.dirname(liveState), { recursive: true });
+      fs.writeFileSync(liveState, "{}");
+    });
+  `;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script, home.manifestPath, marker, liveState], { stdio: "inherit" });
+  const exited = new Promise((resolve) => child.on("exit", resolve));
+  for (let tries = 0; tries < 200; tries += 1) {
+    try { await fs.access(marker); break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
+  }
+  const purged = await runContextcake(["profile", "purge-state", "work", "--confirm", "--json"], home);
+  assert.equal(await exited, 0);
+  assert.equal(purged.exitCode, 4, purged.stdout);
+  assert.equal(purged.json.error.code, "PROFILE_ACTIVE");
+  await fs.access(liveState);
+  await fs.access(retired);
 });

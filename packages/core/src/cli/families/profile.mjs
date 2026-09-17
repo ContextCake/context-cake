@@ -3,6 +3,7 @@
 // human text for the original six commands is the text profile-cli.mjs prints.
 
 import {
+  MANIFEST_REVISION,
   PROFILE_TEXT,
   cloneProfile,
   createProfile,
@@ -42,6 +43,7 @@ const DELETE_PREVIEW = {
     sourceCount: { type: "integer" },
     deleted: { type: "boolean" },
     retiredState: { type: "string" },
+    stateNotRetired: { type: "string" },
   },
 };
 
@@ -63,6 +65,7 @@ export default defineFamily({
       mutation: "read",
       manifest: "required",
       profile: true,
+      errors: ["MANIFEST_NOT_V2"],
       output: {
         type: "object",
         required: ["id", "label", "reason", "mode", "sourceCount"],
@@ -76,8 +79,8 @@ export default defineFamily({
         },
       },
       run(ctx) {
-        ctx.readManifest();
-        const data = currentProfile({ manifestPath: ctx.manifestPath, profile: ctx.flags.profile, cwd: ctx.flags.cwd ? ctx.resolvePath(ctx.flags.cwd) : ctx.cwd });
+        const manifest = ctx.readManifest();
+        const data = currentProfile({ manifest, manifestPath: ctx.manifestPath, profile: ctx.flags.profile, cwd: ctx.flags.cwd ? ctx.resolvePath(ctx.flags.cwd) : ctx.cwd });
         ctx.setContext({ profileId: data.id, profileReason: data.reason });
         return { data, text: PROFILE_TEXT.current(data) };
       },
@@ -89,8 +92,8 @@ export default defineFamily({
       manifest: "required",
       output: { type: "array", items: PROFILE_SUMMARY },
       run(ctx) {
-        ctx.readManifest();
-        const data = listProfiles({ manifestPath: ctx.manifestPath });
+        const manifest = ctx.readManifest();
+        const data = listProfiles({ manifest, manifestPath: ctx.manifestPath });
         return { data, text: PROFILE_TEXT.list(data) };
       },
     },
@@ -101,6 +104,7 @@ export default defineFamily({
       manifest: "required",
       profile: true,
       positionals: [{ name: "id", description: "Profile id. Defaults to the selected profile." }],
+      errors: ["MANIFEST_NOT_V2"],
       output: {
         type: "object",
         required: ["id", "label", "mode", "sources", "pendingSources", "projects", "packs", "state"],
@@ -117,11 +121,12 @@ export default defineFamily({
         },
       },
       run(ctx) {
-        ctx.readManifest();
+        const manifest = ctx.readManifest();
         if (ctx.args.id && ctx.flags.profile && ctx.args.id !== ctx.flags.profile) {
           throw new ControlError("INVALID_INPUT", "Pass the profile id or --profile, not two different ids.", { status: 400 });
         }
         const data = showProfile({
+          manifest,
           manifestPath: ctx.manifestPath,
           profile: ctx.args.id ?? ctx.flags.profile ?? null,
           cwd: ctx.flags.cwd ? ctx.resolvePath(ctx.flags.cwd) : ctx.cwd,
@@ -146,7 +151,7 @@ export default defineFamily({
       preconditions: ["manifest-revision"],
       positionals: [{ name: "label", required: true, variadic: true, description: "Profile label; words are joined with spaces." }],
       flags: { project: { type: "string", description: "Map this folder to the new profile." } },
-      errors: ["PROJECT_MAPPED", "NOT_FOUND"],
+      errors: ["PROFILE_EXISTS", "PROJECT_MAPPED", "NOT_FOUND"],
       output: {
         type: "object",
         required: ["created", "label", "action"],
@@ -167,6 +172,7 @@ export default defineFamily({
           project: ctx.flags.project ? ctx.resolvePath(ctx.flags.project) : null,
           expectRevision: ctx.flags.expectRevision,
         });
+        ctx.noteManifestWrite(data[MANIFEST_REVISION]);
         ctx.suggest("profile.map", `contextcake profile map ${data.created} <path>`, "Map a project folder to the new profile.");
         return { data, text: PROFILE_TEXT.create(data) };
       },
@@ -181,7 +187,7 @@ export default defineFamily({
         { name: "id", required: true, description: "Profile id." },
         { name: "label", required: true, variadic: true, description: "New label; words are joined with spaces." },
       ],
-      errors: ["MANIFEST_NOT_V2"],
+      errors: ["MANIFEST_NOT_V2", "PROFILE_NOT_FOUND"],
       output: {
         type: "object",
         required: ["id", "label", "previousLabel"],
@@ -190,6 +196,7 @@ export default defineFamily({
       run(ctx) {
         ctx.readManifest();
         const data = renameProfile({ manifestPath: ctx.manifestPath, profileId: ctx.args.id, label: ctx.args.label.join(" "), expectRevision: ctx.flags.expectRevision });
+        ctx.noteManifestWrite(data[MANIFEST_REVISION]);
         return { data, text: `Renamed ${data.id}: ${data.previousLabel} -> ${data.label}` };
       },
     },
@@ -203,7 +210,7 @@ export default defineFamily({
         { name: "id", required: true, description: "Profile id to copy." },
         { name: "label", required: true, variadic: true, description: "Label for the copy; words are joined with spaces." },
       ],
-      errors: ["MANIFEST_NOT_V2"],
+      errors: ["MANIFEST_NOT_V2", "PROFILE_NOT_FOUND"],
       output: {
         type: "object",
         required: ["created", "label", "from", "sourceCount", "pendingExecutables"],
@@ -218,6 +225,7 @@ export default defineFamily({
       run(ctx) {
         ctx.readManifest();
         const data = cloneProfile({ manifestPath: ctx.manifestPath, profileId: ctx.args.id, label: ctx.args.label.join(" "), expectRevision: ctx.flags.expectRevision });
+        ctx.noteManifestWrite(data[MANIFEST_REVISION]);
         if (data.pendingExecutables.length) {
           ctx.warn("MCP_SOURCES_PENDING", `MCP sources need local setup before they run in ${data.created}.`, { sources: data.pendingExecutables });
         }
@@ -235,11 +243,12 @@ export default defineFamily({
         { name: "id", required: true, description: "Profile id." },
         { name: "path", required: true, description: "Project folder." },
       ],
-      errors: ["MANIFEST_NOT_V2", "PROJECT_MAPPED", "NOT_FOUND"],
+      errors: ["MANIFEST_NOT_V2", "PROFILE_NOT_FOUND", "PROJECT_MAPPED", "NOT_FOUND"],
       output: { type: "object", required: ["mapped", "profileId"], properties: { mapped: { type: "string" }, profileId: { type: "string" } } },
       run(ctx) {
         ctx.readManifest();
         const data = mapProject({ manifestPath: ctx.manifestPath, profileId: ctx.args.id, projectPath: ctx.resolvePath(ctx.args.path), expectRevision: ctx.flags.expectRevision });
+        ctx.noteManifestWrite(data[MANIFEST_REVISION]);
         return { data, text: PROFILE_TEXT.map(data) };
       },
     },
@@ -255,6 +264,7 @@ export default defineFamily({
       run(ctx) {
         ctx.readManifest();
         const data = unmapProject({ manifestPath: ctx.manifestPath, projectPath: ctx.resolvePath(ctx.args.path), expectRevision: ctx.flags.expectRevision });
+        ctx.noteManifestWrite(data[MANIFEST_REVISION]);
         return { data, text: PROFILE_TEXT.unmap(data) };
       },
     },
@@ -266,7 +276,7 @@ export default defineFamily({
       preconditions: ["manifest-revision", "manifest-v2", "confirm"],
       positionals: [{ name: "id", required: true, description: "Profile id." }],
       flags: { confirm: { type: "boolean", description: "Delete. Without it the command only previews." } },
-      errors: ["MANIFEST_NOT_V2", "PROFILE_PROTECTED"],
+      errors: ["MANIFEST_NOT_V2", "PROFILE_NOT_FOUND", "PROFILE_PROTECTED"],
       output: DELETE_PREVIEW,
       run(ctx) {
         ctx.readManifest();
@@ -274,7 +284,11 @@ export default defineFamily({
         if (!data.deleted) {
           throw confirmationRequired(`Deleting ${data.profileId} needs --confirm.`, data, PROFILE_TEXT.deletePreview(data));
         }
-        ctx.suggest("profile.purge-state", `contextcake profile purge-state ${data.profileId} --confirm`, "Permanently remove the retired state.");
+        ctx.noteManifestWrite(data[MANIFEST_REVISION]);
+        if (data.stateNotRetired) {
+          ctx.warn("STATE_NOT_RETIRED", `The profile was deleted, but its state folder could not be retired (${data.stateNotRetired}).`);
+        }
+        ctx.suggest("profile.purge-state", `contextcake profile purge-state ${data.profileId} --confirm`, "Permanently remove the state the profile left behind.");
         return { data, text: PROFILE_TEXT.deleted(data) };
       },
     },
@@ -286,7 +300,7 @@ export default defineFamily({
       preconditions: ["confirm"],
       positionals: [{ name: "id", required: true, description: "Id of a deleted profile." }],
       flags: { confirm: { type: "boolean", description: "Delete. Without it the command only lists what would go." } },
-      errors: ["PROFILE_ACTIVE"],
+      errors: ["PROFILE_ACTIVE", "MANIFEST_LOCKED"],
       output: {
         type: "object",
         required: ["profileId", "dirs", "purged"],

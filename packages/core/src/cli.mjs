@@ -15,7 +15,7 @@ import { ControlError, EXIT_CATEGORIES, exitCategoryFor, exitCodeFor, toControlE
 import { createRedactor } from "./control/redact.mjs";
 import { resolvePaths } from "./platform-paths.mjs";
 import { parseCommandArgs, parseTimeout } from "./cli/args.mjs";
-import { createCommandContext, currentManifestRevision } from "./cli/context.mjs";
+import { ABORT, createCommandContext } from "./cli/context.mjs";
 import { FAMILIES } from "./cli/families/index.mjs";
 import { prepareSpawnArgs, spawnEngine } from "./cli/spawn.mjs";
 import { buildTable, describeCommand, helpSchema, resolveCommand, usageLine } from "./cli/table.mjs";
@@ -25,8 +25,6 @@ export const ENVELOPE_SCHEMA_VERSION = 1;
 export const TABLE = buildTable(FAMILIES);
 
 const HELP_WORDS = new Set(["help", "--help", "-h"]);
-
-class Interrupted extends Error {}
 
 function write(stream, text) {
   stream.write(text.endsWith("\n") ? text : `${text}\n`);
@@ -241,12 +239,19 @@ export async function runCli(argv, options = {}) {
   });
   const failWithContext = (error) => {
     ctx.collectManifestSecrets();
-    if (ctx.manifestPath) ctx.context.manifestRevision = currentManifestRevision(ctx.manifestPath) ?? ctx.context.manifestRevision;
     return fail(command.id, error, ctx.context, ctx.warnings, ctx.nextActions, { redact: ctx.redact, redactString: (text) => ctx.redact(text) });
   };
 
+  // --timeout and interrupts abort ctx.signal with the error the command
+  // answers with. A read is abandoned at once: its envelope goes out and
+  // main() ends the process even if the read ignores the signal. A write is
+  // never abandoned: it runs to the end (so an answer can never say
+  // INTERRUPTED over a mutation that then lands), and it reports the abort
+  // only if it stopped for it, by calling ctx.throwIfAborted() before its
+  // point of no return.
   let timer = null;
   let result;
+  let abandoned = false;
   try {
     // Validated before run() starts: a refused --timeout must not leave a
     // mutation running behind the error.
@@ -254,25 +259,37 @@ export async function runCli(argv, options = {}) {
     if (ms !== null && !command.acceptsTimeout) {
       throw new ControlError("TIMEOUT_REFUSED", `${command.id} changes state, so it does not accept --timeout.`, { status: 400 });
     }
-    const racers = [Promise.resolve().then(() => command.run(ctx))];
+    const isRead = command.mutation === "read";
+    const running = Promise.resolve().then(() => (isRead ? command.run(ctx) : ctx.critical(() => command.run(ctx))));
+    let rejectAbort;
+    const aborted = new Promise((_resolve, reject) => { rejectAbort = reject; });
+    aborted.catch(() => {});
+    const abort = (error) => {
+      ctx[ABORT](error);
+      rejectAbort(error);
+    };
     if (ms !== null) {
-      racers.push(new Promise((_resolve, reject) => {
-        // Referenced on purpose: the timer is what keeps a stalled command's
-        // process alive long enough to report the timeout.
-        timer = setTimeout(() => reject(new ControlError("TIMEOUT", `${command.id} did not finish within ${ms}ms.`, { status: 504, retryable: true })), ms);
-      }));
+      // Referenced on purpose: the timer is what keeps a stalled command's
+      // process alive long enough to report the timeout.
+      timer = setTimeout(() => abort(new ControlError("TIMEOUT", `${command.id} did not finish within ${ms}ms.`, { status: 504, retryable: true })), ms);
     }
-    if (options.interrupt) {
-      racers.push(options.interrupt.then(async () => {
-        // Hold the interrupt until a critical section settles.
-        while (ctx.inCriticalSection) await new Promise((resolve) => setTimeout(resolve, 10));
-        throw new Interrupted();
-      }));
+    options.interrupt?.then(async () => {
+      // A read holds the interrupt while a critical section runs.
+      while (isRead && ctx.inCriticalSection) await new Promise((resolve) => setTimeout(resolve, 10));
+      abort(new ControlError("INTERRUPTED", `${command.id} was interrupted.`));
+    });
+    if (isRead) {
+      try {
+        result = await Promise.race([running, aborted]);
+      } catch (error) {
+        if (ctx.signal.aborted && error === ctx.signal.reason) abandoned = true;
+        throw error;
+      }
+    } else {
+      result = await running;
     }
-    result = await Promise.race(racers);
   } catch (error) {
-    if (error instanceof Interrupted) return failWithContext(new ControlError("INTERRUPTED", `${command.id} was interrupted.`));
-    return failWithContext(error);
+    return { ...failWithContext(error), abandoned };
   } finally {
     clearTimeout(timer);
   }
@@ -283,11 +300,8 @@ export async function runCli(argv, options = {}) {
   if (command.coverage && !result.coverage) {
     return failWithContext(new ControlError("INTERNAL", `${command.id} must report coverage.`));
   }
-  if (command.coverage && result.coverage.complete === false && parsed.flags.requireComplete) {
+  if (command.coverage && result.coverage.complete === false && (parsed.flags.requireComplete || command.requireComplete)) {
     return failWithContext(new ControlError("INCOMPLETE_COVERAGE", "Some sources could not be read.", { status: 503, detail: result.coverage, retryable: true }));
-  }
-  if (command.mutation !== "read" && ctx.manifestPath) {
-    ctx.context.manifestRevision = currentManifestRevision(ctx.manifestPath);
   }
   for (const warning of result.warnings ?? []) ctx.warnings.push(warning);
   ctx.collectManifestSecrets();
@@ -318,7 +332,14 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   const interrupt = new Promise((resolve) => { onInterrupt = resolve; });
   const resolved = resolveCommand(options.table ?? TABLE, argv);
   const handlesSignals = Boolean(resolved.command?.run);
-  const listener = () => onInterrupt();
+  // The first interrupt goes to the command (a write finishes first). A
+  // second one is the user insisting: stop now.
+  let interrupts = 0;
+  const listener = () => {
+    interrupts += 1;
+    if (interrupts > 1) process.exit(EXIT_CATEGORIES.interrupted);
+    onInterrupt();
+  };
   if (handlesSignals) process.on("SIGINT", listener);
   // A handler awaiting something that holds no handle (a promise nobody will
   // settle) would otherwise let the process exit 0 with no answer at all.
@@ -331,7 +352,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   };
   process.once("beforeExit", stalled);
   try {
-    const { exitCode, signal } = await runCli(argv, { stdinIsTTY: Boolean(process.stdin.isTTY), ...options, interrupt });
+    const { exitCode, signal, abandoned } = await runCli(argv, { stdinIsTTY: Boolean(process.stdin.isTTY), ...options, interrupt });
     answered = true;
     process.off("beforeExit", stalled);
     if (signal) {
@@ -339,9 +360,10 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       return;
     }
     process.exitCode = exitCode;
-    // An interrupted command may still hold a socket or timer; do not let it
-    // keep the process alive once the envelope is out.
-    if (exitCode === EXIT_CATEGORIES.interrupted) setTimeout(() => process.exit(exitCode), 1000).unref();
+    // An abandoned read may still hold a socket or timer after its envelope
+    // is out. Give stdout a moment to drain, then end the process; unref'd,
+    // so a process with nothing left running exits on its own sooner.
+    if (abandoned) setTimeout(() => process.exit(exitCode), 200).unref();
   } finally {
     if (handlesSignals) process.off("SIGINT", listener);
   }

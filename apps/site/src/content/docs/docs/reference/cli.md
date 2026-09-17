@@ -75,20 +75,43 @@ cannot become an agent directive. Selection is fixed for that process lifetime.
 Inspects and manages local Project Profiles without opening source adapters:
 
 ```bash
-contextcake profile current [--profile <id>] [--json]
+contextcake profile current [--profile <id>] [--cwd <path>] [--json]
 contextcake profile list [--json]
+contextcake profile show [<id>] [--json]
 contextcake profile create <label> [--project <path>]
+contextcake profile rename <id> <label>
+contextcake profile clone <id> <label>
 contextcake profile map <id> <path>
 contextcake profile unmap <path>
 contextcake profile delete <id> [--confirm]
+contextcake profile purge-state <id> [--confirm]
 ```
 
 `current` reports the selected id, label, reason, and matched root when one
-applies. `create` is the deliberate migration point for a flat manifest and
-returns the verified backup path. Project folders are canonicalized locally and
-never synced. `delete` refuses `default`, previews affected mappings and Pack
-assignments, and requires `--confirm`; it removes references but never source,
-Pack, overlay, cache, or live-repository files.
+applies. `show` adds the profile's sources, pending sources, mappings, Packs,
+and state folder. `create` is the deliberate migration point for a flat
+manifest and returns the verified backup path. `rename` changes the label, never
+the id. `clone` copies sources and Pack assignments but not mappings or state;
+MCP sources in the copy stay pending until configured on this machine. Project
+folders are canonicalized locally and never synced. `delete` refuses `default`,
+previews affected mappings and Pack assignments, and requires `--confirm`; it
+removes references but never source, Pack, overlay, cache, or live-repository
+files, and it moves the profile's state folder aside rather than deleting it.
+`purge-state --confirm` deletes that folder once no profile owns the id.
+
+Commands that change the manifest accept `--expect-revision sha256:…` and
+refuse with exit 4 if the manifest changed since you read that revision.
+
+### Output and exit codes
+
+Through `contextcake`, `--json` prints one JSON envelope rather than the bare
+result: `{ schemaVersion, ok, command, context, data, warnings, nextActions }`,
+with the old result under `data` and a typed `error` when `ok` is false. Exit
+codes follow `contextcake help --json`: `2` for invalid input (including an
+unknown flag), `3` not found, and `4` when a command needs `--confirm` (so a
+`delete` preview exits 4). This is a deliberate pre-1.0 change for the
+`contextcake` command. `node profile.mjs` from a checkout keeps the bare JSON
+and its old exit codes.
 
 ## ingest.mjs
 

@@ -4,7 +4,7 @@
 // twice, or after the app created a manifest, is safe.
 
 import fs from "node:fs";
-import { classifyManifest, createContextManifest } from "../../manifest.mjs";
+import { classifyManifest, createContextManifest, manifestRevision } from "../../manifest.mjs";
 import { manifestControlError } from "../../control/errors.mjs";
 import { defineFamily } from "../table.mjs";
 
@@ -35,6 +35,8 @@ export default defineFamily({
           try {
             createContextManifest(manifestPath, structuredClone(EMPTY_V2_MANIFEST));
             created = true;
+            // Report what we wrote, not a later read another writer could beat.
+            ctx.noteManifestWrite(manifestRevision(EMPTY_V2_MANIFEST));
           } catch (error) {
             // Another process created it between our check and the exclusive
             // link: fall through and report what is there now.
@@ -43,7 +45,7 @@ export default defineFamily({
         }
         // An existing manifest that fails validation is refused (exit 7), never
         // overwritten.
-        const mode = classifyManifest(ctx.readManifest());
+        const mode = created ? "v2" : classifyManifest(ctx.readManifest());
         ctx.setContext({ profileId: "default", profileReason: "default" });
         if (mode !== "v2") {
           ctx.warn("MANIFEST_NOT_V2", `The existing ${mode} manifest was left unchanged; init never migrates.`, { mode });

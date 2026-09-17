@@ -67,14 +67,25 @@ export function loadReadRuntime({ manifestPath, profileId, manifest = null, quar
 }
 
 /**
- * One selected-profile session: adapters for that profile only, closed by
- * withReadSession in `finally` whatever happens (spec §5.4: every source and
- * child process). tokenEnv credentials resolve from the environment, as they
- * do for `contextcake mcp`.
+ * One selected-profile session: adapters for that profile only (spec §5.4:
+ * every source and child process is closed). The close runs when `fn`
+ * settles, when `scope.signal` aborts, and through `scope.onClose` (the CLI's
+ * ctx.onClose), whichever comes first: a timed-out read is abandoned before
+ * its own `finally` can run, and its MCP children must not outlive the
+ * process. tokenEnv credentials resolve from the environment, as they do for
+ * `contextcake mcp`.
  */
 export async function withReadSession(scope, fn) {
   const runtime = loadReadRuntime(scope);
   const sources = buildSourcesQuarantined(runtime.runtimeManifest, runtime.manifestDir, { profileId: runtime.selection.profileId });
+  let closing = null;
+  const close = () => {
+    closing ??= Promise.allSettled(sources.map(async (source) => source.close?.()));
+    return closing;
+  };
+  scope.onClose?.(close);
+  const signal = scope.signal ?? null;
+  signal?.addEventListener("abort", close, { once: true });
   let liveLayer = null;
   try {
     liveLayer = resolveLiveLayer(runtime.selection.layers, runtime.manifestDir);
@@ -83,7 +94,7 @@ export async function withReadSession(scope, fn) {
   }
   const session = {
     runtime,
-    signal: scope.signal ?? null,
+    signal,
     sources,
     liveLayer,
     profileId: runtime.selection.profileId,
@@ -91,9 +102,11 @@ export async function withReadSession(scope, fn) {
     kinds: new Map(runtime.selection.layers.map((layer) => [layer.name, layer.source ?? "okf-local"])),
   };
   try {
+    signal?.throwIfAborted();
     return await fn(session);
   } finally {
-    await Promise.allSettled(sources.map(async (source) => source.close?.()));
+    signal?.removeEventListener("abort", close);
+    await close();
   }
 }
 
@@ -117,33 +130,71 @@ function healthFailure(source) {
   return health && health.ok === false && health.lastError ? String(health.lastError) : null;
 }
 
+// A source whose listing is already known. Everything else delegates to the
+// adapter, so reads stay live; only the listing is not asked for again.
+function listedView(source, ids, entries) {
+  const view = Object.create(source);
+  view.listConceptIds = async () => ids;
+  if (entries) view.listEntries = async () => entries;
+  return view;
+}
+
 /**
- * Lists every source with walk notes, bounded by the sourceBudgetMs setting.
+ * Lists every source once, with walk notes, bounded by the sourceBudgetMs
+ * setting and the command's signal. Returns the coverage rows and `layers`:
+ * views of the sources that answered, which the query then reads, so coverage
+ * describes the very listing the data came from.
+ *
  * status: "ok"; "partial" when the walk skipped or capped documents (the
  * source still answers); "unavailable" when it could not be listed at all.
  */
-export async function probeSourcesByListing(session) {
-  const rows = await Promise.all(session.sources.map(async (source) => {
+export async function listSources(session) {
+  const listed = await Promise.all(session.sources.map(async (source) => {
     const kind = session.kinds.get(source.name) ?? source.quarantinedKind ?? null;
     const notes = { skipped: [], unreadable: [], hidden: 0 };
+    let ids;
+    let entries = null;
     try {
-      await source.listConceptIds({ signal: budgetSignal(session), notes });
+      const options = { signal: budgetSignal(session), notes };
+      if (typeof source.listEntries === "function") {
+        entries = await source.listEntries(options);
+        ids = entries.map((entry) => entry.id);
+      } else {
+        ids = await source.listConceptIds(options);
+      }
     } catch (error) {
       // The command was stopped, not the source: do not blame the source.
       session.signal?.throwIfAborted();
-      return { name: source.name, kind, status: "unavailable", reason: error?.message ?? String(error) };
+      return { row: { name: source.name, kind, status: "unavailable", reason: error?.message ?? String(error) } };
     }
     const failure = healthFailure(source);
-    if (failure) return { name: source.name, kind, status: "unavailable", reason: failure };
+    if (failure) return { row: { name: source.name, kind, status: "unavailable", reason: failure } };
     const reasons = [];
     if (notes.truncated) reasons.push(`indexed only the first ${notes.truncated.cap} documents`);
     if (notes.skipped.length) reasons.push(`${notes.skipped.length} document(s) over the size cap were skipped`);
     if (notes.unreadable.length) reasons.push(`${notes.unreadable.length} folder(s) could not be read`);
-    return reasons.length
+    const row = reasons.length
       ? { name: source.name, kind, status: "partial", reason: reasons.join("; ") }
       : { name: source.name, kind, status: "ok" };
+    return { row, view: listedView(source, ids, entries) };
   }));
-  return [...rows, ...quarantinedRows(session.runtime)];
+  session.signal?.throwIfAborted();
+  return {
+    rows: [...listed.map((item) => item.row), ...quarantinedRows(session.runtime)],
+    layers: listed.filter((item) => item.view).map((item) => item.view),
+  };
+}
+
+// A document read can fail after its source listed fine (a remote file, an
+// MCP child that died). Adapters record that in health(); downgrade the row
+// so coverage never says "ok" over a read that failed.
+function afterReads(session, rows) {
+  const byName = new Map(session.sources.map((source) => [source.name, source]));
+  return rows.map((row) => {
+    if (row.status === "unavailable") return row;
+    const failure = byName.has(row.name) ? healthFailure(byName.get(row.name)) : null;
+    return failure ? { ...row, status: "partial", reason: [row.reason, `a read failed: ${failure}`].filter(Boolean).join("; ") } : row;
+  });
 }
 
 // A single-concept read touches one file per layer, so it does not walk: a
@@ -177,11 +228,6 @@ export function coverageFrom(rows) {
   };
 }
 
-function usableSources(session, rows) {
-  const unavailable = new Set(rows.filter((row) => row.status === "unavailable").map((row) => row.name));
-  return session.sources.filter((source) => !unavailable.has(source.name));
-}
-
 function notFound(id) {
   return new ControlError("NOT_FOUND", `Concept not found in any source: ${id}`, { status: 404, detail: { conceptId: id } });
 }
@@ -211,10 +257,10 @@ async function hasRecordedResolutions(session) {
 
 export async function listConceptsOperation({ type = null, ...scope }) {
   return withReadSession(scope, async (session) => {
-    const rows = await probeSourcesByListing(session);
+    const { rows, layers } = await listSources(session);
+    const concepts = await listConcepts(layers, { type: type ?? undefined });
     session.signal?.throwIfAborted();
-    const concepts = await listConcepts(usableSources(session, rows), { type: type ?? undefined });
-    return { data: concepts, coverage: coverageFrom(rows) };
+    return { data: concepts, coverage: coverageFrom(afterReads(session, rows)) };
   });
 }
 
@@ -226,11 +272,8 @@ export async function searchConceptsOperation({ query, limit = 10, source = null
   if (!Number.isInteger(limit) || limit <= 0) throw new ControlError("INVALID_INPUT", "--limit must be a positive integer.", { status: 400 });
   const cappedLimit = Math.min(limit, SEARCH_LIMIT_MAX);
   return withReadSession(scope, async (session) => {
-    const rows = await probeSourcesByListing(session);
-    session.signal?.throwIfAborted();
-    const coverage = coverageFrom(rows);
-    if (tokenizeQuery(query).length === 0) return { data: { hits: [] }, coverage };
-    const layers = usableSources(session, rows);
+    const { rows, layers } = await listSources(session);
+    if (tokenizeQuery(query).length === 0) return { data: { hits: [] }, coverage: coverageFrom(rows) };
     // The same on-disk store MCP and the service keep beside the manifest,
     // so a second search reads nothing it already analyzed.
     const dir = path.join(session.runtime.manifestDir, ".cache", "index");
@@ -240,10 +283,14 @@ export async function searchConceptsOperation({ query, limit = 10, source = null
       sourceBudgetMs: session.settings.sourceBudgetMs,
       identities: new Map(session.runtime.selection.layers.map((layer) => [layer.name, layerIdentity(layer)])),
     });
+    const stop = () => retrieval.close();
+    session.signal?.addEventListener("abort", stop, { once: true });
     try {
       const { hits } = await retrieval.search({ query, limit: cappedLimit, source: source ?? undefined, type: type ?? undefined });
-      return { data: { hits }, coverage };
+      session.signal?.throwIfAborted();
+      return { data: { hits }, coverage: coverageFrom(afterReads(session, rows)) };
     } finally {
+      session.signal?.removeEventListener("abort", stop);
       retrieval.close();
     }
   });
@@ -262,7 +309,7 @@ export async function readConceptOperation({ conceptId, ...scope }) {
     decorateResolvedDispositions(resolved, await createConflictResolutionLog(session.runtime.manifestPath, { profileId: session.profileId }).list());
     // A recorded choice may apply only when every document was seen, which
     // needs the walk. Without recorded choices the cheap probe is enough.
-    if (await hasRecordedResolutions(session)) rows = await probeSourcesByListing(session);
+    if (await hasRecordedResolutions(session)) rows = (await listSources(session)).rows;
     const coverage = coverageFrom(rows);
     const data = await applyRecorded(session, resolved, { coverageComplete: coverage.complete });
     return { data, coverage, markdown: assembleMarkdown(data, { retentionDays: session.liveLayer?.retentionDays ?? 14 }) };
@@ -274,15 +321,13 @@ export async function conceptLinksOperation({ conceptId, ...scope }) {
   const id = normalizeId(conceptId);
   if (!id) throw new ControlError("INVALID_INPUT", "Provide a concept id.", { status: 400 });
   return withReadSession(scope, async (session) => {
-    const rows = await probeSourcesByListing(session);
-    session.signal?.throwIfAborted();
-    const coverage = coverageFrom(rows);
-    const layers = usableSources(session, rows);
+    const { rows, layers } = await listSources(session);
     const resolved = await resolveConcept(id, layers);
     if (!resolved) throw notFound(id);
-    const applied = await applyRecorded(session, resolved, { coverageComplete: coverage.complete });
+    const applied = await applyRecorded(session, resolved, { coverageComplete: coverageFrom(rows).complete });
     const data = await getLinks(layers, id, { resolve: async () => applied });
-    return { data, coverage };
+    session.signal?.throwIfAborted();
+    return { data, coverage: coverageFrom(afterReads(session, rows)) };
   });
 }
 
@@ -312,6 +357,11 @@ export async function listFilesOperation(scope) {
 
 // The answer /api/file gives, inside the same layer-root sandbox.
 export async function readFileOperation({ filePath, ...scope }) {
+  // "<layer>//x" would resolve as an absolute path and read as a sandbox
+  // escape; it is a malformed path, so say that instead.
+  if (typeof filePath !== "string" || /(^|\/)(\/|$)/.test(filePath.replace(/\\/g, "/"))) {
+    throw new ControlError("INVALID_INPUT", `Give the path as <layer>/<relative path> with no empty segments: ${filePath}`, { status: 400 });
+  }
   const runtime = loadReadRuntime(scope);
   try {
     return { data: await readFileApi(filePath, fileRoots(runtime)) };

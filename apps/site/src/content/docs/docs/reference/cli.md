@@ -279,10 +279,12 @@ contextcake doctor [--manifest <file>] [--profile <id>] [--cwd <path>] [--json]
 
 Checks the manifest and any invalid layers, the selected profile, whether each
 folder or remote source can be reached, whether the config, data, and cache
-folders are writable, and every `contextcake` on `PATH` with its `--version`. It
-warns when more than one install is on `PATH` or when the first one reports a
-different version than the CLI you ran, since a harness runs whichever comes
-first. MCP sources are never started and are reported as not probed. The Mac
+folders are writable, and every `contextcake` on `PATH` with the version its install
+files record (doctor never runs them). It warns when more than one install is on
+`PATH` or when the first one has a different version than the CLI you ran, since a
+harness runs whichever comes first. MCP sources are never started, and GitHub
+sources whose credential is in the app's keychain are not contacted; both are
+listed as not probed and do not count against `--require-complete`. The Mac
 app's CLI also checks device-local collector availability. A failed check exits
 8, with the report in `error.details` and fix commands in `nextActions`. See
 [diagnostics](/docs/guides/diagnostics).

@@ -94,10 +94,10 @@ contextcake doctor --manifest ./layers.json --profile default
 This performs a **fresh configuration check**, reporting the manifest and any
 invalid layers, the selected profile, manifest revision, effective limits, folder
 and remote source availability, writable config/data/cache folders, every
-`contextcake` on `PATH` with its version, and local collector availability through
+`contextcake` on `PATH` with the version its install files record, and local collector availability through
 the desktop launcher. Source checks are capped at the first 100 configured sources
-or 15 seconds and do not read the corpus. Executable (MCP) sources are never started
-and are marked not probed. It does not read the running app's private observation
+or 15 seconds and do not read the corpus. Executable (MCP) sources are never started,
+and keychain-credential sources are not contacted; both are marked not probed. It does not read the running app's private observation
 history.
 
 Exit codes: `0` healthy check, `8` a failed check (including a missing manifest),

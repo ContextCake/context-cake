@@ -30,7 +30,7 @@ function withCoverageText(lines, coverage) {
 
 function scope(ctx) {
   const { selection, manifest, quarantined } = selectProfileForRead(ctx);
-  return { manifestPath: ctx.manifestPath, profileId: selection.profileId, manifest, quarantined, signal: ctx.signal };
+  return { manifestPath: ctx.manifestPath, profileId: selection.profileId, manifest, quarantined, signal: ctx.signal, onClose: ctx.onClose };
 }
 
 export default defineFamily({

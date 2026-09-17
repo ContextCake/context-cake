@@ -47,7 +47,7 @@ function reportText(report) {
   ];
   if (report.settings) lines.push(`Effective limits: ${Object.entries(report.settings).map(([key, value]) => `${key}=${value}`).join(", ")}`);
   if (report.executables.length > 1) {
-    lines.push("contextcake on PATH:", ...report.executables.map((row) => `  ${row.path}  ${row.version ?? row.error ?? "unknown"}`));
+    lines.push("contextcake on PATH:", ...report.executables.map((row) => `  ${row.path}  ${row.version}`));
   }
   lines.push(`Local observability: ${report.observability.state}`);
   lines.push("Folder checks are capped at 100 sources and 15 seconds. MCP sources are not started. No running-app history is read.");
@@ -88,7 +88,7 @@ export default defineFamily({
           directories: { type: "array", items: { type: "object", required: ["name", "path", "exists", "writable"] } },
           executables: {
             type: "array",
-            items: { type: "object", required: ["path", "realpath", "version"], properties: { version: { type: ["string", "null"] }, error: { type: "string" }, current: { type: "boolean" } } },
+            items: { type: "object", required: ["path", "realpath", "version"], properties: { version: { type: "string", description: "Read from the install's files, never by running it; \"unknown\" when unreadable." }, current: { type: "boolean" } } },
           },
           observability: { type: "object", required: ["state"] },
           checks: {
@@ -116,7 +116,7 @@ export default defineFamily({
           profileReason: report.profile?.reason ?? null,
         });
         for (const warning of warnings) ctx.warn(warning.code, warning.message, warning.details);
-        for (const row of coverage.degraded.filter((entry) => entry.status === "not-probed")) {
+        for (const row of [...coverage.notProbed, ...coverage.degraded.filter((entry) => entry.status === "not-probed")]) {
           ctx.warn("SOURCE_NOT_PROBED", `${row.source} was not probed: ${row.reason}`, { source: row.source });
         }
         for (const suggestion of suggestions) ctx.suggest(suggestion.command, suggestion.run, suggestion.description);

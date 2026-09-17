@@ -131,6 +131,11 @@ async function writeMacBuild(dir, { skip = [] } = {}) {
     }
   }
   await writeFile(path.join(dir, 'latest-mac.yml'), macRows.map((row) => `- url: ${row.updaterName(version)}\n`).join(''))
+  // Channel artifacts need every row, so the fixture carries the Linux .deb too.
+  for (const row of RELEASE_PLATFORMS.filter((candidate) => candidate.os === 'linux')) {
+    await writeFile(path.join(dir, row.installerName(version)), `bytes of ${row.installerName(version)}`)
+    await writeFile(path.join(dir, row.feed), `- url: ${row.installerName(version)}\n`)
+  }
 }
 
 test('release artifacts build together and retain a cryptographic linkage to every DMG', async () => {

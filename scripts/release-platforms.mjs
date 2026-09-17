@@ -66,6 +66,28 @@ export const RELEASE_PLATFORMS = Object.freeze([
     legacyPingAsset: 'install-ping.txt',
   }),
   macRow({ arch: 'x64', label: 'Intel', platformName: 'Intel Mac' }),
+  // The .deb updates by notification only: the app links the download and
+  // never installs it (design §11.4). electron-builder names a deb's x64 arch
+  // "amd64", as Debian does. latest-linux.yml lists the .deb itself, so the
+  // feed check looks for the installer.
+  Object.freeze({
+    id: 'linux-x64-deb',
+    os: 'linux',
+    nodePlatform: 'linux',
+    arch: 'x64',
+    packageType: 'deb',
+    osLabel: 'Linux',
+    label: 'Debian and Ubuntu',
+    platformName: 'Linux',
+    installerName: (version) => `ContextCake-${releaseVersion(version)}-amd64.deb`,
+    updaterName: () => null,
+    feed: 'latest-linux.yml',
+    updates: 'notify',
+    downloadPath: '/download/linux-x64-deb',
+    downloadAliases: Object.freeze(['/download/linux']),
+    pingAsset: 'install-ping-linux-x64-deb.txt',
+    legacyPingAsset: null,
+  }),
 ])
 
 export function platformById(id) {

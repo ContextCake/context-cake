@@ -13,6 +13,8 @@ const releases = [
       { name: 'ContextCake-0.10.0-x64-mac.zip', download_count: 2 },
       { name: 'install-ping-mac-arm64.txt', download_count: 6 },
       { name: 'install-ping-mac-x64.txt', download_count: 1 },
+      { name: 'ContextCake-0.10.0-amd64.deb', download_count: 4 },
+      { name: 'install-ping-linux-x64-deb.txt', download_count: 2 },
       // A stray asset with a matching extension is not a platform download.
       { name: 'notes.zip', download_count: 40 },
     ],
@@ -43,25 +45,28 @@ const releases = [
 test('counts downloads and first launches per platform row, not per file extension', () => {
   const report = summarizeAppMetrics(releases)
   assert.deepEqual(report.totals, {
-    installerDownloads: 22,
+    installerDownloads: 26,
     updaterDownloads: 11,
     mcpbDownloads: 6,
-    confirmedFirstLaunches: 11,
+    confirmedFirstLaunches: 13,
     trackedInstallReleases: 2,
     confirmedMcpbActivations: 2,
     trackedMcpbReleases: 1,
     platforms: {
       'mac-arm64': { installerDownloads: 19, updaterDownloads: 9, confirmedFirstLaunches: 10 },
       'mac-x64': { installerDownloads: 3, updaterDownloads: 2, confirmedFirstLaunches: 1 },
+      // The .deb has no update file; it only notifies.
+      'linux-x64-deb': { installerDownloads: 4, updaterDownloads: 0, confirmedFirstLaunches: 2 },
     },
   })
-  assert.deepEqual(report.releases.map((row) => row.confirmedFirstLaunches), [7, 4, null])
+  assert.deepEqual(report.releases.map((row) => row.confirmedFirstLaunches), [9, 4, null])
   // The pre-table counter belongs to the only platform those releases shipped.
   assert.deepEqual(report.releases[1].platforms['mac-arm64'], { installerDownloads: 7, updaterDownloads: 3, confirmedFirstLaunches: 4 })
   assert.deepEqual(report.releases[1].platforms['mac-x64'], { installerDownloads: 0, updaterDownloads: 0, confirmedFirstLaunches: null })
 
   const markdown = renderMarkdown(report)
-  assert.match(markdown, /Installer downloads: \*\*22\*\*/)
+  assert.match(markdown, /Installer downloads: \*\*26\*\*/)
+  assert.match(markdown, /Linux \(Debian and Ubuntu\): \*\*4\*\* installer downloads, \*\*0\*\* update downloads, \*\*2\*\* first launches/)
   assert.match(markdown, /Mac \(Intel\): \*\*3\*\* installer downloads, \*\*2\*\* update downloads, \*\*1\*\* first launches/)
   assert.match(markdown, /app-v0\.3\.0 \| 2 \| 1 \| 0 \| not tracked/)
   assert.match(markdown, /directional, not unique-person counts/)

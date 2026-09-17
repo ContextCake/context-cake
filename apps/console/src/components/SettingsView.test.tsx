@@ -583,6 +583,64 @@ describe('SettingsView', () => {
     expect(container.textContent).toContain('The configuration folder does not exist yet.')
   })
 
+  it('Linux desktop: a .deb update is a download link, never an install button', async () => {
+    const updates = {
+      getStatus: vi.fn().mockResolvedValue({ state: 'available', version: '1.2.3', url: 'https://github.com/ContextCake/context-cake/releases/tag/app-v1.2.3' } satisfies UpdateStatus),
+      check: vi.fn(),
+      install: vi.fn(),
+      onStatus: vi.fn(() => () => {}),
+    }
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '1.2.2',
+      platform: 'linux',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      updates,
+      cli: { getStatus: vi.fn(), install: vi.fn() },
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" onClose={vi.fn()} /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(container.textContent).toContain('v1.2.3 is available')
+    expect(container.textContent).toContain('package manager')
+    const link = Array.from(container.querySelectorAll('a')).find((a) => a.textContent === 'Download update')
+    expect(link?.getAttribute('href')).toBe('https://github.com/ContextCake/context-cake/releases/tag/app-v1.2.3')
+    expect(findButton('Update Now')).toBeUndefined()
+  })
+
+  it('Linux desktop: names the XDG config and log folders, the file manager, and the ~/.local/bin link', async () => {
+    window.__CC_DESKTOP = {
+      getApiToken: vi.fn().mockResolvedValue('token'),
+      version: '0.0.0-test',
+      platform: 'linux',
+      paths: { config: '~/.config/contextcake', logs: '~/.config/contextcake/logs' },
+      windowRole: 'settings',
+      authState: { signedIn: false, available: false },
+      preferences: preferences(),
+      revealConfigDir: vi.fn().mockResolvedValue({ ok: true }),
+      revealLogs: vi.fn().mockResolvedValue({ ok: true }),
+      cli: {
+        getStatus: vi.fn().mockResolvedValue({ status: 'missing', message: '', shimPath: '/opt/ContextCake/resources/bin/contextcake', linkPath: '/home/ada/.local/bin/contextcake' }),
+        install: vi.fn(),
+      },
+    } as unknown as typeof window.__CC_DESKTOP
+
+    await act(async () => root.render(
+      <ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>,
+    ))
+    await act(async () => {})
+    expect(container.textContent).toContain('~/.config/contextcake.')
+    expect(container.textContent).toContain('~/.config/contextcake/logs')
+    expect(container.textContent).not.toContain('~/Library')
+    expect(container.textContent).not.toContain('this Mac')
+    expect(findButton('Show in Finder')).toBeUndefined()
+    expect(Array.from(container.querySelectorAll('button')).filter((item) => item.textContent === 'Show in Files')).toHaveLength(2)
+    expect(container.textContent).toContain('Adds the contextcake command to /home/ada/.local/bin')
+  })
+
   it('desktop: surfaces Install Command Line Tool and reports the install outcome', async () => {
     const cli = {
       getStatus: vi.fn().mockResolvedValue({ status: 'missing', message: '', shimPath: null }),

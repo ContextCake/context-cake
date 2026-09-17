@@ -3,7 +3,9 @@
   "productName": "ContextCake",
   "private": true,
   "version": "0.9.4",
-  "description": "ContextCake for Mac — desktop shell over the engine and console",
+  "description": "ContextCake desktop app: the engine and console in one window",
+  "homepage": "https://contextcake.com",
+  "desktopName": "contextcake-desktop.desktop",
   "type": "module",
   "main": "src/main/main.mjs",
   "scripts": {
@@ -26,7 +28,9 @@
     "prepack": "npm run supabase:config",
     "pack": "npm run renderer && electron-builder --mac --dir",
     "predist": "npm run supabase:config",
-    "dist": "npm run renderer && electron-builder --mac"
+    "dist": "npm run renderer && electron-builder --mac",
+    "predist:linux": "npm run supabase:config",
+    "dist:linux": "npm run renderer && node scripts/dist-linux.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.116.0",

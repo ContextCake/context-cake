@@ -1,6 +1,6 @@
 # ContextCake Desktop
 
-Electron shell for the ContextCake Mac app. Engine in an isolated utility
+Electron shell for the ContextCake app on macOS and Linux (.deb). Engine in an isolated utility
 process behind a token-guarded loopback service; console build as the renderer. Read
 `specs/contextcake-distribution/design.md` before changing process
 architecture, packaging, or update behavior.
@@ -22,6 +22,7 @@ npm run test:isolation   # engine must not block the UI thread, and must keep
 npm run icon    # regenerate build/icon.icns + icon-master-1024.png from assets/brand/contextcake-app-icon.svg
 npm run pack    # unpacked .app for the host arch (fast) — dist/ is gitignored
 npm run dist    # DMG + zip for arm64 AND x64, ad-hoc signed in dev
+CC_DEB_MAINTAINER="Name <address>" npm run dist:linux   # the x64 .deb (runs on macOS too)
 ```
 
 ## Gotchas
@@ -218,14 +219,25 @@ npm run dist    # DMG + zip for arm64 AND x64, ad-hoc signed in dev
   worth building, is to dispatch to the running app's loopback service, and the
   blocker is that the bearer deliberately exists only in memory and on the
   message port (see the comment at the spawn site in the engine's `packages/core/src/cli/spawn.mjs`).
-- **Harness connection is sudo-free.** The `contextcake:cli-status` and
-  `cli-install` IPC results carry `shimPath` — the packaged shim's absolute
-  path — and the console builds every harness connect command from it when the
-  `/usr/local/bin` name is unusable (`missing`/`stale`/`conflict`). The PATH
-  symlink install is an optional nicety, never a gate. `shimPath` is null in
-  development and in the `blocked` (translocated/DMG) state: those paths are
-  ephemeral and must never reach a harness configuration — keep that null, and
-  keep the console's status gate, if you touch either side.
+- **Harness connection is sudo-free, and always names the absolute shim.** The
+  `contextcake:cli-status` and `cli-install` IPC results carry `shimPath` (the
+  packaged shim's absolute path) and `linkPath`. The console builds every
+  harness connect command from `shimPath` whenever it is non-null, installed
+  link or not: once npm ships, a bare `contextcake` may be a different install
+  running a different engine (control-plane spec §5.11). The PATH link is an
+  optional nicety, never a gate. `shimPath` is null in development and in the
+  `blocked` (translocated/DMG) state: those paths are ephemeral and must never
+  reach a harness configuration. Keep that null, and keep the console's status
+  gate, if you touch either side.
+- **The CLI link lives in `/usr/local/bin` on macOS and `~/.local/bin` on
+  Linux** (`cliLinkPath` in `src/main/cli-status.mjs`). Linux never asks for
+  sudo and warns when `~/.local/bin` is not on PATH. A link to anything that is
+  not some ContextCake app's shim (`<resources>/bin/contextcake` beside
+  `<resources>/engine/cli/cli.mjs`), such as an npm-installed CLI, is a
+  `conflict` and is never replaced; `blocked` stays a macOS-only state. The
+  shim finds `Contents/MacOS/ContextCake` or, in the .deb, `contextcake-desktop`
+  beside `resources/` (`test/cli-shim.test.mjs` runs it through a symlink for
+  both layouts).
 - **The first-run metrics consent prompt waits for the first layer.** A fresh
   install with zero manifest layers defers the dialog until the manifest
   watcher sees a layer land (or until a later launch that has one); installs
@@ -253,16 +265,60 @@ npm run dist    # DMG + zip for arm64 AND x64, ad-hoc signed in dev
 - **`notarize: false` in electron-builder.yml is deliberate** until release
   secrets exist; the release workflow overrides it. Never ship an unnotarized
   artifact to users (distribution spec §7).
-- User data layout is contractual (design §5): config in
+- User data layout is contractual (design §5, §11.2): on macOS config in
   `~/Library/Application Support/ContextCake/`, caches in
-  `~/Library/Caches/ContextCake/`. Installers must preserve both. The native
+  `~/Library/Caches/ContextCake/`; on Linux config (and Electron's `logs`) in
+  `$XDG_CONFIG_HOME/contextcake/`. Installers must preserve them. The native
   updater may maintain only its documented `.updaterId` rollout marker there.
-- **App name is pinned three places that must agree**: `app.setName('ContextCake')`
-  in `src/main/main.mjs`, `productName` in `package.json`, and the macOS branch
-  of the engine's `packages/core/src/platform-paths.mjs`, which the engine CLI
-  and the npm CLI both read for the default manifest. They resolve the same `userData` dir the
-  app writes and the CLI reads — a mismatch breaks `contextcake mcp`. The smoke
-  test asserts `userData=ContextCake`.
+- **The config dir is pinned per platform, and the pins must agree with the
+  engine.** On macOS three places: `app.setName('ContextCake')` in
+  `src/main/main.mjs`, `productName` in `package.json`, and the macOS branch of
+  `packages/core/src/platform-paths.mjs`. On Linux Electron's default
+  (`~/.config/ContextCake`) is wrong, so `main.mjs` calls
+  `app.setPath('userData', resolvePaths().config)` right after `setName`,
+  loading `platform-paths.mjs` synchronously (`require` of an ES module; a
+  top-level await would let `ready` fire first) from `enginePaths().engineSrc`.
+  An explicit `--user-data-dir` skips the pin (`src/main/user-data.mjs`): every
+  spawned desktop test passes one, and pinning over it would send tests into
+  the developer's real manifest. The engine CLI (which `src/cli/cli.mjs` wraps) and the npm CLI read the same
+  `resolvePaths()`, so a mismatch breaks `contextcake mcp`. The smoke check
+  compares userData against the switch when present, else the engine's config
+  dir on Linux, else a folder named `ContextCake` on macOS. A smoke run that
+  loses the single-instance lock (an installed app is running) prints
+  `SMOKE FAIL` and exits 1; pass `--user-data-dir` to run beside one.
+- **A second instance quits before it starts anything.** ESM has no top-level
+  `return`, so the handlers below the lock still register; `whenReady` and
+  `ensureMainWindow` check `lostSingleInstanceLock` so the losing instance never
+  forks an engine or opens a window.
+- **Credentials on Linux can be memory-only, and the app says so.** With no
+  keyring, `safeStorage.isEncryptionAvailable()` is still true but
+  `getSelectedStorageBackend()` is `basic_text`, a key compiled into Chromium.
+  `src/main/encrypted-storage.mjs` treats `basic_text` (and `unknown` once the
+  app is ready; it is always `unknown` before) as unavailable, checked at each
+  use, and keeps values in memory. `integrations:storage` reports
+  `persistent`/`memory`, and Settings → Connections shows a notice for
+  `memory`. A file that exists but will not decrypt or parse is renamed to
+  `<file>.unreadable-<timestamp>`, never read as empty, because the next write
+  would replace it.
+- **A .deb install never updates itself.** electron-builder writes
+  `resources/package-type` (`deb`) in a deb build; `src/main/updater.mjs` reads
+  it (`src/main/package-type.mjs`) and then sets `autoDownload` and
+  `autoInstallOnAppQuit` to false before every check (both default to true, and
+  a manual check can run while automatic checks are off), uses plain
+  `checkForUpdates`, never `quitAndInstall`, and reports
+  `{state: 'available', version, url}`, which Settings renders as a download
+  link. electron-updater's DebUpdater would otherwise `dpkg -i` through pkexec.
+- **The .deb maintainer comes from the build environment.** The deb target
+  refuses to build without one; `scripts/dist-linux.mjs` passes
+  `CC_DEB_MAINTAINER` as `--config.deb.maintainer` and fails with a clear
+  message when it is unset. The release workflow reads the `DEB_MAINTAINER`
+  repository variable. Never add `author` or `deb.maintainer` to the repo.
+  The script also checks the built resources carry the accounts marker.
+- **Linux trims:** native window frame, File and Help menus instead of the app
+  menu (`src/main/menu.mjs`), no Local Grafana (the main process creates the
+  stack on macOS only and the console hides it), and deep-link argv is not
+  parsed (accounts ship disabled). The preload exposes `platform` for
+  `apps/console/src/platform.ts`.
 - **Known gaps tracked as follow-ups** (not blocking merge): the updater reads the
   repo-wide GitHub "latest" release (see the comment in `updater.mjs`).
 - **A local `npm run pack` app may have no release update feed.** The updater

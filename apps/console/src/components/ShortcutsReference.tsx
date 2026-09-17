@@ -1,16 +1,9 @@
 import type { Mode } from '../api'
+import { modKey, shiftModKey } from '../platform'
 import { ShortcutLabel } from './ui'
 
 type Shortcut = { keys: string; label: string; note?: string }
 type ShortcutGroup = { title: string; note?: string; items: Shortcut[] }
-
-// Every binding is CmdOrCtrl (App.tsx tests `e.metaKey || e.ctrlKey`;
-// menu.mjs uses `CmdOrCtrl+`), so the glyph is the platform's, not a hardcoded
-// ⌘. The console ships as a public Web Demo too, where a Windows visitor has
-// no Command key — printing ⌘ there documents a chord they cannot press.
-const APPLE = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent)
-const MOD = APPLE ? '⌘' : 'Ctrl+'
-const SHIFT_MOD = APPLE ? '⇧⌘' : 'Ctrl+Shift+'
 
 // One list, three binding sites: the console's own keyboard handlers (App.tsx
 // — navigation, palette, search, Ask, and the Review queue's S/R/D routing —
@@ -18,6 +11,9 @@ const SHIFT_MOD = APPLE ? '⇧⌘' : 'Ctrl+Shift+'
 // menu accelerators (apps/desktop/src/main/menu.mjs), which carry the same
 // chords. A chord change at any of those sites has to land here too.
 function groupsFor(appMode: Mode): ShortcutGroup[] {
+  // The platform's glyphs (platform.ts): ⌘ on a Mac, Ctrl+ on Linux and Windows.
+  const MOD = modKey()
+  const SHIFT_MOD = shiftModKey()
   const groups: ShortcutGroup[] = [
     {
       title: 'Navigate',

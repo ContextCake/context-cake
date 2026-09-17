@@ -1,4 +1,4 @@
-// Regenerates the Mac app icon from the canonical brand mark. Run with:
+// Regenerates the app icons from the canonical brand mark. Run with:
 //
 //   npm run icon        (from apps/desktop; wraps `electron scripts/generate-icon.mjs`)
 //
@@ -9,6 +9,7 @@
 //
 //   build/icon.icns             all macOS sizes (16 → 1024, PNG-typed entries)
 //   build/icon-master-1024.png  rendered master, kept for marketing/store use
+//   build/icons/<N>x<N>.png     the Linux .deb's hicolor icon set
 //
 // ICNS is written directly (magic + typed PNG chunks) — no iconutil, so this
 // runs on any platform, not just macOS.
@@ -18,6 +19,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
+// electron-builder installs each PNG in build/icons into the hicolor theme at
+// the size its file name states, and a .desktop launcher picks the size it needs.
+const LINUX_SIZES = [16, 32, 48, 64, 128, 256, 512, 1024]
 const SVG_SOURCE = path.resolve(HERE, '../../../assets/brand/contextcake-app-icon.svg')
 const BUILD_DIR = path.resolve(HERE, '../build')
 
@@ -103,8 +107,16 @@ app.whenReady().then(async () => {
     const icns = packIcns(ICNS_TYPES.map(({ type, size }) => ({ type, png: rasters.get(size) })))
     fs.writeFileSync(path.join(BUILD_DIR, 'icon.icns'), icns)
 
+    const linuxDir = path.join(BUILD_DIR, 'icons')
+    fs.rmSync(linuxDir, { recursive: true, force: true })
+    fs.mkdirSync(linuxDir, { recursive: true })
+    for (const size of LINUX_SIZES) {
+      fs.writeFileSync(path.join(linuxDir, `${size}x${size}.png`), rasters.get(size) ?? rasterAt(master, size))
+    }
+
     console.log(`icon: rendered ${SVG_SOURCE}`)
     console.log(`icon: wrote build/icon-master-1024.png + build/icon.icns (${icns.length} bytes, ${ICNS_TYPES.length} entries)`)
+    console.log(`icon: wrote build/icons/ (${LINUX_SIZES.map((size) => `${size}x${size}`).join(', ')})`)
     app.exit(0)
   } catch (err) {
     console.error(`icon: FAILED — ${err.message}`)

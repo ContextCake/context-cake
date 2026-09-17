@@ -87,8 +87,8 @@ test('selects the highest published stable app version', () => {
 test('a release with only Apple silicon assets still builds a record, with Intel marked unavailable', () => {
   const record = buildAppReleaseRecord(release('1.2.3'), armSums())
   assert.equal(record.tag, 'app-v1.2.3')
-  assert.deepEqual(record.platforms.map((row) => [row.id, row.available]), [['mac-arm64', true], ['mac-x64', false]])
-  const [arm, intel] = record.platforms
+  assert.deepEqual(record.platforms.map((row) => [row.id, row.available]), [['mac-arm64', true], ['mac-x64', false], ['linux-x64-deb', false]])
+  const [arm, intel, deb] = record.platforms
   assert.deepEqual(arm.installer, {
     name: 'ContextCake-1.2.3-arm64.dmg',
     url: 'https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg',
@@ -101,6 +101,8 @@ test('a release with only Apple silicon assets still builds a record, with Intel
   assert.equal(intel.platformName, 'Intel Mac')
   assert.equal(intel.installer, null)
   assert.equal(intel.updater, null)
+  assert.equal(deb.platformName, 'Linux')
+  assert.equal(deb.available, false)
   assert.equal(renderDownloadRedirects(record), ARM_REDIRECTS)
 })
 
@@ -109,11 +111,24 @@ test('a two-architecture release records both Mac downloads and redirects each',
   assert.deepEqual(record.platforms.map((row) => [row.id, row.available, row.installer?.sha256, row.updater?.sha256]), [
     ['mac-arm64', true, A, B],
     ['mac-x64', true, C, D],
+    ['linux-x64-deb', false, undefined, undefined],
   ])
   assert.equal(
     renderDownloadRedirects(record),
     `${ARM_REDIRECTS}/download/mac-x64 https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-x64.dmg 302\n`,
   )
+})
+
+test('a release with a .deb records the Linux download with no update file, and redirects both routes', () => {
+  const base = twoArchRelease()
+  const withDeb = { ...base, assets: [...base.assets, asset(base.tag_name, 'ContextCake-1.2.3-amd64.deb', 99)] }
+  const record = buildAppReleaseRecord(withDeb, `${twoArchSums()}${E}  ContextCake-1.2.3-amd64.deb\n`)
+  const deb = record.platforms.find((row) => row.id === 'linux-x64-deb')
+  assert.equal(deb.available, true)
+  assert.equal(deb.updates, 'notify')
+  assert.equal(deb.installer.sha256, E)
+  assert.equal(deb.updater, null)
+  assert.match(renderDownloadRedirects(record), /\/download\/linux-x64-deb \S+ContextCake-1\.2\.3-amd64\.deb 302\n\/download\/linux \S+ContextCake-1\.2\.3-amd64\.deb 302\n$/)
 })
 
 test('a release built with a row but missing its installer fails instead of dropping the download', () => {

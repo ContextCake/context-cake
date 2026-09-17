@@ -158,6 +158,13 @@ async function writeMacBuild(dir, { skip = [] } = {}) {
     return `  - url: ${name}\n    sha512: ${createHash('sha512').update(bytes(name)).digest('base64')}\n    size: ${Buffer.byteLength(bytes(name))}\n`
   }).join('')
   await writeFile(path.join(dir, 'latest-mac.yml'), `version: ${version}\nfiles:\n${files}`)
+  // Channel artifacts need every row, so the fixture carries the Linux .deb and
+  // its feed too.
+  for (const row of RELEASE_PLATFORMS.filter((candidate) => candidate.os === 'linux')) {
+    const name = row.installerName(version)
+    await writeFile(path.join(dir, name), bytes(name))
+    await writeFile(path.join(dir, row.feed), `version: ${version}\nfiles:\n  - url: ${name}\n    sha512: ${createHash('sha512').update(bytes(name)).digest('base64')}\n    size: ${Buffer.byteLength(bytes(name))}\n`)
+  }
 }
 
 test('release artifacts build together and retain a cryptographic linkage to every DMG', async () => {

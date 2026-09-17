@@ -14,6 +14,7 @@ import {
 	appReleaseUrl,
 	appChecksumsUrl,
 	appMcpb,
+	linuxDownloads,
 	macDownloads,
 	sourceRouteList,
 	sourceRouteTitle,
@@ -99,6 +100,26 @@ const intelMissing = !macDownloads.some((row) => row.arch === 'x64');
 							</li>
 						))}
 					</ul>
+					{linuxDownloads.length > 0 && (
+						<>
+							<h2 class="download-module__title download-module__title--group">Linux app · .deb package</h2>
+							<ul class="download-choices">
+								{linuxDownloads.map((row) => (
+									<li class="download-choice">
+										<div class="download-choice__copy">
+											<h3>{row.label}</h3>
+											<span>{row.installer.name} · {formatFileSize(row.installer.bytes)}</span>
+											<code aria-label={`SHA-256 for ${row.installer.name}`}>{row.installer.sha256}</code>
+										</div>
+										<a class="button button--secondary" href={row.downloadPath} download>
+											<Icon name="download" size={18} />
+											Download for {row.label}
+										</a>
+									</li>
+								))}
+							</ul>
+						</>
+					)}
 					<div class="download-record" aria-label="Release details">
 						<span>{appTag}</span>
 						<a href={appReleaseUrl}>Release notes</a>
@@ -418,6 +439,10 @@ const intelMissing = !macDownloads.some((row) => row.arch === 'x64');
 		font-size: 0.78rem;
 		font-weight: 600;
 		letter-spacing: 0;
+	}
+	.download-module__title--group {
+		margin-top: 0.35rem;
+		border-top: 1px solid var(--cc-border);
 	}
 	.download-choices {
 		margin: 0;

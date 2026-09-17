@@ -16,6 +16,9 @@
 #   CSC_LINK / CSC_KEY_PASSWORD          — Developer ID Application cert (.p12, base64)
 #   APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER — notarytool App Store Connect key
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID — Web Demo and site deploys
+# Repository variable:
+#   DEB_MAINTAINER — the .deb's Maintainer field ("Name <address>"). Every run
+#   that builds the .deb, dry runs included, stops without it.
 # Key rotation: revoke in the Apple Developer portal, reissue, replace these
 # secrets. Keys never live in the repository.
 #
@@ -23,11 +26,13 @@
 # unsigned inspection artifacts but does NOT create a GitHub Release;
 # unnotarized builds are never distributed (distribution spec §7).
 #
-# Job order (design §11.5): build-mac → smoke-mac-x64 → publish → public-surfaces,
-# plus remove-dry-run-binaries after a signed dry run.
+# Job order (design §11.5): build-mac → smoke-mac-x64, and build-linux beside
+# them; all feed publish → public-surfaces. remove-dry-run-binaries follows a
+# signed dry run and remove-dry-run-deb follows every run.
 # Artifact names come from scripts/release-platforms.mjs and
 # scripts/release-assets.mjs; no step here spells one out. build-mac hashes its
-# files right after Gatekeeper and passes the digests as a job output; publish
+# files right after Gatekeeper (build-linux right after its build) and passes
+# the digests as a job output; publish
 # refuses bytes that no longer match them, checks every table row before and
 # after it writes SHA256SUMS, uploads to a DRAFT release, checks the draft's
 # assets against the table, and only then makes the release public.
@@ -364,12 +369,132 @@ jobs:
           CC_SMOKE=1 "$BIN" | tee smoke.log
           grep -q "SMOKE OK" smoke.log
 
+  # The Linux .deb (linux-x64-deb row). Not signed: its integrity is its
+  # SHA256SUMS line. The job installs the package it built and boots it with
+  # Chromium's sandbox on, the way a user's machine runs it.
+  build-linux:
+    name: build and smoke the Linux .deb (x64)
+    runs-on: ubuntu-24.04
+    needs:
+      - release-preflight
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      CC_DEB_MAINTAINER: ${{ vars.DEB_MAINTAINER }}
+    outputs:
+      checksums: ${{ steps.digests.outputs.checksums }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Require the .deb maintainer
+        run: |
+          if [ -z "$CC_DEB_MAINTAINER" ]; then
+            echo "::error::Set the DEB_MAINTAINER repository variable (\"Name <address>\") before building the .deb."
+            exit 1
+          fi
+
+      - name: Resolve release version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#app-v}"
+          else
+            VERSION="$(node -p 'require("./apps/desktop/package.json").version')"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install console deps
+        working-directory: apps/console
+        run: npm ci
+
+      - name: Install desktop deps
+        working-directory: apps/desktop
+        run: npm ci
+
+      # dist:linux builds the renderer, refuses to run without the maintainer,
+      # and checks the packaged accounts marker. electron-builder writes
+      # the Linux feed listing the .deb with its sha512 and size.
+      - name: Build the .deb
+        working-directory: apps/desktop
+        run: npm run dist:linux -- --publish never
+
+      - name: Verify the Linux platform row was built
+        run: node scripts/release-platforms.mjs --check apps/desktop/dist --version "$VERSION" --stage build --os linux
+
+      # Hash here, before the package is installed or leaves this job. publish
+      # refuses anything that no longer matches.
+      - name: Record build digests
+        id: digests
+        run: |
+          NAMES=$(node scripts/release-platforms.mjs --list checksummed --version "$VERSION" --os linux)
+          DIGESTS=$(cd apps/desktop/dist && sha256sum $NAMES)
+          echo "$DIGESTS"
+          {
+            echo "checksums<<EOF_BUILD_DIGESTS"
+            echo "$DIGESTS"
+            echo "EOF_BUILD_DIGESTS"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install the .deb
+        run: |
+          DEB="$(node scripts/release-platforms.mjs --list installers --version "$VERSION" --os linux)"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "./apps/desktop/dist/$DEB" xvfb xauth
+          ls -l /opt/ContextCake/contextcake-desktop /opt/ContextCake/chrome-sandbox /usr/bin/contextcake-desktop
+          # The postinst loads this profile on Ubuntu 24.04+, which restricts
+          # unprivileged user namespaces; the profile is what lets the sandbox
+          # create one.
+          ls -l /etc/apparmor.d/contextcake-desktop
+          sudo aa-status | grep -F contextcake-desktop
+          test "$(cat /opt/ContextCake/resources/package-type)" = deb
+
+      # No sandbox switch and no ELECTRON_DISABLE_SANDBOX: the smoke line must
+      # report sandbox=on, or the product would ship depending on a disabled
+      # sandbox.
+      - name: Launch the installed app with the sandbox on
+        shell: bash
+        run: |
+          set -o pipefail
+          env -u ELECTRON_DISABLE_SANDBOX CC_SMOKE=1 xvfb-run -a /opt/ContextCake/contextcake-desktop 2>&1 | tee smoke.log
+          grep -q "SMOKE OK" smoke.log
+          grep -q "sandbox=on" smoke.log
+          test -d "$HOME/.config/contextcake"
+
+      - name: Run the bundled CLI through its shim
+        run: /opt/ContextCake/resources/bin/contextcake --version
+
+      - name: Stage Linux artifacts from the platform table
+        run: |
+          mkdir -p release-linux
+          for KIND in installers updaters feeds; do
+            for NAME in $(node scripts/release-platforms.mjs --list "$KIND" --version "$VERSION" --os linux); do
+              cp "apps/desktop/dist/$NAME" "release-linux/$NAME"
+            done
+          done
+          ls -l release-linux
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-linux
+          path: release-linux
+          if-no-files-found: error
+          # Only publish reads it, and remove-dry-run-deb deletes it after every run.
+          retention-days: 1
+
   publish:
     name: publish every platform row
     runs-on: ubuntu-latest
     needs:
       - build-mac
       - smoke-mac-x64
+      - build-linux
     permissions:
       contents: write
     outputs:
@@ -377,6 +502,7 @@ jobs:
     env:
       VERSION: ${{ needs.build-mac.outputs.version }}
       BUILD_DIGESTS: ${{ needs.build-mac.outputs.checksums }}
+      LINUX_BUILD_DIGESTS: ${{ needs.build-linux.outputs.checksums }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -392,11 +518,17 @@ jobs:
           name: desktop-mac
           path: release-dist
 
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-linux
+          path: release-dist
+
       # Every row, not only this OS: a release attaches every platform or none.
       # The digests come from the build jobs' outputs, not from the artifact.
       - name: Verify every platform row was built and is unchanged
         run: |
-          printf '%s\n' "$BUILD_DIGESTS" > "$RUNNER_TEMP/build.sha256"
+          printf '%s\n' "$BUILD_DIGESTS" "$LINUX_BUILD_DIGESTS" > "$RUNNER_TEMP/build.sha256"
           node scripts/release-platforms.mjs --check release-dist --version "$VERSION" --stage build --digests "$RUNNER_TEMP/build.sha256"
 
       - name: Build verified distribution channel artifacts
@@ -443,7 +575,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: contextcake-release-inspection
-          path: release-dist
+          # The .deb is never signed, so a copy from an unreleased run would be
+          # indistinguishable from a released one. Keep it out.
+          path: |
+            release-dist
+            !release-dist/*.deb
           retention-days: 7
 
       # A signed dry run never leaves a signed binary behind: checksums, feeds,
@@ -477,6 +613,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[] | select(.name == "desktop-mac") | .id')
+          for ID in $IDS; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ID"
+            echo "deleted artifact $ID"
+          done
+
+  # The .deb is unsigned, so any run's package is as installable as a released
+  # one. Only publish reads the artifact, so delete it after publish on every
+  # outcome: a dry run, an unsigned or failed tag push, or a release (whose
+  # .deb now lives on the GitHub Release).
+  remove-dry-run-deb:
+    name: delete the .deb build artifact
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - publish
+    if: always()
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the Linux artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[] | select(.name == "desktop-linux") | .id')
           for ID in $IDS; do
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ID"
             echo "deleted artifact $ID"

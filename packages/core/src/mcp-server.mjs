@@ -14,12 +14,11 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import fsSync from "node:fs";
 import readline from "node:readline";
+import { normalizeId as normalizeIdPure } from "./markdown-links.mjs";
 import {
-  extractLinks, resolveLinkTarget as resolveLinkTargetPure, normalizeId as normalizeIdPure,
-  safeId as safeIdPure,
-} from "./markdown-links.mjs";
-import { sectionText } from "./sections.mjs";
-import { isNewerDay } from "./conflict-policy.mjs";
+  assembleMarkdown as assembleMarkdownShared, effectiveDiscrepancyRules, getLinks as getLinksShared,
+  listConcepts as listConceptsShared,
+} from "./concept-queries.mjs";
 import { resolveConcept } from "./resolver.mjs";
 import { createConflictResolutionLog } from "./conflict-resolutions.mjs";
 import { fingerprint, blockedContextResolutionKeys } from "./discrepancies.mjs";
@@ -28,7 +27,7 @@ import { createRetainedSearch } from "./retained-search.mjs";
 import { resolveSettings } from "./settings.mjs";
 import { readContextManifest, manifestRevision } from "./manifest.mjs";
 import { applyContextResolutions, createContextResolutionStore, contextManifestFingerprint } from "./context-resolutions.mjs";
-import { createDiscrepancyRuleStore, parseRuleDocument } from "./discrepancy-rules.mjs";
+import { createDiscrepancyRuleStore } from "./discrepancy-rules.mjs";
 import { buildSources } from "./sources/index.mjs";
 import { layerIdentity } from "./index-keys.mjs";
 import { commitPaths, push } from "./sources/git-core.mjs";
@@ -75,7 +74,6 @@ if ((args.capture || args.telemetry) && !liveLayer) {
 }
 
 const layerByName = new Map(layers.map((layer) => [layer.name, layer]));
-const layerNameSet = new Set(layerByName.keys());
 // Same content-identity computation service.mjs uses (index-keys.mjs):
 // what a layer READS, name/level left out. Lets the retained search's SQLite
 // store (search.v1.<profile>.sqlite, beside the manifest) tell a genuine
@@ -587,15 +585,7 @@ async function applyRecordedContextResolution(resolved) {
       if (!coverageComplete) break;
     }
   }
-  const localRules = await legacyRuleStore.list();
-  let teamRules = [];
-  if (liveLayer) {
-    try { teamRules = parseRuleDocument(await fsp.readFile(path.join(liveLayer.root, ".contextcake/discrepancy-rules.json"), "utf8")); }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
-  }
-  const localById = new Map(localRules.map(rule => [rule.id, rule]));
-  const effectiveRules = [...teamRules.map(rule => localById.get(rule.id) ?? rule),
-    ...localRules.filter(rule => !teamRules.some(team => team.id === rule.id))];
+  const effectiveRules = await effectiveDiscrepancyRules(legacyRuleStore, liveLayer?.root ?? null);
   return applyContextResolutions(resolved, state, {
     observe: diagnostics.record, profileId: selection.profileId, manifestFingerprint: contextManifestFingerprint(manifest), coverageComplete,
     blockedKeys: blockedContextResolutionKeys([resolved], effectiveRules),
@@ -626,66 +616,16 @@ async function decorateDiscrepancyDisposition(resolved) {
 }
 
 async function listConcepts({ type } = {}) {
-  const byId = new Map();
-  for (const source of layers) {
-    for (const id of await source.listConceptIds()) {
-      const entry = await source.loadConcept(id);
-      const frontmatter = entry?.frontmatter ?? {};
-      const existing = byId.get(id);
-      if (!existing) {
-        byId.set(id, { id, type: frontmatter.type ?? null, title: frontmatter.title ?? null, layers: [source.name] });
-      } else {
-        existing.layers.push(source.name);
-      }
-    }
-  }
-
-  const entries = [...byId.values()].map((entry) => ({ ...entry, layers: orderLayerNames(entry.layers) }));
-  if (!type) return entries.sort((a, b) => a.id.localeCompare(b.id));
-
-  const resolvedAll = await Promise.all(entries.map((e) => resolveConcept(e.id, layers)));
-  return entries
-    .filter((_, i) => resolvedAll[i]?.frontmatter.type === type)
-    .sort((a, b) => a.id.localeCompare(b.id));
+  return listConceptsShared(layers, { type });
 }
 
 async function getLinks({ concept_id }) {
-  const id = normalizeId(concept_id);
-  let resolved = await resolveConcept(id, layers);
-  if (!resolved) throw new Error(`Concept not found in any layer: ${id}`);
-  resolved = await applyRecordedContextResolution(resolved);
-
-  const body = resolved.sections.map((s) => `${s.heading ?? ""}\n${s.content}`).join("\n");
-  const rawLinks = extractLinks(body, layerNameSet).map((link) => {
-    const targetId = resolveLinkTarget(id, link.target, layerNameSet);
-    return { raw: link.raw, target: link.target, id: targetId };
+  return getLinksShared(layers, concept_id, {
+    resolve: async (id) => {
+      const resolved = await resolveConcept(id, layers);
+      return resolved ? applyRecordedContextResolution(resolved) : null;
+    },
   });
-  const outgoing = await Promise.all(rawLinks.map(async (link) => ({
-    ...link,
-    layers: link.id ? orderLayerNames(await layersWith(link.id)) : [],
-  })));
-
-  const incoming = [];
-  for (const source of layers) {
-    for (const sourceId of await source.listConceptIds()) {
-      if (sourceId === id) continue;
-      const entry = await source.loadConcept(sourceId);
-      if (!entry) continue;
-      const sourceBody = entry.sections.map((s) => `${s.heading ?? ""}\n${sectionText(s)}`).join("\n");
-      for (const link of extractLinks(sourceBody, layerNameSet)) {
-        if (resolveLinkTarget(sourceId, link.target, layerNameSet) === id) {
-          incoming.push({ id: sourceId, layer: source.name, raw: link.raw });
-          break;
-        }
-      }
-    }
-  }
-
-  return {
-    source: { id, contributors: resolved.contributors },
-    outgoing,
-    incoming: dedupeIncoming(incoming).sort((a, b) => a.id.localeCompare(b.id)),
-  };
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -706,81 +646,15 @@ function buildLegacyLayers(parsed) {
   return buildSources({ layers: layersJson }, process.cwd());
 }
 
-async function layersWith(id) {
-  const results = await Promise.all(layers.map(async (source) => {
-    const entry = await source.loadConcept(id);
-    return entry ? source.name : null;
-  }));
-  return results.filter(Boolean);
-}
-
-function orderLayerNames(names) {
-  const unique = [...new Set(names)];
-  return unique.sort((a, b) => (layerByName.get(b)?.level ?? 0) - (layerByName.get(a)?.level ?? 0));
-}
-
-// Thin wrappers over the shared pure resolution in markdown-links.mjs — kept
-// under these names because they're called throughout this file, and so this
-// module's own get_links stays the reference implementation extractLinks and
-// friends are proven against.
-function resolveLinkTarget(sourceId, target) {
-  return resolveLinkTargetPure(sourceId, target, layerNameSet);
-}
-
-function safeId(value) {
-  return safeIdPure(value);
-}
-
+// get_links, list_concepts, and the read_file markdown live in
+// concept-queries.mjs, shared with the CLI, which is now the reference
+// implementation extractLinks and friends are proven against.
 function normalizeId(value) {
   return normalizeIdPure(value);
 }
 
-function dedupeIncoming(rows) {
-  const seen = new Set();
-  const out = [];
-  for (const row of rows) {
-    const key = `${row.id}@${row.layer}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(row);
-  }
-  return out;
-}
-
 function assembleMarkdown(resolved) {
-  const fmLines = Object.entries(resolved.frontmatter).map(([k, v]) => `${k}: ${Array.isArray(v) ? `[${v.join(", ")}]` : v}`);
-  const banner = resolved.frontmatter.status === "unreviewed"
-    ? `> ⚠ unreviewed capture from ${resolved.frontmatter.author ?? "unknown"}, ${resolved.frontmatter.captured ?? "?"} — decays after ${liveLayer?.retentionDays ?? 14} days unless promoted\n\n`
-    : "";
-  const front = `---\n${fmLines.join("\n")}\n---\n\n${banner}`;
-  const bodyParts = resolved.sections.map((s) => {
-    // A suppressed section is an explicit tombstone. Rendering nothing would
-    // hide that a layer deliberately withdrew it — say who suppressed it.
-    if (s.suppressed) {
-      const note = `_(suppressed by ${s.sourceLayer})_`;
-      return s.heading ? `${s.heading}\n\n${note}` : note;
-    }
-    const resolutionNote = s.contextResolution
-      ? `\n\n> ContextCake resolution ${s.contextResolution.status}: policy ${s.contextResolution.policyId}; selected source ${s.contextResolution.selectedSource}. Original source documents are preserved.` : "";
-    const head = (s.heading ? `${s.heading}\n\n${s.content}` : s.content) + resolutionNote;
-    if (!s.conflicts || s.conflicts.length === 0) return head;
-    const notes = s.conflicts.map((c) => renderDissent(c, s.sourceUpdated)).join("\n\n");
-    return `${head}\n\n${notes}`;
-  });
-  return front + bodyParts.join("\n\n");
-}
-
-// One blockquote per dissent: a header line naming the layer and date — marked
-// when the dissent is newer than the effective value (day granularity, both
-// dates must parse; see conflict-policy.mjs) — then the dissent's full content
-// with every line quoted. An empty-content dissent is a lower layer's tombstone
-// for a section a higher layer kept. Undated dissent renders `(updated ?)`.
-function renderDissent(dissent, sourceUpdated) {
-  const updated = dissent.updated ?? "?";
-  if (!dissent.content) return `> ⚠ ${dissent.layer} suppresses this section (updated ${updated})`;
-  const newer = isNewerDay(dissent.updated, sourceUpdated) ? " — ⚠ newer than the effective value" : "";
-  const body = dissent.content.split("\n").map((line) => (line ? `> ${line}` : ">")).join("\n");
-  return `> ⚠ ${dissent.layer} disagrees (updated ${updated})${newer}:\n${body}`;
+  return assembleMarkdownShared(resolved, { retentionDays: liveLayer?.retentionDays ?? 14 });
 }
 
 function parseArgs(argv) {

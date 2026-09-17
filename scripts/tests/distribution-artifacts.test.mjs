@@ -135,6 +135,24 @@ test('staged npm CLI finds its default manifest through the shared platform path
   }
 })
 
+test('staged npm CLI finds its default manifest through the shared platform paths', async () => {
+  // The npm CLI used to carry its own config-dir guess, which answered
+  // ~/.config on Windows while the app writes %APPDATA%. It now imports the
+  // engine's platform-paths.mjs from its own staged layout.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'contextcake-npm-paths-test-'))
+  try {
+    await buildNpmPackage({ version, outDir: dir })
+    const configDir = path.join(dir, 'config-override')
+    const help = execFileSync(process.execPath, [path.join(dir, 'bin', 'contextcake.mjs'), '--help'], {
+      encoding: 'utf8',
+      env: { ...process.env, CONTEXTCAKE_CONFIG_DIR: configDir, CONTEXTCAKE_MANIFEST: '' },
+    })
+    assert.match(help, new RegExp(`${path.join(configDir, 'manifest.json').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('release artifacts build together and retain a cryptographic linkage to the DMG', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'contextcake-release-artifacts-test-'))
   try {

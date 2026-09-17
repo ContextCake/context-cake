@@ -60,9 +60,17 @@ for (const row of appRelease.platforms.filter((candidate) => !candidate.availabl
 }
 // The npm route (src/data/npm-release.json). Commands sit in highlighted code,
 // so they are checked against the page's text rather than its markup.
+// A plain scan, not a regex strip: this reads trusted build output and only
+// needs the characters outside tags.
 function pageText(page) {
-  return page
-    .replace(/<[^>]*>/g, '')
+  let text = ''
+  let inTag = false
+  for (const character of page) {
+    if (character === '<') inTag = true
+    else if (character === '>' && inTag) inTag = false
+    else if (!inTag) text += character
+  }
+  return text
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&#x27;/g, "'")
     .replace(/&lt;/g, '<')

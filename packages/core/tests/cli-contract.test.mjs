@@ -266,8 +266,6 @@ test("spawned commands get the default manifest injected and the wrapSpawn hook"
   const pack = TABLE.byId.get("pack");
   assert.deepEqual(prepareSpawnArgs(pack, ["list"], { manifestPath: home.manifestPath }), ["list", "--manifest", home.manifestPath]);
   assert.deepEqual(prepareSpawnArgs(pack, ["inspect", "/dir"], { manifestPath: home.manifestPath }), ["inspect", "/dir"]);
-  const doctor = TABLE.byId.get("doctor");
-  assert.deepEqual(prepareSpawnArgs(doctor, ["--json"], { manifestPath: "/nowhere/manifest.json" }), ["--manifest", "/nowhere/manifest.json", "--json"]);
   const resolve = TABLE.byId.get("resolve");
   assert.deepEqual(prepareSpawnArgs(resolve, ["--personal", "/a", "--shared", "/b"], { manifestPath: "/nowhere" }), ["--personal", "/a", "--shared", "/b"]);
   assert.deepEqual(prepareSpawnArgs(resolve, ["--help"], { manifestPath: "/nowhere" }), ["--help"]);
@@ -501,9 +499,6 @@ test("spawned entrypoints never receive global flags they do not implement", asy
     if (result.json) assert.equal(result.json.error.code, code);
     else assert.match(result.stderr, code === "TIMEOUT_REFUSED" ? /timeout/ : /does not accept/);
   }
-  // doctor implements --json itself, so it passes through.
-  const doctor = TABLE.byId.get("doctor");
-  assert.deepEqual(prepareSpawnArgs(doctor, ["--json"], { manifestPath: home.manifestPath }), ["--manifest", home.manifestPath, "--json"]);
   // Position does not matter: the older parsers would swallow the next
   // argument either way. After `--` nothing is a flag.
   const write = TABLE.byId.get("write");

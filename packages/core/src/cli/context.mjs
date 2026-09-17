@@ -11,6 +11,13 @@ import { createRedactor, manifestSecretValues } from "../control/redact.mjs";
 
 // Dispatcher-only: aborts ctx.signal. Families read ctx.signal instead.
 export const ABORT = Symbol("contextcake.abort");
+// Dispatcher-only: runs the cleanups registered with ctx.onClose.
+export const CLOSE = Symbol("contextcake.close");
+
+// How long all ctx.onClose cleanups may take together. It covers an MCP
+// child that ignores SIGTERM: sources/mcp.mjs waits 300ms, sends SIGKILL, and
+// waits up to 700ms more.
+export const CLOSE_BUDGET_MS = 1500;
 
 // "sha256:" + hash(stableJson(manifest)): key order never changes it.
 export function manifestRevisionOf(manifest) {
@@ -34,6 +41,8 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
   // Aborted by the dispatcher on --timeout or an interrupt. The reason is the
   // ControlError (TIMEOUT or INTERRUPTED) the command should answer with.
   const controller = new AbortController();
+  const closers = [];
+  let closing = null;
 
   const ctx = {
     command,
@@ -153,6 +162,15 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
       if (controller.signal.aborted) throw controller.signal.reason;
     },
 
+    // Registers an async cleanup (close sources, kill children). The
+    // dispatcher runs every cleanup once, newest first, after run() settles,
+    // and before it answers a timeout or an interrupt, so an abandoned read
+    // cannot leave a child process behind when the CLI exits.
+    onClose(fn) {
+      if (typeof fn !== "function") throw new TypeError("ctx.onClose needs a function");
+      closers.push(fn);
+    },
+
     setContext(partial) {
       Object.assign(context, partial);
     },
@@ -198,6 +216,23 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
   };
   ctx[ABORT] = (reason) => {
     if (!controller.signal.aborted) controller.abort(reason);
+  };
+  ctx[CLOSE] = () => {
+    closing ??= (async () => {
+      const deadline = Date.now() + CLOSE_BUDGET_MS;
+      while (closers.length) {
+        const fn = closers.pop();
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        let timer;
+        await Promise.race([
+          Promise.resolve().then(fn).catch(() => {}),
+          new Promise((resolve) => { timer = setTimeout(resolve, remaining); }),
+        ]);
+        clearTimeout(timer);
+      }
+    })();
+    return closing;
   };
   ctx.collectManifestSecrets();
   return ctx;

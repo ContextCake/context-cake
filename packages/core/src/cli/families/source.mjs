@@ -436,7 +436,7 @@ export default defineFamily({
         const timeoutMs = ctx.flags.sourceTimeout ?? 30_000;
         if (timeoutMs < 1) throw invalid("--source-timeout must be at least 1.");
         const result = await call(() => withSourceSession(
-          { manifestPath: ctx.manifestPath, profileId: selection.profileId, onClose: (close) => ctx.onClose?.(close), names: ctx.args.names?.length ? ctx.args.names : null },
+          { manifestPath: ctx.manifestPath, profileId: selection.profileId, onClose: (close) => ctx.onClose(close), names: ctx.args.names?.length ? ctx.args.names : null },
           ({ entries }) => {
             for (const { layer } of entries) {
               if (layer.source === "mcp" && typeof layer.command === "string") warnExecutable(ctx, layer.command, layer.args ?? []);
@@ -479,7 +479,7 @@ export default defineFamily({
         const name = ctx.args.name;
         const ops = operations(ctx);
         const data = await call(() => withSourceSession(
-          { manifestPath: ctx.manifestPath, profileId: selection.profileId, onClose: (close) => ctx.onClose?.(close), names: [name] },
+          { manifestPath: ctx.manifestPath, profileId: selection.profileId, onClose: (close) => ctx.onClose(close), names: [name] },
           ({ layers, entries }) => ops.syncSource(name, { layers, sources: entries.map((entry) => entry.source).filter(Boolean), signal: ctx.signal }),
         ));
         return { data, text: `Synced ${name}${data.concepts !== undefined ? `: ${data.concepts} concept(s)` : ""}.` };

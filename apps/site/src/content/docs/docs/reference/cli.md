@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: Flags and output shapes for resolver, doctor, profiles, sources, settings, Packs, ingest, write, promote, and mcp-server.
+description: Flags and output shapes for resolver, doctor, profiles, sources, settings, concept and file queries, Packs, ingest, write, promote, and mcp-server.
 ---
 
 Every tool is a standalone Node.js script run with `node <tool>.mjs`. The engine is
@@ -291,23 +291,51 @@ Provide either `--event` or `--demo`.
 node classify-context.mjs --demo
 ```
 
-## contextcake doctor
+## contextcake concept and file
 
-The desktop CLI's focused diagnostic command begins in ContextCake 0.9.0. It
-uses the app's default manifest unless `--manifest` is supplied:
+Reads the selected profile's knowledge the way the app and MCP do. These
+commands are experimental.
 
 ```bash
-contextcake doctor [--manifest <file>] [--profile <id>] [--json]
+contextcake concept list [--type <type>] [--json]
+contextcake concept search <query> [--type <type>] [--source <name>] [--limit <n>] [--json]
+contextcake concept read <id> [--json]
+contextcake concept links <id> [--json]
+contextcake file list [--json]
+contextcake file read <layer>/<path> [--json]
 ```
 
-Checks configuration, effective limits, local folder presence, and device-local
-collector availability. Remote/executable sources are marked not probed. This is a
-fresh run, not the app's private in-memory history. The dependency-free equivalent
-is `node packages/core/src/doctor.mjs --manifest <file> --json`; it reports local
-observability as not checked. See [diagnostics](/docs/guides/diagnostics).
+`search` ranks like the app's search box (at most 50 hits). `read` returns the
+resolved concept with provenance, per-section `conflicts[]`, and
+`fresherDissent`; without `--json` it prints the same markdown MCP `read_file`
+returns. `links` matches MCP `get_links`. `file read` only reads inside a folder
+source's root and exits 5 for a path that leaves it.
 
-The full source/settings administration and query command families remain planned
-control-plane increments. Existing resolve and MCP commands remain available.
+Each accepts `--profile`, `--cwd`, and `--timeout`. When a source cannot be read
+(a missing folder, an unreachable remote, an invalid layer) the command still
+answers from the rest, exits 0, and names the source in `coverage.degraded`. Pass
+`--require-complete` to exit 6 instead.
+
+## contextcake doctor
+
+A fresh, bounded check of this machine. It uses the default manifest unless
+`--manifest` is supplied, and it runs even when no manifest exists:
+
+```bash
+contextcake doctor [--manifest <file>] [--profile <id>] [--cwd <path>] [--json]
+```
+
+Checks the manifest and any invalid layers, the selected profile, whether each
+folder or remote source can be reached, whether the config, data, and cache
+folders are writable, and every `contextcake` on `PATH` with the version its install
+files record (doctor never runs them). It warns when more than one install is on
+`PATH` or when the first one has a different version than the CLI you ran, since a
+harness runs whichever comes first. MCP sources are never started, and GitHub
+sources whose credential is in the app's keychain are not contacted; both are
+listed as not probed and do not count against `--require-complete`. The Mac
+app's CLI also checks device-local collector availability. A failed check exits
+8, with the report in `error.details` and fix commands in `nextActions`. See
+[diagnostics](/docs/guides/diagnostics).
 
 ## Related
 

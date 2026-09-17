@@ -36,6 +36,7 @@ import { ControlError } from "./control/errors.mjs";
 import { patchSettings, settingsView } from "./control/settings.mjs";
 import { withDeadline } from "./control/util.mjs";
 import { mergeConcepts, resolveConcept } from "./resolver.mjs";
+import { decorateResolvedDispositions } from "./concept-queries.mjs";
 import { tokenizeQuery } from "./search.mjs";
 import { createSearchIndex } from "./search-index.mjs";
 import { createSearchStore, isSearchStoreAvailable } from "./search-store.mjs";
@@ -2549,26 +2550,6 @@ export function createEngineService({
       health: statusApi(),
       indexing: indexingActivityApi(),
     };
-  }
-
-  function decorateResolvedDispositions(resolved, decisions) {
-    for (const section of resolved.sections) {
-      if (!section.conflicts?.length) continue;
-      const id = `section_content::${resolved.id}::${section.key}`;
-      const latest = decisions.filter((row) => row.discrepancyId === id || row.conflictId === `${resolved.id}::${section.key}`).at(-1);
-      const current = [
-        { source: section.sourceLayer, fingerprint: createHash("sha256").update(section.content).digest("hex") },
-        ...section.conflicts.map((item) => ({ source: item.layer, fingerprint: createHash("sha256").update(item.content).digest("hex") })),
-      ].map((item) => `${item.source}:${item.fingerprint}`).sort();
-      const recorded = (latest?.contributorFingerprints ?? []).map((item) => `${item.source}:${item.fingerprint}`).sort();
-      const unchanged = recorded.length === current.length && recorded.every((value, index) => value === current[index]);
-      section.discrepancy = {
-        id,
-        status: latest?.action === "acknowledge" && unchanged ? "acknowledged" : latest ? "reopened" : "needs_review",
-        ...(latest?.id ? { decisionId: latest.id } : {}),
-        ...(latest?.reasonCode ? { reasonCode: latest.reasonCode } : {}),
-      };
-    }
   }
 
   /**

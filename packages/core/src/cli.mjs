@@ -15,12 +15,16 @@ import { ControlError, EXIT_CATEGORIES, exitCategoryFor, exitCodeFor, toControlE
 import { createRedactor } from "./control/redact.mjs";
 import { resolvePaths } from "./platform-paths.mjs";
 import { parseCommandArgs, parseTimeout } from "./cli/args.mjs";
-import { ABORT, createCommandContext } from "./cli/context.mjs";
+import { ABORT, CLOSE, createCommandContext } from "./cli/context.mjs";
 import { FAMILIES } from "./cli/families/index.mjs";
 import { prepareSpawnArgs, spawnEngine } from "./cli/spawn.mjs";
 import { buildTable, describeCommand, helpSchema, resolveCommand, usageLine } from "./cli/table.mjs";
 
 export const ENVELOPE_SCHEMA_VERSION = 1;
+
+// sources/mcp.mjs gives a child 300ms after SIGTERM, then SIGKILL and up to
+// 700ms more; the process must not exit inside that window.
+const ABANDONED_EXIT_DELAY_MS = 1000;
 
 export const TABLE = buildTable(FAMILIES);
 
@@ -120,6 +124,17 @@ function jsonRequested(argv) {
  *   interrupt (a promise that resolves when the user interrupts).
  */
 export async function runCli(argv, options = {}) {
+  // Cleanups registered with ctx.onClose run once the answer is written and
+  // before runCli returns, whether run() finished, failed, or was abandoned.
+  const scope = { ctx: null };
+  try {
+    return await dispatch(argv, options, scope);
+  } finally {
+    await scope.ctx?.[CLOSE]();
+  }
+}
+
+async function dispatch(argv, options, scope) {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const stdout = options.stdout ?? process.stdout;
@@ -235,12 +250,14 @@ export async function runCli(argv, options = {}) {
     cwd,
     stderr,
     secrets: options.secrets ?? [],
-    hooks: { stdinIsTTY: options.stdinIsTTY ?? false, wrapSpawn: options.wrapSpawn ?? null },
+    hooks: { stdinIsTTY: options.stdinIsTTY ?? false, wrapSpawn: options.wrapSpawn ?? null, version },
   });
   const failWithContext = (error) => {
     ctx.collectManifestSecrets();
     return fail(command.id, error, ctx.context, ctx.warnings, ctx.nextActions, { redact: ctx.redact, redactString: (text) => ctx.redact(text) });
   };
+
+  scope.ctx = ctx;
 
   // --timeout and interrupts abort ctx.signal with the error the command
   // answers with. A read is abandoned at once: its envelope goes out and
@@ -361,9 +378,10 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     }
     process.exitCode = exitCode;
     // An abandoned read may still hold a socket or timer after its envelope
-    // is out. Give stdout a moment to drain, then end the process; unref'd,
-    // so a process with nothing left running exits on its own sooner.
-    if (abandoned) setTimeout(() => process.exit(exitCode), 200).unref();
+    // is out. Its ctx.onClose cleanups already ran inside runCli; give stdout
+    // and any child a SIGTERM grace plus SIGKILL's worth of time, then end the
+    // process. Unref'd, so a process with nothing left running exits sooner.
+    if (abandoned) setTimeout(() => process.exit(exitCode), ABANDONED_EXIT_DELAY_MS).unref();
   } finally {
     if (handlesSignals) process.off("SIGINT", listener);
   }

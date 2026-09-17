@@ -62,6 +62,7 @@ export const CODE_CATEGORIES = Object.freeze({
   PROJECT_MAPPED: "conflict",
   PERMISSION_DENIED: "permission",
   UNTRUSTED_SOURCE: "permission",
+  PATH_OUTSIDE_LAYER: "permission",
   CREDENTIAL_BACKEND_UNAVAILABLE: "permission",
   UNAVAILABLE: "unavailable",
   TIMEOUT: "unavailable",

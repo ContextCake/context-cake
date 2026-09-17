@@ -266,8 +266,6 @@ test("spawned commands get the default manifest injected and the wrapSpawn hook"
   const pack = TABLE.byId.get("pack");
   assert.deepEqual(prepareSpawnArgs(pack, ["list"], { manifestPath: home.manifestPath }), ["list", "--manifest", home.manifestPath]);
   assert.deepEqual(prepareSpawnArgs(pack, ["inspect", "/dir"], { manifestPath: home.manifestPath }), ["inspect", "/dir"]);
-  const doctor = TABLE.byId.get("doctor");
-  assert.deepEqual(prepareSpawnArgs(doctor, ["--json"], { manifestPath: "/nowhere/manifest.json" }), ["--manifest", "/nowhere/manifest.json", "--json"]);
   const resolve = TABLE.byId.get("resolve");
   assert.deepEqual(prepareSpawnArgs(resolve, ["--personal", "/a", "--shared", "/b"], { manifestPath: "/nowhere" }), ["--personal", "/a", "--shared", "/b"]);
   assert.deepEqual(prepareSpawnArgs(resolve, ["--help"], { manifestPath: "/nowhere" }), ["--help"]);

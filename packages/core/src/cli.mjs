@@ -237,7 +237,7 @@ export async function runCli(argv, options = {}) {
     cwd,
     stderr,
     secrets: options.secrets ?? [],
-    hooks: { stdinIsTTY: options.stdinIsTTY ?? false, wrapSpawn: options.wrapSpawn ?? null },
+    hooks: { stdinIsTTY: options.stdinIsTTY ?? false, wrapSpawn: options.wrapSpawn ?? null, version },
   });
   const failWithContext = (error) => {
     ctx.collectManifestSecrets();

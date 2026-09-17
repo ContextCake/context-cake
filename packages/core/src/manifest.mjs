@@ -9,6 +9,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { ControlError } from "./control/errors.mjs";
 
 export const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export const MANIFEST_LOCK_TIMEOUT_MS = 15_000;
@@ -515,6 +516,17 @@ export function writeContextManifest(manifestPath, manifest, {
   writeAtomicJson(path.resolve(manifestPath), manifest);
 }
 
+// Creates a manifest that must not exist yet. The exclusive link means a
+// manifest another process wrote after our check is never replaced; the lock
+// keeps a locked writer from seeing a half-created state.
+export function createContextManifest(manifestPath, manifest) {
+  validateContextManifest(manifest);
+  const resolved = path.resolve(manifestPath);
+  return withManifestLock(resolved, () => {
+    writeAtomicBytes(resolved, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`), { exclusiveTarget: true });
+  });
+}
+
 export function withManifestLock(manifestPath, mutate, {
   timeoutMs = MANIFEST_LOCK_TIMEOUT_MS,
   staleMs = MANIFEST_LOCK_STALE_MS,
@@ -564,10 +576,14 @@ export function mutateContextManifest(manifestPath, mutate, {
   allowMissing = true,
   allowLegacy = true,
   allowTransitional = false,
+  precondition = null,
 } = {}) {
   const resolved = path.resolve(manifestPath);
   return withManifestLock(resolved, () => {
     const manifest = readContextManifest(resolved, { allowMissing });
+    // Runs under the lock against the manifest about to be mutated, so an
+    // expected-revision check cannot race a concurrent writer.
+    precondition?.(manifest);
     const result = mutate(manifest);
     writeContextManifest(resolved, manifest, { allowLegacy, allowTransitional });
     return result;
@@ -579,23 +595,34 @@ export function migrateManifestToV2(manifestPath, {
   projectPath = null,
   now = () => new Date(),
   realpath = fs.realpathSync.native,
+  precondition = null,
 } = {}) {
   const resolved = path.resolve(manifestPath);
   return withManifestLock(resolved, () => {
     const raw = fs.readFileSync(resolved);
     const manifest = readContextManifest(resolved, { allowMissing: false });
+    precondition?.(manifest);
     const beforeMode = classifyManifest(manifest);
     if (newProfile) validateNewProfile(newProfile, manifest);
 
+    // profileId is allocated here, under the lock, so two concurrent creates
+    // cannot both pick the same free id. revision is the manifest as written.
     if (beforeMode === "v2") {
       const candidate = structuredClone(manifest);
-      applyNewProfile(candidate, newProfile, projectPath, realpath);
+      const profileId = applyNewProfile(candidate, newProfile, projectPath, realpath);
       if (newProfile) writeContextManifest(resolved, candidate, { allowLegacy: false });
-      return { action: newProfile ? "profile-created" : "already-v2", mode: "v2", backupPath: null, backupHash: null };
+      return {
+        action: newProfile ? "profile-created" : "already-v2",
+        mode: "v2",
+        backupPath: null,
+        backupHash: null,
+        profileId,
+        revision: manifestRevision(newProfile ? candidate : manifest),
+      };
     }
 
     const candidate = normalizeToV2(manifest);
-    applyNewProfile(candidate, newProfile, projectPath, realpath);
+    const profileId = applyNewProfile(candidate, newProfile, projectPath, realpath);
     validateContextManifest(candidate);
 
     const backupHash = crypto.createHash("sha256").update(raw).digest("hex");
@@ -603,7 +630,7 @@ export function migrateManifestToV2(manifestPath, {
     const backupPath = `${resolved}.pre-profiles.${stamp}.${backupHash}.json`;
     writeVerifiedBackup(backupPath, raw, backupHash);
     writeContextManifest(resolved, candidate, { allowLegacy: false });
-    return { action: "migrated", mode: "v2", backupPath, backupHash };
+    return { action: "migrated", mode: "v2", backupPath, backupHash, profileId, revision: manifestRevision(candidate) };
   });
 }
 
@@ -949,11 +976,11 @@ function normalizeToV2(manifest) {
 function applyNewProfile(manifest, newProfile, projectPath, realpath) {
   if (!newProfile) {
     if (projectPath) throw new Error("A project mapping requires a new profile.");
-    return;
+    return null;
   }
   const id = newProfile.id ?? createProfileId(newProfile.label, Object.keys(manifest.profiles));
   assertProfileId(id);
-  if (Object.hasOwn(manifest.profiles, id)) throw new Error(`ContextCake profile already exists: ${id}`);
+  if (Object.hasOwn(manifest.profiles, id)) throw new ControlError("PROFILE_EXISTS", `ContextCake profile already exists: ${id}`, { status: 409 });
   manifest.profiles[id] = {
     label: normalizeProfileLabel(newProfile.label),
     layers: structuredClone(newProfile.layers ?? []),
@@ -964,18 +991,19 @@ function applyNewProfile(manifest, newProfile, projectPath, realpath) {
     for (const [existingRoot, existingId] of Object.entries(manifest.projects ?? {})) {
       let existingCanonical;
       try { existingCanonical = canonicalExistingPath(existingRoot, realpath, "Project mapping"); } catch { continue; }
-      if (existingCanonical === canonical && existingId !== id) throw new Error(`Project mapping already belongs to profile ${existingId}: ${existingRoot}`);
+      if (existingCanonical === canonical && existingId !== id) throw new ControlError("PROJECT_MAPPED", `Project mapping already belongs to profile ${existingId}: ${existingRoot}`, { status: 409 });
     }
     manifest.projects ??= {};
     manifest.projects[canonical] = id;
   }
+  return id;
 }
 
 function validateNewProfile(profile, manifest) {
   assertObject(profile, "New profile");
   normalizeProfileLabel(profile.label);
   if (profile.id !== undefined) assertProfileId(profile.id);
-  if (profile.id && Object.hasOwn(manifest.profiles ?? {}, profile.id)) throw new Error(`ContextCake profile already exists: ${profile.id}`);
+  if (profile.id && Object.hasOwn(manifest.profiles ?? {}, profile.id)) throw new ControlError("PROFILE_EXISTS", `ContextCake profile already exists: ${profile.id}`, { status: 409 });
   validateLayers(profile.layers ?? [], "new profile");
   if (profile.pendingSources) validatePendingSources(profile.pendingSources, "new profile");
 }

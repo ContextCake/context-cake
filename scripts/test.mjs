@@ -73,6 +73,9 @@ const SUITES = [
   { group: "unit", name: "discrepancy-projection", ...node("discrepancy-projection.test.mjs") },
   { group: "unit", name: "discrepancy-link-actions", ...node("discrepancy-link-actions.test.mjs") },
   { group: "unit", name: "discrepancy-batch", ...node("discrepancy-batch.test.mjs") },
+  { group: "unit", name: "cli-contract", ...node("cli-contract.test.mjs") },
+  { group: "unit", name: "cli-profile", ...node("cli-profile.test.mjs") },
+  { group: "unit", name: "cli-process", ...node("cli-process.test.mjs") },
 
   // Write path, sync, and the servers. These bind ports and shell out to git.
   { group: "integration", name: "profile-runtime", ...sh("profile-runtime-test.sh") },
@@ -108,6 +111,12 @@ const SUITES = [
     name: "distribution-artifacts",
     command: process.execPath,
     args: ["--test", "scripts/tests/distribution-artifacts.test.mjs"],
+  },
+  {
+    group: "release",
+    name: "npm-package-e2e",
+    command: process.execPath,
+    args: ["--test", "scripts/tests/npm-package-e2e.test.mjs"],
   },
   {
     group: "release",

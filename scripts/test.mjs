@@ -77,6 +77,7 @@ const SUITES = [
   { group: "unit", name: "cli-profile", ...node("cli-profile.test.mjs") },
   { group: "unit", name: "cli-query", ...node("cli-query.test.mjs") },
   { group: "unit", name: "cli-doctor", ...node("cli-doctor.test.mjs") },
+  { group: "unit", name: "cli-process", ...node("cli-process.test.mjs") },
 
   // Write path, sync, and the servers. These bind ports and shell out to git.
   { group: "integration", name: "profile-runtime", ...sh("profile-runtime-test.sh") },

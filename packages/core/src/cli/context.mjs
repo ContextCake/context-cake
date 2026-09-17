@@ -9,19 +9,12 @@ import { resolvePaths } from "../platform-paths.mjs";
 import { ControlError, manifestControlError } from "../control/errors.mjs";
 import { createRedactor, manifestSecretValues } from "../control/redact.mjs";
 
+// Dispatcher-only: aborts ctx.signal. Families read ctx.signal instead.
+export const ABORT = Symbol("contextcake.abort");
+
 // "sha256:" + hash(stableJson(manifest)): key order never changes it.
 export function manifestRevisionOf(manifest) {
   return `sha256:${manifestRevision(manifest)}`;
-}
-
-// The revision of whatever is on disk now, or null. Used after a command runs,
-// so a mutation's envelope carries the revision the next call should expect.
-export function currentManifestRevision(manifestPath) {
-  try {
-    return manifestRevisionOf(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
-  } catch {
-    return null;
-  }
 }
 
 export function createCommandContext({ command, table, parsed, env, cwd, stderr, secrets = [], hooks = {} }) {
@@ -37,6 +30,9 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
   const nextActions = [];
   let manifest = null;
   let criticalDepth = 0;
+  // Aborted by the dispatcher on --timeout or an interrupt. The reason is the
+  // ControlError (TIMEOUT or INTERRUPTED) the command should answer with.
+  const controller = new AbortController();
 
   const ctx = {
     command,
@@ -52,6 +48,9 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
     context,
     warnings,
     nextActions,
+    // Pass to anything that accepts an AbortSignal (fetch, child processes,
+    // withDeadline callers) so a timed-out or interrupted command stops work.
+    signal: controller.signal,
     json: flags.json === true,
     quiet: flags.quiet === true,
     // A command that would need a human (a trust prompt, a hidden secret) must
@@ -130,8 +129,23 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
       return selection;
     },
 
+    // Throws the abort reason (a TIMEOUT or INTERRUPTED ControlError) once
+    // ctx.signal has aborted. Call it before a point of no return.
+    throwIfAborted() {
+      if (controller.signal.aborted) throw controller.signal.reason;
+    },
+
     setContext(partial) {
       Object.assign(context, partial);
+    },
+
+    // A write command calls this with the revision of the manifest it wrote
+    // under the lock (hex, or "sha256:" + hex). The envelope then reports that
+    // revision, never a later disk read that could see another writer's change.
+    noteManifestWrite(revision) {
+      if (revision == null) return;
+      const text = String(revision);
+      context.manifestRevision = text.startsWith("sha256:") ? text : `sha256:${text}`;
     },
 
     warn(code, message, details = null) {
@@ -163,6 +177,9 @@ export function createCommandContext({ command, table, parsed, env, cwd, stderr,
     get inCriticalSection() {
       return criticalDepth > 0;
     },
+  };
+  ctx[ABORT] = (reason) => {
+    if (!controller.signal.aborted) controller.abort(reason);
   };
   ctx.collectManifestSecrets();
   return ctx;

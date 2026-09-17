@@ -75,7 +75,7 @@ export function renderMcpManifest(version) {
     homepage: 'https://contextcake.com',
     documentation: 'https://contextcake.com/docs',
     support: `https://github.com/${REPOSITORY}/issues`,
-    compatibility: { platforms: ['darwin'], runtimes: { node: '>=22' } },
+    compatibility: { platforms: ['darwin', 'win32'], runtimes: { node: '>=22' } },
     server: {
       type: 'node',
       entry_point: 'server/index.mjs',

@@ -194,6 +194,14 @@ CC_DEB_MAINTAINER="Name <address>" npm run dist:linux   # the x64 .deb (runs on 
   in renderer code will 401 inside the app.
 - **`resources/bin/contextcake` must stay executable** (mode 755) and POSIX-sh
   compatible — it's exec'd before any Node exists.
+- **`src/cli/cli.mjs` is a thin wrapper, not a dispatcher.** Commands, flags,
+  help, and `help --json` live in the engine's command table
+  (`packages/core/src/cli.mjs` + `cli/families/`), which the npm CLI wraps too.
+  The wrapper adds only the app version and a `wrapSpawn` hook: every spawned
+  entrypoint gets `ELECTRON_RUN_AS_NODE=1`, and `mcp`/`doctor` run through
+  `src/observability/{mcp,doctor}-launcher.mjs`. A new command goes in the
+  engine table, never here; `test/cli-wrapper.test.mjs` pins the hook. The
+  packaged wrapper finds the engine at `Resources/engine/src/cli.mjs`.
 - **The CLI runs a second engine, and it does not share the app's.** The shim
   execs `src/cli/cli.mjs`, which forks an engine entrypoint against the same
   manifest the app's utility process is already serving. That independence is
@@ -210,7 +218,7 @@ CC_DEB_MAINTAINER="Name <address>" npm run dist:linux   # the x64 .deb (runs on 
   anything; it is duplicated work and split freshness. The fix, when it is
   worth building, is to dispatch to the running app's loopback service, and the
   blocker is that the bearer deliberately exists only in memory and on the
-  message port (see the comment at the spawn site in `src/cli/cli.mjs`).
+  message port (see the comment at the spawn site in the engine's `packages/core/src/cli/spawn.mjs`).
 - **Harness connection is sudo-free, and always names the absolute shim.** The
   `contextcake:cli-status` and `cli-install` IPC results carry `shimPath` (the
   packaged shim's absolute path) and `linkPath`. The console builds every
@@ -272,7 +280,7 @@ CC_DEB_MAINTAINER="Name <address>" npm run dist:linux   # the x64 .deb (runs on 
   top-level await would let `ready` fire first) from `enginePaths().engineSrc`.
   An explicit `--user-data-dir` skips the pin (`src/main/user-data.mjs`): every
   spawned desktop test passes one, and pinning over it would send tests into
-  the developer's real manifest. `src/cli/cli.mjs` and the npm CLI read the same
+  the developer's real manifest. The engine CLI (which `src/cli/cli.mjs` wraps) and the npm CLI read the same
   `resolvePaths()`, so a mismatch breaks `contextcake mcp`. The smoke check
   compares userData against the switch when present, else the engine's config
   dir on Linux, else a folder named `ContextCake` on macOS. A smoke run that

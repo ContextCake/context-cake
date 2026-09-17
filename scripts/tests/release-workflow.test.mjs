@@ -308,7 +308,16 @@ test('npm publication is a separate OIDC-only, provenance-backed gate', () => {
   assert.match(npmPublish, /workflow_dispatch/)
   assert.match(npmPublish, /id-token: write/)
   assert.match(npmPublish, /environment: npm-publish/)
-  assert.match(npmPublish, /npm publish --provenance --access public/)
+  assert.match(npmPublish, /npm publish "\$TGZ" --provenance --access public/)
   assert.doesNotMatch(npmPublish, /NODE_AUTH_TOKEN|NPM_TOKEN/)
-  assert.match(npmPublish, /npm pack --dry-run/)
+})
+
+test('npm publishes the signed release tarball after checking it, never a rebuild', () => {
+  assert.match(npmPublish, /gh release download[\s\S]*?contextcake-\$VERSION\.tgz[\s\S]*?SHA256SUMS/)
+  assert.match(npmPublish, /scripts\/verify-npm-tarball\.mjs/)
+  assert.match(npmPublish, /npm publish "\$TGZ" --provenance --access public/)
+  assert.doesNotMatch(npmPublish, /buildNpmPackage/, 'the publish runner must not rebuild the package')
+  assert.match(npmPublish, /npm@11/)
+  assert.match(npmPublish, /11, 5, 1/)
+  assert.match(npmPublish, /dist\.integrity/, 'a re-run must compare integrity before publishing')
 })

@@ -14,6 +14,7 @@
 // deliberately untouched: it rides the git live layer between teammates, whose
 // profile ids differ by machine.
 
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { PROFILE_ID_PATTERN } from "./manifest.mjs";
@@ -100,4 +101,41 @@ async function exists(target) {
   } catch {
     return false;
   }
+}
+
+// Retired state: `profile delete` renames a profile's sidecar directory here
+// instead of deleting it, so a new profile that reuses the id starts clean and
+// the old decisions stay recoverable until `profile purge-state --confirm`.
+// `@` cannot appear in a profile id, so `<id>@<stamp>` never matches a
+// different profile whose id merely starts with this one.
+export function retiredSidecarRoot(manifestPath) {
+  return path.join(sidecarRoot(manifestPath), "retired");
+}
+
+export function retireSidecarDir(manifestPath, profileId, { now = new Date() } = {}) {
+  const source = sidecarDir(manifestPath, profileId);
+  if (!fs.existsSync(source)) return null;
+  const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const root = retiredSidecarRoot(manifestPath);
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  let target = path.join(root, `${profileId}@${stamp}`);
+  for (let suffix = 2; fs.existsSync(target); suffix += 1) target = path.join(root, `${profileId}@${stamp}-${suffix}`);
+  fs.renameSync(source, target);
+  return target;
+}
+
+// Every directory holding state for a profile id that no profile owns any
+// more: its retired copies, plus an active-layout directory left behind by an
+// engine that deleted the profile before retirement existed.
+export function listStaleSidecarDirs(manifestPath, profileId) {
+  const active = sidecarDir(manifestPath, profileId);
+  const found = [];
+  if (fs.existsSync(active)) found.push(active);
+  const root = retiredSidecarRoot(manifestPath);
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith(`${profileId}@`)) found.push(path.join(root, entry.name));
+  }
+  return found.sort();
 }

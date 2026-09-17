@@ -51,6 +51,8 @@ const SUITES = [
   { group: "unit", name: "cache-source", ...node("cache-source.test.mjs") },
   { group: "unit", name: "layer-files", ...node("layer-files.test.mjs") },
   { group: "unit", name: "heading-scan", ...node("heading-scan.test.mjs") },
+  { group: "unit", name: "frontmatter", ...node("frontmatter.test.mjs") },
+  { group: "unit", name: "platform-paths", ...node("platform-paths.test.mjs") },
   { group: "unit", name: "credential-scan", ...node("credential-scan.test.mjs") },
   { group: "unit", name: "pack-checksum", ...node("pack-checksum.test.mjs") },
   { group: "unit", name: "search", ...node("search.test.mjs") },

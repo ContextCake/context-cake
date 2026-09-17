@@ -26,6 +26,7 @@ import path from "node:path";
 import { assertInsideRoot, httpError, json, parseJson, realpathLenient, MIME } from "./http-util.mjs";
 import { defaultWalkLimits, findAttrGroup, matchHeadingLine, MAX_DOC_BYTES, normalizeHeading } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
+import { splitFrontmatter } from "./frontmatter.mjs";
 
 // Files the editor treats as editable text. SVG is text AND image: editable as
 // source, previewable as an image.
@@ -534,10 +535,9 @@ async function cleanupTargets(targets) {
 }
 
 function readFrontmatterValue(text, key) {
-  if (!text.startsWith("---\n")) return undefined;
-  const end = text.indexOf("\n---", 4);
-  if (end === -1) return undefined;
-  for (const line of text.slice(4, end).split(/\r?\n/)) {
+  const fence = splitFrontmatter(text);
+  if (!fence) return undefined;
+  for (const line of fence.raw.split(/\r?\n/)) {
     const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
     if (match?.[1] === key) return parseScalar(match[2].trim());
   }
@@ -545,14 +545,15 @@ function readFrontmatterValue(text, key) {
 }
 
 function replaceFrontmatterValue(text, key, value) {
-  if (!text.startsWith("---\n")) throw httpError(409, "This document has no writable frontmatter");
-  const end = text.indexOf("\n---", 4);
-  if (end === -1) throw httpError(409, "This document has malformed frontmatter");
-  const before = text.slice(4, end).split(/\r?\n/);
+  if (!/^---\r?\n/.test(text)) throw httpError(409, "This document has no writable frontmatter");
+  const fence = splitFrontmatter(text);
+  if (!fence) throw httpError(409, "This document has malformed frontmatter");
+  const { newline: nl } = fence;
+  const before = fence.raw.split(/\r?\n/);
   const index = before.findIndex((line) => line.startsWith(`${key}:`));
   if (index === -1) throw httpError(409, `Frontmatter field ${key} no longer exists`);
   before[index] = `${key}: ${renderScalar(value)}`;
-  return `---\n${before.join("\n")}\n---${text.slice(end + 4)}`;
+  return `---${nl}${before.join(nl)}${nl}---${fence.rest}`;
 }
 
 function parseScalar(value) {

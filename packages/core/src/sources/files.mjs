@@ -8,6 +8,7 @@
 
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { splitFrontmatter } from "../frontmatter.mjs";
 import {
   parseConcept, parseHeadingAttrs, normalizeConceptId, normalizeHeading,
   matchHeadingLine, stripAttrGroups, walkDocs, walkDocEntries, withDocumentDate, localDate, MAX_DOC_BYTES,
@@ -112,9 +113,9 @@ export function parseDocument({ content, stem, updated, ext = ".md" }) {
   return parsePlainMarkdown(content, stem, updated);
 }
 
-// Mirrors okf-local's parseFrontmatter detection: opening --- fence with a closer.
+// Same fence detection okf-local's parseFrontmatter uses, LF or CRLF.
 function hasFrontmatter(content) {
-  return content.startsWith("---\n") && content.indexOf("\n---", 4) !== -1;
+  return splitFrontmatter(content) !== null;
 }
 
 // Plain markdown (no frontmatter): first H1 becomes the title (not a section),

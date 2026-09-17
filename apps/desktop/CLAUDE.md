@@ -239,8 +239,9 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   `~/Library/Caches/ContextCake/`. Installers must preserve both. The native
   updater may maintain only its documented `.updaterId` rollout marker there.
 - **App name is pinned three places that must agree**: `app.setName('ContextCake')`
-  in `src/main/main.mjs`, `productName` in `package.json`, and the CLI's
-  `CONFIG_DIR` in `src/cli/cli.mjs`. They resolve the same `userData` dir the
+  in `src/main/main.mjs`, `productName` in `package.json`, and the macOS branch
+  of the engine's `packages/core/src/platform-paths.mjs`, which `src/cli/cli.mjs`
+  and the npm CLI both read for the default manifest. They resolve the same `userData` dir the
   app writes and the CLI reads — a mismatch breaks `contextcake mcp`. The smoke
   test asserts `userData=ContextCake`.
 - **Known gaps tracked as follow-ups** (not blocking merge): the updater reads the

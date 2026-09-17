@@ -11,6 +11,8 @@ import { slugify } from "./classify-context.mjs";
 import { sectionText } from "./sections.mjs";
 import { sourceConfigFingerprint, withManifestLockAsync } from "./manifest.mjs";
 import { loadProfileRuntime, resolveProfileLiveLayer } from "./profile-runtime.mjs";
+import { splitFrontmatter } from "./frontmatter.mjs";
+import { resolvePaths } from "./platform-paths.mjs";
 
 const PROMOTION_KEYS = [
   "promoteTo",
@@ -227,9 +229,14 @@ async function requestPromotion(liveRoot, curatedRoot, captureId, parsed) {
       `promotionDestination: ${dest}`,
       `promotionCaptureHash: ${captureHash}`,
       `promotionBinding: ${bindingNonce}`,
-    ].join("\n") + "\n"
-    : "";
-  const staged = raw.replace(/^---\n/, `---\npromoteTo: ${dest}\npromotedFrom: ${captureId}\n${bindingFrontmatter}`);
+    ]
+    : [];
+  // Insert after the opening fence in the capture's own line endings; a CRLF
+  // capture that missed a `^---\n` match used to stage with no promoteTo at all.
+  const fence = splitFrontmatter(raw);
+  const nl = fence?.newline ?? "\n";
+  const inserted = [`promoteTo: ${dest}`, `promotedFrom: ${captureId}`, ...bindingFrontmatter].map((line) => line + nl).join("");
+  const staged = fence ? raw.slice(0, fence.open) + inserted + raw.slice(fence.open) : raw;
   try {
     writeFileInRoot(curatedRoot, reviewRel, staged);
   } catch (error) {
@@ -402,11 +409,11 @@ function assertPromotionReviewKeys(content, profileAware) {
 }
 
 function frontmatterKeyCounts(content) {
-  if (!content.startsWith("---\n")) throw new Error("Promotion content must have YAML frontmatter.");
-  const end = content.indexOf("\n---", 4);
-  if (end === -1) throw new Error("Promotion content has unterminated YAML frontmatter.");
+  if (!/^---\r?\n/.test(content)) throw new Error("Promotion content must have YAML frontmatter.");
+  const fence = splitFrontmatter(content);
+  if (!fence) throw new Error("Promotion content has unterminated YAML frontmatter.");
   const counts = new Map();
-  for (const line of content.slice(4, end).split(/\r?\n/)) {
+  for (const line of fence.raw.split(/\r?\n/)) {
     const key = line.match(/^([A-Za-z0-9_-]+):/)?.[1];
     if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
   }
@@ -436,10 +443,9 @@ function createPromotionBinding(manifestPath, record) {
 
 function loadPromotionBinding(manifestPath, nonce) {
   assertPromotionNonce(nonce);
-  const root = promotionBindingDirectory(manifestPath);
   let record;
   try {
-    record = JSON.parse(readFileInRoot(root, `${nonce}.json`));
+    record = JSON.parse(readPromotionBindingFile(manifestPath, nonce));
   } catch (error) {
     throw new Error(`Could not load the authoritative local promotion binding: ${error.message}`);
   }
@@ -468,20 +474,50 @@ function writePromotionBinding(manifestPath, nonce, record, { exclusive = false 
 function deletePromotionBinding(manifestPath, nonce) {
   assertPromotionNonce(nonce);
   fs.rmSync(path.join(promotionBindingDirectory(manifestPath), `${nonce}.json`), { force: true });
+  const legacy = legacyPromotionBindingDirectory(manifestPath);
+  if (legacy) fs.rmSync(path.join(legacy, `${nonce}.json`), { force: true });
 }
 
+// A binding staged before bindings moved into the shared data directory is
+// still read from its old home, so an upgrade never strands a pending review.
+function readPromotionBindingFile(manifestPath, nonce) {
+  try {
+    return readFileInRoot(promotionBindingDirectory(manifestPath), `${nonce}.json`);
+  } catch (error) {
+    const legacy = legacyPromotionBindingDirectory(manifestPath);
+    if (error.code !== "ENOENT" || !legacy) throw error;
+    return readFileInRoot(legacy, `${nonce}.json`);
+  }
+}
+
+// Bindings are durable machine-local state, so they live under the data
+// directory (control-plane spec §5.12). They used to sit in a per-platform
+// "Local State" folder — on macOS inside the Electron app's userData, where
+// Chromium keeps a FILE named `Local State`, so staging failed with ENOTDIR on
+// any Mac that had run the app.
 function promotionBindingDirectory(manifestPath) {
   const configured = process.env.CONTEXTCAKE_LOCAL_STATE_DIR;
-  let localState;
-  if (configured) localState = path.resolve(configured);
-  else if (process.platform === "darwin") localState = path.join(os.homedir(), "Library", "Application Support", "ContextCake", "Local State");
-  else if (process.platform === "win32") localState = path.join(process.env.LOCALAPPDATA ?? os.homedir(), "ContextCake", "Local State");
-  else localState = path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"), "contextcake");
+  const localState = configured ? path.resolve(configured) : resolvePaths().data;
   const directory = path.join(localState, "promotion-bindings", sha256(path.resolve(manifestPath)));
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const stat = fs.lstatSync(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Local promotion-binding store must be a regular directory.");
   return directory;
+}
+
+function legacyPromotionBindingDirectory(manifestPath) {
+  if (process.env.CONTEXTCAKE_LOCAL_STATE_DIR) return null;
+  let localState;
+  if (process.platform === "darwin") localState = path.join(os.homedir(), "Library", "Application Support", "ContextCake", "Local State");
+  else if (process.platform === "win32") localState = path.join(process.env.LOCALAPPDATA ?? os.homedir(), "ContextCake", "Local State");
+  else localState = path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"), "contextcake");
+  const directory = path.join(localState, "promotion-bindings", sha256(path.resolve(manifestPath)));
+  try {
+    const stat = fs.lstatSync(directory);
+    return stat.isDirectory() && !stat.isSymbolicLink() ? directory : null;
+  } catch {
+    return null;
+  }
 }
 
 function assertPromotionNonce(value) {

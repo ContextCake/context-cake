@@ -48,6 +48,9 @@ test('Homebrew cask pins each Mac architecture to its own DMG digest in the stan
 test('MCPB metadata requires an explicit manifest and leaves anonymous activation off by default', () => {
   const manifest = renderMcpManifest(version)
   assert.equal(manifest.manifest_version, '0.3')
+  // win32 is listed because the windows-latest CI job runs the unit group and
+  // the eval. Drop it if that job goes away.
+  assert.deepEqual(manifest.compatibility.platforms, ['darwin', 'win32'])
   assert.equal(manifest.server.mcp_config.args.at(-1), '${user_config.manifest_path}')
   assert.equal(manifest.user_config.anonymous_metrics.default, false)
   assert.match(manifest.user_config.anonymous_metrics.description, /No files, paths, prompts, account data, device ID, or request body/)

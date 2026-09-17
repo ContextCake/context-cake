@@ -176,6 +176,10 @@ test("a failed refresh does not lose persisted content: recovery costs nothing e
 });
 
 test("no parsed concept is retained across queries or a process restart", async (t) => {
+  // Registered before the fixture's cleanup: node:test runs after-hooks in
+  // order, and Windows refuses to delete a folder holding an open SQLite file.
+  let retained2 = null;
+  t.after(() => retained2?.close());
   const { root, source } = await fixture(t);
   const storeFile = path.join(root, "search.sqlite");
 
@@ -190,8 +194,7 @@ test("no parsed concept is retained across queries or a process restart", async 
   // A fresh instance over the SAME file — standing in for a new mcp-server
   // process spawned against the same profile — must answer its very first
   // query without re-parsing anything: the postings are already on disk.
-  const retained2 = createRetainedSearch([source], { file: storeFile });
-  t.after(() => retained2.close());
+  retained2 = createRetainedSearch([source], { file: storeFile });
   const restarted = await retained2.search({ query: "database" });
   assert.equal(retained2._debug.documentsRead, 0, "a fresh instance over the same store file loads zero documents on its first query");
   assert.deepEqual(restarted.hits, first.hits);

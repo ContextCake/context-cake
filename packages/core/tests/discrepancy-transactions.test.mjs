@@ -201,11 +201,13 @@ test("stageFileCreationTransaction creates exclusively, into a new subfolder, an
     // Targets come back realpath'd (assertInsideRoot); the temp root itself
     // sits behind a symlink on macOS, so compare against its real path.
     const realTeamRoot = await fsp.realpath(teamRoot);
+    // Targets are native paths, so compare with / on every OS.
+    const relToTeam = (abs) => path.relative(realTeamRoot, abs).split(path.sep).join("/");
     const text = "---\ntype: note\ntitle: Deploy\n---\n\n# Deploy\n\nstub.\n";
     // A probe answers the would-be target and stages nothing.
     const probed = await stageFileCreationTransaction({ layer: "team", rel: "guides/deploy.md", text }, roots, "tx-probe", { probe: true });
     assert.equal(probed.probe, true);
-    assert.deepEqual(probed.targets.map((t) => [t.layer, path.relative(realTeamRoot, t.path), t.staged, t.backup, t.created]), [["team", "guides/deploy.md", null, null, true]]);
+    assert.deepEqual(probed.targets.map((t) => [t.layer, relToTeam(t.path), t.staged, t.backup, t.created]), [["team", "guides/deploy.md", null, null, true]]);
     await assert.rejects(fsp.stat(path.join(teamRoot, "guides")), { code: "ENOENT" }, "a probe creates no folder");
     await assert.rejects(probed.commit(), /probed transaction/);
 
@@ -214,7 +216,7 @@ test("stageFileCreationTransaction creates exclusively, into a new subfolder, an
     const [target] = staged.targets;
     assert.equal(target.created, true);
     assert.equal(target.backup, null);
-    assert.equal(path.relative(realTeamRoot, target.path), "guides/deploy.md");
+    assert.equal(relToTeam(target.path), "guides/deploy.md");
     assert.equal(await fsp.readFile(target.staged, "utf8"), text);
     await assert.rejects(fsp.stat(target.path), { code: "ENOENT" }, "not placed until commit");
     // Rolling back an uncommitted create is a no-op on the target and never throws.

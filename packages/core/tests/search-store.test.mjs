@@ -92,6 +92,9 @@ const QUERIES = [
   "marker-3", "vault ranking snapshot", "nonexistent-term", "runbook",
 ];
 
+// Register a test's folder cleanup after its store's close(). node:test runs
+// after-hooks in registration order, and Windows refuses to delete an open
+// SQLite file.
 function tempFile() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "search-store-test-"));
   return { dir, file: path.join(dir, "index.sqlite") };
@@ -293,7 +296,6 @@ test("a store written under an older format re-analyzes every document even when
   // touches. The format bump is the only thing that retires postings built by
   // an older parse (v6: CRLF documents gained their frontmatter).
   const { dir, file } = tempFile();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const rand = mulberry32(0x5151);
   let seq = 0;
   const docs = new Map(Array.from({ length: 6 }, (_, i) => [`f-${i}`, makeConcept(rand, seq++)]));
@@ -314,13 +316,13 @@ test("a store written under an older format re-analyzes every document even when
 
   const reopened = createSearchStore({ file });
   t.after(() => reopened.close());
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   reopened.search([viewFor()], { query: "postgres", limit: 10 });
   assert.equal(reopened.inspect().analyzed, docs.size, "an older-format store must rebuild, not reuse postings by file fingerprint");
 });
 
 test("identity change re-analyzes everything; a dropped layer disappears", async (t) => {
   const { dir, file } = tempFile();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const rand = mulberry32(0x5678);
   let seq = 0;
@@ -329,6 +331,7 @@ test("identity change re-analyzes everything; a dropped layer disappears", async
 
   const store = createSearchStore({ file });
   t.after(() => store.close());
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const snap1 = makeSnapshot([...docs]);
   const view1 = { name: "vault", level: 3, gen: snap1.gen, ids: snap1.ids, concepts: snap1.concepts, identity: "identity-a", fileMeta: meta };
@@ -354,7 +357,6 @@ test("identity change re-analyzes everything; a dropped layer disappears", async
 
 test("search() reads `body` only for surviving hits, never the whole corpus", async (t) => {
   const { dir, file } = tempFile();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const rand = mulberry32(0x2222);
   let seq = 0;
@@ -364,6 +366,7 @@ test("search() reads `body` only for surviving hits, never the whole corpus", as
 
   const store = createSearchStore({ file });
   t.after(() => store.close());
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const hits = store.search([view], { query: "postgres deploy", limit: 5 });
   assert.ok(hits.length > 0 && hits.length <= 5);
@@ -376,7 +379,6 @@ test("search() reads `body` only for surviving hits, never the whole corpus", as
 
 test("pending() names only fingerprint-mismatched ids, with no concepts required", async (t) => {
   const { dir, file } = tempFile();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const rand = mulberry32(0x3333);
   let seq = 0;
@@ -386,6 +388,7 @@ test("pending() names only fingerprint-mismatched ids, with no concepts required
 
   const store = createSearchStore({ file });
   t.after(() => store.close());
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   // Never-seen layer: every id is pending.
   const pendingView = { name: "vault", identity: "vault-id", ids, fileMeta: meta };
@@ -428,7 +431,6 @@ test("pending() names only fingerprint-mismatched ids, with no concepts required
 
 test("sync() keeps a fingerprint-matched doc even when its view omits the concept", async (t) => {
   const { dir, file } = tempFile();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const rand = mulberry32(0x4444);
   let seq = 0;
@@ -438,6 +440,7 @@ test("sync() keeps a fingerprint-matched doc even when its view omits the concep
 
   const store = createSearchStore({ file });
   t.after(() => store.close());
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const snap1 = makeSnapshot([...docs]);
   const view1 = { name: "vault", level: 3, gen: snap1.gen, ids: snap1.ids, concepts: snap1.concepts, identity: "v", fileMeta: meta };
@@ -464,7 +467,6 @@ test("sync() keeps a fingerprint-matched doc even when its view omits the concep
 
 test("concurrent opens on the same file answer identically", async (t) => {
   const { dir, file } = tempFile();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const rand = mulberry32(0x9999);
   let seq = 0;
@@ -475,6 +477,7 @@ test("concurrent opens on the same file answer identically", async (t) => {
   const storeA = createSearchStore({ file });
   const storeB = createSearchStore({ file });
   t.after(() => { storeA.close(); storeB.close(); });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const hitsA = storeA.search([view], { query: "postgres deploy", limit: 10 });
   const hitsB = storeB.search([view], { query: "postgres deploy", limit: 10 });
@@ -538,12 +541,12 @@ test("concurrent schema creation on a brand-new file: two workers open and searc
 // of 4,096.
 test("segment sealing, deletion tombstones and compaction all keep answers identical", async (t) => {
   const { dir, file } = tempFile();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const rand = mulberry32(0x7e57);
   const legacyIndex = createSearchIndex();
   const store = createSearchStore({ file, segmentDocs: 8 });
   t.after(() => { store.close(); legacyIndex.close(); });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   let seq = 0;
   const docs = new Map(Array.from({ length: 60 }, (_, i) => [`concept-${i}`, makeConcept(rand, seq++, `concept-${i}`)]));
@@ -606,7 +609,6 @@ test("segment sealing, deletion tombstones and compaction all keep answers ident
 
 test("inspect() and lastSearchStats() report the store's own shape", async (t) => {
   const { dir, file } = tempFile();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const rand = mulberry32(0xbeef);
   let seq = 0;
@@ -616,6 +618,7 @@ test("inspect() and lastSearchStats() report the store's own shape", async (t) =
 
   const store = createSearchStore({ file, segmentDocs: 8 });
   t.after(() => store.close());
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const hits = store.search([view], { query: "postgres deploy", limit: 10 });
 
   const info = store.inspect();

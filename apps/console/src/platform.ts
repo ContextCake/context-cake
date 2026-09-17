@@ -59,10 +59,14 @@ export function thisDevice(): string {
   return desktop && desktop !== 'darwin' ? 'this computer' : 'this Mac'
 }
 
-/** Where the desktop app keeps settings and logs, as the user would type the path. */
+/**
+ * Where the desktop app keeps settings and logs, as the main process resolved
+ * them. An app too old to report paths only ever shipped for macOS.
+ */
 export function desktopDataPaths(): { config: string; logs: string } {
-  if (desktopPlatform() === 'linux') {
-    return { config: '~/.config/contextcake', logs: '~/.config/contextcake/logs' }
+  const reported = typeof window === 'undefined' ? undefined : window.__CC_DESKTOP?.paths
+  return {
+    config: reported?.config || '~/Library/Application Support/ContextCake',
+    logs: reported?.logs || '~/Library/Logs/ContextCake',
   }
-  return { config: '~/Library/Application Support/ContextCake', logs: '~/Library/Logs/ContextCake' }
 }

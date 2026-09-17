@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
   getApiToken: () => ipcRenderer.invoke('contextcake:get-api-token'),
   // App version, for display.
   version: arg('cc-version'),
+  // Display paths for Settings (config folder, engine log folder).
+  paths: { config: decodeURIComponent(arg('cc-config-dir')), logs: decodeURIComponent(arg('cc-logs-dir')) },
   // Update status/actions, backed by the native autoUpdater (see
   // src/main/updater.mjs). Settings polls getStatus() on open and subscribes
   // to onStatus() for live progress; the menu's "Check for Updates…" dialog

@@ -213,8 +213,7 @@ CC_DEB_MAINTAINER="Name <address>" npm run dist:linux   # the x64 .deb (runs on 
   message port (see the comment at the spawn site in `src/cli/cli.mjs`).
 - **Harness connection is sudo-free, and always names the absolute shim.** The
   `contextcake:cli-status` and `cli-install` IPC results carry `shimPath` (the
-  packaged shim's absolute path), `linkPath`, and `onPath` (the first
-  `contextcake` on PATH and whether it is this app's). The console builds every
+  packaged shim's absolute path) and `linkPath`. The console builds every
   harness connect command from `shimPath` whenever it is non-null, installed
   link or not: once npm ships, a bare `contextcake` may be a different install
   running a different engine (control-plane spec §5.11). The PATH link is an

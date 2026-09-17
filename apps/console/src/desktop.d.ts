@@ -73,8 +73,6 @@ interface CliResult {
   shimPath: string | null
   /** Where the PATH link lives: /usr/local/bin/contextcake on macOS, ~/.local/bin/contextcake on Linux. Absent in older apps. */
   linkPath?: string
-  /** The first `contextcake` on the app's PATH, and whether it is this app's shim. Absent in older apps. */
-  onPath?: { path: string; isThisApp: boolean } | null
 }
 
 declare global {
@@ -111,6 +109,8 @@ declare global {
       getApiToken: () => Promise<string>
       /** Desktop app version. */
       version: string
+      /** Where the app keeps settings and the engine log, for display ("~/…"). Absent in older apps. */
+      paths?: { config: string; logs: string }
       /**
        * Update status backed by the native autoUpdater. Optional a second
        * time within itself: a packaged app older than this channel exposes

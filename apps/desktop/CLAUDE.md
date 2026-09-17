@@ -193,6 +193,14 @@ npm run dist    # DMG + zip for arm64 AND x64, ad-hoc signed in dev
   in renderer code will 401 inside the app.
 - **`resources/bin/contextcake` must stay executable** (mode 755) and POSIX-sh
   compatible — it's exec'd before any Node exists.
+- **`src/cli/cli.mjs` is a thin wrapper, not a dispatcher.** Commands, flags,
+  help, and `help --json` live in the engine's command table
+  (`packages/core/src/cli.mjs` + `cli/families/`), which the npm CLI wraps too.
+  The wrapper adds only the app version and a `wrapSpawn` hook: every spawned
+  entrypoint gets `ELECTRON_RUN_AS_NODE=1`, and `mcp`/`doctor` run through
+  `src/observability/{mcp,doctor}-launcher.mjs`. A new command goes in the
+  engine table, never here; `test/cli-wrapper.test.mjs` pins the hook. The
+  packaged wrapper finds the engine at `Resources/engine/src/cli.mjs`.
 - **The CLI runs a second engine, and it does not share the app's.** The shim
   execs `src/cli/cli.mjs`, which forks an engine entrypoint against the same
   manifest the app's utility process is already serving. That independence is
@@ -209,7 +217,7 @@ npm run dist    # DMG + zip for arm64 AND x64, ad-hoc signed in dev
   anything; it is duplicated work and split freshness. The fix, when it is
   worth building, is to dispatch to the running app's loopback service, and the
   blocker is that the bearer deliberately exists only in memory and on the
-  message port (see the comment at the spawn site in `src/cli/cli.mjs`).
+  message port (see the comment at the spawn site in the engine's `packages/core/src/cli/spawn.mjs`).
 - **Harness connection is sudo-free.** The `contextcake:cli-status` and
   `cli-install` IPC results carry `shimPath` — the packaged shim's absolute
   path — and the console builds every harness connect command from it when the
@@ -251,7 +259,7 @@ npm run dist    # DMG + zip for arm64 AND x64, ad-hoc signed in dev
   updater may maintain only its documented `.updaterId` rollout marker there.
 - **App name is pinned three places that must agree**: `app.setName('ContextCake')`
   in `src/main/main.mjs`, `productName` in `package.json`, and the macOS branch
-  of the engine's `packages/core/src/platform-paths.mjs`, which `src/cli/cli.mjs`
+  of the engine's `packages/core/src/platform-paths.mjs`, which the engine CLI
   and the npm CLI both read for the default manifest. They resolve the same `userData` dir the
   app writes and the CLI reads — a mismatch breaks `contextcake mcp`. The smoke
   test asserts `userData=ContextCake`.

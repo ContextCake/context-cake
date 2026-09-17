@@ -74,13 +74,13 @@ const SUITES = [
   { group: "unit", name: "discrepancy-projection", ...node("discrepancy-projection.test.mjs") },
   { group: "unit", name: "discrepancy-link-actions", ...node("discrepancy-link-actions.test.mjs") },
   { group: "unit", name: "discrepancy-batch", ...node("discrepancy-batch.test.mjs") },
-  { group: "unit", name: "cli-contract", ...node("cli-contract.test.mjs") },
-  { group: "unit", name: "cli-profile", ...node("cli-profile.test.mjs") },
-  { group: "unit", name: "cli-query", ...node("cli-query.test.mjs") },
-  { group: "unit", name: "cli-doctor", ...node("cli-doctor.test.mjs") },
-  { group: "unit", name: "cli-process", ...node("cli-process.test.mjs") },
-  { group: "unit", name: "cli-source", ...node("cli-source.test.mjs") },
-  { group: "unit", name: "cli-settings", ...node("cli-settings.test.mjs") },
+  { group: "unit", name: "cli-contract", posixOnly: true, ...node("cli-contract.test.mjs") },
+  { group: "unit", name: "cli-profile", posixOnly: true, ...node("cli-profile.test.mjs") },
+  { group: "unit", name: "cli-query", posixOnly: true, ...node("cli-query.test.mjs") },
+  { group: "unit", name: "cli-doctor", posixOnly: true, ...node("cli-doctor.test.mjs") },
+  { group: "unit", name: "cli-process", posixOnly: true, ...node("cli-process.test.mjs") },
+  { group: "unit", name: "cli-source", posixOnly: true, ...node("cli-source.test.mjs") },
+  { group: "unit", name: "cli-settings", posixOnly: true, ...node("cli-settings.test.mjs") },
 
   // Write path, sync, and the servers. These bind ports and shell out to git.
   { group: "integration", name: "profile-runtime", ...sh("profile-runtime-test.sh") },
@@ -267,8 +267,18 @@ if (options.list) {
 }
 
 const results = [];
+let skippedForPlatform = 0;
 for (const [index, suite] of suites.entries()) {
   console.log(`\n─── [${index + 1}/${suites.length}] ${suite.group}: ${suite.name} ${"─".repeat(20)}`);
+  // The CLI dispatcher suites spawn real processes and assert POSIX signal
+  // behavior. Windows support for the CLI is a separate milestone
+  // (specs/contextcake-control-plane/spec.md §5.13); the Windows job exists to
+  // prove the ENGINE runs there, which is what the MCPB bundle ships.
+  if (suite.posixOnly && process.platform === "win32") {
+    console.log("skipped on win32: POSIX process and signal behavior (control-plane spec §5.13)");
+    skippedForPlatform += 1;
+    continue;
+  }
   const result = await run(suite);
   results.push(result);
   if (!result.ok && options.bail) break;
@@ -278,7 +288,7 @@ const failed = results.filter((result) => !result.ok);
 const total = results.reduce((sum, result) => sum + result.ms, 0);
 
 console.log(`\n${"═".repeat(60)}`);
-console.log(`${results.length - failed.length}/${suites.length} suites passed in ${(total / 1000).toFixed(1)}s`);
+console.log(`${results.length - failed.length}/${suites.length - skippedForPlatform} suites passed in ${(total / 1000).toFixed(1)}s${skippedForPlatform ? ` (${skippedForPlatform} skipped on ${process.platform})` : ""}`);
 
 if (failed.length) {
   console.log("\nFailed:");

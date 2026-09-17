@@ -63,6 +63,8 @@ test('accepts matching Web Demo provenance and a site redirect for every platfor
     'https://site-deploy.pages.dev/download/mac-arm64',
     'https://site-deploy.pages.dev/download/mac',
     'https://site-deploy.pages.dev/download/mac-x64',
+    'https://site-deploy.pages.dev/download/linux-x64-deb',
+    'https://site-deploy.pages.dev/download/linux',
     'https://site-deploy.pages.dev/demo/',
   ])
 })

@@ -11,6 +11,7 @@ import { AccountIcon, ConnectionsIcon, IndexingIcon, PrivacyIcon, SettingsIcon }
 import { ShortcutsReference } from './ShortcutsReference'
 import { ThemePicker } from './ThemePicker'
 import { Button, SegmentedControl } from './ui'
+import { desktopDataPaths, fileManagerName, isApplePlatform, thisDevice } from '../platform'
 import { onCascadeDisplayModeChange, readCascadeDisplayMode, resetCascadeLocalPreferences, writeCascadeDisplayMode, type CascadeDisplayMode } from '../cascade-preferences'
 
 export type SettingsPane = 'general' | 'indexing' | 'integrations' | 'account' | 'privacy'
@@ -28,6 +29,8 @@ function describeUpdateStatus(status: UpdateStatus): string {
       ? `Downloading ${status.version ? `v${status.version} ` : ''}(${status.percent}%)…`
       : 'Update found — starting download…'
     case 'downloaded': return `${status.version ? `v${status.version} ` : 'The update '}is ready to install.`
+    // A .deb install: the package manager owns updates, so the app only links.
+    case 'available': return `${status.version ? `v${status.version}` : 'A new version'} is available. Download the new package and install it with your package manager.`
     case 'error': return status.error ? `Could not check for updates: ${status.error}` : 'Could not check for updates.'
     default: return ''
   }
@@ -107,6 +110,9 @@ function UpdateControl({ appMode }: { appMode: Mode }) {
       <div className="cc-settings-row">
         <div><strong>Updates</strong><span>{status ? describeUpdateStatus(status) : 'Loading…'}</span></div>
         <div style={css('display:flex; gap:8px;')}>
+          {status?.state === 'available' && (
+            <a href={status.url} target="_blank" rel="noreferrer">Download update</a>
+          )}
           {state === 'downloaded' ? (
             <Button type="button" variant="primary" onClick={() => void bridge.install()}>Update Now</Button>
           ) : state !== 'unsupported' && (
@@ -149,13 +155,17 @@ function UpdateControl({ appMode }: { appMode: Mode }) {
 
 type CliToolStatus = 'loading' | 'installed' | 'missing' | 'stale' | 'conflict' | 'blocked' | 'development'
 
-function describeCliStatus(status: CliToolStatus): string {
+// Older apps report no linkPath; they only ever linked into /usr/local/bin.
+const DEFAULT_CLI_LINK = '/usr/local/bin/contextcake'
+
+function describeCliStatus(status: CliToolStatus, linkPath: string = DEFAULT_CLI_LINK): string {
+  const linkDir = linkPath.slice(0, linkPath.lastIndexOf('/'))
   switch (status) {
     case 'loading': return 'Checking the contextcake command…'
-    case 'installed': return 'The contextcake command is installed in /usr/local/bin.'
-    case 'missing': return 'Adds the contextcake command to /usr/local/bin for terminals and agent harnesses.'
+    case 'installed': return `The contextcake command is installed in ${linkDir}.`
+    case 'missing': return `Adds the contextcake command to ${linkDir} for terminals and agent harnesses.`
     case 'stale': return 'The installed contextcake command points at another copy of ContextCake. Reinstall to fix it.'
-    case 'conflict': return 'Another program owns /usr/local/bin/contextcake, and ContextCake will not replace a real file.'
+    case 'conflict': return `Another program owns ${linkPath}, and ContextCake will not replace it.`
     case 'blocked': return 'ContextCake is running from the disk image or a quarantine location. Move it to Applications, reopen it, then install.'
     case 'development': return 'Command-line tool installation is available in packaged builds.'
   }
@@ -172,6 +182,7 @@ function describeCliStatus(status: CliToolStatus): string {
 function CliControl() {
   const bridge = window.__CC_DESKTOP?.cli
   const [status, setStatus] = useState<CliToolStatus>('loading')
+  const [linkPath, setLinkPath] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -186,7 +197,10 @@ function CliControl() {
     void (async () => {
       try {
         const result = await bridge.getStatus()
-        if (active) setStatus(result?.status ?? 'missing')
+        if (active) {
+          setStatus(result?.status ?? 'missing')
+          setLinkPath(result?.linkPath)
+        }
       } catch {
         if (active) setStatus('missing')
       }
@@ -207,7 +221,7 @@ function CliControl() {
         setNotice(result.message || null)
       }
     } catch {
-      setNotice('ContextCake could not start the installer. Use ContextCake → Install Command Line Tool… and try again.')
+      setNotice(`ContextCake could not start the installer. Use ${isApplePlatform() ? 'ContextCake' : 'Help'} → Install Command Line Tool… and try again.`)
     } finally {
       setBusy(false)
     }
@@ -216,7 +230,7 @@ function CliControl() {
   const canInstall = status === 'missing' || status === 'stale'
   return (
     <div className="cc-settings-row">
-      <div><strong>Command-line tool</strong><span>{notice ?? describeCliStatus(status)}</span></div>
+      <div><strong>Command-line tool</strong><span>{notice ?? describeCliStatus(status, linkPath)}</span></div>
       {canInstall && (
         <Button type="button" variant="secondary" disabled={busy} onClick={() => void install()}>
           {busy ? 'Installing…' : status === 'stale' ? 'Reinstall' : 'Install'}
@@ -446,7 +460,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
             {settingsUnsaved && <div role="status" style={css(`display:flex; gap:10px; padding:10px 14px; margin-bottom:14px; border:1px solid ${C.amberStroke}; border-radius:var(--cc-radius-md); background:${C.amberFill}; font-size:12px; color:${C.amberText};`)}>
               <span aria-hidden="true">⚠</span>
               <span style={css('flex:1 1 auto; min-width:0; overflow-wrap:anywhere;')}>
-                These settings are in effect but could not be saved to this Mac, so they will
+                These settings are in effect but could not be saved to {thisDevice()}, so they will
                 revert when ContextCake restarts. Check that the disk is not full and that
                 ContextCake can write to its configuration folder.
               </span>
@@ -454,11 +468,11 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
             <section className="cc-settings-section" aria-labelledby="cc-settings-appearance">
               <h2 id="cc-settings-appearance">Appearance</h2>
               <div className="cc-settings-group">
-                <div className="cc-settings-row"><div><strong>Appearance</strong><span>{desktop ? 'System follows the current appearance of this Mac.' : 'System follows your browser and operating system.'}</span></div><SegmentedControl label="Appearance" value={theme} onChange={setTheme} options={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} /></div>
+                <div className="cc-settings-row"><div><strong>Appearance</strong><span>{desktop ? `System follows the current appearance of ${thisDevice()}.` : 'System follows your browser and operating system.'}</span></div><SegmentedControl label="Appearance" value={theme} onChange={setTheme} options={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} /></div>
                 <div className="cc-settings-row cc-settings-row--stacked"><div><strong>Theme</strong><span>Every theme has a light and a dark half; Appearance picks which one you see. Layer colors keep their roles — blue for company, green for team, amber for personal.</span></div><ThemePicker /></div>
                 <div className="cc-settings-row"><div><strong>Density</strong><span>Comfortable gives controls more room. Compact fits more knowledge on screen.</span></div><SegmentedControl label="Density" value={density} onChange={setDensity} options={[{ value: 'comfortable', label: 'Comfortable' }, { value: 'compact', label: 'Compact' }]} /></div>
                 <div className="cc-settings-row"><div><strong>Cascade view</strong><span>Grouped is the default and keeps large folders condensed. Compact and Cards show concepts individually.</span></div><SegmentedControl label="Cascade view" value={cascadeDisplay} onChange={changeCascadeDisplay} options={[{ value: 'grouped', label: 'Grouped' }, { value: 'compact', label: 'Compact' }, { value: 'cards', label: 'Cards' }]} /></div>
-                {desktop && <div className="cc-settings-row"><div><strong>Reduce transparency</strong><span>Turns off the translucent sidebar material. System follows Accessibility on this Mac, which is currently {systemReducedTransparency ? 'on' : 'off'}.</span></div><SegmentedControl label="Reduce transparency" value={transparency} onChange={setTransparency} options={[{ value: 'system', label: 'System' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]} /></div>}
+                {desktop && <div className="cc-settings-row"><div><strong>Reduce transparency</strong><span>Turns off the translucent sidebar material. System follows Accessibility on {thisDevice()}, which is currently {systemReducedTransparency ? 'on' : 'off'}.</span></div><SegmentedControl label="Reduce transparency" value={transparency} onChange={setTransparency} options={[{ value: 'system', label: 'System' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]} /></div>}
               </div>
             </section>
             <section className="cc-settings-section" aria-labelledby="cc-settings-application">
@@ -468,11 +482,11 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
                 <div className="cc-settings-row"><div><strong>Installed version</strong><span>The version of ContextCake currently running.</span></div><span className="cc-settings-value">{window.__CC_DESKTOP?.version || __APP_VERSION__}</span></div>
                 <UpdateControl appMode={appMode} />
                 <CliControl />
-                {canRevealConfig && <div className="cc-settings-row"><div><strong>Configuration folder</strong><span>{revealError ?? 'Settings and the source list live in ~/Library/Application Support/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showConfigFolder()}>Show in Finder</Button></div>}
-                {canRevealLogs && <div className="cc-settings-row"><div><strong>Engine log</strong><span>{logsError ?? 'What the engine was doing, including each indexing pass — useful in a bug report. Lives in ~/Library/Logs/ContextCake.'}</span></div><Button type="button" variant="secondary" onClick={() => void showEngineLog()}>Show in Finder</Button></div>}
+                {canRevealConfig && <div className="cc-settings-row"><div><strong>Configuration folder</strong><span>{revealError ?? `Settings and the source list live in ${desktopDataPaths().config}.`}</span></div><Button type="button" variant="secondary" onClick={() => void showConfigFolder()}>Show in {fileManagerName()}</Button></div>}
+                {canRevealLogs && <div className="cc-settings-row"><div><strong>Engine log</strong><span>{logsError ?? `What the engine was doing, including each indexing pass — useful in a bug report. Lives in ${desktopDataPaths().logs}.`}</span></div><Button type="button" variant="secondary" onClick={() => void showEngineLog()}>Show in {fileManagerName()}</Button></div>}
                 <EngineEvents appMode={appMode} />
-                {settingsFile && <div className="cc-settings-row"><div><strong>Export settings</strong><span>{exportNote ?? 'Save a copy of ContextCake’s Mac settings file — useful in a bug report. Never includes credentials, hidden Cascade nodes, or your documents.'}</span></div><Button type="button" variant="secondary" onClick={() => void exportSettings()}>Export…</Button></div>}
-                {settingsFile && <div className="cc-settings-row"><div><strong>Reset settings</strong><span>Return appearance, update, navigation, and Cascade view settings on this Mac to their defaults. Sources, knowledge, window position, and privacy choices are not affected.</span></div><Button type="button" variant="secondary" disabled={resetBusy} onClick={() => void resetSettingsFile()}>{resetBusy ? 'Resetting…' : 'Reset…'}</Button></div>}
+                {settingsFile && <div className="cc-settings-row"><div><strong>Export settings</strong><span>{exportNote ?? `Save a copy of ContextCake’s settings file from ${thisDevice()} — useful in a bug report. Never includes credentials, hidden Cascade nodes, or your documents.`}</span></div><Button type="button" variant="secondary" onClick={() => void exportSettings()}>Export…</Button></div>}
+                {settingsFile && <div className="cc-settings-row"><div><strong>Reset settings</strong><span>Return appearance, update, navigation, and Cascade view settings on {thisDevice()} to their defaults. Sources, knowledge, window position, and privacy choices are not affected.</span></div><Button type="button" variant="secondary" disabled={resetBusy} onClick={() => void resetSettingsFile()}>{resetBusy ? 'Resetting…' : 'Reset…'}</Button></div>}
               </div>
             </section>
             <ShortcutsReference appMode={appMode} />
@@ -483,7 +497,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
           {pane === 'account' && accountsAvailable && <><header className="cc-settings-header"><h1>Account</h1><span>Optional sync for preferences and safe source metadata across Macs.</span></header><AccountPanel /></>}
 
           {pane === 'privacy' && <>
-            <header className="cc-settings-header"><h1>Privacy</h1><span>What stays local and what leaves this Mac.</span></header>
+            <header className="cc-settings-header"><h1>Privacy</h1><span>What stays local and what leaves {thisDevice()}.</span></header>
             <section className="cc-settings-section" aria-labelledby="cc-settings-metrics">
               <h2 id="cc-settings-metrics">Anonymous metrics</h2>
               <div className="cc-settings-group">
@@ -492,7 +506,7 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
             </section>
             <section className="cc-settings-section" aria-labelledby="cc-settings-local-first">
               <h2 id="cc-settings-local-first">Local-first operation</h2>
-              <div className="cc-settings-group"><div className="cc-settings-row"><div><strong>Your context stays on this Mac</strong><span>Local engine work does not upload your files, paths, prompts, commands, or document content. Signing in is optional and only syncs approved preferences and sanitized source metadata.</span></div></div></div>
+              <div className="cc-settings-group"><div className="cc-settings-row"><div><strong>Your context stays on {thisDevice()}</strong><span>Local engine work does not upload your files, paths, prompts, commands, or document content. Signing in is optional and only syncs approved preferences and sanitized source metadata.</span></div></div></div>
               <a className="cc-settings-doc-link" href={DOCUMENTATION_URL} target="_blank" rel="noreferrer">Read Updates &amp; Privacy documentation</a>
             </section>
           </>}

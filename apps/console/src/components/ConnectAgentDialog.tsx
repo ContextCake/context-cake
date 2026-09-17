@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DEFAULT_COMMAND, DEFAULT_HARNESS_ID, buildHarnessDefinitions, harnessById, type HarnessIcon, type HarnessId } from '../connect-agent'
+import { isApplePlatform } from '../platform'
 
 type CopyTarget = 'prompt' | 'setup' | 'verify' | 'first-prompt'
 type CopyState = { target: CopyTarget; kind: 'copied' | 'manual' | 'failed' } | null
@@ -32,8 +33,13 @@ function copyLabel(state: CopyState, target: CopyTarget, idle: string): string {
   return 'Copy failed'
 }
 
-function cliCopy(status: CliStatus, shimInUse: boolean): { title: string; detail: string; tone: string } {
-  if (status === 'installed') return { title: 'Command-line tool installed', detail: '`contextcake mcp` is ready for local clients.', tone: 'ready' }
+// Older apps report no linkPath; they only ever linked /usr/local/bin/contextcake.
+function cliCopy(status: CliStatus, shimInUse: boolean, linkPath = '/usr/local/bin/contextcake'): { title: string; detail: string; tone: string } {
+  if (status === 'installed') {
+    return shimInUse
+      ? { title: 'Command-line tool installed', detail: 'The commands below use the app’s full path, so they run this copy of ContextCake even if another `contextcake` comes first on your PATH.', tone: 'ready' }
+      : { title: 'Command-line tool installed', detail: '`contextcake mcp` is ready for local clients.', tone: 'ready' }
+  }
   if (status === 'stale') {
     return shimInUse
       ? { title: 'Command-line tool needs refreshing', detail: 'The commands below use the app’s built-in path, so connections keep working. Reinstall the tool to fix the stale `contextcake` shortcut.', tone: 'warn' }
@@ -41,8 +47,8 @@ function cliCopy(status: CliStatus, shimInUse: boolean): { title: string; detail
   }
   if (status === 'conflict') {
     return shimInUse
-      ? { title: 'Another command uses this name', detail: 'ContextCake will not replace the real file at `/usr/local/bin/contextcake`. The commands below use the app’s full path instead.', tone: 'warn' }
-      : { title: 'Another command uses this name', detail: 'ContextCake will not replace a real file at `/usr/local/bin/contextcake`.', tone: 'error' }
+      ? { title: 'Another command uses this name', detail: `ContextCake will not replace \`${linkPath}\`. The commands below use the app’s full path instead.`, tone: 'warn' }
+      : { title: 'Another command uses this name', detail: `ContextCake will not replace \`${linkPath}\`.`, tone: 'error' }
   }
   if (status === 'blocked') return { title: 'Move ContextCake to Applications', detail: 'ContextCake is running from the disk image or a temporary quarantine location, so it has no lasting command path yet. Move it to Applications, reopen it, then connect.', tone: 'warn' }
   if (status === 'development') return { title: 'Development build', detail: 'CLI installation is available in packaged builds. Generated production setup remains unchanged.', tone: 'neutral' }
@@ -52,13 +58,16 @@ function cliCopy(status: CliStatus, shimInUse: boolean): { title: string; detail
     : { title: 'Install the command-line tool', detail: 'The harness commands below depend on `contextcake mcp`.', tone: 'warn' }
 }
 
-// The absolute shim path stands in for the PATH name only in the states where
-// the `contextcake` name is unusable. `blocked` (translocated/DMG) is
-// deliberately excluded — that path vanishes when the image unmounts, so it
-// must never be written into a harness configuration; the step-1 gate asks the
-// user to move the app to Applications instead.
+// Every connect command names the app's absolute shim whenever the app reports
+// one, installed shortcut or not. Once the npm package ships, the first
+// `contextcake` on PATH may be a different install running a different engine
+// against the same manifest (control-plane spec §5.11). The bare name remains
+// only where no durable path exists: development builds, and `blocked`
+// (translocated/DMG), whose path vanishes when the image unmounts. The status
+// check stays even though the app already sends null there, so a leaked path
+// still never reaches a harness configuration.
 function effectiveCommand(status: CliStatus, shimPath: string | null): string {
-  if (shimPath && (status === 'missing' || status === 'stale' || status === 'conflict')) return shimPath
+  if (shimPath && status !== 'blocked' && status !== 'development' && status !== 'loading') return shimPath
   return DEFAULT_COMMAND
 }
 
@@ -67,6 +76,7 @@ export function ConnectAgentDialog({ hasSources, onClose, onOpenSetup }: Connect
   const [copyState, setCopyState] = useState<CopyState>(null)
   const [cliStatus, setCliStatus] = useState<CliStatus>('loading')
   const [shimPath, setShimPath] = useState<string | null>(null)
+  const [linkPath, setLinkPath] = useState<string | undefined>(undefined)
   const [cliBusy, setCliBusy] = useState(false)
   const [cliNotice, setCliNotice] = useState('')
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -93,6 +103,7 @@ export function ConnectAgentDialog({ hasSources, onClose, onOpenSetup }: Connect
         if (!live) return
         setCliStatus(result.status)
         setShimPath(result.shimPath ?? null)
+        setLinkPath(result.linkPath)
       })
       .catch(() => { if (live) setCliStatus('missing') })
     return () => { live = false }
@@ -133,9 +144,10 @@ export function ConnectAgentDialog({ hasSources, onClose, onOpenSetup }: Connect
       const result = await desktopCli.install()
       setCliStatus(result.status)
       setShimPath(result.shimPath ?? null)
+      setLinkPath(result.linkPath)
       setCliNotice(result.message)
     } catch {
-      setCliNotice('ContextCake could not start the installer. Use ContextCake → Install Command Line Tool… and try again.')
+      setCliNotice(`ContextCake could not start the installer. Use ${isApplePlatform() ? 'ContextCake' : 'Help'} → Install Command Line Tool… and try again.`)
     } finally {
       setCliBusy(false)
     }
@@ -167,7 +179,7 @@ export function ConnectAgentDialog({ hasSources, onClose, onOpenSetup }: Connect
     onOpenSetup()
   }
 
-  const cli = cliCopy(cliStatus, command !== DEFAULT_COMMAND)
+  const cli = cliCopy(cliStatus, command !== DEFAULT_COMMAND, linkPath)
   const canInstall = cliStatus === 'missing' || cliStatus === 'stale'
 
   return (

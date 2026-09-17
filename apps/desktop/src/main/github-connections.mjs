@@ -60,8 +60,8 @@ export function connectionAlias(gitHost, login) {
   return `${gitHost}/${login}`
 }
 
-export function createGithubConnections({ configDir, safeStorage, now = () => new Date().toISOString() }) {
-  const storage = createEncryptedStorage({ configDir, safeStorage, fileName: STORE_FILE })
+export function createGithubConnections({ configDir, safeStorage, now = () => new Date().toISOString(), isReady }) {
+  const storage = createEncryptedStorage({ configDir, safeStorage, fileName: STORE_FILE, isReady })
 
   function readAll() {
     try {
@@ -83,6 +83,15 @@ export function createGithubConnections({ configDir, safeStorage, now = () => ne
 
   return {
     file: storage.file,
+
+    /**
+     * Whether a connection survives a restart: 'persistent' (encrypted on
+     * disk) or 'memory' (no usable OS keyring). Settings says so when it is
+     * 'memory'.
+     */
+    storageMode() {
+      return storage.mode()
+    },
 
     /**
      * Metadata only — deliberately never the token. This is what crosses the

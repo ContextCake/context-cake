@@ -41,11 +41,16 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
     docker: () => ipcRenderer.invoke('observability:docker'),
   },
   windowRole: arg('cc-window-role') === 'settings' ? 'settings' : 'main',
+  // Node's process.platform ('darwin', 'linux'). The console words shortcuts,
+  // file-manager actions, and data paths from it (apps/console/src/platform.ts).
+  platform: process.platform,
   // Per-launch bearer token the local engine service requires on /api/*. It is
   // fetched through trusted IPC, never renderer argv (visible through `ps`).
   getApiToken: () => ipcRenderer.invoke('contextcake:get-api-token'),
   // App version, for display.
   version: arg('cc-version'),
+  // Display paths for Settings (config folder, engine log folder).
+  paths: { config: decodeURIComponent(arg('cc-config-dir')), logs: decodeURIComponent(arg('cc-logs-dir')) },
   // Update status/actions, backed by the native autoUpdater (see
   // src/main/updater.mjs). Settings polls getStatus() on open and subscribes
   // to onStatus() for live progress; the menu's "Check for Updates…" dialog
@@ -136,6 +141,8 @@ contextBridge.exposeInMainWorld('__CC_DESKTOP', {
 // list() answers with metadata, never a secret.
 contextBridge.exposeInMainWorld('__CC_INTEGRATIONS', {
   list: () => ipcRenderer.invoke('integrations:list'),
+  // { mode: 'persistent' | 'memory' }: whether a connection survives a restart.
+  storage: () => ipcRenderer.invoke('integrations:storage'),
   addToken: (token, host) => ipcRenderer.invoke('integrations:add-token', { token, host }),
   disconnect: (alias) => ipcRenderer.invoke('integrations:disconnect', alias),
 })

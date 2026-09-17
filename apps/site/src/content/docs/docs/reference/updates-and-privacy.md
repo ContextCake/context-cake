@@ -54,6 +54,10 @@ the background and installs it when the app quits. Turn off the native menu chec
 to prevent automatic checks; the manual **Check for Updates…** command contacts GitHub
 only when you choose it.
 
+The Linux `.deb` checks the same feed on the same schedule but never downloads or
+installs an update. When a newer release exists, Settings shows a link to it;
+install the new package with your package manager.
+
 ## Anonymous usage metrics
 
 ContextCake asks before sharing anonymous usage metrics. We use these aggregate
@@ -68,7 +72,8 @@ https://github.com/ContextCake/context-cake/releases/download/app-v<version>/ins
 ```
 
 The release URL identifies the app version and which download you installed,
-for example `mac-arm64` for Apple silicon or `mac-x64` for Intel. Releases
+for example `mac-arm64` for Apple silicon, `mac-x64` for Intel, or
+`linux-x64-deb` for the Linux package. Releases
 before the Intel build used a single `install-ping.txt`. GitHub increments that release
 asset's public download count. ContextCake sends no request body and adds no
 identifier, account data, file name, local path, knowledge content, prompt,

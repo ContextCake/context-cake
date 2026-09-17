@@ -76,11 +76,13 @@ test('app-v is the only production release trigger', () => {
   assert.equal(existsSync(retiredConsoleDeploy), false)
 })
 
-test('the job graph runs build, Intel smoke, publish, then deploy', () => {
-  assert.deepEqual(Object.keys(jobs), ['release-preflight', 'build-mac', 'smoke-mac-x64', 'publish', 'remove-dry-run-binaries', 'public-surfaces'])
+test('the job graph runs the builds and Intel smoke, publish, then deploy', () => {
+  assert.deepEqual(Object.keys(jobs), ['release-preflight', 'build-mac', 'smoke-mac-x64', 'build-linux', 'publish', 'remove-dry-run-binaries', 'remove-dry-run-deb', 'public-surfaces'])
   assert.deepEqual(jobs['build-mac'].needs, ['release-preflight'])
   assert.deepEqual(jobs['smoke-mac-x64'].needs, ['build-mac'])
-  assert.deepEqual(jobs.publish.needs, ['build-mac', 'smoke-mac-x64'])
+  assert.deepEqual(jobs['build-linux'].needs, ['release-preflight'])
+  assert.deepEqual(jobs.publish.needs, ['build-mac', 'smoke-mac-x64', 'build-linux'])
+  assert.equal(jobs['build-linux']['runs-on'], 'ubuntu-24.04')
   assert.deepEqual(jobs['public-surfaces'].needs, ['publish'])
   assert.equal(jobs['public-surfaces'].if, "needs.publish.outputs.released == 'true'")
   assert.equal(jobs['build-mac']['runs-on'], 'macos-14')
@@ -171,6 +173,60 @@ test('build digests are recorded after Gatekeeper and checked before anything is
   assert.match(stepNamed('publish', 'Verify the release is complete').text, /--stage publish --digests "\$RUNNER_TEMP\/build\.sha256"/)
 })
 
+test('build-linux builds, hashes, installs, and smokes the .deb with the sandbox on', () => {
+  const linux = jobs['build-linux']
+  // The .deb is never signed, so the job gets no signing environment.
+  assert.equal(linux.environment, undefined)
+  assert.equal(linux.env.CC_DEB_MAINTAINER, '${{ vars.DEB_MAINTAINER }}')
+  const maintainer = stepNamed('build-linux', 'Require the .deb maintainer')
+  // Every run stops without a maintainer, dry runs included.
+  assert.equal(maintainer.if, undefined)
+  assert.match(maintainer.text, /if \[ -z "\$CC_DEB_MAINTAINER" \]; then[\s\S]*exit 1/)
+
+  const order = [
+    'Require the .deb maintainer',
+    'Build the .deb',
+    'Verify the Linux platform row was built',
+    'Record build digests',
+    'Install the .deb',
+    'Launch the installed app with the sandbox on',
+    'Upload Linux artifacts',
+  ]
+  const names = linux.steps.map((step) => step.name)
+  assert.ok(order.every((name) => names.includes(name)), names.join(', '))
+  assert.deepEqual(order.map((name) => names.indexOf(name)), [...order.map((name) => names.indexOf(name))].sort((a, b) => a - b))
+
+  assert.match(stepNamed('build-linux', 'Build the .deb').text, /npm run dist:linux -- --publish never/)
+  assert.match(stepNamed('build-linux', 'Verify the Linux platform row was built').text, /--stage build --os linux/)
+  assert.match(linux.text, /checksums: \$\{\{ steps\.digests\.outputs\.checksums \}\}/)
+  assert.match(stepNamed('build-linux', 'Record build digests').text, /--list checksummed --version "\$VERSION" --os linux[\s\S]*sha256sum \$NAMES/)
+  assert.match(stepNamed('build-linux', 'Install the .deb').text, /apt-get install -y --no-install-recommends "\.\/apps\/desktop\/dist\/\$DEB"/)
+
+  // The sandbox stays on: no switch, no env override, and the smoke must say so.
+  const launch = stepNamed('build-linux', 'Launch the installed app with the sandbox on').text
+  assert.match(launch, /env -u ELECTRON_DISABLE_SANDBOX CC_SMOKE=1 xvfb-run -a \/opt\/ContextCake\/contextcake-desktop/)
+  assert.match(launch, /grep -q "SMOKE OK" smoke\.log\s*\n\s*grep -q "sandbox=on" smoke\.log/)
+  assert.doesNotMatch(appRelease, /--no-sandbox/)
+
+  // A day of retention, deleted after any dry run, and never in the inspection upload.
+  assert.match(stepNamed('build-linux', 'Upload Linux artifacts').text, /name: desktop-linux[\s\S]*retention-days: 1\n/)
+  const cleanup = jobs['remove-dry-run-deb']
+  assert.deepEqual(cleanup.needs, ['build-linux', 'publish'])
+  // Every outcome, pushes included: an unsigned or failed tag push must not
+  // keep an installable .deb either.
+  assert.equal(cleanup.if, 'always()')
+  assert.match(cleanup.text, /select\(\.name == "desktop-linux"\)[\s\S]*gh api --method DELETE/)
+  assert.match(stepNamed('publish', 'Upload inspection artifacts (unsigned build)').text, /!release-dist\/\*\.deb/)
+
+  // publish takes the .deb into the release directory and checks it against
+  // build-linux's digests alongside build-mac's.
+  const publish = jobs.publish.steps.map((step) => step.name)
+  assert.ok(publish.indexOf('Download Linux artifacts') < publish.indexOf('Verify every platform row was built and is unchanged'))
+  assert.match(stepNamed('publish', 'Download Linux artifacts').text, /name: desktop-linux\s*\n\s*path: release-dist/)
+  assert.equal(jobs.publish.env.LINUX_BUILD_DIGESTS, '${{ needs.build-linux.outputs.checksums }}')
+  assert.match(stepNamed('publish', 'Verify every platform row was built and is unchanged').text, /printf '%s\\n' "\$BUILD_DIGESTS" "\$LINUX_BUILD_DIGESTS" > "\$RUNNER_TEMP\/build\.sha256"/)
+})
+
 test('the release is uploaded as a draft, checked against the table, then made public', () => {
   const run = stepNamed('publish', 'Publish GitHub Release').text
   const positions = [
@@ -198,7 +254,7 @@ test('the release splits into build-mac, an Intel smoke, and one publish job', (
 
 test('every artifact name in the release workflow comes from the platform table', () => {
   // No step spells an installer, an update file, or a per-platform ping by hand.
-  assert.doesNotMatch(appRelease, /arm64\.dmg|x64\.dmg|-mac\.zip|\*\.dmg|\*\.zip|install-ping-mac/)
+  assert.doesNotMatch(appRelease, /arm64\.dmg|x64\.dmg|-mac\.zip|\*\.dmg|\*\.zip|install-ping-mac|amd64\.deb|latest-linux|install-ping-linux/)
   assert.match(appRelease, /release-platforms\.mjs --check apps\/desktop\/dist --version "\$VERSION" --stage build --os mac/)
   assert.match(appRelease, /--list pings --version "\$VERSION"\); do\s*\n\s*cp apps\/desktop\/release-assets\/install-ping\.txt "release-dist\/\$NAME"/)
 })

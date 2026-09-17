@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, typ
 import { useStoreData, useStoreNav } from '../store'
 import { destinationForView, readBrowserGroupedViews, viewForDestination, type ShellDestination } from '../shell-navigation'
 import { isActionable } from '../discrepancy-summary'
+import { shortcut } from '../platform'
 import { CascadeIcon, HomeIcon, KnowledgeIcon, ReviewIcon, SettingsIcon, SourcesIcon } from './icons'
 
 const contextCakeLogo = `${import.meta.env.BASE_URL}favicon.svg`
@@ -189,7 +190,7 @@ function SidebarInner({ onOpenSettings, onNavigate }: { onOpenSettings?: () => v
       </nav>
       <div className="cc-sidebar-foot">
         <button type="button" className="cc-settings-cta" onClick={onOpenSettings} aria-label={sidebar.collapsed ? 'Settings' : undefined} title={sidebar.collapsed ? 'Settings' : undefined}>
-          <SettingsIcon /><span>Settings</span><kbd>⌘,</kbd>
+          <SettingsIcon /><span>Settings</span><kbd>{shortcut(',')}</kbd>
         </button>
       </div>
     </aside>

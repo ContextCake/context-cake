@@ -26,6 +26,7 @@ import { useReveal } from '../reveal'
 import { useStoreData, useStoreInput } from '../store'
 import type { Source } from '../data'
 import type { LayerFiles } from '../types'
+import { fileManagerName } from '../platform'
 
 // Sync of a clone-backed source runs `git pull` server-side (bounded at 120s
 // there) — same headroom as the wizard's mutations.
@@ -846,10 +847,10 @@ export function Sources({ onAddSource }: { onAddSource?: () => void }) {
                   <button
                     type="button"
                     className="cc-h-bd-strong"
-                    aria-label={`Reveal the folder for ${s.name} in Finder`}
+                    aria-label={`Reveal the folder for ${s.name} in ${fileManagerName()}`}
                     style={btnSmallGhost()}
                     onClick={() => void finder.reveal(s.name, '')}
-                  >Reveal in Finder</button>
+                  >Reveal in {fileManagerName()}</button>
                 )}
                 {live && canSync(s) && (
                   <button

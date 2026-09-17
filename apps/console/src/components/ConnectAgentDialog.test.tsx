@@ -100,7 +100,7 @@ describe('ConnectAgentDialog', () => {
     expect(container.textContent).toContain('Command-line tool installed')
   })
 
-  it('connects through the app shim path when the CLI name is unusable', async () => {
+  it('connects through the app shim path whether or not the CLI shortcut is installed', async () => {
     desktop('missing', SHIM)
     await render()
 
@@ -113,10 +113,32 @@ describe('ConnectAgentDialog', () => {
     await act(async () => copyPrompt?.click())
     expect(writeText.mock.calls[0][0]).toContain(`"${SHIM}" mcp`)
 
-    // Installing the shortcut flips every payload back to the short name.
+    // Installing the shortcut keeps the absolute path: once npm ships, the
+    // first `contextcake` on PATH may be a different install.
     await act(async () => button('Install tool').click())
-    expect(panel()).toContain('claude mcp add --scope user contextcake -- contextcake mcp')
-    expect(panel()).not.toContain(SHIM)
+    expect(panel()).toContain(`claude mcp add --scope user contextcake -- "${SHIM}" mcp`)
+    expect(panel()).not.toContain('-- contextcake mcp')
+    expect(container.textContent).toContain('run this copy of ContextCake')
+  })
+
+  it('uses the absolute shim path for an installed tool and names the Linux link on conflict', async () => {
+    const linuxShim = '/opt/ContextCake/resources/bin/contextcake'
+    getStatus = vi.fn<CliBridge['getStatus']>().mockResolvedValue({
+      status: 'conflict', message: '', shimPath: linuxShim, linkPath: '/home/ada/.local/bin/contextcake',
+    })
+    window.__CC_DESKTOP = { ...window.__CC_DESKTOP!, platform: 'linux', cli: { getStatus: () => getStatus(), install: () => install() } }
+    await render()
+    const panel = container.querySelector('[role="tabpanel"]')?.textContent ?? ''
+    expect(panel).toContain(`claude mcp add --scope user contextcake -- "${linuxShim}" mcp`)
+    expect(container.textContent).toContain('ContextCake will not replace `/home/ada/.local/bin/contextcake`')
+    expect(container.textContent).not.toContain('/usr/local/bin')
+  })
+
+  it('keeps the bare command name in development builds, which have no durable path', async () => {
+    desktop('development', null)
+    await render()
+    const panel = container.querySelector('[role="tabpanel"]')?.textContent ?? ''
+    expect(panel).toContain('claude mcp add --scope user contextcake -- contextcake mcp')
   })
 
   it('shows the move-to-Applications gate and never an absolute path while translocated', async () => {

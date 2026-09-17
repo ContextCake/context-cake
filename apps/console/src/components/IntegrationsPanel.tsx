@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { thisDevice } from '../platform'
 
 // Connected accounts for private sources.
 //
@@ -21,11 +22,15 @@ export function IntegrationsPanel() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  // 'memory' when the app found no usable OS keyring (Linux without one): a
+  // token still works, but only until ContextCake quits. Older apps cannot say.
+  const [storageMode, setStorageMode] = useState<'persistent' | 'memory' | null>(null)
 
   const refresh = useCallback(async () => {
     if (!bridge) return
     try {
       setConnections(await bridge.list())
+      if (bridge.storage) setStorageMode((await bridge.storage()).mode)
     } catch (err) {
       setError(messageOf(err))
     }
@@ -69,7 +74,7 @@ export function IntegrationsPanel() {
     setNotice('')
     try {
       await bridge.disconnect(alias)
-      setNotice('Disconnected on this Mac. The token still exists on GitHub until you revoke it there.')
+      setNotice(`Disconnected on ${thisDevice()}. The token still exists on GitHub until you revoke it there.`)
       await refresh()
     } catch (err) {
       setError(messageOf(err))
@@ -91,9 +96,14 @@ export function IntegrationsPanel() {
           </div>
           <p className="cc-account-note">
             Connect an account to read private repositories as context sources. This is separate
-            from signing in to ContextCake. The token stays on this Mac in a keychain-encrypted
-            local file, or in memory for the current run when encryption is unavailable.
+            from signing in to ContextCake. The token stays on {thisDevice()} in a local file encrypted
+            with the system keyring, or in memory for the current run when encryption is unavailable.
           </p>
+          {storageMode === 'memory' && (
+            <p className="cc-account-status" role="status">
+              No system keyring is available, so tokens you add here last only until ContextCake quits.
+            </p>
+          )}
         </div>
       </div>
 

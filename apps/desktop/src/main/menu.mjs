@@ -2,14 +2,43 @@ import { app, Menu, shell } from 'electron'
 import { checkInteractive } from './updater.mjs'
 import { installCli } from './cli-install.mjs'
 export function buildMenu(getWindow, openSettings) {
+  return Menu.buildFromTemplate(menuTemplate({ getWindow, openSettings }))
+}
+
+// The platform and the actions are injectable so both menu shapes are tested
+// without Electron (test/menu.test.mjs).
+export function menuTemplate({
+  getWindow,
+  openSettings,
+  platform = process.platform,
+  isPackaged = app.isPackaged,
+  appName = app.name,
+  checkForUpdates = (window) => checkInteractive(window),
+  installCommandLineTool = (window) => installCli(window),
+  openExternal = (url) => shell.openExternal(url),
+}) {
   const invoke = (command) => {
     const window = getWindow()
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
     window.webContents.send('commands:invoke', command)
   }
-  const template = [
+  const mac = platform === 'darwin'
+  const documentationItems = [
     {
-      label: app.name,
+      label: 'ContextCake Documentation',
+      click: () => openExternal('https://contextcake.com/docs/'),
+    },
+    {
+      label: 'Report an Issue',
+      click: () => openExternal('https://github.com/ContextCake/context-cake/issues'),
+    },
+  ]
+  // macOS keeps app-level items in the app menu. Linux has no app menu, so it
+  // follows its own convention: Settings and Quit under File; About, updates,
+  // and the command-line tool under Help.
+  const appMenus = mac ? [
+    {
+      label: appName,
       submenu: [
         { role: 'about' },
         {
@@ -20,12 +49,12 @@ export function buildMenu(getWindow, openSettings) {
         { type: 'separator' },
         {
           label: 'Check for Updates…',
-          click: () => checkInteractive(getWindow()),
+          click: () => checkForUpdates(getWindow()),
         },
         { type: 'separator' },
         {
           label: 'Install Command Line Tool…',
-          click: () => installCli(getWindow()),
+          click: () => installCommandLineTool(getWindow()),
         },
         { type: 'separator' },
         { role: 'hide' },
@@ -35,6 +64,39 @@ export function buildMenu(getWindow, openSettings) {
         { role: 'quit' },
       ],
     },
+  ] : [
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'Settings…',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => openSettings?.(),
+        },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+  ]
+  const helpMenu = {
+    role: 'help',
+    submenu: mac ? documentationItems : [
+      ...documentationItems,
+      { type: 'separator' },
+      {
+        label: 'Check for Updates…',
+        click: () => checkForUpdates(getWindow()),
+      },
+      {
+        label: 'Install Command Line Tool…',
+        click: () => installCommandLineTool(getWindow()),
+      },
+      { type: 'separator' },
+      { role: 'about' },
+    ],
+  }
+  return [
+    ...appMenus,
     { role: 'editMenu' },
     {
       label: 'View',
@@ -58,7 +120,7 @@ export function buildMenu(getWindow, openSettings) {
         // Reload bypasses the renderer's unsaved-file navigation guard, and
         // neither reload nor DevTools belongs in the shipped desktop app.
         // Keep both available to developers running an unpackaged build.
-        ...(!app.isPackaged ? [
+        ...(!isPackaged ? [
           { type: 'separator' },
           { role: 'reload' },
           { role: 'toggleDevTools' },
@@ -66,19 +128,6 @@ export function buildMenu(getWindow, openSettings) {
       ],
     },
     { role: 'windowMenu' },
-    {
-      role: 'help',
-      submenu: [
-        {
-          label: 'ContextCake Documentation',
-          click: () => shell.openExternal('https://contextcake.com/docs/'),
-        },
-        {
-          label: 'Report an Issue',
-          click: () => shell.openExternal('https://github.com/ContextCake/context-cake/issues'),
-        },
-      ],
-    },
+    helpMenu,
   ]
-  return Menu.buildFromTemplate(template)
 }

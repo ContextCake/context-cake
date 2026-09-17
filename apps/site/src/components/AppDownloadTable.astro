@@ -1,31 +1,47 @@
 ---
-// Docs view of the Mac downloads: one row per available platform in the
-// committed release record, so the installation guide never names a DMG,
-// size, or checksum by hand.
-import { appChecksumsUrl, appReleaseUrl, appTag, macDownloads } from '../data/app-release';
+// Docs view of the app downloads for one OS: one row per available platform in
+// the committed release record, so the installation guide never names an
+// installer, size, or checksum by hand.
+import { appChecksumsUrl, appReleaseUrl, appTag, linuxDownloads, macDownloads } from '../data/app-release';
 import { formatFileSize } from '../data/app-downloads.mjs';
 
-const intelMissing = !macDownloads.some((row) => row.arch === 'x64');
+interface Props {
+	os?: 'mac' | 'linux';
+}
+const { os = 'mac' } = Astro.props;
+const rows = os === 'linux' ? linuxDownloads : macDownloads;
+const intelMissing = os === 'mac' && !macDownloads.some((row) => row.arch === 'x64');
 ---
-<p>
-	Download the DMG for your Mac from <a href={appReleaseUrl}>{appTag}</a>. Each file is signed,
-	notarized, and listed in <a href={appChecksumsUrl}>SHA256SUMS</a>.
-</p>
-<table class="app-downloads">
-	<thead>
-		<tr><th scope="col">Mac</th><th scope="col">Download</th><th scope="col">Size</th><th scope="col">SHA-256</th></tr>
-	</thead>
-	<tbody>
-		{macDownloads.map((row) => (
-			<tr>
-				<th scope="row">{row.label}</th>
-				<td><a href={row.downloadPath} download>{row.installer.name}</a></td>
-				<td class="app-downloads__size">{formatFileSize(row.installer.bytes)}</td>
-				<td><code>{row.installer.sha256}</code></td>
-			</tr>
-		))}
-	</tbody>
-</table>
+{os === 'mac' ? (
+	<p>
+		Download the DMG for your Mac from <a href={appReleaseUrl}>{appTag}</a>. Each file is signed,
+		notarized, and listed in <a href={appChecksumsUrl}>SHA256SUMS</a>.
+	</p>
+) : rows.length > 0 ? (
+	<p>
+		Download the package from <a href={appReleaseUrl}>{appTag}</a>. It is not signed; check it against
+		its line in <a href={appChecksumsUrl}>SHA256SUMS</a>.
+	</p>
+) : (
+	<p>{appTag} has no Linux package. Use the source route below until a release includes one.</p>
+)}
+{rows.length > 0 && (
+	<table class="app-downloads">
+		<thead>
+			<tr><th scope="col">{os === 'linux' ? 'Linux' : 'Mac'}</th><th scope="col">Download</th><th scope="col">Size</th><th scope="col">SHA-256</th></tr>
+		</thead>
+		<tbody>
+			{rows.map((row) => (
+				<tr>
+					<th scope="row">{row.label}</th>
+					<td><a href={row.downloadPath} download>{row.installer.name}</a></td>
+					<td class="app-downloads__size">{formatFileSize(row.installer.bytes)}</td>
+					<td><code>{row.installer.sha256}</code></td>
+				</tr>
+			))}
+		</tbody>
+	</table>
+)}
 {intelMissing && <p>This release is for Apple silicon only. On an Intel Mac, use the source route below.</p>}
 
 <style>

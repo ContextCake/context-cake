@@ -16,6 +16,7 @@ import type { LiveErrorKind } from './api'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { useOpenerFocus } from './components/useOpenerFocus'
 import { readBrowserGroupedViews, SEARCHABLE_VIEWS, viewForDestination } from './shell-navigation'
+import { shortcut } from './platform'
 
 const Diagnostics = lazy(() => import('./views/Diagnostics').then(module => ({ default: module.Diagnostics })))
 const Canvas = lazy(() => import('./views/Canvas').then((module) => ({ default: module.Canvas })))
@@ -192,12 +193,12 @@ export function App() {
   }, [closeDrawer, drawerOpen])
 
   const paletteCommands = useMemo<PaletteCommand[]>(() => [
-    { id: 'home', label: 'Go to Workspace', keywords: 'overview', shortcut: '⌘1', run: () => setView('overview') },
-    { id: 'cascade', label: 'Go to Map', keywords: 'canvas graph', shortcut: '⌘2', run: () => setView('canvas') },
+    { id: 'home', label: 'Go to Workspace', keywords: 'overview', shortcut: shortcut('1'), run: () => setView('overview') },
+    { id: 'cascade', label: 'Go to Map', keywords: 'canvas graph', shortcut: shortcut('2'), run: () => setView('canvas') },
     { id: 'concepts', label: 'Go to Library: Context', keywords: 'browse', run: () => setView('concepts') },
-    { id: 'files', label: 'Go to Library: Files', keywords: 'markdown documents', shortcut: '⇧⌘F', run: () => setView('files') },
-    { id: 'diagnostics', label: 'Go to Diagnostics', shortcut: '⌘6', run: () => setView('diagnostics') },
-    { id: 'sources', label: 'Go to Sources', shortcut: '⌘4', run: () => setView('sources') },
+    { id: 'files', label: 'Go to Library: Files', keywords: 'markdown documents', shortcut: shortcut('F', { shift: true }), run: () => setView('files') },
+    { id: 'diagnostics', label: 'Go to Diagnostics', shortcut: shortcut('6'), run: () => setView('diagnostics') },
+    { id: 'sources', label: 'Go to Sources', shortcut: shortcut('4'), run: () => setView('sources') },
     { id: 'queue', label: 'Go to Trust: Captures', keywords: 'triage', run: () => setView('triage') },
     { id: 'conflicts', label: 'Go to Trust: Discrepancies', keywords: 'resolve align', run: () => setView('conflicts') },
     // One per source: the palette is the keyboard route into the navigator,
@@ -211,8 +212,8 @@ export function App() {
     })),
     ...(mode === 'live' ? [{ id: 'add-source', label: 'Add Source', keywords: 'folder repository', run: reopenWizard }] : []),
     ...(isDesktop ? [{ id: 'connect-agent', label: 'Connect Agent', keywords: 'cli mcp', run: openConnect }] : []),
-    { id: 'ask', label: 'Ask ContextCake', shortcut: '⇧⌘A', run: openAskFromPalette },
-    { id: 'settings', label: 'Open Settings', shortcut: '⌘,', run: openSettings },
+    { id: 'ask', label: 'Ask ContextCake', shortcut: shortcut('A', { shift: true }), run: openAskFromPalette },
+    { id: 'settings', label: 'Open Settings', shortcut: shortcut(','), run: openSettings },
     { id: 'sidebar', label: 'Toggle Sidebar', run: toggleSidebar },
   ], [isDesktop, mode, openAskFromPalette, openConnect, openFilesScope, openSettings, reopenWizard, setView, sources, toggleSidebar])
   const closeSettings = () => { setSettingsOpen(false); settingsFocus.restore() }

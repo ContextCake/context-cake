@@ -4,6 +4,7 @@ import type { SourceStatus } from '../types'
 import { DiagnosticActivity } from './DiagnosticActivity'
 import { useStoreData } from '../store'
 import { useThemeMode } from '../theme-mode'
+import { isMacDesktop, thisDevice } from '../platform'
 import {
   Button,
   EmptyState,
@@ -499,8 +500,12 @@ function DiagnosticsInner() {
   const { mode } = useStoreData()
   const isDemo = mode !== 'live'
   const { mode: theme, density, setDensity } = useThemeMode()
+  // Local Grafana needs Docker Desktop and ships in the Mac app only. The Linux
+  // app has no stack (the main process never creates one), so it shows no
+  // Grafana tab, setup, or Docker controls. The Web Demo keeps its preview.
+  const grafanaHidden = !isDemo && Boolean(window.__CC_DESKTOP) && !isMacDesktop()
   const bridge =
-    mode === 'live' ? window.__CC_DESKTOP?.observability : undefined
+    mode === 'live' && !grafanaHidden ? window.__CC_DESKTOP?.observability : undefined
   const [report, setReport] = useState<Report | null>(() =>
     isDemo ? createDemoReport() : null,
   )
@@ -610,7 +615,7 @@ function DiagnosticsInner() {
         s.refreshing || ['queued', 'scanning', 'loading'].includes(s.phase),
     ).length ?? 0
 
-  const stackControls = (
+  const stackControls = grafanaHidden ? null : (
     <section className="cc-diag-stack" aria-labelledby="local-grafana-title">
       <header>
         <h3 id="local-grafana-title">Local Grafana</h3>
@@ -728,10 +733,10 @@ function DiagnosticsInner() {
           <p>
             {isDemo
               ? 'A sample of source health, retrieval, and indexing in the Mac app.'
-              : 'Source health, retrieval, and indexing on this Mac.'}
+              : `Source health, retrieval, and indexing on ${thisDevice()}.`}
           </p>
         </div>
-        <SegmentedControl
+        {!grafanaHidden && <SegmentedControl
           label="Diagnostics view"
           value={tab}
           options={[
@@ -739,7 +744,7 @@ function DiagnosticsInner() {
             { value: 'grafana', label: 'Grafana' },
           ]}
           onChange={setTab}
-        />
+        />}
       </header>
       {isDemo && (
         <InlineNotice>
@@ -749,7 +754,7 @@ function DiagnosticsInner() {
         </InlineNotice>
       )}
       {error && <InlineNotice tone="error">{error}</InlineNotice>}
-      {tab === 'grafana' ? (
+      {tab === 'grafana' && !grafanaHidden ? (
         <>
           <div className="cc-diag-toolbar">
             <span className="cc-diag-scope">
@@ -1455,7 +1460,7 @@ function DiagnosticsInner() {
           <footer className="cc-diag-footer">
             {isDemo
               ? 'Sample observations use the bundled three-layer demo. In the Mac app, native observations cover the desktop engine and Local Grafana combines participating processes.'
-              : 'Native observations cover this desktop engine only. Grafana combines participating processes. Updates every 5 seconds while this view is visible.'}
+              : `Native observations cover this desktop engine only.${grafanaHidden ? '' : ' Grafana combines participating processes.'} Updates every 5 seconds while this view is visible.`}
           </footer>
         </>
       )}

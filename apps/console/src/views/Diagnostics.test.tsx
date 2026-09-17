@@ -412,3 +412,27 @@ it('shows candidates and phase only on search rows in the operations table', asy
   expect(otherRow.cells[5].textContent).toBe('')
   await act(async () => root.unmount())
 })
+
+it('hides Local Grafana and its Docker controls in the Linux app, and never asks the stack for status', async () => {
+  state.mode = 'live'
+  const report = {
+    observedFrom: 100,
+    observedTo: 200,
+    sampleCount: 0,
+    operations: [],
+    health: { memory: 'normal', sources: [] },
+    indexing: { events: [] },
+  }
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => report })))
+  const status = vi.fn(async () => ({ state: 'unavailable', enabled: false }))
+  vi.stubGlobal('__CC_DESKTOP', { platform: 'linux', observability: { status } })
+  const container = document.createElement('div'),
+    root = createRoot(container)
+  await act(async () => root.render(<Diagnostics />))
+  expect(container.textContent).not.toContain('Local Grafana')
+  expect(container.textContent).not.toContain('Docker')
+  expect(container.querySelector('[aria-label="Diagnostics view"]')).toBeNull()
+  expect(container.textContent).toContain('indexing on this computer')
+  expect(status).not.toHaveBeenCalled()
+  await act(async () => root.unmount())
+})

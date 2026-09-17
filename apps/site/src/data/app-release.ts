@@ -45,6 +45,8 @@ if (!appPlatforms.length) {
 	throw new Error('app-release.json must list at least one available platform');
 }
 export const macDownloads = platformsFor(release, 'mac') as AvailablePlatform[];
+// Empty until a release attaches the .deb; pages render nothing for it then.
+export const linuxDownloads = platformsFor(release, 'linux') as AvailablePlatform[];
 
 // The first row is the default one-click download (Apple silicon today).
 export const primaryDownload = appPlatforms[0];

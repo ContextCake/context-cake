@@ -21,6 +21,7 @@ import { filesRevalidation, readLayerFile, useLayerFiles } from '../layer-files'
 import { useReveal } from '../reveal'
 import { useStoreData, useStoreInput, useStoreNav } from '../store'
 import type { FileContent, LayerFile } from '../types'
+import { fileManagerName } from '../platform'
 
 type Tab = 'rendered' | 'raw'
 
@@ -421,10 +422,10 @@ export function Files() {
                 <button
                   type="button"
                   className="cc-h-bd-strong"
-                  aria-label={`Reveal ${file.rel} in Finder`}
+                  aria-label={`Reveal ${file.rel} in ${fileManagerName()}`}
                   onClick={() => void finder.reveal(file.layer, file.rel)}
                   style={css(`padding:7px 12px; border-radius:8px; cursor:pointer; font:inherit; font-size:12px; font-weight:600; border:1px solid ${C.line}; background:transparent; color:${C.caption};`)}
-                >Reveal in Finder</button>
+                >Reveal in {fileManagerName()}</button>
               )}
 
               {canEdit && (

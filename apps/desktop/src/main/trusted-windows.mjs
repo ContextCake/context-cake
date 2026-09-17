@@ -26,6 +26,7 @@ export const TRUSTED_IPC_ROLES = Object.freeze({
   'settings:sync-state': BOTH_ROLES,
   'settings:pull': BOTH_ROLES,
   'integrations:list': BOTH_ROLES,
+  'integrations:storage': BOTH_ROLES,
   'integrations:add-token': BOTH_ROLES,
   'integrations:disconnect': BOTH_ROLES,
   'preferences:get': BOTH_ROLES,

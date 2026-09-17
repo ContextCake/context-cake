@@ -45,6 +45,22 @@
       "available": false,
       "installer": null,
       "updater": null
+    },
+    {
+      "id": "linux-x64-deb",
+      "os": "linux",
+      "arch": "x64",
+      "osLabel": "Linux",
+      "label": "Debian and Ubuntu",
+      "platformName": "Linux",
+      "updates": "notify",
+      "downloadPath": "/download/linux-x64-deb",
+      "downloadAliases": [
+        "/download/linux"
+      ],
+      "available": false,
+      "installer": null,
+      "updater": null
     }
   ],
   "mcpb": {

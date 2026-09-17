@@ -13,29 +13,94 @@
 // safeStorage to decrypt too. Anything stored here should therefore be
 // revocable, and the docs/security threat model says so out loud rather than
 // implying a stronger guarantee than exists.
+//
+// On Linux, safeStorage reports encryption as available even when it found no
+// keyring: it falls back to the `basic_text` backend, whose key is a constant
+// compiled into Chromium. A file written that way is obfuscated, not
+// encrypted, so this store treats `basic_text` as unavailable and keeps values
+// in memory only. The backend is only known once the app is ready (`unknown`
+// before), so it is checked at each use, never cached at construction.
 
 import fs from 'node:fs'
 import path from 'node:path'
 
-export function createEncryptedStorage({ configDir, safeStorage, canWrite = () => true, fileName = 'session.enc' }) {
+// Backends that do not protect the bytes: a fixed key, or none chosen yet.
+const WEAK_BACKENDS = new Set(['basic_text'])
+// Unreadable copies kept for manual recovery; older ones are removed.
+const MAX_UNREADABLE_COPIES = 3
+
+export function createEncryptedStorage({
+  configDir,
+  safeStorage,
+  canWrite = () => true,
+  fileName = 'session.enc',
+  isReady = () => true,
+  now = () => new Date(),
+}) {
   const file = path.join(configDir, fileName)
   const memory = new Map()
 
   const encryptionAvailable = () => {
-    try { return safeStorage?.isEncryptionAvailable() === true } catch { return false }
+    try {
+      if (safeStorage?.isEncryptionAvailable() !== true) return false
+      // Linux only; macOS and Windows have no such method.
+      const backend = safeStorage.getSelectedStorageBackend?.()
+      if (WEAK_BACKENDS.has(backend)) return false
+      if (backend === 'unknown' && isReady()) return false
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // A file that exists but cannot be decrypted or parsed is moved aside, never
+  // treated as empty: the next write would otherwise replace it, and a keyring
+  // that is only locked or reset for now would cost the user every stored
+  // credential for good. The copy keeps the bytes for a manual recovery.
+  //
+  // If the move fails, writes are refused until a later read succeeds: an
+  // unreadable file that could not be moved must not be overwritten either.
+  let unreadableInPlace = false
+  const setAside = () => {
+    const stamp = now().toISOString().replace(/[:.]/g, '-')
+    try {
+      fs.renameSync(file, `${file}.unreadable-${stamp}`)
+    } catch (error) {
+      unreadableInPlace = error?.code !== 'ENOENT'
+      return
+    }
+    unreadableInPlace = false
+    const prefix = `${fileName}.unreadable-`
+    try {
+      const copies = fs.readdirSync(configDir).filter((name) => name.startsWith(prefix)).sort()
+      for (const name of copies.slice(0, Math.max(0, copies.length - MAX_UNREADABLE_COPIES))) {
+        try { fs.rmSync(path.join(configDir, name)) } catch { /* keep what cannot be removed */ }
+      }
+    } catch { /* pruning is best effort */ }
   }
 
   const readMap = () => {
     if (!encryptionAvailable()) return Object.fromEntries(memory)
+    let encrypted
     try {
-      const encrypted = fs.readFileSync(file)
-      const plaintext = safeStorage.decryptString(encrypted)
-      const parsed = JSON.parse(plaintext)
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+      encrypted = fs.readFileSync(file)
     } catch {
-      // Missing, locked, or stale Keychain material reads as "nothing stored".
+      // Missing (or unreadable as a file at all) reads as "nothing stored".
+      unreadableInPlace = false
       return {}
     }
+    try {
+      const plaintext = safeStorage.decryptString(encrypted)
+      const parsed = JSON.parse(plaintext)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        unreadableInPlace = false
+        return parsed
+      }
+    } catch {
+      // Stale or foreign key material, or corrupt bytes: handled below.
+    }
+    setAside()
+    return {}
   }
 
   const writeMap = (values) => {
@@ -43,6 +108,9 @@ export function createEncryptedStorage({ configDir, safeStorage, canWrite = () =
       memory.clear()
       for (const [key, value] of Object.entries(values)) memory.set(key, value)
       return
+    }
+    if (unreadableInPlace) {
+      throw new Error(`${file} could not be decrypted and could not be moved aside, so ContextCake did not overwrite it.`)
     }
     fs.mkdirSync(configDir, { recursive: true })
     const encrypted = safeStorage.encryptString(JSON.stringify(values))
@@ -52,8 +120,12 @@ export function createEncryptedStorage({ configDir, safeStorage, canWrite = () =
     try { fs.chmodSync(file, 0o600) } catch { /* best effort on non-POSIX test hosts */ }
   }
 
+  // Memory-only mode never touches disk. A file there came from an earlier
+  // session that had a keyring; this session cannot read it, and deleting it
+  // would lose it for the next session that can.
   const clear = () => {
     memory.clear()
+    if (!encryptionAvailable()) return
     try { fs.rmSync(file) } catch (err) {
       if (err?.code !== 'ENOENT') throw err
     }
@@ -61,6 +133,13 @@ export function createEncryptedStorage({ configDir, safeStorage, canWrite = () =
 
   return {
     file,
+    /**
+     * 'persistent' when values reach disk encrypted, 'memory' when they last
+     * only as long as this process (no keyring, or a fixed-key backend).
+     */
+    mode() {
+      return encryptionAvailable() ? 'persistent' : 'memory'
+    },
     getItem(key) {
       const value = readMap()[key]
       return typeof value === 'string' ? value : null

@@ -1,6 +1,9 @@
 ---
-// Install page: the Mac app is the primary activation path. The versioned
-// source workflow stays available for evaluators, Linux/WSL users, and audits.
+// Install page: the Mac app is the primary activation path. Every download
+// comes from the release record, one choice per available platform row, so a
+// new row in scripts/release-platforms.mjs needs no edit here. The versioned
+// source workflow stays available for evaluators, platforms without a native
+// download, and audits.
 import Base from '../layouts/Base.astro';
 import CodeBlock from '../components/CodeBlock.astro';
 import Icon from '../components/Icon.astro';
@@ -8,14 +11,14 @@ import demo from '../data/demo-cascade.json';
 import {
 	appVersion,
 	appTag,
-	appDownloadUrl,
-	appDownloadName,
-	appDownloadBytes,
 	appReleaseUrl,
 	appChecksumsUrl,
-	appDownloadSha256,
 	appMcpb,
+	macDownloads,
+	sourceRouteList,
+	sourceRouteTitle,
 } from '../data/app-release';
+import { formatFileSize } from '../data/app-downloads.mjs';
 import {
 	sourceTag,
 	sourceDownloadUrl,
@@ -61,7 +64,8 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
 	timeZone: 'UTC',
 });
 const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:00Z`));
-const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`;
+const macLabels = macDownloads.map((row) => row.label).join(' and ');
+const intelMissing = !macDownloads.some((row) => row.arch === 'x64');
 ---
 
 <Base
@@ -78,18 +82,23 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 					ContextCake runs locally. After you install it, choose a folder of Markdown files
 					and connect the AI tool you use. The app walks you through both steps.
 				</p>
-				<section class="download-module" aria-labelledby="download-title">
-					<div class="download-module__top">
-						<div>
-							<p>Mac app</p>
-							<h2 id="download-title">Apple silicon (M1 or later)</h2>
-							<span>{appDownloadName} · {formatFileSize(appDownloadBytes)} · signed and notarized</span>
-						</div>
-						<a class="button button--primary" href={appDownloadUrl} download>
-							<Icon name="download" size={18} />
-							Download for Mac
-						</a>
-					</div>
+				<section class="download-module" id="download" aria-labelledby="download-title">
+					<h2 id="download-title" class="download-module__title">Mac app · signed and notarized</h2>
+					<ul class="download-choices">
+						{macDownloads.map((row, index) => (
+							<li class="download-choice">
+								<div class="download-choice__copy">
+									<h3>{row.label}</h3>
+									<span>{row.installer.name} · {formatFileSize(row.installer.bytes)}</span>
+									<code aria-label={`SHA-256 for ${row.installer.name}`}>{row.installer.sha256}</code>
+								</div>
+								<a class:list={['button', index === 0 ? 'button--primary' : 'button--secondary']} href={row.downloadPath} download>
+									<Icon name="download" size={18} />
+									Download for {row.label}
+								</a>
+							</li>
+						))}
+					</ul>
 					<div class="download-record" aria-label="Release details">
 						<span>{appTag}</span>
 						<a href={appReleaseUrl}>Release notes</a>
@@ -97,7 +106,7 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 					</div>
 				</section>
 				<nav class="install-alternatives" aria-label="Other installation options">
-					<a href="#source-install"><span>Using an Intel Mac, Linux, or WSL?</span> Run the versioned source <b aria-hidden="true">→</b></a>
+					<a href="#source-install"><span>Using {sourceRouteList}?</span> Run the versioned source <b aria-hidden="true">→</b></a>
 					<a href={appReleaseUrl}><span>Looking for an older build?</span> See all app releases <b aria-hidden="true">→</b></a>
 				</nav>
 				{appMcpb && (
@@ -221,21 +230,26 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 			<div class="download-strip">
 				<div>
 					<strong>Use ContextCake with your own files.</strong>
-					<span>ContextCake {appVersion} · Apple silicon</span>
+					<span>ContextCake {appVersion} for Mac · {macLabels}</span>
 				</div>
-				<a class="button button--primary" href={appDownloadUrl} download>
-					<Icon name="download" size={18} /> Download the DMG
-				</a>
+				<div class="download-strip__actions">
+					{macDownloads.map((row, index) => (
+						<a class:list={['button', index === 0 ? 'button--primary' : 'button--secondary']} href={row.downloadPath} download>
+							<Icon name="download" size={18} /> {row.label}
+						</a>
+					))}
+				</div>
 			</div>
 		</section>
 
 		<section class="source-install" id="source-install" aria-labelledby="source-title">
 			<header class="section-intro section-intro--source">
 				<div>
-					<h2 id="source-title">Run the source version on Intel Mac, Linux, or WSL.</h2>
+					<h2 id="source-title">{sourceRouteTitle}</h2>
 					<p>
-						The Mac app requires Apple silicon. Use the versioned source for other supported
-						platforms, contribution work, or a complete audit before you run anything.
+						{intelMissing ? 'This Mac release is for Apple silicon only. ' : ''}Use the versioned
+						source on {sourceRouteList}, for contribution work, or for a complete audit before you
+						run anything.
 					</p>
 				</div>
 				<span>Node.js 22+ · macOS, Linux, or WSL · no npm install</span>
@@ -293,19 +307,21 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 			</div>
 			<div class="trust-copy">
 					<p>
-						The Mac app is Developer ID-signed and notarized. Each release lists the exact
-						DMG and its checksum. Installed Macs reject an update unless it carries the same
+						The Mac app is Developer ID-signed and notarized. Each release lists every
+						DMG with its checksum. Installed Macs reject an update unless it carries the same
 						Developer ID signature. ContextCake reads only the sources you add.
 				</p>
 				<dl class="release-details">
 					<div>
 						<dt>Current release</dt>
-						<dd><a href={appReleaseUrl}>{appTag}</a> · {appDownloadName}</dd>
+						<dd><a href={appReleaseUrl}>{appTag}</a> · <a href={appChecksumsUrl}>SHA256SUMS</a></dd>
 					</div>
-					<div>
-						<dt>SHA-256</dt>
-						<dd><code>{appDownloadSha256}</code> <a href={appChecksumsUrl}>View manifest</a></dd>
-					</div>
+					{macDownloads.map((row) => (
+						<div>
+							<dt>{row.label}</dt>
+							<dd>{row.installer.name}<br /><code>{row.installer.sha256}</code></dd>
+						</div>
+					))}
 					<div>
 						<dt>Updates</dt>
 						<dd>Checked over HTTPS; you choose whether to relaunch. <a href="/docs/reference/updates-and-privacy">Updates and privacy</a></dd>
@@ -395,37 +411,63 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 		background: color-mix(in srgb, var(--cc-surface-raised) 78%, var(--cc-layer-team));
 		overflow: hidden;
 	}
-	.download-module__top {
+	.download-module__title {
+		margin: 0;
+		padding: 0.85rem 1.25rem 0;
+		color: var(--cc-text-muted);
+		font-size: 0.78rem;
+		font-weight: 600;
+		letter-spacing: 0;
+	}
+	.download-choices {
+		margin: 0;
+		padding: 0.35rem 0 0;
+		list-style: none;
+	}
+	.download-choice {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
-		gap: 1.25rem;
-		padding: 1.15rem 1.25rem;
+		gap: 0.8rem 1.25rem;
+		padding: 0.9rem 1.25rem;
 	}
-	.download-module__top > div { display: grid; gap: 0.18rem; }
-	.download-module__top p {
-		margin: 0;
-		color: var(--cc-layer-team);
-		font-family: var(--cc-font-mono);
-		font-size: 0.66rem;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-	}
-	.download-module__top h2 {
+	.download-choice + .download-choice { border-top: 1px solid var(--cc-border); }
+	.download-choice__copy { display: grid; flex: 1 1 17rem; gap: 0.2rem; min-width: 0; }
+	.download-choice h3 {
 		margin: 0;
 		color: var(--cc-text);
-		font-size: 1.28rem;
+		font-size: 1.2rem;
 		letter-spacing: -0.02em;
 	}
-	.download-module__top > div > span { color: var(--cc-text-body); font-size: 0.78rem; }
-	.download-module__top .button { flex: none; }
+	.download-choice__copy > span { color: var(--cc-text-body); font-size: 0.78rem; }
+	.download-choice code {
+		color: var(--cc-text-muted);
+		font-family: var(--cc-font-mono);
+		font-size: 0.66rem;
+		line-height: 1.5;
+		overflow-wrap: anywhere;
+	}
+	.download-choice .button { flex: none; }
+	.button--secondary {
+		background: transparent;
+		color: var(--cc-text);
+	}
+	.button--secondary:hover {
+		border-color: var(--cc-layer-team);
+		color: var(--cc-layer-team);
+	}
+	.button:focus-visible {
+		outline: 2px solid var(--cc-layer-team);
+		outline-offset: 3px;
+	}
 	.download-record {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.45rem 1rem;
-		padding: 0.7rem 1rem;
+		padding: 0.7rem 1.25rem;
+		border-top: 1px solid var(--cc-border);
 		color: var(--cc-text-muted);
 		font-family: var(--cc-font-mono);
 		font-size: 0.68rem;
@@ -773,6 +815,7 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 	.download-strip > div { display: grid; gap: 0.18rem; }
 	.download-strip strong { color: var(--cc-text); font-size: 1.1rem; }
 	.download-strip span { color: var(--cc-text-muted); font-size: 0.8rem; }
+	.download-strip > .download-strip__actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
 
 	.section-intro--source { align-items: start; }
 	.section-intro--source > div { max-width: 43rem; }
@@ -949,11 +992,11 @@ const formatFileSize = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 	@media (max-width: 520px) {
 		.install-page { padding-inline: 1rem; }
 		h1 { font-size: clamp(2rem, 11vw, 2.75rem); }
-		.download-module__top,
 		.download-strip,
+		.download-strip__actions,
 		.download-strip .button { width: 100%; box-sizing: border-box; }
-		.download-module__top { align-items: flex-start; flex-direction: column; }
-		.download-module__top .button { width: 100%; box-sizing: border-box; }
+		.download-choice { align-items: stretch; flex-direction: column; gap: 0.8rem; }
+		.download-choice .button { width: 100%; box-sizing: border-box; }
 		.install-alternatives a { display: block; width: auto; line-height: 1.65; }
 		.install-alternatives a span { display: block; }
 		.mcpb-route { grid-template-columns: 1fr; }

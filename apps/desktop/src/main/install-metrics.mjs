@@ -3,18 +3,32 @@
 // tiny release asset, then leaves a local marker so the request is never
 // repeated for this ContextCake data directory. No identifier, account data,
 // knowledge content, path, or event body is sent.
+//
+// Each platform build fetches its own asset, so Intel and Apple silicon
+// launches count separately. The asset names mirror the pingAsset column of
+// scripts/release-platforms.mjs, which the packaged app cannot import;
+// scripts/tests/release-platforms.test.mjs fails if the two drift.
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const INSTALL_METRIC_ASSET = 'install-ping.txt'
 export const INSTALL_METRIC_MARKER = 'install-metric-v1.json'
 const inFlightByMarker = new Map()
+const OS_BY_PLATFORM = { darwin: 'mac', linux: 'linux' }
 
-export function installMetricUrl(version) {
+export function installMetricAsset({ platform = process.platform, arch = process.arch, packageType } = {}) {
+  const os = OS_BY_PLATFORM[platform]
+  if (!os) return null
+  return `install-ping-${[os, arch, packageType].filter(Boolean).join('-')}.txt`
+}
+
+export function installMetricUrl(version, asset) {
   if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
     throw new Error('Invalid ContextCake version for install metric.')
   }
-  return `https://github.com/ContextCake/context-cake/releases/download/app-v${version}/${INSTALL_METRIC_ASSET}`
+  if (!/^install-ping-[a-z0-9-]+\.txt$/.test(asset ?? '')) {
+    throw new Error('Invalid install metric asset.')
+  }
+  return `https://github.com/ContextCake/context-cake/releases/download/app-v${version}/${asset}`
 }
 
 export async function reportFirstLaunch({
@@ -22,6 +36,9 @@ export async function reportFirstLaunch({
   version,
   configDir,
   metricsEnabled = false,
+  platform = process.platform,
+  arch = process.arch,
+  packageType,
   fetchImpl = globalThis.fetch,
   now = () => new Date(),
   timeoutMs = 5_000,
@@ -29,6 +46,8 @@ export async function reportFirstLaunch({
 }) {
   if (!isPackaged) return { status: 'development' }
   if (!metricsEnabled) return { status: 'disabled' }
+  const asset = installMetricAsset({ platform, arch, packageType })
+  if (!asset) return { status: 'unsupported' }
 
   const marker = path.join(configDir, INSTALL_METRIC_MARKER)
   if (fs.existsSync(marker)) return { status: 'already-reported' }
@@ -43,7 +62,7 @@ export async function reportFirstLaunch({
     timeout.unref?.()
 
     try {
-      const response = await fetchImpl(installMetricUrl(version), {
+      const response = await fetchImpl(installMetricUrl(version, asset), {
         method: 'GET',
         redirect: 'follow',
         cache: 'no-store',

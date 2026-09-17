@@ -34,13 +34,20 @@ extraResources:
   - from: build/supabase-config.json
     to: supabase-config.json
 
+# Artifact names come from scripts/release-platforms.mjs (mac-arm64, mac-x64).
+# Both patterns are set explicitly: electron-builder's defaults drop the arch
+# from an x64 DMG, which would give Intel a name no release tool expects.
+# scripts/tests/release-platforms.test.mjs expands these patterns for every
+# table row and fails on any difference, so change the table and this file
+# together. mac.artifactName names the zip; dmg.artifactName overrides it.
 mac:
   category: public.app-category.developer-tools
+  artifactName: "${productName}-${version}-${arch}-mac.${ext}"
   target:
     - target: dmg
-      arch: [arm64]
+      arch: [arm64, x64]
     - target: zip
-      arch: [arm64]
+      arch: [arm64, x64]
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
@@ -52,6 +59,7 @@ mac:
 
 dmg:
   sign: false
+  artifactName: "${productName}-${version}-${arch}.${ext}"
 
 protocols:
   - name: ContextCake

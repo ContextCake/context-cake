@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url'
+import { RELEASE_PLATFORMS } from './release-platforms.mjs'
 
 function requireHttpsUrl(value, label) {
   let url
@@ -52,16 +53,27 @@ export async function verifyReleaseSurfaces({
     throw new Error(`Web Demo provenance mismatch: expected ${expectedTag} at ${expectedCommit}`)
   }
 
+  // A release publishes only with every platform row attached, so the site
+  // deployed for it must link and redirect every row too.
   const installResponse = await readResponse(fetchImpl, new URL('/install/', siteBase), 'Site install page')
   const installHtml = await installResponse.text()
-  if (!installHtml.includes(expectedTag) || !installHtml.includes('href="/download/mac"')) {
+  if (!installHtml.includes(expectedTag)) {
     throw new Error(`Site install page does not expose published release ${expectedTag}`)
   }
+  for (const row of RELEASE_PLATFORMS) {
+    if (!installHtml.includes(`href="${row.downloadPath}"`)) {
+      throw new Error(`Site install page does not link ${row.downloadPath} for ${expectedTag}`)
+    }
+  }
 
-  const downloadLocation = await readRedirect(fetchImpl, new URL('/download/mac', siteBase), 'Site Mac download')
-  const expectedDownload = `https://github.com/ContextCake/context-cake/releases/download/${expectedTag}/ContextCake-${expectedVersion}-arm64.dmg`
-  if (downloadLocation !== expectedDownload) {
-    throw new Error(`Site Mac download does not target ${expectedTag}`)
+  for (const row of RELEASE_PLATFORMS) {
+    const expectedDownload = `https://github.com/ContextCake/context-cake/releases/download/${expectedTag}/${row.installerName(expectedVersion)}`
+    for (const route of [row.downloadPath, ...row.downloadAliases]) {
+      const location = await readRedirect(fetchImpl, new URL(route, siteBase), `Site ${row.platformName} download ${route}`)
+      if (location !== expectedDownload) {
+        throw new Error(`Site download ${route} does not target ${expectedTag}`)
+      }
+    }
   }
 
   const demoResponse = await readResponse(fetchImpl, new URL('/demo/', siteBase), 'Site demo page')

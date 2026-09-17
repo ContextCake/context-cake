@@ -1,11 +1,37 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url'
+import { RELEASE_PLATFORMS } from './release-platforms.mjs'
 
-export const INSTALL_METRIC_ASSET = 'install-ping.txt'
 export const MCPB_INSTALL_METRIC_ASSET = 'mcpb-install-ping.txt'
 export const NPM_PACKAGE = 'contextcake'
 export const HOMEBREW_CASK = 'contextcake'
 const APP_TAG = /^app-v/
+const STABLE_TAG = /^app-v(\d+\.\d+\.\d+)$/
+
+const sumNullable = (values) => values.some((value) => value !== null)
+  ? values.reduce((total, value) => total + (value ?? 0), 0)
+  : null
+
+// Downloads and first launches for one release, counted by platform-table row.
+// Names come from the table, so a stray file that happens to end in .zip is not
+// counted as an app download. A row's pre-table counter (install-ping.txt) is
+// read too, so releases from before the table keep their launch counts.
+function platformCounts(release, assets) {
+  const count = (name) => {
+    const asset = name && assets.find((candidate) => candidate.name === name)
+    return asset ? Number(asset.download_count ?? 0) : null
+  }
+  const version = STABLE_TAG.exec(release.tag_name)?.[1]
+  const platforms = {}
+  for (const row of RELEASE_PLATFORMS) {
+    platforms[row.id] = {
+      installerDownloads: version ? count(row.installerName(version)) ?? 0 : 0,
+      updaterDownloads: version && row.updaterName(version) ? count(row.updaterName(version)) ?? 0 : 0,
+      confirmedFirstLaunches: sumNullable([count(row.pingAsset), count(row.legacyPingAsset)]),
+    }
+  }
+  return platforms
+}
 
 export function summarizeAppMetrics(releases) {
   const rows = releases
@@ -15,24 +41,36 @@ export function summarizeAppMetrics(releases) {
       const sum = (pattern) => assets
         .filter((asset) => pattern.test(asset.name ?? ''))
         .reduce((total, asset) => total + Number(asset.download_count ?? 0), 0)
-      const installAsset = assets.find((asset) => asset.name === INSTALL_METRIC_ASSET)
       const mcpbInstallAsset = assets.find((asset) => asset.name === MCPB_INSTALL_METRIC_ASSET)
+      const platforms = platformCounts(release, assets)
+      const perRow = Object.values(platforms)
       return {
         release: release.tag_name,
         publishedAt: release.published_at ?? null,
-        dmgDownloads: sum(/\.dmg$/i),
-        zipDownloads: sum(/\.zip$/i),
+        installerDownloads: perRow.reduce((total, row) => total + row.installerDownloads, 0),
+        updaterDownloads: perRow.reduce((total, row) => total + row.updaterDownloads, 0),
         mcpbDownloads: sum(/\.mcpb$/i),
-        confirmedFirstLaunches: installAsset ? Number(installAsset.download_count ?? 0) : null,
+        confirmedFirstLaunches: sumNullable(perRow.map((row) => row.confirmedFirstLaunches)),
         confirmedMcpbActivations: mcpbInstallAsset ? Number(mcpbInstallAsset.download_count ?? 0) : null,
+        platforms,
       }
     })
+
+  const platforms = {}
+  for (const platform of RELEASE_PLATFORMS) {
+    const perRelease = rows.map((row) => row.platforms[platform.id])
+    platforms[platform.id] = {
+      installerDownloads: perRelease.reduce((total, row) => total + row.installerDownloads, 0),
+      updaterDownloads: perRelease.reduce((total, row) => total + row.updaterDownloads, 0),
+      confirmedFirstLaunches: sumNullable(perRelease.map((row) => row.confirmedFirstLaunches)),
+    }
+  }
 
   return {
     generatedAt: new Date().toISOString(),
     totals: {
-      dmgDownloads: rows.reduce((total, row) => total + row.dmgDownloads, 0),
-      zipDownloads: rows.reduce((total, row) => total + row.zipDownloads, 0),
+      installerDownloads: rows.reduce((total, row) => total + row.installerDownloads, 0),
+      updaterDownloads: rows.reduce((total, row) => total + row.updaterDownloads, 0),
       mcpbDownloads: rows.reduce((total, row) => total + row.mcpbDownloads, 0),
       confirmedFirstLaunches: rows.reduce(
         (total, row) => total + (row.confirmedFirstLaunches ?? 0),
@@ -44,6 +82,7 @@ export function summarizeAppMetrics(releases) {
         0,
       ),
       trackedMcpbReleases: rows.filter((row) => row.confirmedMcpbActivations !== null).length,
+      platforms,
     },
     releases: rows,
   }
@@ -56,18 +95,28 @@ export function renderMarkdown(report) {
   const lines = [
     '# ContextCake app metrics',
     '',
-    `- DMG downloads: **${report.totals.dmgDownloads}**`,
-    `- ZIP/update downloads: **${report.totals.zipDownloads}**`,
+    `- Installer downloads: **${report.totals.installerDownloads}**`,
+    `- Update downloads: **${report.totals.updaterDownloads}**`,
     `- MCPB bundle downloads: **${report.totals.mcpbDownloads}**`,
     `- Confirmed first launches: **${installSummary}**`,
     `- Confirmed MCPB activations: **${report.totals.trackedMcpbReleases > 0 ? report.totals.confirmedMcpbActivations : 'not available until the first instrumented bundle'}**`,
     '',
-    '| Release | DMG downloads | ZIP/update downloads | MCPB downloads | First launches | MCPB activations | Published |',
-    '|---|---:|---:|---:|---:|---:|---|',
+    '## By platform',
+    '',
   ]
+  for (const platform of RELEASE_PLATFORMS) {
+    const metric = report.totals.platforms[platform.id]
+    const launches = metric.confirmedFirstLaunches === null ? 'first launches not tracked' : `**${metric.confirmedFirstLaunches}** first launches`
+    lines.push(`- ${platform.osLabel} (${platform.label}): **${metric.installerDownloads}** installer downloads, **${metric.updaterDownloads}** update downloads, ${launches}`)
+  }
+  lines.push(
+    '',
+    '| Release | Installer downloads | Update downloads | MCPB downloads | First launches | MCPB activations | Published |',
+    '|---|---:|---:|---:|---:|---:|---|',
+  )
   for (const row of report.releases) {
     lines.push(
-      `| ${row.release} | ${row.dmgDownloads} | ${row.zipDownloads} | ${row.mcpbDownloads} | ${row.confirmedFirstLaunches ?? 'not tracked'} | ${row.confirmedMcpbActivations ?? 'not tracked'} | ${row.publishedAt?.slice(0, 10) ?? 'unknown'} |`,
+      `| ${row.release} | ${row.installerDownloads} | ${row.updaterDownloads} | ${row.mcpbDownloads} | ${row.confirmedFirstLaunches ?? 'not tracked'} | ${row.confirmedMcpbActivations ?? 'not tracked'} | ${row.publishedAt?.slice(0, 10) ?? 'unknown'} |`,
     )
   }
   if (report.npm) {
@@ -84,7 +133,7 @@ export function renderMarkdown(report) {
   }
   lines.push(
     '',
-    '_Counts come from GitHub Release asset downloads. They are directional, not unique-person counts: a person can download more than once, ZIP downloads can include automatic updates, and activation is recorded only after an explicit opt-in._',
+    '_Counts come from GitHub Release asset downloads. They are directional, not unique-person counts: a person can download more than once, update downloads include automatic updates, and activation is recorded only after an explicit opt-in._',
   )
   return lines.join('\n') + '\n'
 }

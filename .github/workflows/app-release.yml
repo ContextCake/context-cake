@@ -28,7 +28,7 @@
 #
 # Job order (design §11.5): build-mac → smoke-mac-x64, and build-linux beside
 # them; all feed publish → public-surfaces. remove-dry-run-binaries follows a
-# signed dry run and remove-dry-run-deb follows every dry run.
+# signed dry run and remove-dry-run-deb follows every run.
 # Artifact names come from scripts/release-platforms.mjs and
 # scripts/release-assets.mjs; no step here spells one out. build-mac hashes its
 # files right after Gatekeeper (build-linux right after its build) and passes
@@ -485,7 +485,7 @@ jobs:
           name: desktop-linux
           path: release-linux
           if-no-files-found: error
-          # Only this run's later jobs read it. A dry run also deletes it.
+          # Only publish reads it, and remove-dry-run-deb deletes it after every run.
           retention-days: 1
 
   publish:
@@ -618,15 +618,17 @@ jobs:
             echo "deleted artifact $ID"
           done
 
-  # The .deb is unsigned, so a dry run's package is as installable as a
-  # released one. Never leave it behind, signed run or not.
+  # The .deb is unsigned, so any run's package is as installable as a released
+  # one. Only publish reads the artifact, so delete it after publish on every
+  # outcome: a dry run, an unsigned or failed tag push, or a release (whose
+  # .deb now lives on the GitHub Release).
   remove-dry-run-deb:
-    name: delete the dry-run .deb
+    name: delete the .deb build artifact
     runs-on: ubuntu-latest
     needs:
       - build-linux
       - publish
-    if: always() && github.event_name != 'push'
+    if: always()
     permissions:
       actions: write
     steps:

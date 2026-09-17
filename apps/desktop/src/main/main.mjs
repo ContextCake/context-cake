@@ -94,10 +94,11 @@ process.on('unhandledRejection', handleFatal)
 // lock below already does). Electron otherwise derives the name from
 // package.json — "contextcake-desktop" in dev, and electron-builder does not
 // inject productName into the packaged package.json — so userData would land
-// at …/contextcake-desktop/ while the CLI (src/cli/cli.mjs) reads
-// …/Application Support/ContextCake/. Both sides MUST agree or `contextcake
-// mcp` can't find the manifest the app wrote. Keep this string, the CLI's
-// CONFIG_DIR, and package.json's productName identical.
+// at …/contextcake-desktop/ while the CLI (the engine's platform-paths.mjs)
+// reads …/Application Support/ContextCake/. Both sides MUST agree or
+// `contextcake mcp` can't find the manifest the app wrote. Keep this string,
+// platform-paths.mjs's macOS config dir, and package.json's productName
+// identical.
 app.setName('ContextCake')
 
 if (!app.requestSingleInstanceLock()) {

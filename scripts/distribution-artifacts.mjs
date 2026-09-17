@@ -139,12 +139,20 @@ function run(command, args, options = {}) {
   })
 }
 
+export const NPM_POLICY_FIXTURES = ['capture-policy.json', 'context-policy.json']
+
 export async function buildNpmPackage({ version, outDir }) {
   assertReleaseVersion(version)
   const output = path.resolve(outDir)
   await rm(output, { recursive: true, force: true })
   await cp(path.join(root, 'packages/npm/contextcake'), output, { recursive: true })
   await cp(path.join(root, 'packages/core/src'), path.join(output, 'engine'), { recursive: true })
+  // capture.mjs and classify-context.mjs read these from `<engine>/../fixtures`.
+  // Without them `ingest` and `mcp --capture` fail with ENOENT. Only the two
+  // policy files ship: the rest of fixtures/ is demo and test data.
+  for (const name of NPM_POLICY_FIXTURES) {
+    await cp(path.join(root, 'packages/core/fixtures', name), path.join(output, 'fixtures', name))
+  }
   const packagePath = path.join(output, 'package.json')
   const pkg = JSON.parse(await readFile(packagePath, 'utf8'))
   pkg.version = version

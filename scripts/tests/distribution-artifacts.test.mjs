@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import {
   assertHomebrewCask,
   buildMcpb,
   buildNpmPackage,
   dmgName,
   mcpbName,
+  NPM_POLICY_FIXTURES,
   npmTarballName,
   renderHomebrewCask,
   renderMcpManifest,
@@ -96,10 +98,41 @@ test('npm staging package contains the CLI and engine but no lifecycle scripts',
       env: { ...process.env, npm_config_ignore_scripts: 'true', npm_config_cache: path.join(dir, '.npm-cache') },
     })
     const [{ files }] = JSON.parse(listing)
-    const names = files.map((file) => file.path)
-    assert.ok(names.includes('bin/contextcake.mjs'))
-    assert.ok(names.includes('engine/mcp-server.mjs'))
-    assert.ok(names.every((name) => !name.includes('node_modules')))
+    const names = files.map((file) => file.path).sort()
+    // The exact tarball: the bin, the whole engine source tree, the two policy
+    // fixtures the engine reads at runtime, and nothing else. Engine files are
+    // listed from disk so adding a module does not need a test edit, but a
+    // stray file (a test, a lockfile, the rest of fixtures/) fails here.
+    const engineFiles = (await readdir(new URL('../../packages/core/src', import.meta.url), { recursive: true, withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.posix.join('engine', path.relative(fileURLToPath(new URL('../../packages/core/src', import.meta.url)), path.join(entry.parentPath, entry.name)).split(path.sep).join('/')))
+    const expected = [
+      'LICENSE',
+      'README.md',
+      'bin/contextcake.mjs',
+      ...NPM_POLICY_FIXTURES.map((name) => `fixtures/${name}`),
+      'package.json',
+      ...engineFiles,
+    ].sort()
+    assert.deepEqual(names, expected)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('staged npm CLI finds its default manifest through the shared platform paths', async () => {
+  // The npm CLI used to carry its own config-dir guess, which answered
+  // ~/.config on Windows while the app writes %APPDATA%. It now imports the
+  // engine's platform-paths.mjs from its own staged layout.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'contextcake-npm-paths-test-'))
+  try {
+    await buildNpmPackage({ version, outDir: dir })
+    const configDir = path.join(dir, 'config-override')
+    const help = execFileSync(process.execPath, [path.join(dir, 'bin', 'contextcake.mjs'), '--help'], {
+      encoding: 'utf8',
+      env: { ...process.env, CONTEXTCAKE_CONFIG_DIR: configDir, CONTEXTCAKE_MANIFEST: '' },
+    })
+    assert.match(help, new RegExp(`${path.join(configDir, 'manifest.json').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

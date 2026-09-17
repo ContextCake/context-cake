@@ -1,6 +1,6 @@
 {
   "name": "contextcake",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Local-first context resolution and MCP tools for ContextCake.",
   "type": "module",
   "license": "MIT",
@@ -18,6 +18,7 @@
   "files": [
     "bin",
     "engine",
+    "fixtures",
     "README.md",
     "LICENSE"
   ],

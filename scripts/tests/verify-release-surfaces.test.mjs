@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { RELEASE_PLATFORMS } from '../release-platforms.mjs'
 import { verifyReleaseSurfaces } from '../verify-release-surfaces.mjs'
 
 const release = {
@@ -19,6 +20,21 @@ function response(body) {
   }
 }
 
+const download = (tag, name) => `https://github.com/ContextCake/context-cake/releases/download/${tag}/${name}`
+const installHtml = `app-v1.2.3 ${RELEASE_PLATFORMS.map((row) => `href="${row.downloadPath}"`).join(' ')}`
+
+// Every route of every platform row, pointed at that row's installer.
+function downloadRoutes(version = '1.2.3', { skip } = {}) {
+  const routes = new Map()
+  for (const row of RELEASE_PLATFORMS) {
+    if (row.id === skip) continue
+    for (const route of [row.downloadPath, ...row.downloadAliases]) {
+      routes.set(route, download(`app-v${version}`, row.installerName(version)))
+    }
+  }
+  return routes
+}
+
 function redirect(location) {
   return {
     ok: false,
@@ -27,15 +43,16 @@ function redirect(location) {
   }
 }
 
-test('accepts matching Web Demo provenance and site release links', async () => {
+test('accepts matching Web Demo provenance and a site redirect for every platform row', async () => {
   const seen = []
+  const routes = downloadRoutes()
   await verifyReleaseSurfaces({
     ...release,
     fetchImpl: async (url) => {
       seen.push(url.href)
       if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
-      if (url.pathname === '/install/') return response('app-v1.2.3 href="/download/mac"')
-      if (url.pathname === '/download/mac') return redirect('https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg')
+      if (url.pathname === '/install/') return response(installHtml)
+      if (routes.has(url.pathname)) return redirect(routes.get(url.pathname))
       if (url.pathname === '/demo/') return response('<iframe src="https://contextcake-console.pages.dev/"></iframe>')
       throw new Error(`unexpected URL ${url}`)
     },
@@ -43,9 +60,27 @@ test('accepts matching Web Demo provenance and site release links', async () => 
   assert.deepEqual(seen, [
     'https://demo-deploy.pages.dev/release.json',
     'https://site-deploy.pages.dev/install/',
+    'https://site-deploy.pages.dev/download/mac-arm64',
     'https://site-deploy.pages.dev/download/mac',
+    'https://site-deploy.pages.dev/download/mac-x64',
     'https://site-deploy.pages.dev/demo/',
   ])
+})
+
+test('rejects a deployed site that is missing a platform row', async () => {
+  const routes = downloadRoutes('1.2.3', { skip: 'mac-x64' })
+  await assert.rejects(
+    verifyReleaseSurfaces({
+      ...release,
+      fetchImpl: async (url) => {
+        if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
+        if (url.pathname === '/install/') return response(installHtml.replace(' href="/download/mac-x64"', ''))
+        if (routes.has(url.pathname)) return redirect(routes.get(url.pathname))
+        return { ok: false, status: 404 }
+      },
+    }),
+    /does not link \/download\/mac-x64/,
+  )
 })
 
 test('rejects a deployed Web Demo from another commit', async () => {
@@ -77,8 +112,8 @@ test('rejects a lookalike Web Demo iframe host', async () => {
       ...release,
       fetchImpl: async (url) => {
         if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
-        if (url.pathname === '/install/') return response('app-v1.2.3 href="/download/mac"')
-        if (url.pathname === '/download/mac') return redirect('https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg')
+        if (url.pathname === '/install/') return response(installHtml)
+        if (downloadRoutes().has(url.pathname)) return redirect(downloadRoutes().get(url.pathname))
         if (url.pathname === '/demo/') {
           return response('<iframe src="https://contextcake-console.pages.dev.attacker.example/"></iframe>')
         }
@@ -90,16 +125,18 @@ test('rejects a lookalike Web Demo iframe host', async () => {
 })
 
 test('rejects a stable download redirect to another app version', async () => {
+  const routes = downloadRoutes()
+  routes.set('/download/mac', download('app-v1.2.2', 'ContextCake-1.2.2-arm64.dmg'))
   await assert.rejects(
     verifyReleaseSurfaces({
       ...release,
       fetchImpl: async (url) => {
         if (url.pathname === '/release.json') return response({ tag: release.expectedTag, commit: release.expectedCommit })
-        if (url.pathname === '/install/') return response('app-v1.2.3 href="/download/mac"')
-        if (url.pathname === '/download/mac') return redirect('https://github.com/ContextCake/context-cake/releases/download/app-v1.2.2/ContextCake-1.2.2-arm64.dmg')
+        if (url.pathname === '/install/') return response(installHtml)
+        if (routes.has(url.pathname)) return redirect(routes.get(url.pathname))
         throw new Error(`unexpected URL ${url}`)
       },
     }),
-    /does not target app-v1\.2\.3/,
+    /\/download\/mac does not target app-v1\.2\.3/,
   )
 })

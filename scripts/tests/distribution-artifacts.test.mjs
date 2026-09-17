@@ -8,7 +8,6 @@ import {
   assertHomebrewCask,
   buildMcpb,
   buildNpmPackage,
-  dmgName,
   mcpbName,
   npmTarballName,
   renderHomebrewCask,
@@ -17,20 +16,24 @@ import {
   sha256,
   writeReleaseChannelArtifacts,
 } from '../distribution-artifacts.mjs'
+import { RELEASE_PLATFORMS } from '../release-platforms.mjs'
 
 const rootPackage = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'))
 const version = rootPackage.version
 const escapedVersion = version.replaceAll('.', '\\.')
 const digest = 'a'.repeat(64)
 
-test('Homebrew cask is pinned to the signed app release and exposes the bundled CLI', () => {
-  const cask = renderHomebrewCask({ version, dmgSha256: digest })
-  assert.match(cask, /app-v#\{version\}\/ContextCake-#\{version\}-arm64\.dmg/)
+test('Homebrew cask pins each Mac architecture to its own DMG and digest', () => {
+  const digests = { 'mac-arm64': digest, 'mac-x64': 'b'.repeat(64) }
+  const cask = renderHomebrewCask({ version, digests })
+  assert.match(cask, /on_arm do\n {4}sha256 "a{64}"\n {4}url "[^"]+\/app-v#\{version\}\/ContextCake-#\{version\}-arm64\.dmg"\n {2}end/)
+  assert.match(cask, /on_intel do\n {4}sha256 "b{64}"\n {4}url "[^"]+\/app-v#\{version\}\/ContextCake-#\{version\}-x64\.dmg"\n {2}end/)
   assert.match(cask, /auto_updates true/)
   assert.match(cask, /binary "#\{appdir\}\/ContextCake\.app\/Contents\/Resources\/bin\/contextcake"/)
   assert.doesNotMatch(cask, /zap /)
-  assertHomebrewCask(cask, { version, dmgSha256: digest })
-  assert.throws(() => assertHomebrewCask(cask.replace(version, '9.9.9'), { version, dmgSha256: digest }), /does not match/)
+  assertHomebrewCask(cask, { version, digests })
+  assert.throws(() => assertHomebrewCask(cask.replace(version, '9.9.9'), { version, digests }), /does not match/)
+  assert.throws(() => renderHomebrewCask({ version, digests: { 'mac-arm64': digest } }), /mac-x64/)
 })
 
 test('MCPB metadata requires an explicit manifest and leaves anonymous activation off by default', () => {
@@ -120,16 +123,41 @@ test('staged npm CLI finds its default manifest through the shared platform path
   }
 })
 
-test('release artifacts build together and retain a cryptographic linkage to the DMG', async () => {
+async function writeMacBuild(dir, { skip = [] } = {}) {
+  const macRows = RELEASE_PLATFORMS.filter((row) => row.os === 'mac')
+  for (const row of macRows) {
+    for (const name of [row.installerName(version), row.updaterName(version)]) {
+      if (!skip.includes(name)) await writeFile(path.join(dir, name), `signed bytes of ${name}`)
+    }
+  }
+  await writeFile(path.join(dir, 'latest-mac.yml'), macRows.map((row) => `- url: ${row.updaterName(version)}\n`).join(''))
+}
+
+test('release artifacts build together and retain a cryptographic linkage to every DMG', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'contextcake-release-artifacts-test-'))
   try {
-    await writeFile(path.join(dir, dmgName(version)), 'signed-app-bytes')
+    await writeMacBuild(dir)
     const artifacts = await writeReleaseChannelArtifacts({ version, distDir: dir })
     const cask = await readFile(path.join(dir, 'contextcake.rb'), 'utf8')
-    assert.match(cask, new RegExp(sha256(await readFile(artifacts.dmg))))
+    for (const row of RELEASE_PLATFORMS.filter((candidate) => candidate.os === 'mac')) {
+      const installer = path.join(dir, row.installerName(version))
+      assert.equal(artifacts.installers[row.id], installer)
+      assert.match(cask, new RegExp(sha256(await readFile(installer))))
+    }
     assert.equal(path.basename(artifacts.npmTarball), npmTarballName(version))
     const registry = JSON.parse(await readFile(path.join(dir, 'contextcake-mcp-server.json'), 'utf8'))
     assert.equal(registry.packages[0].fileSha256, sha256(await readFile(artifacts.mcpb)))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('channel artifacts refuse a build that is missing a platform row', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'contextcake-release-artifacts-test-'))
+  try {
+    await writeMacBuild(dir, { skip: [`ContextCake-${version}-x64.dmg`] })
+    await assert.rejects(writeReleaseChannelArtifacts({ version, distDir: dir }), /mac-x64: missing ContextCake-.+-x64\.dmg/)
+    await assert.rejects(readFile(path.join(dir, 'contextcake.rb')), /ENOENT/)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

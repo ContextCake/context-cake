@@ -31,7 +31,7 @@ The signed Mac app is presently the only packaged installation path. Developers 
 
 - Requiring an account, email address, or analytics consent to download or use ContextCake.
 - Behavioral advertising, cross-site tracking, fingerprinting, sale of analytics data, or uploading local knowledge for acquisition analytics.
-- Native installers for Intel Macs, Windows, or Linux.
+- ~~Native installers for Intel Macs, Windows, or Linux.~~ *Amended 2026-09-16:* Intel Mac and a Linux `.deb` (x64) are in scope (`specs/contextcake-distribution/spec.md` §8 amendment). A Windows desktop app, Linux AppImage, and `.rpm` remain out of scope.
 - Enterprise fleet/MDM distribution and per-seat reporting.
 - Automated marketing campaigns beyond recording a voluntary opt-in.
 
@@ -41,7 +41,7 @@ None. External registry, Homebrew tap, and optional-contact-service credentials 
 
 ## Dependencies
 
-- A verified public Homebrew tap with a maintained ContextCake cask.
+- A verified public Homebrew tap with a maintained ContextCake cask. *(Amended 2026-09-16: Homebrew follows the first npm publication rather than shipping with it.)*
 - An npm account with two-factor authentication and a repository-bound trusted-publishing configuration.
 - An MCP registry publisher identity and a release-hosted MCP bundle artifact.
 - A privacy-reviewed optional-contact service for people who deliberately identify themselves.

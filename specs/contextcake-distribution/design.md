@@ -18,6 +18,7 @@
 | Release automation | **electron-builder** in GitHub Actions on `app-v*` tag: build → sign → notarize → staple → publish release assets |
 | Artifact set per release | `ContextCake-<ver>-arm64.dmg`, `ContextCake-<ver>-arm64-mac.zip` (updater feed), `latest-mac.yml`, `SHA256SUMS`, `install-ping.txt` (content-free first-launch counter) |
 | Architecture | arm64-only first (spec §2 primary target); universal2 revisited on demand |
+| *Amended 2026-09-16* | Intel Mac (separate x64 DMG + zip, not universal2) and Linux `.deb` x64 added. Artifact names, feeds, install locations, and the CLI channel per platform: §11 |
 
 ## 2. Why Electron
 
@@ -209,3 +210,74 @@ from the same engine + manifest contract; it is a packaging task, not new code.
 - **Self-verification:** compare the implementation against
   `specs/contextcake-distribution/spec.md` §5 and list any acceptance criteria
   not addressed.
+
+## 11. Platforms (amended 2026-09-16)
+
+Spec §8 amendment of the same date adds Intel Mac and a Linux `.deb`, and makes
+the npm CLI the way to use ContextCake without the app. Sections 1–8 above still
+describe the Apple-silicon Mac; this section is what changes for the rest.
+
+### 11.1 One platform table
+
+`scripts/release-platforms.mjs` lists every download as one row: `id`, `os`,
+`arch`, label, installer name, updater artifact, feed file, site download path,
+and install-ping asset. Every tool that names an artifact reads it: electron-builder
+`artifactName`, `scripts/distribution-artifacts.mjs`, the release workflow's
+checksum and upload lists, `apps/site/scripts/sync-app-release.mjs`,
+`scripts/verify-release-surfaces.mjs`, the site's install-page verifier, and
+`scripts/app-metrics.mjs`. Nothing rebuilds an artifact name by hand.
+
+| Row | Installer | Updater artifact | Feed | Update behavior |
+|---|---|---|---|---|
+| `mac-arm64` | DMG | zip | `latest-mac.yml` | self-update (§7) |
+| `mac-x64` | DMG | zip | `latest-mac.yml` (same file, both zips) | self-update (§7) |
+| `linux-x64-deb` | `.deb` | none | `latest-linux.yml` | check and notify only |
+
+A release attaches every row or publishes nothing.
+
+### 11.2 Install locations and user data
+
+| | macOS | Linux (`.deb`) | Windows (CLI and `.mcpb` only) |
+|---|---|---|---|
+| App | `/Applications/ContextCake.app` | `/opt/ContextCake/` | none |
+| Config (manifest, settings) | `~/Library/Application Support/ContextCake/` | `$XDG_CONFIG_HOME/contextcake/` (default `~/.config/contextcake/`) | `%APPDATA%\ContextCake\` |
+| CLI link from the app | `/usr/local/bin/contextcake` | `~/.local/bin/contextcake` (no sudo) | none |
+
+Config locations come from one engine module, `packages/core/src/platform-paths.mjs`,
+matching control-plane spec §5.12. The Linux app pins Electron's `userData` to
+that directory so the app and a standalone CLI share one manifest. On macOS
+Electron's default already matches.
+
+### 11.3 CLI channel
+
+- **Without the app:** `npm install -g contextcake` on macOS, Linux, and WSL.
+  Windows runs it best-effort. Homebrew follows once a tap exists.
+- **From the app:** the menu action links the bundled shim as in §6, using the
+  per-platform path above.
+- **Harness commands always name an absolute executable.** Once npm ships, a bare
+  `contextcake` on PATH may be a different install, running a different engine
+  version against the same manifest.
+
+### 11.4 Linux specifics
+
+- **Why `.deb` and not AppImage:** electron-builder's AppImage launcher adds
+  `--no-sandbox` when unprivileged user namespaces are blocked (the Ubuntu 24.04
+  default), and an AppImage self-update would be verified only against a hash from
+  the same release. The `.deb` installs an AppArmor profile, so the sandbox stays on.
+- **Updates:** electron-updater's `.deb` updater would run `dpkg -i` through pkexec.
+  The app instead turns off download and install when `resources/package-type` is
+  `deb`, and shows a download link (spec §4 "Own-it-or-defer-to-it").
+- **Credentials:** `safeStorage` falls back to a `basic_text` backend with a fixed key
+  when no keyring is detected. The app treats that backend as unavailable and keeps
+  credentials in memory only, with a visible notice.
+- **Executable name:** stays `contextcake-desktop`, so the `.deb` postinst's
+  `/usr/bin/` link never shadows the CLI.
+- **Signing:** none. Integrity is the `SHA256SUMS` line from the release.
+
+### 11.5 Release jobs
+
+`app-release.yml` splits into build jobs per OS (`build-mac` on macOS signs and
+notarizes both architectures; `build-linux` on Ubuntu builds and smoke-installs the
+`.deb`) and one `publish` job. `publish` downloads every artifact, checks it against
+the table, writes `SHA256SUMS`, and creates the GitHub Release once. A
+`workflow_dispatch` dry run builds and verifies without publishing.

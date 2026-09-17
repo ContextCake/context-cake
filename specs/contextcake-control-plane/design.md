@@ -43,6 +43,15 @@ technology choices; the spec owns behavior.
   through internal milestones; new families register in a command table that
   serves both dispatch and `help --json` (the help schema is generated from
   the same table that routes — they cannot drift).
+  *Amended 2026-09-16:* the dispatcher and its table move into the engine
+  (`packages/core/src/cli.mjs`) in Wave A's foundation step. The app's
+  `cli.mjs` and the npm package's bin had already drifted into two copies
+  (the npm one lacks `doctor`); both become thin wrappers, and the app passes
+  its observability launchers in as a hook.
+- The npm package also carries `packages/core/fixtures/{capture-policy,
+  context-policy}.json` (*added 2026-09-16*): `capture.mjs` and
+  `classify-context.mjs` read them, so without them `ingest` and
+  `mcp --capture` fail with ENOENT.
 - Root `.mjs` wrappers keep their existing flags and raw output; the stable
   JSON contract is an intentional pre-1.0 break for the new surface only.
 - npm package `contextcake`: `files` allowlist carries `packages/core/src`,
@@ -200,6 +209,9 @@ Every operational CLI command forks a second engine beside the app's warm one
 ## 11. Delivery sequence
 
 0. Reserve `contextcake` + `context-cake` on npm; approve this spec/design.
+   *(2026-09-16: not yet done; both names still 404. Trusted publishing can
+   only be configured on an existing package, so reserve with hand-published
+   `0.0.0` placeholders.)*
 1. Extract shared control operations; sidecar namespacing + migration;
    engines → 22; CI matrix 22/24.
 2. Wave A CLI: foundation, profiles, sources, settings, query, diagnostics.
@@ -208,6 +220,9 @@ Every operational CLI command forks a second engine beside the app's warm one
    `npm pack --dry-run` in CI), site `/install` update, version alignment
    across root/desktop/MCP. Wave A ships as `0.x` on npm and Homebrew
    together (spec §8.5); absent families are absent, not broken.
+   *Amended 2026-09-16:* npm first; Homebrew when a tap exists (spec §8.5).
+   The publish workflow publishes the release's own `.tgz` after checking it
+   against `SHA256SUMS`, rather than rebuilding it.
 4. Wave B as contracts freeze: writes, discrepancies, Packs, team sync,
    persistent capture approval — each family a minor release.
 5. Credential broker (macOS/Linux) + engine-wide MCP env hardening +

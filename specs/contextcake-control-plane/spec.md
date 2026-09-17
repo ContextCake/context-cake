@@ -416,6 +416,11 @@ Accepted by John 2026-08-11 (plan-approval session):
 2. **Windows demoted** to a parallel, independently gated milestone; v1
    supports macOS + Linux, win32 best-effort. Consistent with the
    distribution spec's "incidentally cross-platform" posture.
+   *Amended 2026-09-16:* milestone 7 starts with its read path only (CRLF
+   handling, `.cmd` MCP source launches, config directory, the `unit` test
+   group on a Windows CI job) so the `.mcpb` bundle can list `win32`. Rename
+   retries, lock and symlink hardening, a Windows CLI e2e, and the
+   "supported" claim remain the rest of milestone 7.
 3. **Keychain custody inversion.** `tokens.enc` migrates into OS-native
    stores despite the prior "never let a token reach the login keychain"
    doctrine; mitigations are contractual (§5.5): shared delete path, host
@@ -430,8 +435,11 @@ release.
 
 Resolved 2026-08-11 (spec sign-off session):
 
-5. **Homebrew ships in the same wave as npm** — one release publishes both
-   channels together.
+5. ~~**Homebrew ships in the same wave as npm** — one release publishes both
+   channels together.~~ **Amended 2026-09-16 (John):** npm publishes first,
+   once Wave A is complete; Homebrew follows when a tap repository exists.
+   No tap exists today, and waiting on one would hold back the CLI for users
+   without the app.
 6. **`account status` exists with a typed "disabled" state** while builds
    ship accounts-disabled, reporting that accounts are disabled in this
    build rather than omitting the family.

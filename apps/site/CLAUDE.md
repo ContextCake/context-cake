@@ -33,6 +33,12 @@ For public-facing copy, also read `specs/contextcake-site/voice.md`.
 - Install story is **signed Mac app first**. Keep the checksum-pinned `app-v*`
   source snapshot as an audit, Linux/WSL, and contribution fallback.
   Never add an `npm install` step for the engine.
+- **Downloads render from the release record's platform rows.** `src/data/app-release.json`
+  has one row per row of `scripts/release-platforms.mjs`, marked `available` when the
+  published release attached that installer. Pages, the footer, and the installation doc
+  (`AppDownloadTable.astro`) map over available rows; `src/data/app-downloads.mjs` holds the
+  shared views that `scripts/verify-install-page.mjs` checks against. Never hardcode a DMG
+  name, size, checksum, or `/download/*` route in a page.
 - Docs routes live under `src/content/docs/docs/` (the extra `docs/` gives `/docs/*`
   URLs; the marketing pages own `/`). Sidebar is explicit in `astro.config.mjs`.
 - Self-hosted assets only (fonts via @fontsource). No CDN, no analytics, no npm deps

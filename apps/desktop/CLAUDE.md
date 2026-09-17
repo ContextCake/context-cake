@@ -20,8 +20,8 @@ npm run smoke:relaunch   # engine restart re-points the window at the new origin
 npm run test:isolation   # engine must not block the UI thread, and must keep
                          # answering itself (3,000-doc / ~90MB corpus)
 npm run icon    # regenerate build/icon.icns + icon-master-1024.png from assets/brand/contextcake-app-icon.svg
-npm run pack    # unpacked .app (fast) — dist/ is gitignored
-npm run dist    # DMG + zip, ad-hoc signed in dev
+npm run pack    # unpacked .app for the host arch (fast) — dist/ is gitignored
+npm run dist    # DMG + zip for arm64 AND x64, ad-hoc signed in dev
 ```
 
 ## Gotchas
@@ -231,6 +231,17 @@ npm run dist    # DMG + zip, ad-hoc signed in dev
   brand mark at `assets/brand/contextcake-app-icon.svg` (the same file the site
   and console favicons mirror). To change the icon, change the brand SVG and
   regenerate — a divergent icns is how the app shipped the old logo once already.
+- **Artifact names come from `scripts/release-platforms.mjs`, not from
+  electron-builder defaults.** `mac.artifactName` (the zip) and
+  `dmg.artifactName` are set explicitly because the default drops the arch
+  from an x64 DMG. Change a name in the table and the yml together:
+  `scripts/tests/release-platforms.test.mjs` expands both patterns for every
+  row and fails on a difference. The x64 app lands in `dist/mac`, arm64 in
+  `dist/mac-arm64`. Keep "arm64" out of every non-arm64 file name:
+  electron-updater gives Intel Macs only the zips whose names lack it.
+  `src/main/install-metrics.mjs` mirrors the table's `pingAsset` column
+  (`install-ping-<row id>.txt`) because the packaged app cannot import repo
+  scripts; the same test checks the two agree.
 - **`notarize: false` in electron-builder.yml is deliberate** until release
   secrets exist; the release workflow overrides it. Never ship an unnotarized
   artifact to users (distribution spec §7).

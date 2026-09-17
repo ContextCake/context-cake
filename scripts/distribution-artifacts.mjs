@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { RELEASE_PLATFORMS, verifyReleaseDirectory } from './release-platforms.mjs'
+import { RELEASE_PLATFORMS, releaseFileNames, verifyReleaseDirectory } from './release-platforms.mjs'
 
 export const REPOSITORY = 'ContextCake/context-cake'
 export const MCPB_NAME = 'contextcake.mcpb'
@@ -38,33 +38,85 @@ export function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex')
 }
 
-// Homebrew's architecture blocks for each Mac row. A Mac row with an arch
-// missing here fails loudly rather than leaving that Mac out of the cask.
-const HOMEBREW_ARCH_BLOCK = { arm64: 'on_arm', x64: 'on_intel' }
+export const CHANNEL_METADATA_ASSETS = Object.freeze(['contextcake.rb', 'contextcake-mcp-server.json', 'SHA256SUMS'])
+
+// Every file a GitHub Release for `version` attaches: each platform row's
+// installer, update file, feed, and install ping, plus the channel artifacts.
+// The workflow uploads exactly this list and checks the draft against it
+// before making the release public.
+export function releaseAssetNames(version) {
+  assertReleaseVersion(version)
+  const table = ['installers', 'updaters', 'feeds', 'pings'].flatMap((kind) => releaseFileNames({ version, kind }))
+  return [...table, mcpbName(version), npmTarballName(version), ...CHANNEL_METADATA_ASSETS, MCPB_INSTALL_METRIC_ASSET]
+}
+
+// `uploaded` is the asset list GitHub reports for the draft ([{ name, size }]).
+// The draft must carry exactly the expected names, each with the byte size of
+// the local file it came from. Throws one error listing every difference.
+export function verifyUploadedAssets({ version, dist, uploaded }) {
+  const expected = releaseAssetNames(version)
+  const problems = []
+  const byName = new Map()
+  for (const asset of uploaded ?? []) {
+    if (byName.has(asset.name)) problems.push(`uploaded twice: ${asset.name}`)
+    byName.set(asset.name, asset)
+  }
+  for (const name of expected) {
+    const asset = byName.get(name)
+    if (!asset) {
+      problems.push(`not uploaded: ${name}`)
+      continue
+    }
+    const local = path.join(dist, name)
+    const size = fs.existsSync(local) ? fs.statSync(local).size : null
+    if (asset.state !== undefined && asset.state !== 'uploaded') problems.push(`${name} upload state is ${asset.state}`)
+    if (size === null) problems.push(`no local file for ${name}`)
+    else if (asset.size !== size) problems.push(`${name} uploaded ${asset.size} bytes, local file is ${size}`)
+  }
+  for (const name of byName.keys()) {
+    if (!expected.includes(name)) problems.push(`unexpected asset: ${name}`)
+  }
+  if (problems.length) throw new Error(`Release ${version} draft does not match the platform table:\n${problems.map((problem) => `  ${problem}`).join('\n')}`)
+  return expected
+}
+
+// Homebrew's arch keys for each Mac row. A Mac row with an arch missing here
+// fails loudly rather than leaving that Mac out of the cask.
+const HOMEBREW_ARCH = { arm64: 'arm', x64: 'intel' }
 
 function macRows() {
   return RELEASE_PLATFORMS.filter((row) => row.os === 'mac')
 }
 
-// `digests` maps a Mac row id to its DMG's SHA-256.
+// `digests` maps a Mac row id to its DMG's SHA-256. The cask uses Homebrew's
+// standard multi-arch form: one `arch` stanza, one `sha256` with a value per
+// arch, and one url that interpolates #{arch}. That form only works while every
+// Mac row names its DMG the same way apart from the arch, so this checks it.
 export function renderHomebrewCask({ version, digests }) {
   assertReleaseVersion(version)
-  const blocks = macRows().map((row) => {
-    const block = HOMEBREW_ARCH_BLOCK[row.arch]
-    if (!block) throw new Error(`Homebrew cask has no architecture block for ${row.id}.`)
+  const rows = macRows()
+  const urlFor = (row) => row.installerName(version).replaceAll(version, '#{version}').replaceAll(row.arch, '#{arch}')
+  const dmg = urlFor(rows[0])
+  const entries = rows.map((row) => {
+    const key = HOMEBREW_ARCH[row.arch]
+    if (!key) throw new Error(`Homebrew cask has no arch key for ${row.id}.`)
+    if (urlFor(row) !== dmg) throw new Error(`Homebrew cask needs every Mac DMG to differ only by arch; ${row.id} does not.`)
     const digest = digests?.[row.id]
     if (!/^[a-f0-9]{64}$/.test(digest ?? '')) throw new Error(`Homebrew cask requires a SHA-256 DMG digest for ${row.id}.`)
-    const dmg = row.installerName(version).replaceAll(version, '#{version}')
-    return `  ${block} do
-    sha256 "${digest}"
-    url "https://github.com/${REPOSITORY}/releases/download/app-v#{version}/${dmg}"
-  end
-`
+    return { key, arch: row.arch, digest }
   })
+  const width = Math.max(...entries.map((entry) => entry.key.length)) + 1
+  const archStanza = entries.map((entry) => `${entry.key}: "${entry.arch}"`).join(', ')
+  const sha = entries
+    .map((entry, index) => `${index === 0 ? '  sha256 ' : '         '}${`${entry.key}:`.padEnd(width)} "${entry.digest}"`)
+    .join(',\n')
   return `cask "${HOMEBREW_CASK_NAME}" do
-  version "${version}"
+  arch ${archStanza}
 
-${blocks.join('\n')}
+  version "${version}"
+${sha}
+
+  url "https://github.com/${REPOSITORY}/releases/download/app-v#{version}/${dmg}"
   name "ContextCake"
   desc "Local-first context resolution for people and AI agents"
   homepage "https://contextcake.com"

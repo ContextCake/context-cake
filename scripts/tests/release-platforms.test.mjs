@@ -8,6 +8,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
   RELEASE_PLATFORMS,
+  parseUpdateFeed,
   platformById,
   releaseFileNames,
   verifyReleaseDirectory,
@@ -18,6 +19,24 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const script = path.join(root, 'scripts/release-platforms.mjs')
 const version = '1.2.3'
 const sha = (text) => createHash('sha256').update(text).digest('hex')
+const sha512 = (text) => createHash('sha512').update(text).digest('base64')
+const bytesOf = (name) => `bytes of ${name}`
+
+const macRows = RELEASE_PLATFORMS.filter((row) => row.feed === 'latest-mac.yml')
+const linuxRows = RELEASE_PLATFORMS.filter((row) => row.feed === 'latest-linux.yml')
+// The file a feed lists for a row: its update file, or the installer when the
+// row has none (the .deb).
+const feedName = (row) => row.updaterName(version) ?? row.installerName(version)
+
+// The shape electron-builder writes, including the legacy top-level path.
+function feedText({ feedVersion = version, rows = macRows, entry = (name) => ({ sha512: sha512(bytesOf(name)), size: Buffer.byteLength(bytesOf(name)) }) } = {}) {
+  const files = rows.map((row) => {
+    const name = feedName(row)
+    const { sha512: digest, size } = entry(name)
+    return `  - url: ${name}\n    sha512: ${digest}\n    size: ${size}\n`
+  }).join('')
+  return `version: ${feedVersion}\nfiles:\n${files}path: ${feedName(rows[0])}\nsha512: x\nreleaseDate: '2026-09-17T03:51:20.923Z'\n`
+}
 
 test('every row carries the full shape and names nothing twice', () => {
   assert.deepEqual(RELEASE_PLATFORMS.map((row) => row.id), ['mac-arm64', 'mac-x64', 'linux-x64-deb'])
@@ -67,7 +86,6 @@ test('the Linux row ships a .deb that only notifies and has no update file', () 
   assert.equal(deb.feed, 'latest-linux.yml')
   assert.equal(deb.updates, 'notify')
   assert.deepEqual(deb.downloadAliases, ['/download/linux'])
-  // The Mac rows update themselves; only a package-managed install notifies.
   assert.deepEqual(RELEASE_PLATFORMS.filter((row) => row.updates === 'notify').map((row) => row.id), ['linux-x64-deb'])
 })
 
@@ -105,13 +123,26 @@ test('CLI lists names for workflow globs, one per line', () => {
 async function writeBuild(dir, { skip = [], feed, linuxFeed } = {}) {
   for (const row of RELEASE_PLATFORMS) {
     for (const name of [row.installerName(version), row.updaterName(version)].filter(Boolean)) {
-      if (!skip.includes(name)) await writeFile(path.join(dir, name), `bytes of ${name}`)
+      if (!skip.includes(name)) await writeFile(path.join(dir, name), bytesOf(name))
     }
   }
-  const zips = RELEASE_PLATFORMS.filter((row) => row.os === 'mac').map((row) => `  - url: ${row.updaterName(version)}\n`).join('')
-  await writeFile(path.join(dir, 'latest-mac.yml'), feed ?? `version: ${version}\nfiles:\n${zips}`)
-  await writeFile(path.join(dir, 'latest-linux.yml'), linuxFeed ?? `version: ${version}\nfiles:\n  - url: ${platformById('linux-x64-deb').installerName(version)}\n`)
+  await writeFile(path.join(dir, 'latest-mac.yml'), feed ?? feedText())
+  await writeFile(path.join(dir, 'latest-linux.yml'), linuxFeed ?? feedText({ rows: linuxRows }))
 }
+
+test('the feed parser reads electron-builder output and refuses other shapes', () => {
+  const feed = parseUpdateFeed(feedText())
+  assert.equal(feed.version, version)
+  assert.equal(feed.releaseDate, '2026-09-17T03:51:20.923Z')
+  assert.deepEqual(feed.files.map((file) => file.url), ['ContextCake-1.2.3-arm64-mac.zip', 'ContextCake-1.2.3-x64-mac.zip'])
+  assert.equal(typeof feed.files[0].size, 'number')
+  assert.throws(() => parseUpdateFeed('files:\n  - url: a.zip\n    sha512: x\n    size: 1\n'), /no version/)
+  assert.throws(() => parseUpdateFeed(`version: ${version}\nfiles:\n  - url: a.zip\n    sha512: x\n`), /needs url, sha512, and size/)
+  assert.throws(() => parseUpdateFeed(`version: ${version}\nreleaseNotes: |\n  hello\n`), /Unsupported update feed/)
+  // A url that merely contains the name is not the name.
+  const lookalike = feedText().replaceAll('url: ContextCake-1.2.3-x64-mac.zip', 'url: old/ContextCake-1.2.3-x64-mac.zip.bak')
+  assert.equal(parseUpdateFeed(lookalike).files.some((file) => file.url === 'ContextCake-1.2.3-x64-mac.zip'), false)
+})
 
 test('a build directory passes only when every row is present and named by its feed', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cc-release-platforms-'))
@@ -138,7 +169,7 @@ test('a build directory passes only when every row is present and named by its f
 test('a feed that omits one architecture fails the build check', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cc-release-platforms-'))
   try {
-    await writeBuild(dir, { feed: `version: ${version}\nfiles:\n  - url: ContextCake-1.2.3-arm64-mac.zip\n` })
+    await writeBuild(dir, { feed: feedText({ rows: [platformById('mac-arm64')] }) })
     assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build' }), /mac-x64: latest-mac\.yml does not list ContextCake-1\.2\.3-x64-mac\.zip/)
     // Filtering to one OS never excuses a row of that OS.
     assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build', os: 'mac' }), /mac-x64/)
@@ -147,15 +178,54 @@ test('a feed that omits one architecture fails the build check', async () => {
   }
 })
 
-test('the Linux row passes when its feed names the .deb, and fails without the feed', async () => {
+test('a feed whose version, sha512, or size disagrees with the bytes fails the build check', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cc-release-platforms-'))
   try {
-    await writeBuild(dir, { linuxFeed: `version: ${version}\nfiles:\n  - url: something-else.deb\n` })
-    assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build' }), /linux-x64-deb: latest-linux\.yml does not list ContextCake-1\.2\.3-amd64\.deb/)
-    // A Mac-only check never looks at the Linux feed.
+    await writeBuild(dir, { feed: feedText({ feedVersion: '1.2.2' }) })
+    assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build' }), /latest-mac\.yml is for version 1\.2\.2, not 1\.2\.3/)
+
+    await writeBuild(dir, { feed: feedText({ entry: (name) => ({ sha512: sha512('other bytes'), size: Buffer.byteLength(bytesOf(name)) }) }) })
+    assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build' }), /mac-arm64: latest-mac\.yml sha512 for ContextCake-1\.2\.3-arm64-mac\.zip does not match the file/)
+
+    await writeBuild(dir, { feed: feedText({ entry: (name) => ({ sha512: sha512(bytesOf(name)), size: 7 }) }) })
+    assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build' }), /mac-x64: latest-mac\.yml size for ContextCake-1\.2\.3-x64-mac\.zip does not match the file/)
+
+    await writeBuild(dir, { feed: 'version: 1.2.3\nfiles: []\n' })
+    assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build' }), /latest-mac\.yml cannot be read/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('the Linux feed must list the .deb itself with its real sha512 and size', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cc-release-platforms-'))
+  try {
+    await writeBuild(dir)
+    verifyReleaseDirectory({ dir, version, stage: 'build', os: 'linux' })
+    await writeBuild(dir, { linuxFeed: feedText({ rows: linuxRows, entry: () => ({ sha512: sha512('other'), size: 3 }) }) })
+    assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build' }), /linux-x64-deb: latest-linux\.yml size for ContextCake-1\.2\.3-amd64\.deb does not match the file/)
+    // A Mac-only check never reads the Linux feed.
     verifyReleaseDirectory({ dir, version, stage: 'build', os: 'mac' })
     await rm(path.join(dir, 'latest-linux.yml'))
     assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build' }), /linux-x64-deb: missing latest-linux\.yml/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('build digests must list every checksummed file and match its bytes', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cc-release-platforms-'))
+  try {
+    await writeBuild(dir)
+    const names = releaseFileNames({ version, kind: 'checksummed' })
+    const digests = names.map((name) => `${sha(bytesOf(name))}  ${name}`).join('\n')
+    verifyReleaseDirectory({ dir, version, stage: 'build', digests })
+    assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build', digests: digests.split('\n').slice(1).join('\n') }), /build digests has no line for ContextCake-1\.2\.3-arm64\.dmg/)
+
+    // Bytes that changed after the build job hashed them.
+    await writeFile(path.join(dir, 'ContextCake-1.2.3-x64.dmg'), 'tampered')
+    assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build', digests }), /build digests does not match ContextCake-1\.2\.3-x64\.dmg/)
+    assert.throws(() => verifyReleaseDirectory({ dir, version, stage: 'build', digests: 'not a digest' }), /build digests cannot be read/)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -169,7 +239,7 @@ test('the publish stage also requires ping assets and matching SHA256SUMS lines'
 
     for (const row of RELEASE_PLATFORMS) await writeFile(path.join(dir, row.pingAsset), 'ping')
     const names = releaseFileNames({ version, kind: 'checksummed' })
-    const lines = names.map((name) => `${sha(`bytes of ${name}`)}  ${name}`)
+    const lines = names.map((name) => `${sha(bytesOf(name))}  ${name}`)
     await writeFile(path.join(dir, 'SHA256SUMS'), `${lines.join('\n')}\n`)
     verifyReleaseDirectory({ dir, version, stage: 'publish' })
 
@@ -240,7 +310,6 @@ test('electron-builder names the Linux .deb the way the table does', async () =>
   const linux = yamlBlock(config, 'linux')
   const pattern = /^ {2}artifactName: "([^"]+)"$/m.exec(linux)?.[1]
   assert.ok(pattern, 'linux must set artifactName explicitly')
-  const linuxRows = RELEASE_PLATFORMS.filter((row) => row.os === 'linux')
   for (const row of linuxRows) {
     assert.equal(expand(pattern, { ...row, arch: DEB_ARCH[row.arch] }, row.packageType), row.installerName(version))
   }

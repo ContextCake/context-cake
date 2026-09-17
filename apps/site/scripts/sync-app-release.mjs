@@ -70,11 +70,15 @@ function artifactRecord(asset, checksums) {
 }
 
 // One record row per platform-table row. The site follows the newest PUBLISHED
-// release, and releases before the table carry Apple silicon files only, so a
-// row whose installer is absent is recorded as unavailable instead of failing
-// the sync. A row that is half there (installer without its update file, or a
-// file without its checksum) still fails: that release is broken, not old.
-// The release workflow is what refuses to publish a release missing a row.
+// release, and releases made before a row existed do not carry it (0.9.x has
+// Apple silicon only), so such a row is recorded as unavailable.
+//
+// "Made before the row existed" means the release shows no trace of the row at
+// all: no installer, no update file, no install-ping asset, and no SHA256SUMS
+// line. Any trace means the release was built with the row, so a missing file
+// is a broken or half-uploaded release, and the sync fails rather than deploy
+// a site that quietly drops a download. The release workflow itself refuses to
+// publish a release missing a row.
 export function buildAppReleaseRecord(release, checksumText) {
   const parts = versionParts(release.tag_name)
   if (!parts || release.draft || release.prerelease) {
@@ -89,6 +93,15 @@ export function buildAppReleaseRecord(release, checksumText) {
     const installerName = row.installerName(version)
     const updaterName = row.updaterName(version)
     const available = hasAsset(installerName)
+    const traces = [
+      hasAsset(row.pingAsset) && row.pingAsset,
+      updaterName && hasAsset(updaterName) && updaterName,
+      checksums.has(installerName) && `SHA256SUMS line for ${installerName}`,
+      updaterName && checksums.has(updaterName) && `SHA256SUMS line for ${updaterName}`,
+    ].filter(Boolean)
+    if (!available && traces.length) {
+      throw new Error(`${release.tag_name} is missing release asset ${installerName} for ${row.id} but has ${traces.join(', ')}`)
+    }
     return {
       id: row.id,
       os: row.os,

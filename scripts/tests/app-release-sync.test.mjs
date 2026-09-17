@@ -131,6 +131,25 @@ test('a release with a .deb records the Linux download with no update file, and 
   assert.match(renderDownloadRedirects(record), /\/download\/linux-x64-deb \S+ContextCake-1\.2\.3-amd64\.deb 302\n\/download\/linux \S+ContextCake-1\.2\.3-amd64\.deb 302\n$/)
 })
 
+test('a release built with a row but missing its installer fails instead of dropping the download', () => {
+  const tag = 'app-v1.2.3'
+  // Half-uploaded: SHA256SUMS names the Intel DMG, the DMG itself never landed.
+  const noIntelDmg = twoArchRelease()
+  noIntelDmg.assets = noIntelDmg.assets.filter((candidate) => candidate.name !== 'ContextCake-1.2.3-x64.dmg')
+  assert.throws(
+    () => buildAppReleaseRecord(noIntelDmg, twoArchSums()),
+    /app-v1\.2\.3 is missing release asset ContextCake-1\.2\.3-x64\.dmg for mac-x64 but has ContextCake-1\.2\.3-x64-mac\.zip, SHA256SUMS line for ContextCake-1\.2\.3-x64\.dmg/,
+  )
+  // Only the row's install-ping asset is present.
+  const pingOnly = release('1.2.3')
+  pingOnly.assets = [...pingOnly.assets, asset(tag, 'install-ping-mac-x64.txt', 12)]
+  assert.throws(() => buildAppReleaseRecord(pingOnly, armSums()), /missing release asset ContextCake-1\.2\.3-x64\.dmg for mac-x64 but has install-ping-mac-x64\.txt/)
+  // A release from before the row existed has no trace of it and still syncs.
+  const preTable = release('1.2.3')
+  preTable.assets = [...preTable.assets, asset(tag, 'install-ping.txt', 12)]
+  assert.equal(buildAppReleaseRecord(preTable, armSums()).platforms[1].available, false)
+})
+
 test('a platform row needs its installer, update file, and both checksums', () => {
   assert.throws(
     () => buildAppReleaseRecord(release('1.2.3'), `${A}  ContextCake-1.2.3-arm64.dmg\n`),

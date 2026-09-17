@@ -472,13 +472,13 @@ export function createSourceOperations({
       const ref = b.ref ? String(b.ref) : null;
       if (fs.existsSync(path.join(dir, ".git"))) {
         // Another layer already reads this clone: refresh it in place.
-        await gitCloneOrPull(url, dir, ref);
+        await gitCloneOrPull(url, dir, ref, signal);
         folder = await probeFolder(abs, [".md"]);
       } else {
         if (fs.existsSync(dir)) throw cloneDirOccupied(dir);
         const staged = path.join(STAGING_DIR, `${slug}-${randomUUID().slice(0, 8)}`);
         fs.mkdirSync(STAGING_DIR, { recursive: true });
-        await gitCloneOrPull(url, staged, ref);
+        await gitCloneOrPull(url, staged, ref, signal);
         promote = { staged, dir };
         try {
           folder = await probeFolder(path.join(staged, path.relative(dir, abs)), [".md"]);
@@ -831,7 +831,7 @@ export function createSourceOperations({
     return withRevision({ ok: true, ...(probed ? { reindexing: true, hasDocuments: probed.found, scanComplete: probed.complete } : {}) }, written);
   }
 
-  async function gitCloneOrPull(url, dir, ref) {
+  async function gitCloneOrPull(url, dir, ref, signal = null) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
     const secrets = gitCredentialsForUrl(url);
     const attempts = secrets.length ? secrets : [null];
@@ -871,16 +871,24 @@ export function createSourceOperations({
 
       try {
         if (pulling) {
-          await execFileP("git", [...config, "-C", dir, "pull", "--ff-only"], { timeout: 60000, env });
+          await execFileP("git", [...config, "-C", dir, "pull", "--ff-only"], { timeout: 60000, env, ...(signal ? { signal } : {}) });
         } else {
           const args = [...config, "clone", "--depth", "1"];
           if (ref) args.push("--branch", ref);
           args.push(url, dir);
-          await execFileP("git", args, { timeout: 120000, env });
+          await execFileP("git", args, { timeout: 120000, env, ...(signal ? { signal } : {}) });
         }
         return;
       } catch (err) {
         lastError = err;
+        // Stopped by the caller: its reason, not a git failure. A partial
+        // clone is removed below, as for any failed clone.
+        if (signal?.aborted) {
+          if (!pulling) {
+            try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+          }
+          throw signal.reason;
+        }
         const text = String(err.stderr || err.message || "");
         const retryingAnotherAccount = looksLikeAuthFailure(text) && i < attempts.length - 1;
         // A failed or timed-out clone may leave a partial app-managed
@@ -920,7 +928,7 @@ export function createSourceOperations({
    * caller's own index learns that content moved. Throws SYNC_FAILED (502)
    * with the health detail when the remote could not be read.
    */
-  async function syncSource(name, { layers = [], sources = [], invalidate = () => {}, reload = () => {} } = {}) {
+  async function syncSource(name, { layers = [], sources = [], invalidate = () => {}, reload = () => {}, signal = null } = {}) {
     if (!name) throw new ControlError("NAME_REQUIRED", "Provide ?name=", { status: 400 });
     const layer = layers.find((l) => l.name === name);
     if (!layer) throw new ControlError("SOURCE_NOT_FOUND", `No source named "${name}"`, { status: 404 });
@@ -967,7 +975,7 @@ export function createSourceOperations({
     }
     if (!layer.origin) throw new ControlError("SYNC_UNSUPPORTED", `"${name}" is not a git-backed source`, { status: 400 });
     const { url, slug } = normalizeRepo(layer.origin);
-    await gitCloneOrPull(url, path.join(CACHE_DIR, slug), layer.ref ?? null);
+    await gitCloneOrPull(url, path.join(CACHE_DIR, slug), layer.ref ?? null, signal);
     reload();
     return { ok: true, synced: name };
   }
@@ -1271,8 +1279,13 @@ function missingFields(entry) {
  * `fn` did. A layer that fails to build becomes an entry with `error`, and a
  * quarantined layer an entry with `quarantined: true`, so a test can report
  * them instead of failing outright.
+ *
+ * `onClose(closeAll)` (optional) receives the same idempotent close before
+ * any adapter is built. A caller that can abandon `fn` (a CLI read cut off by
+ * --timeout) registers it, so no MCP child outlives the process when the
+ * `finally` below never gets its turn.
  */
-export async function withSourceSession({ manifestPath, profileId = null, names = null }, fn) {
+export async function withSourceSession({ manifestPath, profileId = null, names = null, onClose = null }, fn) {
   const resolved = path.resolve(manifestPath);
   const manifestDir = path.dirname(resolved);
   let read;
@@ -1295,6 +1308,12 @@ export async function withSourceSession({ manifestPath, profileId = null, names 
   }
   const runtime = { ...(manifest.settings ? { settings: manifest.settings } : {}) };
   const entries = [];
+  let closing = null;
+  const closeAll = () => {
+    closing ??= Promise.allSettled(entries.map(({ source }) => Promise.resolve().then(() => source?.close?.())));
+    return closing;
+  };
+  onClose?.(closeAll);
   try {
     for (const layer of selected) {
       try {
@@ -1307,7 +1326,7 @@ export async function withSourceSession({ manifestPath, profileId = null, names 
     for (const entry of broken) entries.push({ layer: { name: entry.name, level: entry.level, source: entry.kind }, source: null, error: entry.error, quarantined: true });
     return await fn({ manifest, layers: selected, entries });
   } finally {
-    await Promise.allSettled(entries.map(({ source }) => Promise.resolve().then(() => source?.close?.())));
+    await closeAll();
   }
 }
 

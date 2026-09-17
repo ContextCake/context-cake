@@ -2,7 +2,7 @@
   "name": "contextcake-desktop",
   "productName": "ContextCake",
   "private": true,
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "ContextCake desktop app: the engine and console in one window",
   "homepage": "https://contextcake.com",
   "desktopName": "contextcake-desktop.desktop",

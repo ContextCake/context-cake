@@ -1,0 +1,34 @@
+---
+// Docs view of the Mac downloads: one row per available platform in the
+// committed release record, so the installation guide never names a DMG,
+// size, or checksum by hand.
+import { appChecksumsUrl, appReleaseUrl, appTag, macDownloads } from '../data/app-release';
+import { formatFileSize } from '../data/app-downloads.mjs';
+
+const intelMissing = !macDownloads.some((row) => row.arch === 'x64');
+---
+<p>
+	Download the DMG for your Mac from <a href={appReleaseUrl}>{appTag}</a>. Each file is signed,
+	notarized, and listed in <a href={appChecksumsUrl}>SHA256SUMS</a>.
+</p>
+<table class="app-downloads">
+	<thead>
+		<tr><th scope="col">Mac</th><th scope="col">Download</th><th scope="col">Size</th><th scope="col">SHA-256</th></tr>
+	</thead>
+	<tbody>
+		{macDownloads.map((row) => (
+			<tr>
+				<th scope="row">{row.label}</th>
+				<td><a href={row.downloadPath} download>{row.installer.name}</a></td>
+				<td class="app-downloads__size">{formatFileSize(row.installer.bytes)}</td>
+				<td><code>{row.installer.sha256}</code></td>
+			</tr>
+		))}
+	</tbody>
+</table>
+{intelMissing && <p>This release is for Apple silicon only. On an Intel Mac, use the source route below.</p>}
+
+<style>
+	.app-downloads code { overflow-wrap: anywhere; word-break: break-all; }
+	.app-downloads__size { white-space: nowrap; }
+</style>

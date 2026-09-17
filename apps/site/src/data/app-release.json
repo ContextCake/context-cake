@@ -3,29 +3,54 @@
   "version": "0.9.1",
   "tag": "app-v0.9.1",
   "publishedAt": "2026-09-15T05:50:13Z",
-  "architectures": [
-    "arm64"
-  ],
   "releaseUrl": "https://github.com/ContextCake/context-cake/releases/tag/app-v0.9.1",
   "checksumsUrl": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/SHA256SUMS",
-  "artifacts": {
-    "dmg": {
-      "name": "ContextCake-0.9.1-arm64.dmg",
-      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/ContextCake-0.9.1-arm64.dmg",
-      "sha256": "e0fd78e20f5a9139188977b9f7999551a789c896af8962ebdc5901186b051e22",
-      "bytes": 124279138
+  "platforms": [
+    {
+      "id": "mac-arm64",
+      "os": "mac",
+      "arch": "arm64",
+      "osLabel": "Mac",
+      "label": "Apple silicon",
+      "platformName": "Apple silicon Mac",
+      "updates": "self",
+      "downloadPath": "/download/mac-arm64",
+      "downloadAliases": [
+        "/download/mac"
+      ],
+      "available": true,
+      "installer": {
+        "name": "ContextCake-0.9.1-arm64.dmg",
+        "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/ContextCake-0.9.1-arm64.dmg",
+        "sha256": "e0fd78e20f5a9139188977b9f7999551a789c896af8962ebdc5901186b051e22",
+        "bytes": 124279138
+      },
+      "updater": {
+        "name": "ContextCake-0.9.1-arm64-mac.zip",
+        "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/ContextCake-0.9.1-arm64-mac.zip",
+        "sha256": "da5b5a7f85a91520766375791dc6c2c5a93f6a9fe3d0f3b6007769fd4fc643d9",
+        "bytes": 123715639
+      }
     },
-    "updaterZip": {
-      "name": "ContextCake-0.9.1-arm64-mac.zip",
-      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/ContextCake-0.9.1-arm64-mac.zip",
-      "sha256": "da5b5a7f85a91520766375791dc6c2c5a93f6a9fe3d0f3b6007769fd4fc643d9",
-      "bytes": 123715639
-    },
-    "mcpb": {
-      "name": "ContextCake-0.9.1.mcpb",
-      "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/ContextCake-0.9.1.mcpb",
-      "sha256": "99cf685fde0fb83968794f7dbfafcb75e7f4e87890b40818a9d31bb8994bde83",
-      "bytes": 1425307
+    {
+      "id": "mac-x64",
+      "os": "mac",
+      "arch": "x64",
+      "osLabel": "Mac",
+      "label": "Intel",
+      "platformName": "Intel Mac",
+      "updates": "self",
+      "downloadPath": "/download/mac-x64",
+      "downloadAliases": [],
+      "available": false,
+      "installer": null,
+      "updater": null
     }
+  ],
+  "mcpb": {
+    "name": "ContextCake-0.9.1.mcpb",
+    "url": "https://github.com/ContextCake/context-cake/releases/download/app-v0.9.1/ContextCake-0.9.1.mcpb",
+    "sha256": "99cf685fde0fb83968794f7dbfafcb75e7f4e87890b40818a9d31bb8994bde83",
+    "bytes": 1425307
   }
 }

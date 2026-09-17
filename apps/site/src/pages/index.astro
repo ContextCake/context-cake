@@ -4,7 +4,11 @@ import Base from '../layouts/Base.astro';
 import Icon from '../components/Icon.astro';
 import ContextPreview from '../components/ContextPreview.astro';
 import libraryImage from '../assets/context-library.webp';
-import { appDownloadUrl } from '../data/app-release';
+import { appDownloadUrl, macDownloads, primaryDownload, sourceRouteList } from '../data/app-release';
+
+// The big button downloads the first platform row; the note under it names that
+// row and links every other Mac row, so an Intel visitor never takes the wrong file.
+const otherMacDownloads = macDownloads.filter((row) => row.id !== primaryDownload.id);
 
 const tools = ['search', 'read_file', 'list_concepts', 'get_links', 'find_captures', 'whats_new'];
 ---
@@ -23,7 +27,7 @@ const tools = ['search', 'read_file', 'list_concepts', 'get_links', 'find_captur
           <a class="button button-primary" href={appDownloadUrl} download><Icon name="download" size={17} /> Download for Mac</a>
           <a class="button button-secondary" href="/demo/">Explore demo <span aria-hidden="true">↗</span></a>
         </div>
-        <p class="install-note">Apple silicon · Signed &amp; notarized<br /><a href="/install/">Intel Mac, Linux &amp; WSL: install from source <span aria-hidden="true">→</span></a></p>
+        <p class="install-note">{primaryDownload.label} · Signed &amp; notarized{otherMacDownloads.map((row) => (<> · <a href={row.downloadPath} download>Download for {row.platformName}</a></>))}<br /><a href="/install/">{sourceRouteList}: install from source <span aria-hidden="true">→</span></a></p>
       </div>
       <ContextPreview />
     </section>

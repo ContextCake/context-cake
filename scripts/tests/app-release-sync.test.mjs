@@ -9,7 +9,7 @@ import {
   compareAppReleaseTags,
   fetchAppReleaseRecord,
   parseChecksums,
-  renderDownloadRedirect,
+  renderDownloadRedirects,
   renderRedirects,
   renderRedirectsFile,
   selectStableAppRelease,
@@ -18,9 +18,19 @@ import { HIDDEN_REDIRECT_LINES } from '../../apps/site/scripts/site-flags.mjs'
 
 const HIDDEN_BLOCK = HIDDEN_REDIRECT_LINES.map((line) => `${line}\n`).join('')
 
+const A = 'a'.repeat(64)
+const B = 'b'.repeat(64)
+const C = 'c'.repeat(64)
+const D = 'd'.repeat(64)
+const E = 'e'.repeat(64)
+
+function asset(tag, name, size) {
+  return { name, size, browser_download_url: `https://github.com/ContextCake/context-cake/releases/download/${tag}/${name}` }
+}
+
+// A 0.9.x-shaped release: Apple silicon only.
 function release(version, overrides = {}) {
   const tag = `app-v${version}`
-  const base = `https://github.com/ContextCake/context-cake/releases/download/${tag}`
   return {
     tag_name: tag,
     draft: false,
@@ -28,13 +38,40 @@ function release(version, overrides = {}) {
     published_at: '2026-08-12T20:35:33Z',
     html_url: `https://github.com/ContextCake/context-cake/releases/tag/${tag}`,
     assets: [
-      { name: `ContextCake-${version}-arm64.dmg`, size: 120, browser_download_url: `${base}/ContextCake-${version}-arm64.dmg` },
-      { name: `ContextCake-${version}-arm64-mac.zip`, size: 110, browser_download_url: `${base}/ContextCake-${version}-arm64-mac.zip` },
-      { name: 'SHA256SUMS', size: 190, browser_download_url: `${base}/SHA256SUMS` },
+      asset(tag, `ContextCake-${version}-arm64.dmg`, 120),
+      asset(tag, `ContextCake-${version}-arm64-mac.zip`, 110),
+      asset(tag, 'SHA256SUMS', 190),
     ],
     ...overrides,
   }
 }
+
+function armSums(version = '1.2.3') {
+  return `${A}  ContextCake-${version}-arm64.dmg\n${B}  ContextCake-${version}-arm64-mac.zip\n`
+}
+
+// A release built from the platform table: Apple silicon and Intel.
+function twoArchRelease(version = '1.2.3') {
+  const base = release(version)
+  const tag = base.tag_name
+  return {
+    ...base,
+    assets: [
+      ...base.assets,
+      asset(tag, `ContextCake-${version}-x64.dmg`, 130),
+      asset(tag, `ContextCake-${version}-x64-mac.zip`, 125),
+    ],
+  }
+}
+
+function twoArchSums(version = '1.2.3') {
+  return `${armSums(version)}${C}  ContextCake-${version}-x64.dmg\n${D}  ContextCake-${version}-x64-mac.zip\n`
+}
+
+const ARM_REDIRECTS = [
+  '/download/mac-arm64 https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg 302\n',
+  '/download/mac https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg 302\n',
+].join('')
 
 test('selects the highest published stable app version', () => {
   const selected = selectStableAppRelease([
@@ -47,27 +84,53 @@ test('selects the highest published stable app version', () => {
   assert.ok(compareAppReleaseTags('app-v1.10.0', 'app-v1.9.0') > 0)
 })
 
-test('builds a release record only when both packaged artifacts have checksums', () => {
-  const checksumText = `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg\n${'b'.repeat(64)}  ContextCake-1.2.3-arm64-mac.zip\n`
-  const record = buildAppReleaseRecord(release('1.2.3'), checksumText)
+test('a release with only Apple silicon assets still builds a record, with Intel marked unavailable', () => {
+  const record = buildAppReleaseRecord(release('1.2.3'), armSums())
   assert.equal(record.tag, 'app-v1.2.3')
-  assert.equal(record.artifacts.dmg.sha256, 'a'.repeat(64))
-  assert.equal(record.artifacts.updaterZip.sha256, 'b'.repeat(64))
-  assert.equal(
-    renderDownloadRedirect(record),
-    '/download/mac https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg 302\n',
-  )
+  assert.deepEqual(record.platforms.map((row) => [row.id, row.available]), [['mac-arm64', true], ['mac-x64', false]])
+  const [arm, intel] = record.platforms
+  assert.deepEqual(arm.installer, {
+    name: 'ContextCake-1.2.3-arm64.dmg',
+    url: 'https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg',
+    sha256: A,
+    bytes: 120,
+  })
+  assert.equal(arm.updater.sha256, B)
+  assert.equal(arm.label, 'Apple silicon')
+  assert.equal(arm.osLabel, 'Mac')
+  assert.equal(intel.platformName, 'Intel Mac')
+  assert.equal(intel.installer, null)
+  assert.equal(intel.updater, null)
+  assert.equal(renderDownloadRedirects(record), ARM_REDIRECTS)
+})
 
-  assert.throws(
-    () => buildAppReleaseRecord(release('1.2.3'), `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg\n`),
-    /SHA256SUMS is missing ContextCake-1\.2\.3-arm64-mac\.zip/,
+test('a two-architecture release records both Mac downloads and redirects each', () => {
+  const record = buildAppReleaseRecord(twoArchRelease(), twoArchSums())
+  assert.deepEqual(record.platforms.map((row) => [row.id, row.available, row.installer?.sha256, row.updater?.sha256]), [
+    ['mac-arm64', true, A, B],
+    ['mac-x64', true, C, D],
+  ])
+  assert.equal(
+    renderDownloadRedirects(record),
+    `${ARM_REDIRECTS}/download/mac-x64 https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-x64.dmg 302\n`,
   )
 })
 
+test('a platform row needs its installer, update file, and both checksums', () => {
+  assert.throws(
+    () => buildAppReleaseRecord(release('1.2.3'), `${A}  ContextCake-1.2.3-arm64.dmg\n`),
+    /SHA256SUMS is missing ContextCake-1\.2\.3-arm64-mac\.zip/,
+  )
+  const noIntelZip = twoArchRelease()
+  noIntelZip.assets = noIntelZip.assets.filter((candidate) => candidate.name !== 'ContextCake-1.2.3-x64-mac.zip')
+  assert.throws(() => buildAppReleaseRecord(noIntelZip, twoArchSums()), /app-v1\.2\.3 is missing release asset ContextCake-1\.2\.3-x64-mac\.zip/)
+  const noInstallers = release('1.2.3', { assets: [asset('app-v1.2.3', 'SHA256SUMS', 190)] })
+  assert.throws(() => buildAppReleaseRecord(noInstallers, ''), /app-v1\.2\.3 has no installer for any release platform/)
+})
+
 test('renders the commerce redirects only while commerce is hidden', () => {
-  const checksumText = `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg\n${'b'.repeat(64)}  ContextCake-1.2.3-arm64-mac.zip\n`
-  const record = buildAppReleaseRecord(release('1.2.3'), checksumText)
-  const download = renderDownloadRedirect(record)
+  const record = buildAppReleaseRecord(release('1.2.3'), armSums())
+  const download = renderDownloadRedirects(record)
 
   // Both slash forms of each hidden route, so the 302 answers however the
   // path arrives.
@@ -89,8 +152,7 @@ test('renders the commerce redirects only while commerce is hidden', () => {
 test('renders _redirects offline from the committed record and flags', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-redirects-'))
   try {
-    const checksumText = `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg\n${'b'.repeat(64)}  ContextCake-1.2.3-arm64-mac.zip\n`
-    const record = buildAppReleaseRecord(release('1.2.3'), checksumText)
+    const record = buildAppReleaseRecord(release('1.2.3'), armSums())
     const recordUrl = pathToFileURL(join(dir, 'app-release.json'))
     const flagsUrl = pathToFileURL(join(dir, 'flags.json'))
     const redirectsUrl = pathToFileURL(join(dir, '_redirects'))
@@ -98,13 +160,13 @@ test('renders _redirects offline from the committed record and flags', async () 
 
     await writeFile(flagsUrl, JSON.stringify({ commerceVisible: false, paymentsLive: false }))
     const hidden = await renderRedirectsFile({ recordUrl, flagsUrl, redirectsUrl })
-    assert.equal(hidden, `${renderDownloadRedirect(record)}${HIDDEN_BLOCK}`)
+    assert.equal(hidden, `${renderDownloadRedirects(record)}${HIDDEN_BLOCK}`)
     assert.equal(await readFile(redirectsUrl, 'utf8'), hidden)
 
     // Flipping the flag and re-rendering removes the lines — no network involved.
     await writeFile(flagsUrl, JSON.stringify({ commerceVisible: true, paymentsLive: false }))
     const visible = await renderRedirectsFile({ recordUrl, flagsUrl, redirectsUrl })
-    assert.equal(visible, renderDownloadRedirect(record))
+    assert.equal(visible, renderDownloadRedirects(record))
     assert.equal(await readFile(redirectsUrl, 'utf8'), visible)
 
     // A malformed flags file is a loud error naming the file, never a guess.
@@ -124,16 +186,13 @@ test('adds the MCPB route only when its released bytes are checksum-pinned', () 
       { name: 'ContextCake-1.2.3.mcpb', size: 42, browser_download_url: 'https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3.mcpb' },
     ],
   })
-  const checksums = [
-    `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg`,
-    `${'b'.repeat(64)}  ContextCake-1.2.3-arm64-mac.zip`,
-    `${'c'.repeat(64)}  ContextCake-1.2.3.mcpb`,
-  ].join('\n')
+  const checksums = `${armSums()}${E}  ContextCake-1.2.3.mcpb\n`
   const record = buildAppReleaseRecord(published, checksums)
-  assert.equal(record.artifacts.mcpb?.sha256, 'c'.repeat(64))
+  assert.equal(record.mcpb?.sha256, E)
+  assert.equal(buildAppReleaseRecord(release('1.2.3'), armSums()).mcpb, undefined)
 
   assert.throws(
-    () => buildAppReleaseRecord(published, checksums.replace(`\n${'c'.repeat(64)}  ContextCake-1.2.3.mcpb`, '')),
+    () => buildAppReleaseRecord(published, armSums()),
     /SHA256SUMS is missing ContextCake-1\.2\.3\.mcpb/,
   )
 })
@@ -142,16 +201,15 @@ test('rejects malformed checksum manifests', () => {
   assert.throws(() => parseChecksums('not a checksum'), /Invalid SHA256SUMS line/)
 })
 
-test('syncs one exact published tag and probes every recorded artifact', async () => {
-  const published = release('1.2.3')
-  const checksumText = `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg\n${'b'.repeat(64)}  ContextCake-1.2.3-arm64-mac.zip\n`
+test('syncs one exact published tag and probes every available artifact', async () => {
+  const published = twoArchRelease()
   const seen = []
   const fetchImpl = async (url, options = {}) => {
     seen.push([url, options.method ?? 'GET', options.redirect ?? 'follow'])
     if (url.endsWith('/releases/tags/app-v1.2.3')) {
       return new Response(JSON.stringify(published), { status: 200 })
     }
-    if (url.endsWith('/SHA256SUMS')) return new Response(checksumText, { status: 200 })
+    if (url.endsWith('/SHA256SUMS')) return new Response(twoArchSums(), { status: 200 })
     if (url.endsWith('.dmg') || url.endsWith('.zip')) {
       return new Response(null, {
         status: 302,
@@ -164,26 +222,25 @@ test('syncs one exact published tag and probes every recorded artifact', async (
   const record = await fetchAppReleaseRecord({ tag: 'app-v1.2.3', token: 'test-token', fetchImpl })
 
   assert.equal(record.tag, 'app-v1.2.3')
+  const download = 'https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3'
   assert.deepEqual(seen.map((entry) => entry[0]), [
     'https://api.github.com/repos/ContextCake/context-cake/releases/tags/app-v1.2.3',
-    'https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/SHA256SUMS',
-    'https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64.dmg',
-    'https://github.com/ContextCake/context-cake/releases/download/app-v1.2.3/ContextCake-1.2.3-arm64-mac.zip',
+    `${download}/SHA256SUMS`,
+    `${download}/ContextCake-1.2.3-arm64.dmg`,
+    `${download}/ContextCake-1.2.3-arm64-mac.zip`,
+    `${download}/ContextCake-1.2.3-x64.dmg`,
+    `${download}/ContextCake-1.2.3-x64-mac.zip`,
   ])
-  assert.deepEqual(seen.slice(2).map((entry) => entry.slice(1)), [
-    ['GET', 'manual'],
-    ['GET', 'manual'],
-  ])
+  assert.ok(seen.slice(2).every((entry) => entry[1] === 'GET' && entry[2] === 'manual'))
 })
 
 test('rejects a release whose advertised Mac artifact is not downloadable', async () => {
   const published = release('1.2.3')
-  const checksumText = `${'a'.repeat(64)}  ContextCake-1.2.3-arm64.dmg\n${'b'.repeat(64)}  ContextCake-1.2.3-arm64-mac.zip\n`
   const fetchImpl = async (url) => {
     if (url.endsWith('/releases/tags/app-v1.2.3')) {
       return new Response(JSON.stringify(published), { status: 200 })
     }
-    if (url.endsWith('/SHA256SUMS')) return new Response(checksumText, { status: 200 })
+    if (url.endsWith('/SHA256SUMS')) return new Response(armSums(), { status: 200 })
     if (url.endsWith('.dmg')) return new Response('missing', { status: 404 })
     throw new Error(`unexpected URL ${url}`)
   }

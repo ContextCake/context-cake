@@ -64,10 +64,12 @@ If you choose **Share Anonymous Metrics**, a successfully started packaged app
 downloads one tiny file from its versioned GitHub Release:
 
 ```text
-https://github.com/ContextCake/context-cake/releases/download/app-v<version>/install-ping.txt
+https://github.com/ContextCake/context-cake/releases/download/app-v<version>/install-ping-<platform>.txt
 ```
 
-The release URL identifies the app version. GitHub increments that release
+The release URL identifies the app version and which download you installed,
+for example `mac-arm64` for Apple silicon or `mac-x64` for Intel. Releases
+before the Intel build used a single `install-ping.txt`. GitHub increments that release
 asset's public download count. ContextCake sends no request body and adds no
 identifier, account data, file name, local path, knowledge content, prompt,
 device ID, or cookie. The count is anonymous to ContextCake and is never tied to

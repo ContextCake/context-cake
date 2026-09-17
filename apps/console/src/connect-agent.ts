@@ -18,7 +18,10 @@ export interface HarnessDefinition {
   firstPrompt: string
 }
 
-/** The PATH-resolved command name used once the optional CLI shortcut exists. */
+/**
+ * The bare command name, for the Web Demo and development builds only. The
+ * desktop app always connects harnesses through its absolute shim path.
+ */
 export const DEFAULT_COMMAND = 'contextcake'
 
 export function mcpServerJson(command: string): string {
@@ -54,10 +57,12 @@ function shellCommand(command: string): string {
 }
 
 /**
- * Build the five harness definitions around one MCP server command. Callers
- * pass the bare `contextcake` name when the CLI shortcut is installed (or when
- * no desktop shell is present) and the app's absolute shim path when it is not
- * — connecting a harness never requires the sudo-gated PATH install.
+ * Build the five harness definitions around one MCP server command. The
+ * desktop app passes its absolute shim path whenever it has a durable one, so a
+ * harness runs this app's engine even when another `contextcake` comes first
+ * on PATH, and connecting never requires the PATH install. The bare
+ * `contextcake` name is for builds with no durable path (development, a
+ * translocated app) and the browser.
  */
 export function buildHarnessDefinitions(command: string = DEFAULT_COMMAND): readonly HarnessDefinition[] {
   const shell = shellCommand(command)

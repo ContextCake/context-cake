@@ -13,29 +13,71 @@
 // safeStorage to decrypt too. Anything stored here should therefore be
 // revocable, and the docs/security threat model says so out loud rather than
 // implying a stronger guarantee than exists.
+//
+// On Linux, safeStorage reports encryption as available even when it found no
+// keyring: it falls back to the `basic_text` backend, whose key is a constant
+// compiled into Chromium. A file written that way is obfuscated, not
+// encrypted, so this store treats `basic_text` as unavailable and keeps values
+// in memory only. The backend is only known once the app is ready (`unknown`
+// before), so it is checked at each use, never cached at construction.
 
 import fs from 'node:fs'
 import path from 'node:path'
 
-export function createEncryptedStorage({ configDir, safeStorage, canWrite = () => true, fileName = 'session.enc' }) {
+// Backends that do not protect the bytes: a fixed key, or none chosen yet.
+const WEAK_BACKENDS = new Set(['basic_text'])
+
+export function createEncryptedStorage({
+  configDir,
+  safeStorage,
+  canWrite = () => true,
+  fileName = 'session.enc',
+  isReady = () => true,
+  now = () => new Date(),
+}) {
   const file = path.join(configDir, fileName)
   const memory = new Map()
 
   const encryptionAvailable = () => {
-    try { return safeStorage?.isEncryptionAvailable() === true } catch { return false }
+    try {
+      if (safeStorage?.isEncryptionAvailable() !== true) return false
+      // Linux only; macOS and Windows have no such method.
+      const backend = safeStorage.getSelectedStorageBackend?.()
+      if (WEAK_BACKENDS.has(backend)) return false
+      if (backend === 'unknown' && isReady()) return false
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // A file that exists but cannot be decrypted or parsed is moved aside, never
+  // treated as empty: the next write would otherwise replace it, and a keyring
+  // that is only locked or reset for now would cost the user every stored
+  // credential for good. The copy keeps the bytes for a manual recovery.
+  const setAside = () => {
+    const stamp = now().toISOString().replace(/[:.]/g, '-')
+    try { fs.renameSync(file, `${file}.unreadable-${stamp}`) } catch { /* already gone */ }
   }
 
   const readMap = () => {
     if (!encryptionAvailable()) return Object.fromEntries(memory)
+    let encrypted
     try {
-      const encrypted = fs.readFileSync(file)
-      const plaintext = safeStorage.decryptString(encrypted)
-      const parsed = JSON.parse(plaintext)
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+      encrypted = fs.readFileSync(file)
     } catch {
-      // Missing, locked, or stale Keychain material reads as "nothing stored".
+      // Missing (or unreadable as a file at all) reads as "nothing stored".
       return {}
     }
+    try {
+      const plaintext = safeStorage.decryptString(encrypted)
+      const parsed = JSON.parse(plaintext)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+    } catch {
+      // Stale or foreign key material, or corrupt bytes: handled below.
+    }
+    setAside()
+    return {}
   }
 
   const writeMap = (values) => {
@@ -61,6 +103,13 @@ export function createEncryptedStorage({ configDir, safeStorage, canWrite = () =
 
   return {
     file,
+    /**
+     * 'persistent' when values reach disk encrypted, 'memory' when they last
+     * only as long as this process (no keyring, or a fixed-key backend).
+     */
+    mode() {
+      return encryptionAvailable() ? 'persistent' : 'memory'
+    },
     getItem(key) {
       const value = readMap()[key]
       return typeof value === 'string' ? value : null

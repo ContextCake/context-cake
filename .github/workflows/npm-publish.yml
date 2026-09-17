@@ -1,5 +1,18 @@
 # Publishes only after npm's trusted-publisher/OIDC relationship has been
 # configured for ContextCake. No long-lived npm token is accepted or stored.
+#
+# Prerequisites (one-time, by a maintainer):
+#   - `contextcake` exists on npm. A trusted publisher can only be attached to
+#     an existing package, so the first version is a hand-published 0.0.0
+#     placeholder with 2FA.
+#   - A trusted publisher on npmjs.com for this repository, this workflow file,
+#     and the `npm-publish` environment; token publishing disabled.
+#
+# The workflow publishes the npm tarball the signed GitHub Release already
+# carries, after checking it against that release's SHA256SUMS. It never
+# rebuilds the package, so the registry copy is byte-identical to the release
+# artifact. Re-running for a version npm already has succeeds only when the
+# published integrity matches the release tarball.
 name: Publish ContextCake npm package
 
 on:
@@ -9,6 +22,11 @@ on:
         description: Published app-vX.Y.Z GitHub Release to publish to npm
         required: true
         type: string
+      publish_pointer:
+        description: Also publish the non-executable context-cake pointer package at this version
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,7 +58,22 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Verify published GitHub release and package hardening
+      # Trusted publishing needs npm >= 11.5.1 on Node >= 22.14.0
+      # (docs.npmjs.com/trusted-publishers). Node 22 bundles npm 10.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install --global --ignore-scripts npm@11
+          node --input-type=module -e '
+            import { execFileSync } from "node:child_process";
+            const at = (v) => v.split(".").map(Number);
+            const newer = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return true; };
+            const npm = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+            if (!newer(at(npm), [11, 5, 1])) throw new Error(`npm ${npm} is older than 11.5.1`);
+            if (!newer(at(process.versions.node), [22, 14, 0])) throw new Error(`Node ${process.versions.node} is older than 22.14.0`);
+            console.log(`npm ${npm} on Node ${process.versions.node}`);
+          '
+
+      - name: Verify published GitHub release and version alignment
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
@@ -48,32 +81,56 @@ jobs:
           gh release view "$RELEASE_TAG" --repo ContextCake/context-cake --json isDraft,isPrerelease --jq 'if .isDraft or .isPrerelease then error("Release must be published and stable") else empty end'
           VERSION="${RELEASE_TAG#app-v}"
           VERSION="$VERSION" node --input-type=module -e '
-            import { assertVersionAlignment, buildNpmPackage } from "./scripts/distribution-artifacts.mjs";
-            import { mkdtemp, rm } from "node:fs/promises";
-            import { spawnSync } from "node:child_process";
-            import os from "node:os";
-            import path from "node:path";
+            import { assertVersionAlignment } from "./scripts/distribution-artifacts.mjs";
             await assertVersionAlignment(process.env.VERSION);
-            const dir = await mkdtemp(path.join(os.tmpdir(), "contextcake-npm-publish-"));
-            try {
-              await buildNpmPackage({ version: process.env.VERSION, outDir: dir });
-              const dryRun = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts"], { cwd: dir, stdio: "inherit" });
-              if (dryRun.status !== 0) throw new Error("npm pack --dry-run failed");
-            }
-            finally { await rm(dir, { recursive: true, force: true }); }
           '
 
-      - name: Publish contextcake with provenance
+      - name: Download and verify the release tarball
+        id: tarball
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           VERSION="${RELEASE_TAG#app-v}"
-          STAGING="$(mktemp -d)"
-          trap 'rm -rf "$STAGING"' EXIT
-          VERSION="$VERSION" STAGING="$STAGING" node --input-type=module -e '
-            import { buildNpmPackage } from "./scripts/distribution-artifacts.mjs";
-            await buildNpmPackage({ version: process.env.VERSION, outDir: process.env.STAGING });
-          '
-          cd "$STAGING"
-          npm publish --provenance --access public
-          test "$(npm view contextcake@"$VERSION" version)" = "$VERSION"
+          DIR="$RUNNER_TEMP/npm-release"
+          mkdir -p "$DIR"
+          gh release download "$RELEASE_TAG" --repo ContextCake/context-cake --dir "$DIR" \
+            --pattern "contextcake-$VERSION.tgz" --pattern SHA256SUMS
+          INTEGRITY="$(node scripts/verify-npm-tarball.mjs --tarball "$DIR/contextcake-$VERSION.tgz" --sums "$DIR/SHA256SUMS" --version "$VERSION")"
+          echo "tgz=$DIR/contextcake-$VERSION.tgz" >> "$GITHUB_OUTPUT"
+          echo "integrity=$INTEGRITY" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish contextcake with provenance
+        env:
+          TGZ: ${{ steps.tarball.outputs.tgz }}
+          INTEGRITY: ${{ steps.tarball.outputs.integrity }}
+          VERSION: ${{ steps.tarball.outputs.version }}
+        run: |
+          PUBLISHED="$(npm view "contextcake@$VERSION" dist.integrity 2>/dev/null || true)"
+          if [ -n "$PUBLISHED" ]; then
+            if [ "$PUBLISHED" = "$INTEGRITY" ]; then
+              echo "contextcake@$VERSION is already published with the release tarball's integrity; nothing to do."
+              exit 0
+            fi
+            echo "::error::contextcake@$VERSION is already published with different contents ($PUBLISHED)."
+            exit 1
+          fi
+          npm publish "$TGZ" --provenance --access public
+          test "$(npm view "contextcake@$VERSION" dist.integrity)" = "$INTEGRITY"
+
+      # The pointer only reserves the hyphenated name against typosquatting. npm
+      # may refuse it as too similar to `contextcake`; that rule already blocks
+      # the lookalike for everyone, so a refusal here is not a release problem.
+      - name: Publish context-cake pointer package
+        if: inputs.publish_pointer
+        env:
+          VERSION: ${{ steps.tarball.outputs.version }}
+        working-directory: packages/npm/context-cake
+        run: |
+          if [ "$(npm view "context-cake@$VERSION" version 2>/dev/null || true)" = "$VERSION" ]; then
+            echo "context-cake@$VERSION is already published; nothing to do."
+            exit 0
+          fi
+          npm pack --dry-run --ignore-scripts
+          npm publish --ignore-scripts --provenance --access public

@@ -119,6 +119,12 @@ const SUITES = [
   },
   {
     group: "release",
+    name: "npm-tarball",
+    command: process.execPath,
+    args: ["--test", "scripts/tests/verify-npm-tarball.test.mjs"],
+  },
+  {
+    group: "release",
     name: "npm-package-e2e",
     command: process.execPath,
     args: ["--test", "scripts/tests/npm-package-e2e.test.mjs"],

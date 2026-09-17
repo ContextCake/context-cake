@@ -515,6 +515,17 @@ export function writeContextManifest(manifestPath, manifest, {
   writeAtomicJson(path.resolve(manifestPath), manifest);
 }
 
+// Creates a manifest that must not exist yet. The exclusive link means a
+// manifest another process wrote after our check is never replaced; the lock
+// keeps a locked writer from seeing a half-created state.
+export function createContextManifest(manifestPath, manifest) {
+  validateContextManifest(manifest);
+  const resolved = path.resolve(manifestPath);
+  return withManifestLock(resolved, () => {
+    writeAtomicBytes(resolved, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`), { exclusiveTarget: true });
+  });
+}
+
 export function withManifestLock(manifestPath, mutate, {
   timeoutMs = MANIFEST_LOCK_TIMEOUT_MS,
   staleMs = MANIFEST_LOCK_STALE_MS,
@@ -564,10 +575,14 @@ export function mutateContextManifest(manifestPath, mutate, {
   allowMissing = true,
   allowLegacy = true,
   allowTransitional = false,
+  precondition = null,
 } = {}) {
   const resolved = path.resolve(manifestPath);
   return withManifestLock(resolved, () => {
     const manifest = readContextManifest(resolved, { allowMissing });
+    // Runs under the lock against the manifest about to be mutated, so an
+    // expected-revision check cannot race a concurrent writer.
+    precondition?.(manifest);
     const result = mutate(manifest);
     writeContextManifest(resolved, manifest, { allowLegacy, allowTransitional });
     return result;
@@ -579,11 +594,13 @@ export function migrateManifestToV2(manifestPath, {
   projectPath = null,
   now = () => new Date(),
   realpath = fs.realpathSync.native,
+  precondition = null,
 } = {}) {
   const resolved = path.resolve(manifestPath);
   return withManifestLock(resolved, () => {
     const raw = fs.readFileSync(resolved);
     const manifest = readContextManifest(resolved, { allowMissing: false });
+    precondition?.(manifest);
     const beforeMode = classifyManifest(manifest);
     if (newProfile) validateNewProfile(newProfile, manifest);
 

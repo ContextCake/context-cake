@@ -2,8 +2,10 @@
 // Install page: the Mac app is the primary activation path. Every download
 // comes from the release record, one choice per available platform row, so a
 // new row in scripts/release-platforms.mjs needs no edit here. The versioned
-// source workflow stays available for evaluators, platforms without a native
-// download, and audits.
+// source workflow stays available for audits and contribution work. Once npm
+// has this release (src/data/npm-release.json), the npm CLI is the route
+// without the app; until then the source route covers platforms without a
+// native download.
 import Base from '../layouts/Base.astro';
 import CodeBlock from '../components/CodeBlock.astro';
 import Icon from '../components/Icon.astro';
@@ -25,6 +27,7 @@ import {
 	sourceDownloadUrl,
 	sourceArchiveSha256,
 } from '../data/source-release';
+import { npmCli, WSL_MANIFEST_NOTE } from '../data/npm-release';
 
 const archiveName = `context-cake-${sourceTag}.tar.gz`;
 const sourceTagUrl = `https://github.com/ContextCake/context-cake/tree/${sourceTag}`;
@@ -67,6 +70,10 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
 const formatDate = (iso: string) => dateFormatter.format(new Date(`${iso}T00:00:00Z`));
 const macLabels = macDownloads.map((row) => row.label).join(' and ');
 const intelMissing = !macDownloads.some((row) => row.arch === 'x64');
+// Once npm has this release, the CLI is the route for anyone without the app
+// and the source route narrows to audits and contribution work.
+const sourceTitle = npmCli ? 'Run the versioned source.' : sourceRouteTitle;
+const cliConnect = npmCli ? `${npmCli.resolve}\n${npmCli.connectClaude}` : '';
 ---
 
 <Base
@@ -127,7 +134,14 @@ const intelMissing = !macDownloads.some((row) => row.arch === 'x64');
 					</div>
 				</section>
 				<nav class="install-alternatives" aria-label="Other installation options">
-					<a href="#source-install"><span>Using {sourceRouteList}?</span> Run the versioned source <b aria-hidden="true">→</b></a>
+					{npmCli ? (
+						<>
+							<a href="#cli-install"><span>No app?</span> Use the CLI from npm <b aria-hidden="true">→</b></a>
+							<a href="#source-install"><span>Auditing the code?</span> Run the versioned source <b aria-hidden="true">→</b></a>
+						</>
+					) : (
+						<a href="#source-install"><span>Using {sourceRouteList}?</span> Run the versioned source <b aria-hidden="true">→</b></a>
+					)}
 					<a href={appReleaseUrl}><span>Looking for an older build?</span> See all app releases <b aria-hidden="true">→</b></a>
 				</nav>
 				{appMcpb && (
@@ -263,17 +277,80 @@ const intelMissing = !macDownloads.some((row) => row.arch === 'x64');
 			</div>
 		</section>
 
+		{npmCli && (
+			<section class="source-install cli-install" id="cli-install" aria-labelledby="cli-title">
+				<header class="section-intro section-intro--source">
+					<div>
+						<h2 id="cli-title">Use the CLI without the app.</h2>
+						<p>
+							{intelMissing ? 'This Mac release is for Apple silicon only. ' : ''}The <code>contextcake</code>{' '}
+							command runs on {npmCli.platforms} with Node.js 22 or newer.
+							Windows works on a best-effort basis. The install pins {npmCli.version}, the same release as the app.
+						</p>
+					</div>
+					<span>Node.js 22+ · macOS, Linux, or WSL · {npmCli.spec}</span>
+				</header>
+
+				<div class="cli-routes">
+					<section class="source-route" aria-labelledby="cli-install-title">
+						<div class="route-heading">
+							<span>Install</span>
+							<h3 id="cli-install-title">Install the pinned version</h3>
+							<p>npm installs the tarball attached to the {appTag} release. The package runs no install scripts.</p>
+						</div>
+						<CodeBlock lang="bash" code={npmCli.install} label="Install with npm" copy />
+						<p class="route-footnote">
+							Registry integrity <code>{npmCli.tarballIntegrity}</code>
+						</p>
+					</section>
+
+					<section class="source-route" aria-labelledby="cli-setup-title">
+						<div class="route-heading">
+							<span>First source</span>
+							<h3 id="cli-setup-title">Create a manifest and add a folder</h3>
+							<p><code>init</code> creates an empty manifest and leaves an existing one alone. Point <code>--path</code> at a folder of Markdown files.</p>
+						</div>
+						<CodeBlock lang="bash" code={npmCli.setup} label="Add a Markdown folder" copy />
+						<p class="route-footnote">{WSL_MANIFEST_NOTE}</p>
+					</section>
+
+					<section class="source-route" aria-labelledby="cli-connect-title">
+						<div class="route-heading">
+							<span>AI tool</span>
+							<h3 id="cli-connect-title">Connect with the absolute path</h3>
+							<p>Check which <code>contextcake</code> your shell finds. The connect command saves that full path, so a different install later on your PATH is never used by mistake.</p>
+						</div>
+						<CodeBlock lang="bash" code={cliConnect} label="Connect Claude Code" copy />
+						<details class="cli-alternative">
+							<summary>Use Codex instead</summary>
+							<CodeBlock lang="bash" code={npmCli.connectCodex} label="Connect Codex" copy />
+						</details>
+						<p class="route-footnote">
+							To try a command without installing, run <code>{npmCli.npx}</code>. Keep npx out of AI tool settings: it runs from a cache folder that can change.
+						</p>
+					</section>
+				</div>
+			</section>
+		)}
+
 		<section class="source-install" id="source-install" aria-labelledby="source-title">
 			<header class="section-intro section-intro--source">
 				<div>
-					<h2 id="source-title">{sourceRouteTitle}</h2>
-					<p>
-						{intelMissing ? 'This Mac release is for Apple silicon only. ' : ''}Use the versioned
-						source on {sourceRouteList}, for contribution work, or for a complete audit before you
-						run anything.
-					</p>
+					<h2 id="source-title">{sourceTitle}</h2>
+					{npmCli ? (
+						<p>
+							Use the versioned source for a complete audit before you run anything, or for
+							contribution work.
+						</p>
+					) : (
+						<p>
+							{intelMissing ? 'This Mac release is for Apple silicon only. ' : ''}Use the versioned
+							source on {sourceRouteList}, for contribution work, or for a complete audit before you
+							run anything.
+						</p>
+					)}
 				</div>
-				<span>Node.js 22+ · macOS, Linux, or WSL · no npm install</span>
+				<span>Node.js 22+ · macOS, Linux, or WSL · {npmCli ? 'runs as plain Node.js' : 'no npm install'}</span>
 			</header>
 
 			<details class="source-details">
@@ -907,6 +984,15 @@ const intelMissing = !macDownloads.some((row) => row.arch === 'x64');
 	}
 	.route-footnote { font-size: 0.82rem; }
 	.route-footnote a { color: var(--cc-layer-team); }
+	.cli-routes { border-bottom: 1px solid var(--cc-border-strong); }
+	.cli-routes > .source-route:first-child { border-top-color: var(--cc-border-strong); }
+	.cli-install p code,
+	.route-footnote code {
+		color: var(--cc-text-body);
+		font-family: var(--cc-font-mono);
+		font-size: 0.92em;
+	}
+	.route-footnote code { overflow-wrap: anywhere; }
 	.cli-alternative { color: var(--cc-text-body); }
 	.cli-alternative summary { cursor: pointer; font-weight: 700; }
 	.cli-alternative :global(.code-block) { margin-top: 0.9rem; }

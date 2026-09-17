@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { RELEASE_PLATFORMS } from './release-platforms.mjs'
 
@@ -38,6 +39,7 @@ export async function verifyReleaseSurfaces({
   expectedTag,
   expectedCommit,
   expectedVersion,
+  npmRelease = { published: false },
   fetchImpl = globalThis.fetch,
 }) {
   if (!/^app-v\d+\.\d+\.\d+$/.test(expectedTag)) throw new Error('Expected tag must be app-v semantic version')
@@ -64,6 +66,17 @@ export async function verifyReleaseSurfaces({
     if (!installHtml.includes(`href="${row.downloadPath}"`)) {
       throw new Error(`Site install page does not link ${row.downloadPath} for ${expectedTag}`)
     }
+  }
+
+  // The npm route follows the record the site was built from
+  // (apps/site/src/data/npm-release.json): shown for this version, else absent.
+  const npmInstall = `npm install -g contextcake@${expectedVersion}`
+  if (npmRelease.published === true && npmRelease.version === expectedVersion) {
+    if (!installHtml.includes(npmInstall)) {
+      throw new Error(`Site install page does not offer ${npmInstall} although npm has it`)
+    }
+  } else if (installHtml.includes('id="cli-install"')) {
+    throw new Error(`Site install page offers the npm CLI but npm has no contextcake@${expectedVersion}`)
   }
 
   for (const row of RELEASE_PLATFORMS) {
@@ -93,7 +106,9 @@ export async function verifyReleaseSurfaces({
 }
 
 async function main() {
+  const npmRelease = JSON.parse(await readFile(new URL('../apps/site/src/data/npm-release.json', import.meta.url), 'utf8'))
   await verifyReleaseSurfaces({
+    npmRelease,
     webDemoUrl: process.env.WEB_DEMO_DEPLOYMENT_URL,
     siteUrl: process.env.SITE_DEPLOYMENT_URL,
     expectedTag: process.env.EXPECTED_TAG,

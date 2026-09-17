@@ -1,0 +1,37 @@
+---
+// Docs view of the npm route: nothing until npm has the app release's version,
+// then install, first source, and harness connection with the same commands
+// /install shows (src/data/npm-cli.mjs).
+import { Code } from '@astrojs/starlight/components';
+import { appTag } from '../data/app-release';
+import { npmCli, WSL_MANIFEST_NOTE } from '../data/npm-release';
+---
+{npmCli && (
+	<>
+		<h2 id="cli-without-the-app">Use the CLI without the app</h2>
+		<p>
+			The <code>contextcake</code> command runs on {npmCli.platforms} with Node.js 22 or newer.
+			Windows works on a best-effort basis. Install the version that matches {appTag}:
+		</p>
+		<Code lang="bash" code={npmCli.install} />
+		<p>
+			npm installs the tarball attached to the {appTag} release, with registry integrity <code>{npmCli.tarballIntegrity}</code>. The package runs no install scripts.
+		</p>
+		<p>Create a manifest, then add a folder of Markdown files as your first source:</p>
+		<Code lang="bash" code={npmCli.setup} />
+		<p>
+			<code>init</code> leaves an existing manifest alone. On macOS the CLI and the app read the same
+			manifest. {WSL_MANIFEST_NOTE}
+		</p>
+		<p>
+			Connect an AI tool with the absolute path of the install you just made. Check which <code>contextcake</code>{' '}
+			your shell finds. The connect command saves that full path.
+		</p>
+		<Code lang="bash" code={`${npmCli.resolve}\n${npmCli.connectClaude}`} title="Claude Code" />
+		<Code lang="bash" code={npmCli.connectCodex} title="Codex" />
+		<p>
+			To try a command without installing, run <code>{npmCli.npx}</code>. Keep npx out of AI tool
+			settings: it runs from a cache folder that can change.
+		</p>
+	</>
+)}

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { HIDDEN_COMMERCE_ROUTES, HIDDEN_REDIRECT_LINES, isCommerceVisible, readSiteFlags } from './site-flags.mjs'
 import { availablePlatforms, formatFileSize, platformsFor, sourceRouteHeading, sourceRouteNames, joinOr } from '../src/data/app-downloads.mjs'
+import { WSL_MANIFEST_NOTE, npmCliRoute } from '../src/data/npm-cli.mjs'
 
 const html = await readFile(new URL('../dist/install/index.html', import.meta.url), 'utf8')
 const homeHtml = await readFile(new URL('../dist/index.html', import.meta.url), 'utf8')
@@ -10,6 +11,7 @@ const installationDocsHtml = await readFile(new URL('../dist/docs/getting-starte
 const diagnosticsDocsHtml = await readFile(new URL('../dist/docs/guides/diagnostics/index.html', import.meta.url), 'utf8')
 const appRelease = JSON.parse(await readFile(new URL('../src/data/app-release.json', import.meta.url), 'utf8'))
 const sourceRelease = JSON.parse(await readFile(new URL('../src/data/source-release.json', import.meta.url), 'utf8'))
+const npmRelease = JSON.parse(await readFile(new URL('../src/data/npm-release.json', import.meta.url), 'utf8'))
 const redirects = await readFile(new URL('../dist/_redirects', import.meta.url), 'utf8')
 const commerceVisible = isCommerceVisible(await readSiteFlags())
 
@@ -56,7 +58,57 @@ for (const row of platforms) {
 for (const row of appRelease.platforms.filter((candidate) => !candidate.available)) {
   forbidText(`href="${row.downloadPath}"`, `Install page must not link ${row.downloadPath}: ${appRelease.tag} has no ${row.platformName} download`)
 }
-requireText(`Using ${joinOr(sourceRouteNames(appRelease))}?`, 'Install page must send platforms without a download to the source route')
+// The npm route (src/data/npm-release.json). Commands sit in highlighted code,
+// so they are checked against the page's text rather than its markup.
+// A plain scan, not a regex strip: this reads trusted build output and only
+// needs the characters outside tags.
+function pageText(page) {
+  let text = ''
+  let inTag = false
+  for (const character of page) {
+    if (character === '<') inTag = true
+    else if (character === '>' && inTag) inTag = false
+    else if (!inTag) text += character
+  }
+  return text
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&#x27;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+const installText = pageText(html)
+const installationDocsText = pageText(installationDocsHtml)
+const npmCli = npmCliRoute(npmRelease, appRelease)
+if (npmRelease.published === true && !npmCli) {
+  throw new Error(`npm-release.json says ${npmRelease.version} is published but the app release is ${appRelease.version}; run scripts/sync-npm-release.mjs after the app sync`)
+}
+if (npmCli) {
+  const npmCommands = [npmCli.install, ...npmCli.setup.split('\n'), npmCli.resolve, npmCli.connectClaude, npmCli.connectCodex, npmCli.npx]
+  for (const [label, text] of [['Install page', installText], ['Installation docs', installationDocsText]]) {
+    for (const command of npmCommands) {
+      if (!text.includes(command)) throw new Error(`${label} must show the npm route command: ${command}`)
+    }
+    if (!text.includes(WSL_MANIFEST_NOTE)) throw new Error(`${label} must say the WSL CLI keeps its own manifest`)
+    if (!text.includes(npmCli.tarballIntegrity)) throw new Error(`${label} must show the npm tarball integrity`)
+  }
+  requireText('Use the CLI without the app.', 'Install page must offer the CLI without the app once npm has the release')
+  requireText('href="#cli-install"', 'Install page must link the npm route from the download module')
+  if (installationDocsHtml.includes('intentionally held behind npm trusted publishing')) {
+    throw new Error('Installation docs must not call npm unavailable once npm has the release')
+  }
+} else {
+  requireText(`Using ${joinOr(sourceRouteNames(appRelease))}?`, 'Install page must send platforms without a download to the source route')
+  for (const [label, text] of [['Install page', installText], ['Installation docs', installationDocsText]]) {
+    if (/npm install -g contextcake|npx --yes contextcake/.test(text)) {
+      throw new Error(`${label} must not offer the npm CLI before npm has ${appRelease.version}`)
+    }
+  }
+  forbidText('id="cli-install"', 'Install page must not render the npm route before npm has the release')
+  if (!installationDocsHtml.includes('intentionally held behind npm trusted publishing')) {
+    throw new Error('Installation docs must explain why npm is unavailable while it has no release')
+  }
+}
 requireText('href="/install" aria-current="page"', 'Install navigation must expose the current route')
 requireText('Show source installation', 'Versioned source installation must remain available')
 requireText(`app-v${sourceRelease.version}`, 'Source installation must use an app release tag')
@@ -91,13 +143,16 @@ requireOrder([
   'Choose a folder with Markdown files',
   'Connect your AI tool',
   'Run the test prompt',
-  sourceRouteHeading(appRelease),
+  ...(npmCli ? ['Use the CLI without the app.', 'Run the versioned source.'] : [sourceRouteHeading(appRelease)]),
 ])
 
 forbidText('The next distribution layer', 'Planned distribution channels must not displace activation')
 forbidText('After sign-in', 'Sign-in must not be presented as required for local setup')
 forbidText('theagent', 'Inline link whitespace collapsed in production HTML')
 forbidText('nopostinstall', 'Inline code whitespace collapsed in production HTML')
+for (const [label, text] of [['Install page', installText], ['Installation docs', installationDocsText]]) {
+  if (/Thecontextcake|contextcakecommand|whichcontextcake|contextcakeyour|integritysha512|runnpx/.test(text)) throw new Error(`${label}: inline code whitespace collapsed in the npm route`)
+}
 
 // The pricing page carries a Mac download only while it is a real page. While
 // commerce is hidden it is a redirect stub and is checked as one below.
@@ -186,4 +241,4 @@ for (const cue of diagnosticsDemoCues) {
   }
 }
 
-console.log(`install page verification passed (${appRelease.tag}: ${platforms.map((row) => row.id).join(', ')} + source fallback; commerce ${commerceVisible ? 'visible' : 'hidden'})`)
+console.log(`install page verification passed (${appRelease.tag}: ${platforms.map((row) => row.id).join(', ')} + ${npmCli ? `npm ${npmCli.spec} + ` : ''}source fallback; commerce ${commerceVisible ? 'visible' : 'hidden'})`)

@@ -10,6 +10,14 @@ on:
       # The site release sync reads the platform table.
       - 'scripts/release-platforms.mjs'
   workflow_dispatch:
+  # Redeploy once npm has a release, so /install offers the npm CLI without a
+  # hand edit. Runs this file from main; the validate job skips a failed or
+  # cancelled publish.
+  workflow_run:
+    workflows:
+      - Publish ContextCake npm package
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -33,6 +41,7 @@ jobs:
   validate:
     name: validate
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Checkout
@@ -52,6 +61,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/sync-app-release.mjs
+
+      # After the app record: the npm route needs npm to have that version.
+      # A registry failure records no npm route rather than failing the deploy.
+      - name: Sync published npm release
+        run: node scripts/sync-npm-release.mjs
 
       - name: Build
         run: npm run build

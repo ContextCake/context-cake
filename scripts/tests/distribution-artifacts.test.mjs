@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import {
   assertHomebrewCask,
   buildMcpb,
   buildNpmPackage,
   mcpbName,
+  NPM_POLICY_FIXTURES,
   npmTarballName,
   releaseAssetNames,
   renderHomebrewCask,
@@ -103,10 +105,23 @@ test('npm staging package contains the CLI and engine but no lifecycle scripts',
       env: { ...process.env, npm_config_ignore_scripts: 'true', npm_config_cache: path.join(dir, '.npm-cache') },
     })
     const [{ files }] = JSON.parse(listing)
-    const names = files.map((file) => file.path)
-    assert.ok(names.includes('bin/contextcake.mjs'))
-    assert.ok(names.includes('engine/mcp-server.mjs'))
-    assert.ok(names.every((name) => !name.includes('node_modules')))
+    const names = files.map((file) => file.path).sort()
+    // The exact tarball: the bin, the whole engine source tree, the two policy
+    // fixtures the engine reads at runtime, and nothing else. Engine files are
+    // listed from disk so adding a module does not need a test edit, but a
+    // stray file (a test, a lockfile, the rest of fixtures/) fails here.
+    const engineFiles = (await readdir(new URL('../../packages/core/src', import.meta.url), { recursive: true, withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.posix.join('engine', path.relative(fileURLToPath(new URL('../../packages/core/src', import.meta.url)), path.join(entry.parentPath, entry.name)).split(path.sep).join('/')))
+    const expected = [
+      'LICENSE',
+      'README.md',
+      'bin/contextcake.mjs',
+      ...NPM_POLICY_FIXTURES.map((name) => `fixtures/${name}`),
+      'package.json',
+      ...engineFiles,
+    ].sort()
+    assert.deepEqual(names, expected)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

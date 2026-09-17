@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: Flags and output shapes for resolver, doctor, profiles, Packs, ingest, write, promote, and mcp-server.
+description: Flags and output shapes for resolver, doctor, profiles, sources, settings, concept and file queries, Packs, ingest, write, promote, and mcp-server.
 ---
 
 Every tool is a standalone Node.js script run with `node <tool>.mjs`. The engine is
@@ -75,20 +75,91 @@ cannot become an agent directive. Selection is fixed for that process lifetime.
 Inspects and manages local Project Profiles without opening source adapters:
 
 ```bash
-contextcake profile current [--profile <id>] [--json]
+contextcake profile current [--profile <id>] [--cwd <path>] [--json]
 contextcake profile list [--json]
+contextcake profile show [<id>] [--json]
 contextcake profile create <label> [--project <path>]
+contextcake profile rename <id> <label>
+contextcake profile clone <id> <label>
 contextcake profile map <id> <path>
 contextcake profile unmap <path>
 contextcake profile delete <id> [--confirm]
+contextcake profile purge-state <id> [--confirm]
 ```
 
 `current` reports the selected id, label, reason, and matched root when one
-applies. `create` is the deliberate migration point for a flat manifest and
-returns the verified backup path. Project folders are canonicalized locally and
-never synced. `delete` refuses `default`, previews affected mappings and Pack
-assignments, and requires `--confirm`; it removes references but never source,
-Pack, overlay, cache, or live-repository files.
+applies. `show` adds the profile's sources, pending sources, mappings, Packs,
+and state folder. `create` is the deliberate migration point for a flat
+manifest and returns the verified backup path. `rename` changes the label, never
+the id. `clone` copies sources and Pack assignments but not mappings or state;
+MCP sources in the copy stay pending until configured on this machine. Project
+folders are canonicalized locally and never synced. `delete` refuses `default`,
+previews affected mappings and Pack assignments, and requires `--confirm`; it
+removes references but never source, Pack, overlay, cache, or live-repository
+files, and it moves the profile's state folder aside rather than deleting it.
+`purge-state --confirm` deletes that folder once no profile owns the id.
+
+Commands that change the manifest accept `--expect-revision sha256:…` and
+refuse with exit 4 if the manifest changed since you read that revision.
+
+### Output and exit codes
+
+Through `contextcake`, `--json` prints one JSON envelope rather than the bare
+result: `{ schemaVersion, ok, command, context, data, warnings, nextActions }`,
+with the old result under `data` and a typed `error` when `ok` is false. Exit
+codes follow `contextcake help --json`: `2` for invalid input (including an
+unknown flag), `3` not found, and `4` when a command needs `--confirm` (so a
+`delete` preview exits 4). This is a deliberate pre-1.0 change for the
+`contextcake` command. `node profile.mjs` from a checkout keeps the bare JSON
+and its old exit codes.
+
+## source
+
+Manages the selected profile's sources. Experimental.
+
+```bash
+contextcake source list [--json]
+contextcake source show <name>
+contextcake source add <name> --path <folder> [--kind okf-local|files] [--level <n> | --position <n>]
+contextcake source add <name> --repo <owner/name> [--ref <ref>] [--include <path>] [--token-env <NAME>]
+contextcake source add <name> --kind git --repo <owner/name or URL> [--ref <ref>] [--subdir <path>]
+contextcake source add <name> --command <executable> --trusted [-- <args>...]
+contextcake source update <name> [--path <folder>] [--rename <new>] [--level <n>]
+contextcake source level <name> <level>
+contextcake source reorder <name>...
+contextcake source remove <name>...
+contextcake source test [<name>...]
+contextcake source sync <name>
+contextcake source prune [--confirm]
+contextcake source pending-list
+contextcake source pending-configure <name> [--path <folder>] [--command <executable> --trusted] [--token-env <NAME> [--api-base <url>]]
+contextcake source pending-dismiss <name>...
+```
+
+`list` and `show` never open a source, and list an invalid entry as a row with
+its error. `add` checks a folder exists, a public repo answers, and an MCP
+command answers `tools/list`; it does not index. An MCP source runs its command
+as you, so `add` needs `--trusted` and always warns. `reorder` takes every
+source in the profile, first wins, and refuses while an invalid entry exists.
+`remove` refuses to save while other invalid entries remain; name them all.
+`remove` keeps a managed clone; `prune --confirm` deletes clones no source uses,
+and never one with changed, untracked, or ignored files, a stash, an unfinished
+merge, or commits no remote has. `test` reads each source once and exits 6 if
+any could not be read. `pending-configure` shows where a GitHub source reads
+from; to give it a token when that is not `api.github.com`, restate the address
+with `--api-base`.
+
+## settings
+
+```bash
+contextcake settings list [--json]
+contextcake settings get <key>
+contextcake settings set <key> <value>
+contextcake settings reset <key>... | --all
+```
+
+A value stored in the manifest wins over its environment variable, which wins
+over the default. `list` and `get` report which one applied. Experimental.
 
 ## ingest.mjs
 
@@ -220,23 +291,51 @@ Provide either `--event` or `--demo`.
 node classify-context.mjs --demo
 ```
 
-## contextcake doctor
+## contextcake concept and file
 
-The desktop CLI's focused diagnostic command begins in ContextCake 0.9.0. It
-uses the app's default manifest unless `--manifest` is supplied:
+Reads the selected profile's knowledge the way the app and MCP do. These
+commands are experimental.
 
 ```bash
-contextcake doctor [--manifest <file>] [--profile <id>] [--json]
+contextcake concept list [--type <type>] [--json]
+contextcake concept search <query> [--type <type>] [--source <name>] [--limit <n>] [--json]
+contextcake concept read <id> [--json]
+contextcake concept links <id> [--json]
+contextcake file list [--json]
+contextcake file read <layer>/<path> [--json]
 ```
 
-Checks configuration, effective limits, local folder presence, and device-local
-collector availability. Remote/executable sources are marked not probed. This is a
-fresh run, not the app's private in-memory history. The dependency-free equivalent
-is `node packages/core/src/doctor.mjs --manifest <file> --json`; it reports local
-observability as not checked. See [diagnostics](/docs/guides/diagnostics).
+`search` ranks like the app's search box (at most 50 hits). `read` returns the
+resolved concept with provenance, per-section `conflicts[]`, and
+`fresherDissent`; without `--json` it prints the same markdown MCP `read_file`
+returns. `links` matches MCP `get_links`. `file read` only reads inside a folder
+source's root and exits 5 for a path that leaves it.
 
-The full source/settings administration and query command families remain planned
-control-plane increments. Existing resolve and MCP commands remain available.
+Each accepts `--profile`, `--cwd`, and `--timeout`. When a source cannot be read
+(a missing folder, an unreachable remote, an invalid layer) the command still
+answers from the rest, exits 0, and names the source in `coverage.degraded`. Pass
+`--require-complete` to exit 6 instead.
+
+## contextcake doctor
+
+A fresh, bounded check of this machine. It uses the default manifest unless
+`--manifest` is supplied, and it runs even when no manifest exists:
+
+```bash
+contextcake doctor [--manifest <file>] [--profile <id>] [--cwd <path>] [--json]
+```
+
+Checks the manifest and any invalid layers, the selected profile, whether each
+folder or remote source can be reached, whether the config, data, and cache
+folders are writable, and every `contextcake` on `PATH` with the version its install
+files record (doctor never runs them). It warns when more than one install is on
+`PATH` or when the first one has a different version than the CLI you ran, since a
+harness runs whichever comes first. MCP sources are never started, and GitHub
+sources whose credential is in the app's keychain are not contacted; both are
+listed as not probed and do not count against `--require-complete`. The Mac
+app's CLI also checks device-local collector availability. A failed check exits
+8, with the report in `error.details` and fix commands in `nextActions`. See
+[diagnostics](/docs/guides/diagnostics).
 
 ## Related
 

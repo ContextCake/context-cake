@@ -1,7 +1,8 @@
 #!/bin/sh
-# ContextCake CLI shim. Installed as a symlink at /usr/local/bin/contextcake;
-# resolves back into the app bundle it ships inside, so app updates update the
-# CLI automatically and uninstalling the app leaves only a dangling link.
+# ContextCake CLI shim. Installed as a symlink (/usr/local/bin/contextcake on
+# macOS, ~/.local/bin/contextcake on Linux); resolves back into the app it ships
+# inside, so app updates update the CLI automatically and uninstalling the app
+# leaves only a dangling link.
 resolve_link() {
   target="$1"
   while [ -L "$target" ]; do
@@ -16,19 +17,24 @@ resolve_link() {
 }
 
 # macOS' BSD readlink has no -f. Resolve Homebrew's and the app menu's symlink
-# explicitly so both installation routes can find ContextCake.app.
+# explicitly so both installation routes can find the app.
 SELF_PATH="$(resolve_link "$0")" || {
   echo "contextcake: cannot resolve command path" >&2
   exit 1
 }
-BIN_DIR="$(cd "$(dirname "$SELF_PATH")" && pwd -P)"          # …/Contents/Resources/bin
-RESOURCES="$(dirname "$BIN_DIR")"                             # …/Contents/Resources
-CONTENTS="$(dirname "$RESOURCES")"                            # …/Contents
-ELECTRON="$CONTENTS/MacOS/ContextCake"
+BIN_DIR="$(cd "$(dirname "$SELF_PATH")" && pwd -P)"          # …/Resources/bin or /opt/ContextCake/resources/bin
+RESOURCES="$(dirname "$BIN_DIR")"                             # …/Contents/Resources or /opt/ContextCake/resources
+APP_DIR="$(dirname "$RESOURCES")"                             # …/Contents or /opt/ContextCake
 
-if [ ! -x "$ELECTRON" ]; then
-  echo "contextcake: cannot find ContextCake.app (looked at $ELECTRON)" >&2
-  echo "Reinstall the app, then run 'Install Command Line Tool…' from the app menu." >&2
+# ContextCake.app keeps its binary in Contents/MacOS. The Linux .deb keeps it
+# beside resources/, under the package's executable name.
+if [ -x "$APP_DIR/MacOS/ContextCake" ]; then
+  ELECTRON="$APP_DIR/MacOS/ContextCake"
+elif [ -x "$APP_DIR/contextcake-desktop" ]; then
+  ELECTRON="$APP_DIR/contextcake-desktop"
+else
+  echo "contextcake: cannot find the ContextCake app (looked in $APP_DIR/MacOS and $APP_DIR)" >&2
+  echo "Reinstall the app, then run 'Install Command Line Tool…' from its menu." >&2
   exit 1
 fi
 

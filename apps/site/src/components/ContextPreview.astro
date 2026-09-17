@@ -3,29 +3,50 @@
 import demo from '../data/demo-cascade.json';
 const concept = demo.concepts.find((item) => item.id === 'decisions/primary-db');
 if (!concept) throw new Error('Homepage requires demo concept decisions/primary-db');
-const sections = ['choice', 'analytics', 'ownership'].map((key) => {
+const sections = ['choice', 'rationale', 'ownership'].map((key) => {
   const section = concept.sections.find((item) => item.key === key && !item.suppressed);
   if (!section?.content.trim()) throw new Error(`Homepage demo section ${key} is missing`);
   return section;
 });
-const labels = { choice: 'Database choice', analytics: 'Analytics store', ownership: 'Ownership' };
+const labels = { choice: 'Application database', rationale: 'Why analytics is separate', ownership: 'Who owns it' };
 const names = { personal: 'Personal', team: 'Team', company: 'Company' };
-const sentence = (text: string) => text.replace(/\s+/g, ' ').trim().match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() ?? text;
-const conflict = sections[0].conflicts?.[0];
+const reasons = {
+  choice: 'Highest-priority version',
+  rationale: 'Inherited from Team',
+  ownership: 'Inherited from Company',
+};
+const sentenceCount = { choice: 1, rationale: 1, ownership: 1 };
+const excerpt = (text: string, count = 1) => {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return normalized.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.slice(0, count).join(' ').trim() ?? normalized;
+};
+const priorities = [...concept.contributors].sort((a, b) => b.level - a.level);
 ---
 <figure class="context-preview">
-  <div class="preview-top"><span class="preview-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>ContextCake</span><span class="example-label">Example context</span></div>
-  <div class="preview-heading"><h2>Which database should I use?</h2><code>{concept.id}</code></div>
-  <div class="preview-sections">
-    {sections.map((section) => (
-      <div class="context-section" style={`--source-color: var(--cc-layer-${section.sourceLayer})`}>
-        <div class="section-meta"><h3>{labels[section.key]}</h3><span>{names[section.sourceLayer]} {section.sourceUpdated && <time datetime={section.sourceUpdated}>· {section.sourceUpdated}</time>}</span></div>
-        <p>{section.key === 'choice' ? section.content : sentence(section.content)}</p>
-      </div>
-    ))}
+  <div class="preview-top"><span class="preview-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>ContextCake</span><span class="example-label">Worked example</span></div>
+  <div class="preview-heading"><span>Question</span><h2>What database setup should this service use?</h2><code>{concept.id}</code></div>
+  <div class="priority">
+    <div class="priority-heading"><strong>This example uses source priority</strong><span>Highest first · section by section</span></div>
+    <ol>
+      {priorities.map((source, index) => (
+        <li style={`--source-color: var(--cc-layer-${source.layer})`}><span>{index + 1}</span><i aria-hidden="true"></i>{names[source.layer]}</li>
+      ))}
+    </ol>
   </div>
-  {conflict && <div class="context-conflict"><div><span aria-hidden="true">↳</span><strong>Another source differs</strong><span>{names[conflict.layer]} · {conflict.updated && <time datetime={conflict.updated}>{conflict.updated}</time>}</span></div><p>{conflict.content}</p></div>}
-  <figcaption>Real resolver output, excerpted from the bundled demo.<br />Each section keeps its source. Conflicts travel with it.</figcaption>
+  <div class="preview-answer">
+    <strong class="answer-label">Combined answer</strong>
+    <div class="preview-sections">
+      {sections.map((section) => (
+        <section class="context-section" style={`--source-color: var(--cc-layer-${section.sourceLayer})`}>
+          <div class="section-meta"><h3>{labels[section.key]}</h3><span class="source-badge"><i aria-hidden="true"></i>{names[section.sourceLayer]}</span></div>
+          <p>{excerpt(section.content, sentenceCount[section.key])}</p>
+          <div class="section-reason"><span>{reasons[section.key]}</span>{section.sourceUpdated && <time datetime={section.sourceUpdated}>{section.sourceUpdated}</time>}</div>
+          {section.key === 'rationale' && section.conflicts?.[0] && <aside class="context-conflict"><div><strong>{names[section.conflicts[0].layer]} has a different version</strong><span>Disagreement kept with this section</span></div><p>{excerpt(section.conflicts[0].content)}</p></aside>}
+        </section>
+      ))}
+    </div>
+  </div>
+  <figcaption>Actual resolver output from the bundled demo. Here, higher-priority sources win only the sections they define; the rest falls through.</figcaption>
 </figure>
 <style>
 	.context-preview {
@@ -73,7 +94,14 @@ const conflict = sections[0].conflicts?.[0];
 		font-weight: 400;
 	}
 	.preview-heading {
-		padding: 22px 24px 14px;
+		padding: 20px 24px 16px;
+	}
+	.preview-heading > span {
+		display: block;
+		margin-bottom: 5px;
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--cc-text-muted);
 	}
 	.preview-heading h2 {
 		margin: 0 0 5px;
@@ -86,14 +114,76 @@ const conflict = sections[0].conflicts?.[0];
 		font: 11px/1.5 var(--cc-font-mono);
 		color: var(--cc-text-muted);
 	}
+	.priority {
+		padding: 13px 24px 15px;
+		border-block: 1px solid var(--cc-border);
+		background: var(--cc-surface-soft);
+	}
+	.priority-heading {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 8px 16px;
+		margin-bottom: 10px;
+		font-size: 11px;
+	}
+	.priority-heading strong {
+		color: var(--cc-text);
+		font-weight: 600;
+	}
+	.priority-heading span {
+		color: var(--cc-text-muted);
+	}
+	.priority ol {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 7px;
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+	.priority li {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		min-width: 0;
+		padding: 7px 9px;
+		border: 1px solid var(--cc-border);
+		border-radius: 6px;
+		background: var(--cc-surface-solid);
+		color: var(--cc-text-body);
+		font-size: 11px;
+		font-weight: 600;
+	}
+	.priority li > span {
+		color: var(--cc-text-muted);
+		font: 10px/1 var(--cc-font-mono);
+	}
+	.priority li > i,
+	.source-badge i {
+		width: 7px;
+		height: 7px;
+		flex: 0 0 auto;
+		border-radius: 50%;
+		background: var(--source-color);
+	}
+	.preview-answer {
+		padding-top: 15px;
+	}
+	.answer-label {
+		display: block;
+		padding: 0 24px;
+		color: var(--cc-text);
+		font-size: 12px;
+	}
 	.preview-sections {
 		padding: 0 24px;
 	}
 	.context-section {
-		padding: 12px 0 12px 15px;
-		border-left: 3px solid var(--source-color);
-		margin: 9px 0;
+		padding: 14px 0;
+		border-bottom: 1px solid var(--cc-border);
 	}
+	.context-section:last-child { border-bottom: 0; }
 	.section-meta {
 		display: flex;
 		justify-content: space-between;
@@ -106,9 +196,13 @@ const conflict = sections[0].conflicts?.[0];
 		font-size: 13px;
 		font-weight: 600;
 	}
-	.section-meta > span {
-		font: 11px/1.6 var(--cc-font-mono);
-		color: var(--cc-text-muted);
+	.source-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--cc-text-body);
 	}
 	.context-section p {
 		margin: 5px 0 0;
@@ -116,27 +210,37 @@ const conflict = sections[0].conflicts?.[0];
 		line-height: 1.55;
 		text-wrap: pretty;
 	}
+	.section-reason {
+		display: flex;
+		justify-content: space-between;
+		gap: 8px 16px;
+		margin-top: 6px;
+		color: var(--cc-text-muted);
+		font-size: 10px;
+	}
+	.section-reason time {
+		font-family: var(--cc-font-mono);
+	}
 	.context-conflict {
-		margin: 16px 24px 20px;
-		padding: 12px 14px;
+		margin-top: 11px;
+		padding: 10px 12px;
 		border: 1px solid color-mix(in srgb, var(--cc-conflict) 45%, var(--cc-border));
 		border-radius: 6px;
 		background: color-mix(in srgb, var(--cc-conflict) 7%, var(--cc-surface-solid));
 	}
 	.context-conflict > div {
 		display: flex;
+		justify-content: space-between;
 		flex-wrap: wrap;
-		align-items: baseline;
-		gap: 4px 8px;
-		font-size: 12px;
+		gap: 3px 10px;
+		font-size: 11px;
 		color: var(--cc-text);
 	}
-	.context-conflict > div > span:last-child {
+	.context-conflict > div > span {
 		color: var(--cc-text-muted);
-		font: 11px/1.5 var(--cc-font-mono);
 	}
 	.context-conflict p {
-		font-size: 13px;
+		font-size: 12px;
 		line-height: 1.5;
 		margin: 5px 0 0;
 	}
@@ -157,14 +261,24 @@ const conflict = sections[0].conflicts?.[0];
 		.preview-heading h2 {
 			font-size: 21px;
 		}
-		.preview-sections {
+		.priority {
 			padding-inline: 18px;
 		}
-		.context-section {
-			padding-left: 11px;
+		.priority-heading {
+			display: block;
 		}
-		.context-conflict {
-			margin-inline: 18px;
+		.priority-heading span {
+			display: block;
+			margin-top: 2px;
+		}
+		.priority ol {
+			grid-template-columns: 1fr;
+		}
+		.answer-label {
+			padding-inline: 18px;
+		}
+		.preview-sections {
+			padding-inline: 18px;
 		}
 		figcaption {
 			padding-inline: 18px;

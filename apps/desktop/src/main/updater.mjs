@@ -7,23 +7,23 @@ import electronUpdater from 'electron-updater'
 import { readSettings } from './settings.mjs'
 import { statSync } from 'node:fs'
 import path from 'node:path'
-import { readPackageType } from './package-type.mjs'
 
 const { autoUpdater } = electronUpdater
 const SIX_HOURS = 6 * 60 * 60 * 1000
 
-// ---- Package-managed installs (.deb) ----------------------------------------
+// ---- Self-update is macOS only ---------------------------------------------
 //
-// A .deb belongs to the system's package manager. electron-updater's
-// DebUpdater would download the next .deb and run `dpkg -i` through pkexec or
-// sudo, which is neither ours to do nor verified against a key we hold
-// (distribution design §11.4). So when electron-builder recorded the install
-// as a deb, the updater only checks: it never downloads, never installs on
-// quit, and reports `available` with a link to the release instead.
-const NOTIFY_ONLY_PACKAGES = new Set(['deb'])
-
+// Only the macOS app installs its own updates: a zip whose Developer ID
+// signature Squirrel checks. Everywhere else the updater only checks. A .deb
+// belongs to the package manager, and electron-updater's Linux updaters
+// (DebUpdater, RpmUpdater, PacmanUpdater) would download the next package and
+// install it through pkexec or sudo, verified against no key we hold
+// (distribution design §11.4). Gating on the platform rather than on
+// `resources/package-type` means a future Linux target cannot reach those
+// installers by accident. Notify-only builds never download, never install on
+// quit, and report `available` with a link to the release.
 function notifyOnly() {
-  return app.isPackaged && NOTIFY_ONLY_PACKAGES.has(readPackageType(process.resourcesPath))
+  return app.isPackaged && process.platform !== 'darwin'
 }
 
 export function releaseUrl(version) {
@@ -145,7 +145,7 @@ export async function checkInteractive(win) {
       const { response } = await dialog.showMessageBox(win, {
         type: 'info',
         message: `ContextCake ${latest} is available.`,
-        detail: 'This copy was installed from a .deb package, so your package manager installs updates. Download the new package, then install it the way you installed this one.',
+        detail: 'ContextCake does not install updates on this system. Download the new package, then install it the way you installed this one.',
         buttons: ['Open Download Page', 'Later'],
         defaultId: 0,
         cancelId: 1,

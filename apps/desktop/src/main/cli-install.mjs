@@ -2,12 +2,11 @@
 // pattern): /usr/local/bin on macOS, ~/.local/bin on Linux (no sudo). We only
 // ever write a symlink pointing at the installed app; the shim itself ships
 // inside the app's resources and is replaced by updates automatically.
-import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { app, clipboard, dialog } from 'electron'
 import { enginePaths } from './paths.mjs'
-import { cliLinkPath, inspectCliStatus, isOnPath } from './cli-status.mjs'
+import { cliLinkPath, inspectCliStatus, isOnPath, replaceCliLink } from './cli-status.mjs'
 
 export function getCliStatus() {
   return inspectCliStatus({
@@ -81,14 +80,9 @@ export async function installCli(win, { showSuccess = true } = {}) {
   }
 
   try {
-    fs.mkdirSync(linkDir, { recursive: true })
-    try {
-      // Replace only things that are already symlinks; never clobber a real file.
-      if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link)
-    } catch {
-      // ENOENT — nothing there, proceed.
-    }
-    fs.symlinkSync(cliShim, link)
+    // Re-checks the link right before replacing it (cli-status.mjs); a link
+    // that changed into something other than a ContextCake shim throws EEXIST.
+    replaceCliLink({ cliShim, link })
     const installed = getCliStatus()
     // A GUI session's PATH is fixed at login. ~/.local/bin is added by
     // ~/.profile only if it existed then, so a folder this install just

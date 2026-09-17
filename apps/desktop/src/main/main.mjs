@@ -35,7 +35,7 @@ import { createTrustedWindowRegistry, trustedRolesForChannel } from './trusted-w
 import { getCliStatus, installCli } from './cli-install.mjs'
 import { reportFirstLaunch } from './install-metrics.mjs'
 import { readPackageType } from './package-type.mjs'
-import { checkUserDataDir, pinnedUserDataDir } from './user-data.mjs'
+import { checkUserDataDir, pinEnv, pinnedUserDataDir } from './user-data.mjs'
 import { manifestLayerCount, shouldDeferConsentPrompt } from './metrics-consent.mjs'
 import { PALETTE_ID, changedPreferencePatch } from './preferences.mjs'
 import { applyUiStatePatch, normalizeUiState } from './ui-state.mjs'
@@ -110,7 +110,7 @@ app.setName('ContextCake')
 function engineConfigDir() {
   const require = createRequire(import.meta.url)
   const { resolvePaths } = require(path.join(enginePaths().engineSrc, 'platform-paths.mjs'))
-  return resolvePaths().config
+  return resolvePaths({ env: pinEnv(process.env) }).config
 }
 
 // Linux only: Electron's default (~/.config/ContextCake) is not the engine's
@@ -143,8 +143,13 @@ if (lostSingleInstanceLock) {
 
 // Deep-link scheme for OAuth callbacks (specs/contextcake-auth/spec.md).
 // Registered for packaged builds only — in dev it would bind the bare
-// Electron binary system-wide.
-if (app.isPackaged) {
+// Electron binary system-wide. macOS only: it delivers the URL through
+// `open-url`. On Linux the URL arrives in argv (first launch) or in
+// `second-instance`'s argv, and nothing parses either yet, so registering
+// there would claim the scheme without handling it (and a second instance that
+// lost the lock would still shell out to xdg-settings). The .deb's .desktop
+// entry already declares the MimeType; add argv handling before registering.
+if (app.isPackaged && process.platform === 'darwin') {
   app.setAsDefaultProtocolClient('contextcake')
 }
 
@@ -160,6 +165,12 @@ const trustedWindows = createTrustedWindowRegistry(() => service?.origin)
 // ~/Library/Logs.
 let engineLog = null
 let engineLogOpened = false
+
+// "~/…" reads better in Settings than the expanded home folder.
+function displayPath(dir) {
+  const home = app.getPath('home')
+  return dir === home || dir.startsWith(`${home}${path.sep}`) ? `~${dir.slice(home.length)}` : dir
+}
 
 function engineLogDir() {
   return process.env.CC_ENGINE_LOG_DIR || app.getPath('logs')
@@ -1328,6 +1339,11 @@ function rendererArguments(preferences, uiState, role) {
   return [
     `--cc-window-role=${role}`,
     `--cc-version=${app.getVersion()}`,
+    // Where settings and the engine log live, as Settings shows them. Resolved
+    // here because only the main process knows the pinned userData and any
+    // CC_ENGINE_LOG_DIR / XDG override.
+    `--cc-config-dir=${encodeURIComponent(displayPath(configDir()))}`,
+    `--cc-logs-dir=${encodeURIComponent(displayPath(engineLogDir()))}`,
     `--cc-signed-in=${currentAuthState().signedIn ? '1' : '0'}`,
     `--cc-theme=${preferences.theme}`,
     `--cc-palette=${preferences.palette}`,

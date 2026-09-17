@@ -2,8 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { desktopDataPaths, fileManagerName, isApplePlatform, isMacDesktop, shortcut, thisDevice } from './platform'
 
-function desktop(platform?: string) {
-  window.__CC_DESKTOP = { getApiToken: async () => 't', version: '0', authState: { signedIn: false }, cli: { getStatus: vi.fn(), install: vi.fn() }, ...(platform ? { platform } : {}) }
+function desktop(platform?: string, paths?: { config: string; logs: string }) {
+  window.__CC_DESKTOP = { getApiToken: async () => 't', version: '0', authState: { signedIn: false }, cli: { getStatus: vi.fn(), install: vi.fn() }, ...(platform ? { platform } : {}), ...(paths ? { paths } : {}) }
 }
 
 afterEach(() => {
@@ -13,14 +13,15 @@ afterEach(() => {
 
 describe('platform', () => {
   it('the Linux app gets Ctrl shortcuts, Files, XDG paths, and no Mac wording', () => {
-    desktop('linux')
+    desktop('linux', { config: '~/cfg/contextcake', logs: '~/cfg/contextcake/logs' })
     expect(isApplePlatform()).toBe(false)
     expect(isMacDesktop()).toBe(false)
     expect(shortcut('K')).toBe('Ctrl+K')
     expect(shortcut('F', { shift: true })).toBe('Ctrl+Shift+F')
     expect(fileManagerName()).toBe('Files')
     expect(thisDevice()).toBe('this computer')
-    expect(desktopDataPaths()).toEqual({ config: '~/.config/contextcake', logs: '~/.config/contextcake/logs' })
+    // The main process's answer, including an XDG_CONFIG_HOME override, never a guess.
+    expect(desktopDataPaths()).toEqual({ config: '~/cfg/contextcake', logs: '~/cfg/contextcake/logs' })
   })
 
   it('the Mac app, and an older app that predates the platform field, keep the Mac wording', () => {

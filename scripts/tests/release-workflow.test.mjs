@@ -212,7 +212,9 @@ test('build-linux builds, hashes, installs, and smokes the .deb with the sandbox
   assert.match(stepNamed('build-linux', 'Upload Linux artifacts').text, /name: desktop-linux[\s\S]*retention-days: 1\n/)
   const cleanup = jobs['remove-dry-run-deb']
   assert.deepEqual(cleanup.needs, ['build-linux', 'publish'])
-  assert.equal(cleanup.if, "always() && github.event_name != 'push'")
+  // Every outcome, pushes included: an unsigned or failed tag push must not
+  // keep an installable .deb either.
+  assert.equal(cleanup.if, 'always()')
   assert.match(cleanup.text, /select\(\.name == "desktop-linux"\)[\s\S]*gh api --method DELETE/)
   assert.match(stepNamed('publish', 'Upload inspection artifacts (unsigned build)').text, /!release-dist\/\*\.deb/)
 

@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { StoreProvider } from './store'
 import { ThemeModeProvider } from './theme-mode'
-import { shortcut } from './platform'
 
 let container: HTMLDivElement
 let root: Root
@@ -22,6 +21,9 @@ function button(label: string): HTMLButtonElement {
 
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  // Shortcut labels follow the platform; pin a Mac so they read the same on
+  // every CI runner. The Linux labels have their own test below.
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
   window.history.replaceState(null, '', '/?mode=demo#/canvas')
   window.localStorage.clear()
   delete window.__CC_DESKTOP
@@ -36,6 +38,7 @@ afterEach(async () => {
   delete window.__CC_DESKTOP
   container.remove()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   document.documentElement.removeAttribute('data-theme')
 })
 
@@ -224,6 +227,26 @@ describe('Mac-first application shell', () => {
     expect(document.body.style.userSelect).toBe('')
   })
 
+  it.each([
+    ['a Mac browser', 'MacIntel', undefined, 'Settings⌘,', '⇧⌘A'],
+    ['a Linux browser', 'Linux x86_64', undefined, 'SettingsCtrl+,', 'Ctrl+Shift+A'],
+    ['the Linux desktop app', 'MacIntel', 'linux', 'SettingsCtrl+,', 'Ctrl+Shift+A'],
+  ])('labels shortcuts for %s', async (_name, navigatorPlatform, desktopPlatform, settingsLabel, askShortcut) => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(navigatorPlatform)
+    if (desktopPlatform) {
+      window.__CC_DESKTOP = { getApiToken: async () => 'token', version: '0.0.0', platform: desktopPlatform, authState: { signedIn: false }, cli: { getStatus: vi.fn(), install: vi.fn() } }
+    }
+    await act(async () => root.render(
+      <ThemeModeProvider>
+        <StoreProvider><App /></StoreProvider>
+      </ThemeModeProvider>,
+    ))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(button(settingsLabel)).toBeTruthy()
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })) })
+    expect(container.textContent).toContain(askShortcut)
+  })
+
   it('keeps the app shell mounted and restores visible focus when Settings closes', async () => {
     await act(async () => root.render(
       <ThemeModeProvider>
@@ -234,7 +257,7 @@ describe('Mac-first application shell', () => {
 
     const shell = container.querySelector('.cc-app-shell')
     expect(shell).toBeTruthy()
-    const settings = button(`Settings${shortcut(',')}`)
+    const settings = button('Settings⌘,')
     settings.getBoundingClientRect = () => ({
       x: -300, y: 0, left: -300, top: 0, right: -260, bottom: 40, width: 40, height: 40, toJSON: () => ({}),
     })
@@ -321,7 +344,7 @@ describe('Mac-first application shell', () => {
     }
     await act(async () => root.render(<ThemeModeProvider><StoreProvider><App /></StoreProvider></ThemeModeProvider>))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    await act(async () => button(`Settings${shortcut(',')}`).click())
+    await act(async () => button('Settings⌘,').click())
     expect(openSettings).toHaveBeenCalledWith()
     expect(container.querySelector('.cc-settings-screen')).toBeNull()
   })
@@ -336,7 +359,7 @@ describe('Mac-first application shell', () => {
 
     await act(async () => button('Use with agent').click())
     expect(container.querySelector('[aria-label="Ask ContextCake"]')).toBeTruthy()
-    await act(async () => button(`Settings${shortcut(',')}`).click())
+    await act(async () => button('Settings⌘,').click())
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))

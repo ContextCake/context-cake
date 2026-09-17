@@ -616,6 +616,7 @@ describe('SettingsView', () => {
       getApiToken: vi.fn().mockResolvedValue('token'),
       version: '0.0.0-test',
       platform: 'linux',
+      paths: { config: '~/.config/contextcake', logs: '~/.config/contextcake/logs' },
       windowRole: 'settings',
       authState: { signedIn: false, available: false },
       preferences: preferences(),

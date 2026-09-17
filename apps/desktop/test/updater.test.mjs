@@ -17,6 +17,12 @@ register(`data:text/javascript,${encodeURIComponent(`
   }
 `)}`)
 
+// Only macOS installs updates itself. Every test picks the platform it means,
+// so the file passes the same way on a Linux or macOS runner.
+const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+const setPlatform = (value) => Object.defineProperty(process, 'platform', { ...realPlatform, value })
+setPlatform('darwin')
+
 const resources = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-updater-'))
 const originalResources = process.resourcesPath
 process.resourcesPath = resources
@@ -24,6 +30,7 @@ const updater = await import('../src/main/updater.mjs')
 test.after(() => {
   app.emit('before-quit')
   process.resourcesPath = originalResources
+  Object.defineProperty(process, 'platform', realPlatform)
   fs.rmSync(resources, { recursive: true, force: true })
 })
 
@@ -66,6 +73,7 @@ test('release metadata enables normal events, scheduled checks, manual checks an
 
 test('a .deb install only checks: no download, no install on quit, and a link to the release', async () => {
   // electron-builder writes package-type into a deb's resources.
+  setPlatform('linux')
   fs.writeFileSync(path.join(resources, 'package-type'), 'deb')
   const notifications = []
   updater.registerRendererUpdates((channel, status) => notifications.push(status))
@@ -103,12 +111,34 @@ test('a .deb install only checks: no download, no install on quit, and a link to
     dialogAnswer.response = 1
     feed.latest = '0.7.5'
     fs.rmSync(path.join(resources, 'package-type'))
+    setPlatform('darwin')
   }
 
   // Without the marker the same app self-updates again.
   await updater.checkForUpdatesFromRenderer()
   assert.equal(autoUpdater.autoDownload, true)
   assert.equal(autoUpdater.autoInstallOnAppQuit, true)
+})
+
+test('every non-macOS build only notifies, whatever package it came from', async () => {
+  // An rpm, pacman, or AppImage target must never reach electron-updater's
+  // pkexec installers, and neither may a Linux build with no package-type.
+  for (const packageType of ['rpm', 'pacman', null]) {
+    setPlatform('linux')
+    if (packageType) fs.writeFileSync(path.join(resources, 'package-type'), packageType)
+    try {
+      autoUpdater.autoDownload = true
+      autoUpdater.autoInstallOnAppQuit = true
+      await updater.checkForUpdatesFromRenderer()
+      assert.equal(autoUpdater.autoDownload, false, `${packageType}: no download`)
+      assert.equal(autoUpdater.autoInstallOnAppQuit, false, `${packageType}: no install on quit`)
+    } finally {
+      setPlatform('darwin')
+      fs.rmSync(path.join(resources, 'package-type'), { force: true })
+    }
+  }
+  await updater.checkForUpdatesFromRenderer()
+  assert.equal(autoUpdater.autoDownload, true)
 })
 
 test('unpackaged development builds remain unsupported even with metadata', async () => {

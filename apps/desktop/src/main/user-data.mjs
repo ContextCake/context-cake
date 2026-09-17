@@ -16,10 +16,24 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+/**
+ * The environment the pin resolves against. app.setPath throws on a relative
+ * path, and it runs before `ready`, so a relative CONTEXTCAKE_CONFIG_DIR would
+ * kill the app with no window and no dialog. The pin ignores one, the same way
+ * the engine already ignores a relative XDG_CONFIG_HOME.
+ */
+export function pinEnv(env) {
+  const value = env.CONTEXTCAKE_CONFIG_DIR
+  if (!value || path.isAbsolute(value)) return env
+  const { CONTEXTCAKE_CONFIG_DIR: _ignored, ...rest } = env
+  return rest
+}
+
 /** The directory to pass to app.setPath('userData'), or null to leave Electron's default. */
 export function pinnedUserDataDir({ platform, userDataSwitch, resolveConfigDir }) {
   if (platform !== 'linux' || userDataSwitch) return null
-  return resolveConfigDir()
+  const dir = resolveConfigDir()
+  return path.isAbsolute(dir) ? dir : null
 }
 
 function samePath(a, b) {
@@ -33,10 +47,8 @@ function samePath(a, b) {
  */
 export function checkUserDataDir({ actual, platform, userDataSwitch, resolveConfigDir }) {
   if (userDataSwitch) return { ok: samePath(actual, userDataSwitch), expected: userDataSwitch }
-  if (platform === 'linux') {
-    const expected = resolveConfigDir()
-    return { ok: samePath(actual, expected), expected }
-  }
+  const pinned = pinnedUserDataDir({ platform, userDataSwitch, resolveConfigDir })
+  if (pinned) return { ok: samePath(actual, pinned), expected: pinned }
   // macOS: app.setName('ContextCake') decides the folder name, and the
   // engine's darwin branch reads the same one.
   return { ok: path.basename(actual) === 'ContextCake', expected: '…/ContextCake' }

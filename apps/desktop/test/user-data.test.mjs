@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { checkUserDataDir, pinnedUserDataDir } from '../src/main/user-data.mjs'
+import { checkUserDataDir, pinEnv, pinnedUserDataDir } from '../src/main/user-data.mjs'
 import { resolvePaths } from '../../../packages/core/src/platform-paths.mjs'
 
 const linuxConfig = () => resolvePaths({ platform: 'linux', env: {}, homedir: '/home/ada' }).config
@@ -46,4 +46,20 @@ test('the smoke check compares against the switch, then the Linux config dir, th
 
   assert.equal(checkUserDataDir({ actual: '/Users/ada/Library/Application Support/ContextCake', platform: 'darwin', userDataSwitch: '' }).ok, true)
   assert.equal(checkUserDataDir({ actual: '/Users/ada/Library/Application Support/contextcake-desktop', platform: 'darwin', userDataSwitch: '' }).ok, false)
+})
+
+test('a relative CONTEXTCAKE_CONFIG_DIR is ignored by the pin instead of crashing app.setPath', () => {
+  const env = { CONTEXTCAKE_CONFIG_DIR: 'relative/cfg', XDG_CONFIG_HOME: '/srv/cfg', PATH: '/usr/bin' }
+  const filtered = pinEnv(env)
+  assert.equal(filtered.CONTEXTCAKE_CONFIG_DIR, undefined)
+  assert.equal(filtered.XDG_CONFIG_HOME, '/srv/cfg')
+  assert.equal(env.CONTEXTCAKE_CONFIG_DIR, 'relative/cfg', 'the process env is not modified')
+  const resolveConfigDir = () => resolvePaths({ platform: 'linux', env: pinEnv(env), homedir: '/home/ada' }).config
+  assert.equal(pinnedUserDataDir({ platform: 'linux', userDataSwitch: '', resolveConfigDir }), '/srv/cfg/contextcake')
+  // An absolute override still wins.
+  assert.equal(pinEnv({ CONTEXTCAKE_CONFIG_DIR: '/abs/cfg' }).CONTEXTCAKE_CONFIG_DIR, '/abs/cfg')
+})
+
+test('the pin never hands app.setPath a relative path', () => {
+  assert.equal(pinnedUserDataDir({ platform: 'linux', userDataSwitch: '', resolveConfigDir: () => 'still/relative' }), null)
 })

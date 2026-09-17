@@ -108,6 +108,76 @@ test('corrupt JSON inside a decryptable file is set aside the same way', (t) => 
   assert.equal(fs.readdirSync(configDir).length, 1)
 })
 
+test('memory-only mode never deletes an encrypted file an earlier keyring session wrote', (t) => {
+  const configDir = tempDir(t)
+  const safeStorage = fakeSafeStorage({ backend: 'gnome_libsecret' })
+  createEncryptedStorage({ configDir, safeStorage, fileName: 'tokens.enc' }).setItem('a', 'from-keyring-session')
+  const file = path.join(configDir, 'tokens.enc')
+  const original = fs.readFileSync(file)
+
+  // Next launch finds no keyring.
+  safeStorage.state.backend = 'basic_text'
+  const storage = createEncryptedStorage({ configDir, safeStorage, fileName: 'tokens.enc' })
+  storage.setItem('b', 'memory-only')
+  storage.removeItem('b')
+  assert.deepEqual(fs.readFileSync(file), original)
+  storage.clear()
+  assert.deepEqual(fs.readFileSync(file), original)
+
+  // The same through the GitHub broker: add, then remove the last connection.
+  const connections = createGithubConnections({ configDir, safeStorage })
+  connections.add({ login: 'octocat', token: TOKEN })
+  assert.equal(connections.remove('github.com/octocat'), true)
+  assert.deepEqual(fs.readFileSync(file), original)
+
+  // With the keyring back, the earlier value is still there.
+  safeStorage.state.backend = 'gnome_libsecret'
+  assert.equal(createEncryptedStorage({ configDir, safeStorage, fileName: 'tokens.enc' }).getItem('a'), 'from-keyring-session')
+})
+
+test('a write is refused when an unreadable file could not be moved aside', (t) => {
+  const configDir = tempDir(t)
+  const safeStorage = fakeSafeStorage({ backend: 'gnome_libsecret' })
+  const stamp = new Date('2026-09-17T01:02:03.456Z')
+  const storage = createEncryptedStorage({ configDir, safeStorage, fileName: 'tokens.enc', now: () => stamp })
+  storage.setItem('a', 'first')
+  const original = fs.readFileSync(path.join(configDir, 'tokens.enc'))
+  safeStorage.state.key = 'k2'
+
+  // Something already occupies the aside name, so the rename fails.
+  const blocker = path.join(configDir, 'tokens.enc.unreadable-2026-09-17T01-02-03-456Z')
+  fs.mkdirSync(blocker)
+  fs.writeFileSync(path.join(blocker, 'x'), 'x')
+  assert.throws(() => storage.setItem('b', 'second'), /could not be moved aside/)
+  assert.deepEqual(fs.readFileSync(path.join(configDir, 'tokens.enc')), original)
+
+  // Once the name is free the next write sets the file aside and proceeds.
+  fs.rmSync(blocker, { recursive: true })
+  storage.setItem('b', 'second')
+  assert.deepEqual(fs.readFileSync(blocker), original)
+  assert.equal(storage.getItem('b'), 'second')
+})
+
+test('at most three unreadable copies are kept, oldest removed first', (t) => {
+  const configDir = tempDir(t)
+  const safeStorage = fakeSafeStorage({ backend: 'gnome_libsecret' })
+  let clock = Date.parse('2026-09-17T00:00:00.000Z')
+  const storage = createEncryptedStorage({ configDir, safeStorage, fileName: 'tokens.enc', now: () => new Date(clock) })
+  for (let round = 1; round <= 5; round += 1) {
+    safeStorage.state.key = `k${round}`
+    storage.setItem('a', `round ${round}`)
+    safeStorage.state.key = `other${round}`
+    clock += 60_000
+    assert.equal(storage.getItem('a'), null)
+  }
+  const aside = fs.readdirSync(configDir).filter((name) => name.startsWith('tokens.enc.unreadable-')).sort()
+  assert.deepEqual(aside, [
+    'tokens.enc.unreadable-2026-09-17T00-03-00-000Z',
+    'tokens.enc.unreadable-2026-09-17T00-04-00-000Z',
+    'tokens.enc.unreadable-2026-09-17T00-05-00-000Z',
+  ])
+})
+
 test('GitHub connections report whether they will survive a restart', (t) => {
   const configDir = tempDir(t)
   const keyring = createGithubConnections({ configDir, safeStorage: fakeSafeStorage({ backend: 'gnome_libsecret' }) })

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { cliLinkPath, inspectCliStatus, isOnPath } from '../src/main/cli-status.mjs'
+import { cliLinkPath, inspectCliStatus, isOnPath, replaceCliLink } from '../src/main/cli-status.mjs'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'contextcake-cli-status-'))
 
@@ -114,23 +114,38 @@ try {
     assert.equal(inspectCliStatus({ ...linux, isPackaged: true, cliShim: shim }).status, 'conflict')
     fs.unlinkSync(link)
 
-    // The first `contextcake` on PATH, and whether it is this app's shim.
-    const npmDir = path.join(tmp, 'npm-bin')
-    fs.mkdirSync(npmDir)
-    fs.symlinkSync(npmBin, path.join(npmDir, 'contextcake'))
-    fs.symlinkSync(shim, link)
-    const notExecutableDir = path.join(tmp, 'not-executable')
-    fs.mkdirSync(notExecutableDir)
-    fs.writeFileSync(path.join(notExecutableDir, 'contextcake'), 'text', { mode: 0o644 })
-
-    const npmFirst = inspectCliStatus({ ...linux, isPackaged: true, cliShim: shim, pathEnv: ['relative/bin', notExecutableDir, npmDir, path.dirname(link)].join(':') })
-    assert.deepEqual(npmFirst.onPath, { path: path.join(npmDir, 'contextcake'), isThisApp: false })
-    const appFirst = inspectCliStatus({ ...linux, isPackaged: true, cliShim: shim, pathEnv: [path.dirname(link), npmDir].join(':') })
-    assert.deepEqual(appFirst.onPath, { path: link, isThisApp: true })
-    assert.equal(inspectCliStatus({ ...linux, isPackaged: true, cliShim: shim, pathEnv: '/nowhere' }).onPath, null)
-
     assert.equal(isOnPath(path.dirname(link), { pathEnv: `/usr/bin:${path.dirname(link)}/`, platform: 'linux' }), true)
     assert.equal(isOnPath(path.dirname(link), { pathEnv: '/usr/bin:/bin', platform: 'linux' }), false)
+    assert.equal('onPath' in inspectCliStatus({ ...linux, isPackaged: true, cliShim: shim }), false)
+
+    // ---- replaceCliLink: the unlink path of installCli ----------------------
+    // Creates the link folder and the link when nothing is there.
+    fs.rmSync(path.dirname(link), { recursive: true, force: true })
+    replaceCliLink({ cliShim: shim, link })
+    assert.equal(fs.readlinkSync(link), shim)
+
+    // Replaces a link to another copy of the app, and a dangling link.
+    fs.unlinkSync(link)
+    fs.symlinkSync(otherShim, link)
+    replaceCliLink({ cliShim: shim, link })
+    assert.equal(fs.readlinkSync(link), shim)
+    fs.unlinkSync(link)
+    fs.symlinkSync(path.join(tmp, 'gone', 'contextcake'), link)
+    replaceCliLink({ cliShim: shim, link })
+    assert.equal(fs.readlinkSync(link), shim)
+
+    // The link changed after the status check (stale then) and now points at
+    // the npm CLI: it is re-read before unlinking and left alone.
+    fs.unlinkSync(link)
+    fs.symlinkSync(npmBin, link)
+    assert.throws(() => replaceCliLink({ cliShim: shim, link }), (error) => error.code === 'EEXIST')
+    assert.equal(fs.readlinkSync(link), npmBin)
+    fs.unlinkSync(link)
+
+    // A real file is never unlinked.
+    fs.writeFileSync(link, 'mine')
+    assert.throws(() => replaceCliLink({ cliShim: shim, link }), (error) => error.code === 'EEXIST')
+    assert.equal(fs.readFileSync(link, 'utf8'), 'mine')
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true })

@@ -17,7 +17,6 @@ export function inspectCliStatus({
   cliShim,
   platform = process.platform,
   link = cliLinkPath({ platform }),
-  pathEnv = process.env.PATH ?? '',
 }) {
   const result = classifyCliLink({ isPackaged, cliShim, link, platform })
   // The console builds every harness connect command from this absolute shim
@@ -27,7 +26,7 @@ export function inspectCliStatus({
   // (translocated/DMG) path vanishes when the app quits or the image unmounts;
   // both report null so an ephemeral path never reaches a harness config.
   const shimPath = isPackaged && result.status !== 'blocked' ? cliShim : null
-  return { ...result, shimPath, linkPath: link, onPath: firstOnPath({ pathEnv, cliShim, platform }) }
+  return { ...result, shimPath, linkPath: link }
 }
 
 function realpathOrNull(file) {
@@ -81,24 +80,25 @@ function classifyCliLink({ isPackaged, cliShim, link, platform }) {
   return { status: 'stale', message: 'The command-line tool points to another or unavailable ContextCake installation.' }
 }
 
-// The `contextcake` a terminal would run, and whether it is this app's shim.
-// A harness never uses it (it gets the absolute shim path), but a person typing
-// `contextcake` in a shell does, so Settings can say when those differ.
-function firstOnPath({ pathEnv, cliShim, platform }) {
-  const delimiter = platform === 'win32' ? ';' : ':'
-  const shim = realpathOrNull(cliShim)
-  for (const dir of String(pathEnv).split(delimiter)) {
-    if (!dir || !path.isAbsolute(dir)) continue
-    const candidate = path.join(dir, 'contextcake')
-    try {
-      const stat = fs.statSync(candidate)
-      if (!stat.isFile() || (stat.mode & 0o111) === 0) continue
-    } catch {
-      continue
+/**
+ * Point `link` at `cliShim`. The link is re-read here, immediately before any
+ * unlink, because it may have changed since the status check: only a link to
+ * some ContextCake app's shim, or a dangling link, is replaced. Anything else
+ * (a real file, an npm-installed CLI) throws EEXIST and is left as it is.
+ */
+export function replaceCliLink({ cliShim, link }) {
+  fs.mkdirSync(path.dirname(link), { recursive: true })
+  let stat = null
+  try { stat = fs.lstatSync(link) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+  if (stat) {
+    const target = stat.isSymbolicLink() ? realpathOrNull(link) : undefined
+    const replaceable = stat.isSymbolicLink() && (target === null || isAppShim(target))
+    if (!replaceable) {
+      throw Object.assign(new Error(`${link} is not a ContextCake link and was not replaced.`), { code: 'EEXIST' })
     }
-    return { path: candidate, isThisApp: shim !== null && realpathOrNull(candidate) === shim }
+    fs.unlinkSync(link)
   }
-  return null
+  fs.symlinkSync(cliShim, link)
 }
 
 /** True when `dir` is one of the PATH entries this process was started with. */

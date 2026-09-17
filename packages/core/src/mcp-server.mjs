@@ -16,12 +16,12 @@ import fsSync from "node:fs";
 import readline from "node:readline";
 import { normalizeId as normalizeIdPure } from "./markdown-links.mjs";
 import {
-  assembleMarkdown as assembleMarkdownShared, effectiveDiscrepancyRules, getLinks as getLinksShared,
+  assembleMarkdown as assembleMarkdownShared, decorateResolvedDispositions, effectiveDiscrepancyRules, getLinks as getLinksShared,
   listConcepts as listConceptsShared,
 } from "./concept-queries.mjs";
 import { resolveConcept } from "./resolver.mjs";
 import { createConflictResolutionLog } from "./conflict-resolutions.mjs";
-import { fingerprint, blockedContextResolutionKeys } from "./discrepancies.mjs";
+import { blockedContextResolutionKeys } from "./discrepancies.mjs";
 import { searchCaptures } from "./search.mjs";
 import { createRetainedSearch } from "./retained-search.mjs";
 import { resolveSettings } from "./settings.mjs";
@@ -593,26 +593,7 @@ async function applyRecordedContextResolution(resolved) {
 }
 
 async function decorateDiscrepancyDisposition(resolved) {
-  const decisions = discrepancyDecisions ? await discrepancyDecisions.list() : [];
-  for (const section of resolved.sections) {
-    if (!section.conflicts?.length) continue;
-    const discrepancyId = `section_content::${resolved.id}::${section.key}`;
-    const history = decisions.filter((row) => row.discrepancyId === discrepancyId || row.conflictId === `${resolved.id}::${section.key}`);
-    const latest = history.at(-1);
-    const contributions = [
-      { source: section.sourceLayer, fingerprint: fingerprint(section.content) },
-      ...section.conflicts.map((item) => ({ source: item.layer, fingerprint: fingerprint(item.content) })),
-    ];
-    const recorded = latest?.contributorFingerprints ?? [];
-    const unchanged = recorded.length === contributions.length
-      && recorded.map((item) => `${item.source}:${item.fingerprint}`).sort().every((value, index) => value === contributions.map((item) => `${item.source}:${item.fingerprint}`).sort()[index]);
-    section.discrepancy = {
-      id: discrepancyId,
-      status: latest?.action === "acknowledge" && unchanged ? "acknowledged" : latest ? "reopened" : "needs_review",
-      ...(latest?.id ? { decisionId: latest.id } : {}),
-      ...(latest?.reasonCode ? { reasonCode: latest.reasonCode } : {}),
-    };
-  }
+  decorateResolvedDispositions(resolved, discrepancyDecisions ? await discrepancyDecisions.list() : []);
 }
 
 async function listConcepts({ type } = {}) {

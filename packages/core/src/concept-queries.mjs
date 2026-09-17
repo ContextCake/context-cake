@@ -7,10 +7,10 @@
 // Nothing here ranks or merges: resolution stays in resolver.mjs and ranking
 // in search.mjs. `layers` is always an already-selected profile's adapters.
 
-import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isNewerDay } from "./conflict-policy.mjs";
+import { fingerprint } from "./discrepancies.mjs";
 import { parseRuleDocument } from "./discrepancy-rules.mjs";
 import { extractLinks, normalizeId, resolveLinkTarget } from "./markdown-links.mjs";
 import { resolveConcept } from "./resolver.mjs";
@@ -129,17 +129,19 @@ export async function effectiveDiscrepancyRules(ruleStore, liveLayerRoot = null)
     ...localRules.filter((rule) => !teamRules.some((team) => team.id === rule.id))];
 }
 
-// The discrepancy status `/api/resolve` attaches to each contested section,
-// from the latest recorded decision for it. Fingerprints hash the raw section
-// text, matching what the legacy conflict-resolution route records.
+// The discrepancy status /api/resolve and MCP read_file attach to each
+// contested section, from the latest recorded decision for it. Fingerprints use
+// discrepancies.mjs fingerprint(), the form control/discrepancies.mjs records.
+// (The legacy conflict-resolution route records raw hashes, but only on
+// choose_contribution records, which read "reopened" either way.)
 export function decorateResolvedDispositions(resolved, decisions) {
   for (const section of resolved.sections) {
     if (!section.conflicts?.length) continue;
     const id = `section_content::${resolved.id}::${section.key}`;
     const latest = decisions.filter((row) => row.discrepancyId === id || row.conflictId === `${resolved.id}::${section.key}`).at(-1);
     const current = [
-      { source: section.sourceLayer, fingerprint: createHash("sha256").update(section.content).digest("hex") },
-      ...section.conflicts.map((item) => ({ source: item.layer, fingerprint: createHash("sha256").update(item.content).digest("hex") })),
+      { source: section.sourceLayer, fingerprint: fingerprint(section.content) },
+      ...section.conflicts.map((item) => ({ source: item.layer, fingerprint: fingerprint(item.content) })),
     ].map((item) => `${item.source}:${item.fingerprint}`).sort();
     const recorded = (latest?.contributorFingerprints ?? []).map((item) => `${item.source}:${item.fingerprint}`).sort();
     const unchanged = recorded.length === current.length && recorded.every((value, index) => value === current[index]);

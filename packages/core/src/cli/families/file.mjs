@@ -8,8 +8,8 @@ import { selectProfileForRead } from "../read-selection.mjs";
 import { defineFamily } from "../table.mjs";
 
 function scope(ctx) {
-  const selection = selectProfileForRead(ctx);
-  return { manifestPath: ctx.manifestPath, profileId: selection.profileId };
+  const { selection, manifest, quarantined } = selectProfileForRead(ctx);
+  return { manifestPath: ctx.manifestPath, profileId: selection.profileId, manifest, quarantined, signal: ctx.signal };
 }
 
 export default defineFamily({

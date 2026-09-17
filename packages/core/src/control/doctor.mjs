@@ -15,7 +15,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { NOT_CHECKED } from "../doctor.mjs";
-import { readContextManifestQuarantined, selectManifestProfile } from "../manifest.mjs";
+import { manifestRevision, readContextManifestQuarantined, selectManifestProfile } from "../manifest.mjs";
 import { resolveSettings } from "../settings.mjs";
 import { buildSourcesQuarantined } from "../sources/index.mjs";
 import { withDeadline } from "./util.mjs";
@@ -32,12 +32,18 @@ function check(id, status, message, details = null) {
 }
 
 function readManifestState(manifestPath) {
-  if (!fs.existsSync(manifestPath)) return { status: "missing" };
+  if (!fs.existsSync(manifestPath)) return { status: "missing", revision: null };
+  let revision = null;
+  try {
+    revision = `sha256:${manifestRevision(JSON.parse(fs.readFileSync(manifestPath, "utf8")))}`;
+  } catch {
+    // Unparseable: the quarantined read below reports why.
+  }
   try {
     const { manifest, quarantined } = readContextManifestQuarantined(manifestPath, { allowMissing: false, validatePacks: false });
-    return { status: quarantined.length ? "quarantined" : "valid", manifest, quarantined };
+    return { status: quarantined.length ? "quarantined" : "valid", revision, manifest, quarantined };
   } catch (error) {
-    return { status: "invalid", error: error.message };
+    return { status: "invalid", revision, error: error.message };
   }
 }
 
@@ -50,11 +56,13 @@ async function probeLocal(root, remainingMs) {
   }
 }
 
-async function probeRemote(source, remainingMs) {
-  const signal = AbortSignal.timeout(Math.max(1, Math.min(REMOTE_PROBE_MS, remainingMs)));
+async function probeRemote(source, remainingMs, stop) {
+  const budget = AbortSignal.timeout(Math.max(1, Math.min(REMOTE_PROBE_MS, remainingMs)));
+  const signal = stop ? AbortSignal.any([budget, stop]) : budget;
   try {
     await source.listConceptIds({ signal, notes: { skipped: [], unreadable: [], hidden: 0 } });
   } catch (error) {
+    stop?.throwIfAborted();
     return { status: "unavailable", reason: error?.message ?? String(error) };
   }
   const health = source.health?.();
@@ -62,13 +70,14 @@ async function probeRemote(source, remainingMs) {
   return { status: "reachable" };
 }
 
-async function probeSources(runtimeManifest, manifestDir, profileId) {
+async function probeSources(runtimeManifest, manifestDir, profileId, stop) {
   const layers = runtimeManifest.layers ?? [];
   const sources = buildSourcesQuarantined(runtimeManifest, manifestDir, { profileId });
   const deadline = Date.now() + SOURCE_BUDGET_MS;
   try {
     const rows = [];
     for (const [index, layer] of layers.entries()) {
+      stop?.throwIfAborted();
       const kind = layer.source ?? "okf-local";
       const row = { name: layer.name, kind, level: layer.level };
       const remaining = deadline - Date.now();
@@ -79,7 +88,7 @@ async function probeSources(runtimeManifest, manifestDir, profileId) {
       } else if (kind === "mcp") {
         rows.push({ ...row, status: "not-probed", reason: "Doctor does not start executable sources." });
       } else {
-        rows.push({ ...row, ...(await probeRemote(sources[index], remaining)) });
+        rows.push({ ...row, ...(await probeRemote(sources[index], remaining, stop)) });
       }
     }
     return rows;
@@ -171,11 +180,12 @@ export async function findExecutables({ env, platform = process.platform, curren
 /**
  * options: manifestPath, requestedProfile, cwd, env, paths ({config,data,cache}),
  *   version (the running CLI's), entry (the running CLI's script path),
- *   observability (already probed by the caller), platform.
+ *   observability (already probed by the caller), platform, signal (stops
+ *   the probes when the command times out or is interrupted).
  */
 export async function runDoctor({
   manifestPath, requestedProfile = null, cwd, env, paths, version, entry = null,
-  observability = null, platform = process.platform,
+  observability = null, platform = process.platform, signal = null,
 }) {
   const checks = [];
   const suggestions = [];
@@ -223,7 +233,7 @@ export async function runDoctor({
       }
       const runtimeManifest = { layers: selection.layers, ...(state.manifest.settings ? { settings: state.manifest.settings } : {}) };
       settings = resolveSettings(runtimeManifest);
-      sources = await probeSources(runtimeManifest, path.dirname(path.resolve(manifestPath)), selection.profileId);
+      sources = await probeSources(runtimeManifest, path.dirname(path.resolve(manifestPath)), selection.profileId, signal);
       if (!sources.length) {
         checks.push(check("sources", "warn", `Profile ${selection.profileId} has no sources.`));
         suggest("source.add", "contextcake source add <name> --path <folder>", "Add a folder of Markdown as a source.");
@@ -306,6 +316,7 @@ export async function runDoctor({
   };
   return {
     report,
+    manifestRevision: state.revision,
     warnings,
     suggestions,
     coverage: {

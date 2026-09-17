@@ -2,7 +2,9 @@
 // read, and links over concepts, and list/read over layer files. The CLI's
 // `concept` and `file` families are shims over these.
 //
-// Every operation takes an immutable { manifestPath, profileId } and answers
+// Every operation takes an immutable scope { manifestPath, profileId } and
+// optionally the `manifest` (and its `quarantined` layers) the caller already
+// read, plus an AbortSignal that stops a timed-out or interrupted read. It answers
 // through the engine's own read paths: resolver.mjs for resolution,
 // retained-search.mjs (the search store MCP and the service use) for ranking,
 // concept-queries.mjs for the shapes MCP and /api/resolve return, and
@@ -41,15 +43,15 @@ const LOCAL_KINDS = new Set(["okf-local", "files"]);
  * The selected profile as the read path sees it. Same shape as
  * profile-runtime.mjs's loadProfileRuntime, plus `quarantined`: the layers of
  * this profile the manifest reader lifted out. The profile is re-selected by
- * id, so the caller's selection (and its reason) stays authoritative.
+ * id, so the caller's selection (and its reason) stays authoritative. A caller
+ * that already read the manifest passes it (already quarantined) and its
+ * `quarantined` list; otherwise it is read here.
  */
-export function loadReadRuntime({ manifestPath, profileId }) {
+export function loadReadRuntime({ manifestPath, profileId, manifest = null, quarantined = [] }) {
   const resolvedPath = path.resolve(manifestPath);
-  let manifest;
-  let quarantined;
   let selection;
   try {
-    ({ manifest, quarantined } = readContextManifestQuarantined(resolvedPath, { allowMissing: false, validatePacks: false }));
+    if (!manifest) ({ manifest, quarantined } = readContextManifestQuarantined(resolvedPath, { allowMissing: false, validatePacks: false }));
     selection = selectManifestProfile(manifest, { requestedProfile: profileId });
   } catch (error) {
     throw manifestControlError(error);
@@ -70,8 +72,8 @@ export function loadReadRuntime({ manifestPath, profileId }) {
  * child process). tokenEnv credentials resolve from the environment, as they
  * do for `contextcake mcp`.
  */
-export async function withReadSession({ manifestPath, profileId }, fn) {
-  const runtime = loadReadRuntime({ manifestPath, profileId });
+export async function withReadSession(scope, fn) {
+  const runtime = loadReadRuntime(scope);
   const sources = buildSourcesQuarantined(runtime.runtimeManifest, runtime.manifestDir, { profileId: runtime.selection.profileId });
   let liveLayer = null;
   try {
@@ -81,6 +83,7 @@ export async function withReadSession({ manifestPath, profileId }, fn) {
   }
   const session = {
     runtime,
+    signal: scope.signal ?? null,
     sources,
     liveLayer,
     profileId: runtime.selection.profileId,
@@ -103,6 +106,12 @@ function quarantinedRows(runtime) {
   }));
 }
 
+// The per-source time budget, cut short when the command is stopped.
+function budgetSignal(session) {
+  const budget = AbortSignal.timeout(session.settings.sourceBudgetMs);
+  return session.signal ? AbortSignal.any([budget, session.signal]) : budget;
+}
+
 function healthFailure(source) {
   const health = source.health?.();
   return health && health.ok === false && health.lastError ? String(health.lastError) : null;
@@ -118,8 +127,10 @@ export async function probeSourcesByListing(session) {
     const kind = session.kinds.get(source.name) ?? source.quarantinedKind ?? null;
     const notes = { skipped: [], unreadable: [], hidden: 0 };
     try {
-      await source.listConceptIds({ signal: AbortSignal.timeout(session.settings.sourceBudgetMs), notes });
+      await source.listConceptIds({ signal: budgetSignal(session), notes });
     } catch (error) {
+      // The command was stopped, not the source: do not blame the source.
+      session.signal?.throwIfAborted();
       return { name: source.name, kind, status: "unavailable", reason: error?.message ?? String(error) };
     }
     const failure = healthFailure(source);
@@ -198,9 +209,10 @@ async function hasRecordedResolutions(session) {
   return state.decisions.length > 0;
 }
 
-export async function listConceptsOperation({ manifestPath, profileId, type = null }) {
-  return withReadSession({ manifestPath, profileId }, async (session) => {
+export async function listConceptsOperation({ type = null, ...scope }) {
+  return withReadSession(scope, async (session) => {
     const rows = await probeSourcesByListing(session);
+    session.signal?.throwIfAborted();
     const concepts = await listConcepts(usableSources(session, rows), { type: type ?? undefined });
     return { data: concepts, coverage: coverageFrom(rows) };
   });
@@ -209,12 +221,13 @@ export async function listConceptsOperation({ manifestPath, profileId, type = nu
 // The answer /api/search gives: same store, same scorer, same filters. A
 // query with no searchable token finds nothing rather than failing, as the
 // HTTP route does.
-export async function searchConceptsOperation({ manifestPath, profileId, query, limit = 10, source = null, type = null }) {
+export async function searchConceptsOperation({ query, limit = 10, source = null, type = null, ...scope }) {
   if (typeof query !== "string" || !query.trim()) throw new ControlError("INVALID_INPUT", "Provide a search query.", { status: 400 });
   if (!Number.isInteger(limit) || limit <= 0) throw new ControlError("INVALID_INPUT", "--limit must be a positive integer.", { status: 400 });
   const cappedLimit = Math.min(limit, SEARCH_LIMIT_MAX);
-  return withReadSession({ manifestPath, profileId }, async (session) => {
+  return withReadSession(scope, async (session) => {
     const rows = await probeSourcesByListing(session);
+    session.signal?.throwIfAborted();
     const coverage = coverageFrom(rows);
     if (tokenizeQuery(query).length === 0) return { data: { hits: [] }, coverage };
     const layers = usableSources(session, rows);
@@ -237,11 +250,12 @@ export async function searchConceptsOperation({ manifestPath, profileId, query, 
 }
 
 // The answer /api/resolve gives, plus the markdown `read_file` renders.
-export async function readConceptOperation({ manifestPath, profileId, conceptId }) {
+export async function readConceptOperation({ conceptId, ...scope }) {
   const id = normalizeId(conceptId);
   if (!id) throw new ControlError("INVALID_INPUT", "Provide a concept id.", { status: 400 });
-  return withReadSession({ manifestPath, profileId }, async (session) => {
+  return withReadSession(scope, async (session) => {
     const resolved = await resolveConcept(id, session.sources);
+    session.signal?.throwIfAborted();
     // Reach first, then health: a remote failure surfaces during the read.
     let rows = await probeSourcesByReach(session);
     if (!resolved) throw notFound(id);
@@ -256,11 +270,12 @@ export async function readConceptOperation({ manifestPath, profileId, conceptId 
 }
 
 // The answer MCP `get_links` gives.
-export async function conceptLinksOperation({ manifestPath, profileId, conceptId }) {
+export async function conceptLinksOperation({ conceptId, ...scope }) {
   const id = normalizeId(conceptId);
   if (!id) throw new ControlError("INVALID_INPUT", "Provide a concept id.", { status: 400 });
-  return withReadSession({ manifestPath, profileId }, async (session) => {
+  return withReadSession(scope, async (session) => {
     const rows = await probeSourcesByListing(session);
+    session.signal?.throwIfAborted();
     const coverage = coverageFrom(rows);
     const layers = usableSources(session, rows);
     const resolved = await resolveConcept(id, layers);
@@ -284,8 +299,8 @@ function fileRoots(runtime) {
 }
 
 // The answer /api/files gives. Config-only: no adapter opens.
-export async function listFilesOperation({ manifestPath, profileId }) {
-  const runtime = loadReadRuntime({ manifestPath, profileId });
+export async function listFilesOperation(scope) {
+  const runtime = loadReadRuntime(scope);
   const data = await listFilesApi(fileRoots(runtime), walkLimitsFrom(resolveSettings(runtime.runtimeManifest)));
   const rows = data.layers.map((layer) => {
     if (layer.error) return { name: layer.layer, kind: layer.kind, status: "unavailable", reason: layer.error };
@@ -296,8 +311,8 @@ export async function listFilesOperation({ manifestPath, profileId }) {
 }
 
 // The answer /api/file gives, inside the same layer-root sandbox.
-export async function readFileOperation({ manifestPath, profileId, filePath }) {
-  const runtime = loadReadRuntime({ manifestPath, profileId });
+export async function readFileOperation({ filePath, ...scope }) {
+  const runtime = loadReadRuntime(scope);
   try {
     return { data: await readFileApi(filePath, fileRoots(runtime)) };
   } catch (error) {

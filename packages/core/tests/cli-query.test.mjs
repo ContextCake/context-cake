@@ -272,3 +272,10 @@ test("query commands are read-only, declare coverage, and need a manifest", asyn
   assert.equal(missing.exitCode, 3);
   assert.equal(missing.json.error.code, "MANIFEST_NOT_FOUND");
 });
+
+test("--timeout stops a query and exits 6", async (t) => {
+  const { home } = await fixture(t);
+  const result = await runContextcake(["concept", "list", "--timeout", "1", "--json"], home);
+  assert.equal(result.exitCode, 6, result.stdout);
+  assert.equal(result.json.error.code, "TIMEOUT");
+});

@@ -1,5 +1,5 @@
 // Spawned commands: the engine entrypoints that predate the command table
-// (mcp, resolve, ingest, write, promote, pack, doctor). They keep their own
+// (mcp, resolve, ingest, write, promote, pack). They keep their own
 // flags and raw output; the dispatcher only injects the default manifest,
 // guards `mcp`, and forwards the exit status.
 
@@ -45,7 +45,7 @@ export function guardMcpArgs(args) {
 // older entrypoints parse any unknown `--x` as taking the next argument, so
 // `write --json --dry-run` used to read `--dry-run` as the value of --json and
 // then write for real. Refuse them unless the entrypoint implements the flag
-// itself (spawn.globalFlags, e.g. doctor's --json). The scan ignores
+// itself (spawn.globalFlags). The scan ignores
 // position on purpose: a global flag's name is never a sensible value either.
 const DISPATCHER_FLAGS = ["json", "quiet", "timeout", "no-input", "expect-revision", "require-complete", "cwd"];
 

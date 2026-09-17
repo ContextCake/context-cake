@@ -499,9 +499,6 @@ test("spawned entrypoints never receive global flags they do not implement", asy
     if (result.json) assert.equal(result.json.error.code, code);
     else assert.match(result.stderr, code === "TIMEOUT_REFUSED" ? /timeout/ : /does not accept/);
   }
-  // doctor implements --json itself, so it passes through.
-  const doctor = TABLE.byId.get("doctor");
-  assert.deepEqual(prepareSpawnArgs(doctor, ["--json"], { manifestPath: home.manifestPath }), ["--manifest", home.manifestPath, "--json"]);
   // Position does not matter: the older parsers would swallow the next
   // argument either way. After `--` nothing is a flag.
   const write = TABLE.byId.get("write");

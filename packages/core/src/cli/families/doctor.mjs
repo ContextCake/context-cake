@@ -12,7 +12,6 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { ControlError } from "../../control/errors.mjs";
 import { runDoctor } from "../../control/doctor.mjs";
-import { currentManifestRevision } from "../context.mjs";
 import { ENGINE_SRC } from "../spawn.mjs";
 import { defineFamily } from "../table.mjs";
 
@@ -66,7 +65,7 @@ export default defineFamily({
       manifest: "optional",
       profile: true,
       coverage: true,
-      errors: ["UNHEALTHY_DIAGNOSTICS", "MANIFEST_NOT_V2"],
+      errors: ["UNHEALTHY_DIAGNOSTICS"],
       output: {
         type: "object",
         required: ["scope", "checkedAt", "healthy", "cli", "manifest", "profile", "settings", "sources", "directories", "executables", "observability", "checks"],
@@ -100,7 +99,7 @@ export default defineFamily({
       },
       async run(ctx) {
         const observability = await probeObservability(ctx);
-        const { report, warnings, suggestions, coverage } = await runDoctor({
+        const { report, manifestRevision, warnings, suggestions, coverage } = await runDoctor({
           manifestPath: ctx.manifestPath,
           requestedProfile: ctx.flags.profile ?? null,
           cwd: ctx.flags.cwd ? ctx.resolvePath(ctx.flags.cwd) : ctx.cwd,
@@ -109,9 +108,10 @@ export default defineFamily({
           version: ctx.hooks.version ?? null,
           entry: process.argv[1] ?? null,
           observability,
+          signal: ctx.signal,
         });
         ctx.setContext({
-          manifestRevision: currentManifestRevision(ctx.manifestPath),
+          manifestRevision,
           profileId: report.profile?.id ?? null,
           profileReason: report.profile?.reason ?? null,
         });

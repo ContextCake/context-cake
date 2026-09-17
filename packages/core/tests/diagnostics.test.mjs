@@ -1,10 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDiagnostics, safeEvent } from '../src/diagnostics.mjs';
-import { diagnose } from '../src/doctor.mjs';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -141,62 +137,13 @@ test('snapshot() reports a bounded retrieval summary from recorded search events
   assert.equal(snap.retrieval.lastSearch.candidateCount, 5);
   assert.equal(typeof snap.retrieval.lastSearch.at, 'number');
 });
-test('doctor distinguishes present folders, missing folders and unprobed executable sources', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'cc-doctor-'));
-  try {
-    const manifest = path.join(root, 'layers.json');
-    await writeFile(
-      manifest,
-      JSON.stringify({
-        layers: [
-          { name: 'local', source: 'files', path: root, level: 2 },
-          {
-            name: 'missing',
-            source: 'files',
-            path: path.join(root, 'absent'),
-            level: 1,
-          },
-        ],
-      }),
-    );
-    const r = await diagnose(manifest);
-    assert.equal(r.ok, false);
-    assert.equal(r.data, null);
-    assert.equal(r.error.code, 'UNHEALTHY_DIAGNOSTICS');
-    assert.match(r.context.manifestRevision, /^sha256:[a-f0-9]{64}$/);
-    assert.equal(r.error.details.scope, 'fresh-configuration-check');
-    assert.deepEqual(
-      r.error.details.sources.map((s) => s.status),
-      ['present', 'unavailable'],
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('doctor JSON errors follow CLI exit conventions without leaking exception text', () => {
+// The doctor checks themselves are covered by cli-doctor.test.mjs. What stays
+// here is the probe entry the Mac app's launcher imports: run bare, it reports
+// that nothing was checked, as one JSON line.
+test('the doctor observability probe prints one JSON line', () => {
   const entry = fileURLToPath(new URL('../src/doctor.mjs', import.meta.url));
-  for (const [args, exit, code] of [
-    [['--json', '--manifest'], 2, 'INVALID_INPUT'],
-    [['--manifest', '--json'], 2, 'INVALID_INPUT'],
-    [
-      [
-        '--json',
-        '--manifest',
-        '/private/tmp/cc-doctor-no-such-manifest-secret',
-      ],
-      3,
-      'NOT_FOUND',
-    ],
-  ]) {
-    const result = spawnSync(process.execPath, [entry, ...args], {
-      encoding: 'utf8',
-    });
-    assert.equal(result.status, exit);
-    const body = JSON.parse(result.stdout);
-    assert.equal(body.error.code, code);
-    assert.equal(body.schemaVersion, 1);
-    assert.equal(body.ok, false);
-    assert.ok(!result.stdout.includes('no-such-manifest-secret'));
-  }
+  const result = spawnSync(process.execPath, [entry], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).state, 'not-checked');
+  assert.equal(result.stdout.trim().split('\n').length, 1);
 });

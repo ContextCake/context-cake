@@ -1,6 +1,6 @@
 // The spawned entrypoints both CLIs shipped before the command table. They
 // keep their flags and raw output, so each is its own experimental family:
-// no envelope contract to freeze. When a family replaces one (doctor, say),
+// no envelope contract to freeze. When a family replaces one (as doctor did),
 // delete its entry here and register the new module in ./index.mjs.
 
 import { defineFamily } from "../table.mjs";
@@ -14,13 +14,6 @@ function spawned(name, summary, mutation, spawn) {
   });
 }
 
-export const doctor = spawned("doctor", "check profile configuration and source folders", "read", {
-  entry: "doctor.mjs",
-  manifest: "inject",
-  // doctor reports a missing manifest itself, as NOT_FOUND in its own JSON.
-  requireManifest: false,
-  globalFlags: ["json"],
-});
 export const mcp = spawned("mcp", "serve the resolved graph over stdio MCP", "serve", { entry: "mcp-server.mjs", manifest: "inject" });
 export const resolve = spawned("resolve", "resolve a concept across layers", "read", { entry: "resolver.mjs", manifest: "inject" });
 export const ingest = spawned("ingest", "classify repo events into signals", "write", { entry: "ingest.mjs", manifest: "none" });

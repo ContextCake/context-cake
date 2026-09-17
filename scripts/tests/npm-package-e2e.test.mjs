@@ -107,6 +107,17 @@ test('the packed npm tarball installs and runs help, init, and MCP with no app p
     manifest.profiles.default.layers.push({ name: 'notes', source: 'files', path: content, level: 1 })
     await writeFile(init.data.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
+    // The query family answers from the installed engine, search store included.
+    const search = JSON.parse(run(['concept', 'search', 'packed', '--json']))
+    assert.equal(search.ok, true)
+    assert.equal(search.data.hits[0]?.id, 'hello')
+    assert.equal(search.coverage.complete, true)
+    const read = JSON.parse(run(['concept', 'read', 'hello', '--json']))
+    assert.equal(read.ok, true)
+    assert.equal(read.data.id, 'hello')
+    assert.ok(read.data.sections.some((section) => section.content.includes('From the packed CLI.')))
+    assert.equal(read.data.contributors[0].layer, 'notes')
+
     const session = await mcpSession(bin, ['mcp'], env, [
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e', version: '0' } } },
       { jsonrpc: '2.0', id: 2, method: 'tools/list' },

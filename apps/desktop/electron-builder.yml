@@ -61,6 +61,29 @@ dmg:
   sign: false
   artifactName: "${productName}-${version}-${arch}.${ext}"
 
+# The linux-x64-deb row. Only a .deb: electron-builder's AppImage launcher adds
+# --no-sandbox on Ubuntu 24.04+, and the .deb installs an AppArmor profile that
+# keeps the sandbox on (design §11.4). ${arch} expands to "amd64" in a .deb
+# name. The executable keeps its default name (contextcake-desktop), so the
+# postinst's /usr/bin link never shadows the `contextcake` CLI. The package
+# needs a maintainer, which scripts/dist-linux.mjs passes in from
+# CC_DEB_MAINTAINER at build time; the repository never names one.
+linux:
+  category: Development
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  icon: build/icons
+  # desktopName in package.json names the .desktop entry and Electron's
+  # WM_CLASS; syncing them lets the desktop match windows to the launcher.
+  syncDesktopName: true
+  target:
+    - target: deb
+      arch: [x64]
+
+deb:
+  # The one-line summary apt shows; the long description is package.json's.
+  synopsis: ContextCake desktop app
+
+# `protocols` also becomes the .desktop entry's MimeType on Linux.
 protocols:
   - name: ContextCake
     schemes: [contextcake]

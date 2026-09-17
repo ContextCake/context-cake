@@ -111,6 +111,12 @@ const SUITES = [
   },
   {
     group: "release",
+    name: "npm-tarball",
+    command: process.execPath,
+    args: ["--test", "scripts/tests/verify-npm-tarball.test.mjs"],
+  },
+  {
+    group: "release",
     name: "release-surfaces",
     command: process.execPath,
     args: ["--test", "scripts/tests/app-release-sync.test.mjs", "scripts/tests/release-workflow.test.mjs", "scripts/tests/verify-release-surfaces.test.mjs", "scripts/tests/verify-commerce-hidden.test.mjs"],

@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
@@ -33,6 +34,8 @@ import { isEngineOrigin } from './navigation.mjs'
 import { createTrustedWindowRegistry, trustedRolesForChannel } from './trusted-windows.mjs'
 import { getCliStatus, installCli } from './cli-install.mjs'
 import { reportFirstLaunch } from './install-metrics.mjs'
+import { readPackageType } from './package-type.mjs'
+import { checkUserDataDir, pinnedUserDataDir } from './user-data.mjs'
 import { manifestLayerCount, shouldDeferConsentPrompt } from './metrics-consent.mjs'
 import { PALETTE_ID, changedPreferencePatch } from './preferences.mjs'
 import { applyUiStatePatch, normalizeUiState } from './ui-state.mjs'
@@ -100,8 +103,42 @@ process.on('unhandledRejection', handleFatal)
 // CONFIG_DIR, and package.json's productName identical.
 app.setName('ContextCake')
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit()
+// The engine's own answer for where config lives, so the app, the bundled CLI,
+// and the npm CLI all read one manifest. Loaded synchronously (require of an
+// ES module) because userData must be pinned before the single-instance lock
+// below reads it, and a top-level await would let `ready` fire first.
+function engineConfigDir() {
+  const require = createRequire(import.meta.url)
+  const { resolvePaths } = require(path.join(enginePaths().engineSrc, 'platform-paths.mjs'))
+  return resolvePaths().config
+}
+
+// Linux only: Electron's default (~/.config/ContextCake) is not the engine's
+// $XDG_CONFIG_HOME/contextcake. An explicit --user-data-dir wins, which is how
+// every spawned desktop test stays out of the real config dir (user-data.mjs).
+const userDataSwitch = app.commandLine.getSwitchValue('user-data-dir')
+const pinnedUserData = pinnedUserDataDir({
+  platform: process.platform,
+  userDataSwitch,
+  resolveConfigDir: engineConfigDir,
+})
+if (pinnedUserData) app.setPath('userData', pinnedUserData)
+
+// A second launch hands its window request to the running instance
+// (`second-instance` below) and quits. Registration below still runs, because
+// ESM has no top-level return; the startup in whenReady checks this flag so a
+// losing instance never starts an engine or opens a window.
+const lostSingleInstanceLock = !app.requestSingleInstanceLock()
+if (lostSingleInstanceLock) {
+  // A smoke run that yields to a running app proved nothing, so it fails
+  // loudly instead of exiting 0 with no output. Pass --user-data-dir to run
+  // one beside an installed app.
+  if (process.env.CC_SMOKE === '1') {
+    console.error(`SMOKE FAIL another ContextCake instance holds the lock for ${app.getPath('userData')}`)
+    app.exit(1)
+  } else {
+    app.quit()
+  }
 }
 
 // Deep-link scheme for OAuth callbacks (specs/contextcake-auth/spec.md).
@@ -785,6 +822,7 @@ function reportAnonymousFirstLaunch() {
     version: app.getVersion(),
     configDir: configDir(),
     metricsEnabled: true,
+    packageType: app.isPackaged ? readPackageType(process.resourcesPath) : undefined,
     signal: controller.signal,
   }).finally(() => {
     if (installMetricAbortController === controller) installMetricAbortController = null
@@ -923,7 +961,7 @@ async function handleDeepLink(url) {
 let githubConnections = null
 
 function connections() {
-  githubConnections ??= createGithubConnections({ configDir: configDir(), safeStorage })
+  githubConnections ??= createGithubConnections({ configDir: configDir(), safeStorage, isReady: () => app.isReady() })
   return githubConnections
 }
 
@@ -944,6 +982,9 @@ async function pushGithubTokens() {
 function registerIntegrationIpc() {
   const handle = handleTrustedIpc
   handle('integrations:list', () => connections().list())
+  // 'memory' means no usable OS keyring (Linux without one, or Chromium's
+  // fixed-key basic_text fallback): connections work until the app quits.
+  handle('integrations:storage', () => ({ mode: connections().storageMode() }))
   handle('integrations:add-token', async ({ token, host } = {}) => {
     // Verify before storing: it names the account (so the alias reflects the
     // real login) and turns a typo into a clear message instead of a layer
@@ -1889,10 +1930,17 @@ async function smokeCheck() {
     const [lag, latency] = await Promise.all([measureMainLoopLag(1200), measureEngineLatency(1200)])
     const res = await fetch(`${service.origin}/api/graph`, { headers: authHeaders })
     const unauth = await fetch(`${service.origin}/api/graph`)
-    // Guard the app-name/CLI agreement: userData must resolve under a dir named
-    // "ContextCake" so `contextcake mcp` finds the manifest the app wrote.
+    // Guard the app/CLI agreement: userData must be the folder `contextcake mcp`
+    // reads. That is the --user-data-dir a test passed, else the engine's config
+    // dir on Linux, else a macOS folder named "ContextCake" (user-data.mjs).
     const userDataName = path.basename(app.getPath('userData'))
-    const okName = userDataName === 'ContextCake'
+    const userDataCheck = checkUserDataDir({
+      actual: app.getPath('userData'),
+      platform: process.platform,
+      userDataSwitch,
+      resolveConfigDir: engineConfigDir,
+    })
+    const okName = userDataCheck.ok
     // The engine must know the heap ceiling it runs under (memoryDetail on
     // /api/status): the watermark that pauses indexing is computed against it,
     // and Electron gives us no way to raise it — so "the number is present and
@@ -1916,7 +1964,7 @@ async function smokeCheck() {
       exitAfterObservability(0)
     } else {
       console.error(
-        `SMOKE FAIL api=${res.status} unauth=${unauth.status} userData=${userDataName}`
+        `SMOKE FAIL api=${res.status} unauth=${unauth.status} userData=${app.getPath('userData')} expected=${userDataCheck.expected}`
         + ` heapDetail=${okHeapDetail} engineLog=${okEngineLog}`,
       )
       shutdownEngine()
@@ -1946,15 +1994,21 @@ app.on('open-url', (event, url) => {
 })
 
 app.whenReady().then(async () => {
+  if (lostSingleInstanceLock) return
   // Also gate initial frame loads and redirects, which navigation events alone
   // do not cover. The managed origin is read at request time after opt-in setup.
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     callback({ cancel: details.resourceType === 'subFrame'
       && !isEngineOrigin(details.url, localGrafana?.status().origin) })
   })
-  localGrafana = createLocalGrafana({ directory: configDir(), ...(app.isPackaged ? { provisioningPath: path.join(process.resourcesPath, 'engine', 'observability', 'provisioning') } : {}) })
-  await localGrafana.load()
-  void localGrafana.start()
+  // Local Grafana is a macOS feature for now: it expects Docker Desktop, and the
+  // console hides it elsewhere. With no stack, every observability IPC answers
+  // `unavailable`.
+  if (process.platform === 'darwin') {
+    localGrafana = createLocalGrafana({ directory: configDir(), ...(app.isPackaged ? { provisioningPath: path.join(process.resourcesPath, 'engine', 'observability', 'provisioning') } : {}) })
+    await localGrafana.load()
+    void localGrafana.start()
+  }
   nativeTheme.on('updated', () => sendToRenderer('preferences:changed', desktopPreferencesSnapshot()))
   await initializeAccounts()
   await createWindow()
@@ -1996,7 +2050,7 @@ app.whenReady().then(async () => {
 let mainWindowPending = null
 
 function ensureMainWindow() {
-  if (trustedWindows.windowForRole('main')) return Promise.resolve()
+  if (lostSingleInstanceLock || trustedWindows.windowForRole('main')) return Promise.resolve()
   mainWindowPending ??= createWindow().finally(() => { mainWindowPending = null })
   return mainWindowPending
 }

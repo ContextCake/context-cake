@@ -5,6 +5,8 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
+import { resolveSpawnCommand } from "../spawn-command.mjs";
+
 function spawnTrustedMcpCommand(command, args) {
   if (typeof command !== "string" || command.trim() === "" || command.includes("\0")) {
     throw new Error("MCP command must be a non-empty executable name or path");
@@ -16,12 +18,15 @@ function spawnTrustedMcpCommand(command, args) {
   // direct manifests are trusted configuration, and the mutation API requires
   // an explicit `trusted: true` acknowledgement before persisting a command.
   // `shell: false` keeps command/args as an argv vector, so metacharacters have
-  // no meaning unless the trusted command deliberately launches a shell.
+  // no meaning unless the trusted command deliberately launches a shell. The
+  // one exception is a Windows `.cmd`/`.bat` shim such as `npx`, which only
+  // runs under cmd.exe; resolveSpawnCommand escapes that line itself.
   // See apps/site/src/content/docs/docs/concepts/trust-boundary.md.
+  const launch = resolveSpawnCommand(command.trim(), args);
 
   // codeql[js/command-line-injection]
   // lgtm[js/command-line-injection]
-  return spawn(command.trim(), args, { stdio: ["pipe", "pipe", "inherit"], shell: false });
+  return spawn(launch.command, launch.args, { stdio: ["pipe", "pipe", "inherit"], shell: false, ...launch.options });
 }
 
 export function createMcpSource({ name, level, command, args = [], respawnCooldownMs = 3000 }) {

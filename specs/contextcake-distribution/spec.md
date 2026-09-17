@@ -6,6 +6,8 @@ Give ContextCake a way to be **downloaded, installed, set up, and kept current**
 **Status:** Approved — ready for design & implementation handoff (all open questions resolved)
 **Workflow:** Requirements-First (desired behavior known; architecture flexible)
 **Primary target:** macOS on Apple Silicon (arm64)
+**Amended 2026-09-16:** Intel Macs (x64) and Linux (`.deb`, x64) added as native targets; the CLI
+installs and works without the app on every platform. See §5 "Platforms" and the §8 amendment.
 **Depends on:** `specs/contextcake-core/design.md` (the engine being distributed)
 
 ---
@@ -28,6 +30,7 @@ surfaces we control — so users don't drift onto stale versions.
 - **Uniform update awareness** everywhere, with **self-applied "Relaunch to update"** on channels we own.
 - **One release → every channel**, from a single pipeline, with verified update integrity.
 - Native, first-class experience on **Apple Silicon MacBooks**.
+- *(Amended 2026-09-16)* Native builds for Intel Macs and Linux desktops, and a CLI that needs no app.
 
 ## 3. User Stories
 
@@ -68,6 +71,22 @@ surfaces we control — so users don't drift onto stale versions.
 - [ ] WHEN ContextCake is installed through any channel THE SYSTEM SHALL expose the **same core
   capabilities** (MCP server, CLI, GUI) backed by one engine.
 - [ ] WHEN installed on Apple Silicon THE SYSTEM SHALL run natively as arm64 without Rosetta.
+
+### Platforms (amended 2026-09-16)
+- [ ] WHEN an Intel Mac runs the app THE SYSTEM SHALL run natively as x64.
+- [ ] WHEN a Linux x64 user installs the app THE SYSTEM SHALL offer a `.deb` package that launches
+  with Chromium's sandbox enabled.
+- [ ] WHEN the CLI is installed from npm on a machine with no app present THE SYSTEM SHALL
+  initialize a manifest, add sources, and serve MCP.
+- [ ] WHEN the app and the CLI run on one machine THE SYSTEM SHALL resolve the same config directory.
+- [ ] WHEN a release publishes THE SYSTEM SHALL attach, for every row of the release platform
+  table, its installer, updater artifact, update feed, and SHA-256 line, or SHALL publish nothing.
+- [ ] WHEN the Linux app finds no OS keyring THE SYSTEM SHALL keep credentials in memory only and
+  say so in Settings.
+- [ ] WHEN a `.deb`-installed app finds a newer release THE SYSTEM SHALL notify with a download link
+  and SHALL NOT download or install it (a package-managed install, per §5 "Self-update").
+- [ ] WHEN the `.mcpb` bundle is installed in Claude Desktop on Windows THE SYSTEM SHALL start and
+  serve the read tools.
 
 ### First-run setup
 - [ ] WHEN ContextCake first runs with no existing configuration THE SYSTEM SHALL present an
@@ -136,9 +155,10 @@ surfaces we control — so users don't drift onto stale versions.
 
 ## 6. Out of Scope
 
-- **Windows / Linux native installers and self-update** — `npx`/npm remain incidentally
-  cross-platform, but double-click installers, notarization equivalents, and self-update are
-  **macOS-first** for v1.
+- ~~**Windows / Linux native installers and self-update**~~ **Amended 2026-09-16:** a Linux `.deb`
+  (x64) is in scope; it never self-updates. Still out of scope: a Windows desktop app, Linux
+  AppImage, `.rpm`, Linux arm64, and self-update on any non-macOS install. The npm CLI runs on
+  Windows best-effort (`specs/contextcake-control-plane/spec.md` §5.13).
 - **Multiple release channels** (beta/nightly) — single stable channel only for v1.
 - **Enterprise/MDM-managed `.mcpb` auto-update infrastructure** — deferred.
 - **Mac App Store** distribution — Developer ID direct distribution instead.
@@ -151,7 +171,8 @@ surfaces we control — so users don't drift onto stale versions.
 - ✅ **Always:** every "download-and-run" macOS artifact passes Gatekeeper cleanly before release.
 - ⚠️ **Ask first:** before adding an npm runtime dependency to the **core engine** (it stays
   dependency-free; the GUI/updater may carry their own stack); before adding a second release channel;
-  before expanding to non-macOS native installers.
+  before expanding to non-macOS native installers (the Linux `.deb` was approved 2026-09-16;
+  anything beyond it still needs asking).
 - 🚫 **Never:** apply an unverified/unsigned update; self-mutate a package manager's install; clobber
   user config/knowledge on update; ship an unnotarized binary to end users; commit signing keys; put
   real secrets/PII into installers, manifests, or fixtures.
@@ -196,12 +217,26 @@ allowlist — and update the site's `/install` "Why isn't this on npm?" section 
 - The GUI app and its self-updater can be **built and tested locally with ad-hoc/development signing**
   in the meantime, but MUST NOT be distributed to end users until notarized.
 
+**Amendment (2026-09-16): more platforms, and a CLI without the app.** Decided by John:
+
+- **Intel Mac:** a separate x64 DMG and zip beside the arm64 pair, signed and notarized with the
+  same Developer ID. Not universal2: each download stays single-architecture.
+- **Linux:** `.deb` for x64 only. AppImage is out for v1 for two reasons. electron-builder's
+  AppImage launcher adds `--no-sandbox` whenever unprivileged user namespaces are blocked, which is
+  the Ubuntu 24.04 default. And an AppImage self-update would be checked only against a hash from
+  the same release, which §5 "Integrity" forbids. The `.deb` keeps the sandbox through its AppArmor
+  profile and only notifies about updates.
+- **CLI without the app:** the npm package is the install route on macOS, Linux, and WSL. It ships
+  after control-plane Wave A, so a user with no app can create a manifest and add sources.
+- **Homebrew follows npm** once a tap repository exists, rather than shipping with it.
+- **Windows:** the `.mcpb` bundle and the CLI's read path only. No Windows desktop app.
+
 ## 9. Dependencies
 
 - `specs/contextcake-core/design.md` — the engine and its `layers.json` configuration contract.
 - **Apple Developer Program** — Developer ID signing + notarization service *(to be acquired — see §8)*.
 - A **host for the authoritative version source + release artifacts** (e.g. GitHub Releases).
-- **npm registry** (package `context-cake`), a **Homebrew tap** repo, the **MCPB toolchain** + the
+- **npm registry** (package `contextcake`, pointer `context-cake`), a **Homebrew tap** repo, the **MCPB toolchain** + the
   **MCP registry/directory**, and a **native desktop-app framework** (Tauri is the leading candidate)
   — final choices made in design.
 

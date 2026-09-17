@@ -288,6 +288,36 @@ test("restart equivalence: reopening on the same file re-analyzes nothing unless
   storeR2.close();
 });
 
+test("a store written under an older format re-analyzes every document even when file fingerprints match", async (t) => {
+  // Postings are reused by FILE fingerprint, which a parser change never
+  // touches. The format bump is the only thing that retires postings built by
+  // an older parse (v6: CRLF documents gained their frontmatter).
+  const { dir, file } = tempFile();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rand = mulberry32(0x5151);
+  let seq = 0;
+  const docs = new Map(Array.from({ length: 6 }, (_, i) => [`f-${i}`, makeConcept(rand, seq++)]));
+  const meta = new Map([...docs.keys()].map((id, i) => [id, { rel: `${id}.md`, ext: ".md", size: 100 + i, mtimeMs: 1000 + i, authoredDate: "2026-01-01" }]));
+  const viewFor = () => {
+    const snap = makeSnapshot([...docs]);
+    return { name: "vault", level: 3, gen: snap.gen, ids: snap.ids, concepts: snap.concepts, identity: "vault-identity", fileMeta: meta };
+  };
+
+  const first = createSearchStore({ file });
+  first.search([viewFor()], { query: "postgres", limit: 10 });
+  first.close();
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(file);
+  db.prepare("UPDATE meta SET value = '5' WHERE key = 'format'").run();
+  db.close();
+
+  const reopened = createSearchStore({ file });
+  t.after(() => reopened.close());
+  reopened.search([viewFor()], { query: "postgres", limit: 10 });
+  assert.equal(reopened.inspect().analyzed, docs.size, "an older-format store must rebuild, not reuse postings by file fingerprint");
+});
+
 test("identity change re-analyzes everything; a dropped layer disappears", async (t) => {
   const { dir, file } = tempFile();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

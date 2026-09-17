@@ -86,7 +86,13 @@ import { effectiveType } from "./resolver.mjs";
 // insert time) so a `type` filter reads three indexed columns per candidate
 // instead of parsing frontmatter JSON and running a full mergeConcepts per
 // candidate — see typeOf() below.
-const FORMAT_VERSION = 5;
+// v6 is a parser change, not a layout change: CRLF documents now keep their
+// frontmatter (frontmatter.mjs). Postings are reused by FILE fingerprint
+// (size/mtime), which a parser change never touches, so without the bump an
+// unchanged CRLF note would keep its old frontmatter-less postings and a
+// wrong `type` column until someone edited it. Bump again for any change to
+// what a document parses into.
+const FORMAT_VERSION = 6;
 // Documents per segment. Bigger segments mean fewer blobs to read per query
 // term and a better compression ratio for the per-term header cost; smaller
 // segments mean less bytes copied when the open segment's blob is appended

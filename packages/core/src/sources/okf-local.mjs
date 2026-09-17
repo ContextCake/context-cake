@@ -9,6 +9,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolveSettings, walkLimitsFrom } from "../settings.mjs";
 import { runGit } from "./git-core.mjs";
+import { splitFrontmatter } from "../frontmatter.mjs";
 
 // A read-path memo of the layer's git history must not outlive the history —
 // mcp-server is a session-lifetime process, so a boot-time snapshot would serve
@@ -350,13 +351,11 @@ export function stripAttrGroups(text) {
 }
 
 function parseFrontmatter(content) {
-  if (!content.startsWith("---\n")) return { frontmatter: {}, body: content };
-  const end = content.indexOf("\n---", 4);
-  if (end === -1) return { frontmatter: {}, body: content };
-  const raw = content.slice(4, end).trim();
-  const body = content.slice(end + 4).replace(/^\n/, "");
+  const fence = splitFrontmatter(content);
+  if (!fence) return { frontmatter: {}, body: content };
+  const body = fence.rest.replace(/^\r?\n/, "");
   const frontmatter = {};
-  for (const line of raw.split(/\r?\n/)) {
+  for (const line of fence.raw.trim().split(/\r?\n/)) {
     const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
     if (!match) continue;
     frontmatter[match[1]] = parseYamlScalar(match[2].trim());

@@ -63,9 +63,13 @@ technical documentation close to the claims they support.
 
 ### Install (`/install`)
 
-- [ ] WHEN a visitor loads `/install` THE SYSTEM SHALL present the signed, notarized Apple
+- [ ] ~~WHEN a visitor loads `/install` THE SYSTEM SHALL present the signed, notarized Apple
       silicon app as the primary action, followed by source setup for Intel Mac, Linux, and
-      WSL with Node.js 22 or newer.
+      WSL with Node.js 22 or newer.~~ *Amended 2026-09-16:*
+- [ ] WHEN a visitor loads `/install` THE SYSTEM SHALL list one download per row of the
+      release platform table (Apple silicon, Intel Mac, Linux `.deb`), each with its size and
+      checksum, and SHALL present the npm CLI as the route that needs no app (macOS, Linux,
+      WSL; Windows best-effort). Versioned source setup stays available for audits.
 - [ ] WHEN the page names a released artifact THE SYSTEM SHALL derive its version, URL,
       size, and checksum from the committed release record rather than placeholder copy.
 
@@ -97,6 +101,8 @@ technical documentation close to the claims they support.
 
 - ~~Distribution~~ **RESOLVED: signed Mac app first.** The Apple silicon app is the primary
   path. Tagged source remains available for Intel Mac, Linux, WSL, audits, and contributions.
+  *Amended 2026-09-16:* Intel Mac and Linux get native downloads, and the npm CLI replaces
+  source setup as the no-app route; source stays for audits and contributions.
   The engine remains dependency-free: no `npm install`, install scripts, or transitive deps.
 - ~~Domain~~ **RESOLVED 2026-07-02: `contextcake.com`** (registered; only the .com for
   now). Canonical URLs, OG tags, and the Cloudflare Pages custom domain all use it.

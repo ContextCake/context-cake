@@ -2,17 +2,15 @@
 // The standalone npm CLI carries the same dependency-free engine that ships in
 // ContextCake for Mac.  It intentionally has no install or lifecycle scripts.
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { resolvePaths } from '../engine/platform-paths.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const engine = path.resolve(here, '..', 'engine')
-const configDir = process.platform === 'darwin'
-  ? path.join(os.homedir(), 'Library', 'Application Support', 'ContextCake')
-  : path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'ContextCake')
-const defaultManifest = path.join(configDir, 'manifest.json')
+// Same answer the app and its bundled CLI use, so both find one manifest.
+const { manifest: defaultManifest } = resolvePaths()
 
 const commands = {
   mcp: { entry: 'mcp-server.mjs', manifest: true, blurb: 'serve the resolved graph over stdio MCP' },

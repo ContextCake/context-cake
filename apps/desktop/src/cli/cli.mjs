@@ -3,10 +3,9 @@
 // Runs under ELECTRON_RUN_AS_NODE via the shim in Resources/bin (packaged) or
 // plain `node` (dev checkout). Works with the app closed.
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { readCliVersion } from './version.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -23,11 +22,13 @@ function engineSrc() {
   process.exit(1)
 }
 
-// Must match the app's app.getPath('userData'), which is pinned to
-// "ContextCake" via app.setName in src/main/main.mjs. If you change one, change
-// both — otherwise `contextcake mcp` can't find the manifest the app wrote.
-const CONFIG_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'ContextCake')
-const DEFAULT_MANIFEST = path.join(CONFIG_DIR, 'manifest.json')
+// The engine's platform-paths.mjs is the one answer for where the manifest
+// lives, shared with the npm CLI. On macOS it must equal the app's
+// app.getPath('userData'), which is pinned to "ContextCake" via app.setName in
+// src/main/main.mjs — change one and `contextcake mcp` can't find the manifest
+// the app wrote.
+const { resolvePaths } = await import(pathToFileURL(path.join(engineSrc(), 'platform-paths.mjs')).href)
+const { config: CONFIG_DIR, manifest: DEFAULT_MANIFEST } = resolvePaths()
 
 const COMMANDS = {
   doctor: { entry: 'doctor.mjs', manifest: true, blurb: 'check profile configuration and source folders' },

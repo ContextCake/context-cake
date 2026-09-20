@@ -1,0 +1,17 @@
+{
+  "name": "contextcake",
+  "version": "0.0.0",
+  "description": "Name reservation for the ContextCake CLI. Install a released version.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ContextCake/context-cake.git"
+  },
+  "homepage": "https://contextcake.com",
+  "bugs": {
+    "url": "https://github.com/ContextCake/context-cake/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

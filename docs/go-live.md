@@ -124,8 +124,6 @@ Per release, after the `app-v*` release is public:
 
 1. Dispatch the workflow with the published tag:
    `gh workflow run npm-publish.yml --repo ContextCake/context-cake -f tag=app-vX.Y.Z`
-   (add `-f publish_pointer=true` only when the `context-cake` pointer needs the
-   same version).
 2. Approve the `npm-publish` environment gate. The approval is the point where a
    human confirms the tag, so it is never granted in advance.
 3. Confirm `npm view contextcake version` matches the release, and that
@@ -143,7 +141,7 @@ One-time setup, already done and recorded here so it can be audited or redone:
 - The `contextcake` npm account is a project role account on the project's `npm@`
   address, never a personal account, with 2FA required for authorization and
   writes.
-- Both names were reserved by hand-publishing `0.0.0` placeholders from
+- The name was reserved by hand-publishing a `0.0.0` placeholder from
   [`packages/npm/reserve/`](../packages/npm/reserve/README.md), because a trusted
   publisher can only be attached to a package that already exists. Those
   placeholders are deprecated once a real version ships.

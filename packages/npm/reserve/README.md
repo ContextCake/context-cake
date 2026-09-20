@@ -39,5 +39,5 @@ Deprecating is the right tool here, not unpublishing: npm allows unpublish only
 within 72 hours, and removing a version that something already resolved breaks
 that install. A deprecated version stays resolvable and warns on install.
 
-The full channel procedure, including who approves a publish, is in
+The full channel procedure, including both approval gates, is in
 [`docs/go-live.md`](../../../docs/go-live.md).

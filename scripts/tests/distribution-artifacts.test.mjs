@@ -130,6 +130,30 @@ test('npm staging package contains the CLI and engine but no lifecycle scripts',
   }
 })
 
+test('only the packages meant for the registry are publishable', async () => {
+  // The repo root is named `context-cake`, which is also a reserved package
+  // name, so a stray `npm publish` here would push the whole monorepo to the
+  // registry under a real name. `private: true` is what refuses it — and note
+  // that `npm publish --dry-run` ignores the field entirely, so a dry run is
+  // not evidence that the guard exists.
+  const manifests = (await readdir(new URL('../..', import.meta.url), { recursive: true, withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name === 'package.json')
+    .map((entry) => path.join(entry.parentPath, entry.name))
+    .filter((file) => !file.split(path.sep).includes('node_modules'))
+  const root = fileURLToPath(new URL('../..', import.meta.url))
+  const publishable = []
+  for (const file of manifests) {
+    const pkg = JSON.parse(await readFile(file, 'utf8'))
+    if (!pkg.private) publishable.push(path.relative(root, file).split(path.sep).join('/'))
+  }
+  assert.deepEqual(publishable.sort(), [
+    'packages/npm/context-cake/package.json',
+    'packages/npm/contextcake/package.json',
+    'packages/npm/reserve/context-cake/package.json',
+    'packages/npm/reserve/contextcake/package.json',
+  ])
+})
+
 test('staged npm CLI finds its default manifest through the shared platform paths', async () => {
   // The npm CLI used to carry its own config-dir guess, which answered
   // ~/.config on Windows while the app writes %APPDATA%. It now imports the

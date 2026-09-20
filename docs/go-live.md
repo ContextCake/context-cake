@@ -150,6 +150,12 @@ One-time setup, already done and recorded here so it can be audited or redone:
 - npmjs.com carries a trusted publisher for this repository, the
   `npm-publish.yml` workflow, and the `npm-publish` environment, with token
   publishing disallowed.
+- The `npm-publish` environment requires a maintainer's review **and** restricts
+  deployments to `main`. Both halves matter: npm's trusted-publisher record
+  names a repository, a workflow file, and an environment, but no ref, so
+  without the branch restriction a modified `npm-publish.yml` run from any
+  branch would still be handed the publishing credential. The `release`
+  environment is restricted the same way, to `main` and the `app-v*` tags.
 
 ### engine / MCP / CLI
 

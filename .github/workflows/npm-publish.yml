@@ -42,18 +42,24 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          case "$RELEASE_TAG" in
-            app-v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::tag must use app-vX.Y.Z"; exit 1 ;;
-          esac
+          # A shell glob would accept app-v1abc.2.3xyz ([0-9]* is one digit then
+          # anything). The tag decides which ref every later step trusts, so it
+          # is matched exactly here rather than downstream.
+          printf '%s' "$RELEASE_TAG" | grep -Eq '^app-v[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "::error::tag must use app-vX.Y.Z"; exit 1
+          }
 
+      # refs/tags/ is load-bearing. actions/checkout resolves an unqualified ref
+      # as a branch first and only then as a tag, so a branch named app-vX.Y.Z
+      # would supersede the signed tag and supply the verification scripts this
+      # job runs while holding the npm publishing credential.
       - name: Checkout exact release tag
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag }}
+          ref: refs/tags/${{ inputs.tag }}
 
       - name: Setup Node with npm registry
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -62,7 +68,7 @@ jobs:
       # (docs.npmjs.com/trusted-publishers). Node 22 bundles npm 10.
       - name: Upgrade npm for trusted publishing
         run: |
-          npm install --global --ignore-scripts npm@11
+          npm install --global --ignore-scripts npm@11.19.0
           node --input-type=module -e '
             import { execFileSync } from "node:child_process";
             const at = (v) => v.split(".").map(Number);
@@ -132,5 +138,17 @@ jobs:
             echo "context-cake@$VERSION is already published; nothing to do."
             exit 0
           fi
+          # Unlike contextcake, this package is built here rather than taken
+          # from the release, so its shape is asserted before it is published.
+          # --ignore-scripts only suppresses this machine's hooks; it does not
+          # stop a declared script from reaching consumers' install.
+          node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const pkg = JSON.parse(await readFile("package.json", "utf8"));
+            for (const field of ["scripts", "bin", "dependencies", "optionalDependencies", "peerDependencies"]) {
+              if (Object.keys(pkg[field] ?? {}).length) throw new Error(`pointer package declares ${field}`);
+            }
+            if (!Array.isArray(pkg.files) || pkg.files.length === 0) throw new Error("pointer package must declare files");
+          '
           npm pack --dry-run --ignore-scripts
           npm publish --ignore-scripts --provenance --access public

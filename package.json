@@ -1,5 +1,6 @@
 {
   "name": "context-cake",
+  "private": true,
   "version": "0.10.0",
   "description": "Federated team knowledge with cascading layer precedence — OKF-compatible, MCP-ready.",
   "type": "module",

@@ -2,7 +2,7 @@
 // so these checks are the last thing between that file and the registry.
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -62,6 +62,55 @@ test('a package with a lifecycle script is refused even when its checksum matche
   })
   try {
     await assert.rejects(verifyReleaseTarball({ tarball, sums, version }), /lifecycle script/)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('a package that declares dependencies is refused', async () => {
+  // A dependency runs its own install hooks on the consumer's machine, which is
+  // the outcome the lifecycle-script check exists to prevent, one indirection
+  // away. The engine is dependency-free, so this can be absolute.
+  const { dir, tarball, sums } = await packedRelease(async (staging) => {
+    const file = path.join(staging, 'package.json')
+    const pkg = JSON.parse(await readFile(file, 'utf8'))
+    pkg.dependencies = { 'left-pad': '1.3.0' }
+    await writeFile(file, JSON.stringify(pkg))
+  })
+  try {
+    await assert.rejects(verifyReleaseTarball({ tarball, sums, version }), /declares dependencies/)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('a tarball carrying a symlink is refused', async () => {
+  // Built with tar rather than `npm pack`, which does not preserve symlinks —
+  // which is the point: the verifier's job is to judge the bytes attached to a
+  // release, not to assume they came out of npm. `tar -tzf` lists names only,
+  // so a symlink reads as an ordinary file there; the verbose listing's type
+  // flag is what catches one pointing out of the extracted tree.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'contextcake-verify-link-'))
+  try {
+    const staging = path.join(dir, 'package')
+    await mkdir(path.join(staging, 'bin'), { recursive: true })
+    await writeFile(path.join(staging, 'package.json'), JSON.stringify({ name: 'contextcake', version }))
+    await symlink('/etc/passwd', path.join(staging, 'bin', 'leak.mjs'))
+    const tarball = path.join(dir, npmTarballName(version))
+    execFileSync('tar', ['-czf', tarball, '-C', dir, 'package'])
+    const sums = path.join(dir, 'SHA256SUMS')
+    await writeFile(sums, `${sha256(await readFile(tarball))}  ${npmTarballName(version)}\n`)
+    await assert.rejects(verifyReleaseTarball({ tarball, sums, version }), /link entries/)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('a tarball with an undeclared top-level entry is refused', async () => {
+  const { dir, tarball, sums } = await packedRelease(async (staging) => {
+    const file = path.join(staging, 'package.json')
+    const pkg = JSON.parse(await readFile(file, 'utf8'))
+    pkg.files = [...pkg.files, 'secrets']
+    await writeFile(file, JSON.stringify(pkg))
+    await mkdir(path.join(staging, 'secrets'), { recursive: true })
+    await writeFile(path.join(staging, 'secrets', 'note.txt'), 'x')
+  })
+  try {
+    await assert.rejects(verifyReleaseTarball({ tarball, sums, version }), /unexpected top-level entries: secrets/)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 

@@ -5,8 +5,8 @@ npm can only attach a trusted publisher to a package that already exists, so
 placeholders built from the sources in this directory:
 
 ```sh
-npm publish packages/npm/reserve/contextcake --access public
-npm publish packages/npm/reserve/context-cake --access public
+npm publish packages/npm/reserve/contextcake --access public --ignore-scripts
+npm publish packages/npm/reserve/context-cake --access public --ignore-scripts
 ```
 
 These directories are the record of exactly what went to the registry before the
@@ -16,12 +16,16 @@ The shipping packages are `packages/npm/contextcake` (the CLI) and
 `.github/workflows/npm-publish.yml` from the tarball the signed GitHub Release
 already carries.
 
-Once a real version is on the registry, deprecate the placeholder so nobody
-installs it by accident:
+Deprecate each placeholder in the same session it is published, not later.
+Until a real version ships, `0.0.0` is what `npm install contextcake` resolves,
+and the deprecation warning is the only thing that says so:
 
 ```sh
 npm deprecate contextcake@0.0.0 "Name reservation. Install a released version."
 ```
+
+The placeholders declare no `bin` and no `main`, so an accidental install leaves
+a user with nothing rather than a broken `contextcake` command.
 
 Deprecating is the right tool here, not unpublishing: npm allows unpublish only
 within 72 hours, and removing a version that something already resolved breaks

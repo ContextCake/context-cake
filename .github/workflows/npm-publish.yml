@@ -127,10 +127,17 @@ jobs:
           fi
           # Restaging the same version would leave a maintainer choosing between
           # two entries with no way to tell them apart in the approve prompt.
+          # The entry shape is matched by value rather than by field name: a
+          # guard that silently stops matching because npm renamed a key is
+          # worse than one that occasionally refuses and asks for a look.
           if npm stage list contextcake --json 2>/dev/null | node -e '
             let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
               const staged = JSON.parse(s || "[]");
-              process.exit(staged.some((entry) => entry.version === process.env.VERSION) ? 0 : 1);
+              // Bounded so 0.10.0 does not match inside 10.10.0 or 0.10.01,
+              // and unanchored so it finds the version whether npm reports it
+              // as its own field or inside a spec like contextcake@0.10.0.
+              const wanted = new RegExp(`(^|[^0-9.])${process.env.VERSION.replace(/\./g, "\\.")}([^0-9.]|$)`);
+              process.exit(staged.some((entry) => wanted.test(JSON.stringify(entry))) ? 0 : 1);
             });
           '; then
             echo "::error::contextcake@$VERSION is already staged. Approve or reject that entry (npm stage list contextcake) instead of staging it twice."

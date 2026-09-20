@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "description": "Name reservation for the ContextCake CLI pointer package. Install contextcake.",
   "license": "MIT",
+  "files": [
+    "README.md"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ContextCake/context-cake.git"

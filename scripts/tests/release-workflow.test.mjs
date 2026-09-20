@@ -331,6 +331,19 @@ test('npm publication is a separate OIDC-only, provenance-backed gate', () => {
   assert.doesNotMatch(npmPublish, /NODE_AUTH_TOKEN|NPM_TOKEN/)
 })
 
+test('the npm job checks out the tag itself, from actions pinned to a commit', () => {
+  // actions/checkout resolves an unqualified ref as a branch before a tag, so
+  // `ref: ${{ inputs.tag }}` would let a branch named app-vX.Y.Z supply the
+  // verification scripts that run while the job holds the npm credential.
+  assert.match(npmPublish, /ref: refs\/tags\/\$\{\{ inputs\.tag \}\}/)
+  assert.doesNotMatch(npmPublish, /ref: \$\{\{ inputs\.tag \}\}/)
+  // A moveable tag on an action in this job is a publish credential.
+  for (const [, ref] of npmPublish.matchAll(/uses: (\S+)/g)) {
+    assert.match(ref, /@[0-9a-f]{40}$/, `${ref} must be pinned to a commit SHA`)
+  }
+  assert.match(npmPublish, /npm install --global --ignore-scripts npm@\d+\.\d+\.\d+/, 'npm itself must be an exact version')
+})
+
 test('npm publishes the signed release tarball after checking it, never a rebuild', () => {
   assert.match(npmPublish, /gh release download[\s\S]*?contextcake-\$VERSION\.tgz[\s\S]*?SHA256SUMS/)
   assert.match(npmPublish, /scripts\/verify-npm-tarball\.mjs/)

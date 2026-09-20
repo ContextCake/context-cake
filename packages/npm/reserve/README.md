@@ -1,20 +1,28 @@
 # npm name reservation
 
 npm can only attach a trusted publisher to a package that already exists, so
-`contextcake` and `context-cake` were first published by hand as empty `0.0.0`
-placeholders built from the sources in this directory:
+`contextcake` was first published by hand as an empty `0.0.0` placeholder built
+from the source in this directory:
 
 ```sh
 npm publish packages/npm/reserve/contextcake --access public --ignore-scripts
-npm publish packages/npm/reserve/context-cake --access public --ignore-scripts
 ```
 
-These directories are the record of exactly what went to the registry before the
-automated channel existed. They are not built, installed, or published again.
-The shipping packages are `packages/npm/contextcake` (the CLI) and
-`packages/npm/context-cake` (the pointer), both published only by
+This directory is the record of exactly what went to the registry before the
+automated channel existed. It is not built, installed, or published again. The
+shipping package is `packages/npm/contextcake`, published only by
 `.github/workflows/npm-publish.yml` from the tarball the signed GitHub Release
 already carries.
+
+The hyphenated `context-cake` was attempted on 2026-09-20 and refused:
+
+```
+403 Package name too similar to existing package contextcake
+```
+
+That is the outcome worth having. npm's similarity rule blocks the lookalike for
+everyone, which is stronger than owning the name, and it needs no maintenance.
+There is deliberately no pointer package.
 
 Deprecate each placeholder in the same session it is published, not later.
 Until a real version ships, `0.0.0` is what `npm install contextcake` resolves,

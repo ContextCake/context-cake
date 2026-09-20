@@ -147,9 +147,7 @@ test('only the packages meant for the registry are publishable', async () => {
     if (!pkg.private) publishable.push(path.relative(root, file).split(path.sep).join('/'))
   }
   assert.deepEqual(publishable.sort(), [
-    'packages/npm/context-cake/package.json',
     'packages/npm/contextcake/package.json',
-    'packages/npm/reserve/context-cake/package.json',
     'packages/npm/reserve/contextcake/package.json',
   ])
 })

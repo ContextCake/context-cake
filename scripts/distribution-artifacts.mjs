@@ -254,7 +254,6 @@ export async function assertVersionAlignment(version) {
     'package.json',
     'apps/desktop/package.json',
     'packages/npm/contextcake/package.json',
-    'packages/npm/context-cake/package.json',
   ]
   const mismatches = []
   for (const rel of packageFiles) {

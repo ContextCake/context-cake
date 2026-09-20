@@ -4,7 +4,9 @@
 # Prerequisites (one-time, by a maintainer):
 #   - `contextcake` exists on npm. A trusted publisher can only be attached to
 #     an existing package, so the first version is a hand-published 0.0.0
-#     placeholder with 2FA.
+#     placeholder with 2FA (packages/npm/reserve/). npm refuses the hyphenated
+#     `context-cake` as too similar, which blocks the lookalike for everyone;
+#     there is deliberately no pointer package to publish.
 #   - A trusted publisher on npmjs.com for this repository, this workflow file,
 #     and the `npm-publish` environment; token publishing disabled.
 #
@@ -22,11 +24,6 @@ on:
         description: Published app-vX.Y.Z GitHub Release to publish to npm
         required: true
         type: string
-      publish_pointer:
-        description: Also publish the non-executable context-cake pointer package at this version
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -124,31 +121,3 @@ jobs:
           fi
           npm publish "$TGZ" --provenance --access public
           test "$(npm view "contextcake@$VERSION" dist.integrity)" = "$INTEGRITY"
-
-      # The pointer only reserves the hyphenated name against typosquatting. npm
-      # may refuse it as too similar to `contextcake`; that rule already blocks
-      # the lookalike for everyone, so a refusal here is not a release problem.
-      - name: Publish context-cake pointer package
-        if: inputs.publish_pointer
-        env:
-          VERSION: ${{ steps.tarball.outputs.version }}
-        working-directory: packages/npm/context-cake
-        run: |
-          if [ "$(npm view "context-cake@$VERSION" version 2>/dev/null || true)" = "$VERSION" ]; then
-            echo "context-cake@$VERSION is already published; nothing to do."
-            exit 0
-          fi
-          # Unlike contextcake, this package is built here rather than taken
-          # from the release, so its shape is asserted before it is published.
-          # --ignore-scripts only suppresses this machine's hooks; it does not
-          # stop a declared script from reaching consumers' install.
-          node --input-type=module -e '
-            import { readFile } from "node:fs/promises";
-            const pkg = JSON.parse(await readFile("package.json", "utf8"));
-            for (const field of ["scripts", "bin", "dependencies", "optionalDependencies", "peerDependencies"]) {
-              if (Object.keys(pkg[field] ?? {}).length) throw new Error(`pointer package declares ${field}`);
-            }
-            if (!Array.isArray(pkg.files) || pkg.files.length === 0) throw new Error("pointer package must declare files");
-          '
-          npm pack --dry-run --ignore-scripts
-          npm publish --ignore-scripts --provenance --access public

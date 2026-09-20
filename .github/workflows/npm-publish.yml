@@ -10,11 +10,16 @@
 #   - A trusted publisher on npmjs.com for this repository, this workflow file,
 #     and the `npm-publish` environment; token publishing disabled.
 #
-# The workflow publishes the npm tarball the signed GitHub Release already
-# carries, after checking it against that release's SHA256SUMS. It never
-# rebuilds the package, so the registry copy is byte-identical to the release
-# artifact. Re-running for a version npm already has succeeds only when the
-# published integrity matches the release tarball.
+# The workflow STAGES the npm tarball the signed GitHub Release already carries,
+# after checking it against that release's SHA256SUMS. It never rebuilds the
+# package, so the registry copy is byte-identical to the release artifact.
+#
+# Staging, not publishing: the trusted publisher grants `npm stage publish` only.
+# A maintainer then approves the staged version with their own 2FA
+# (`npm stage approve`), so reaching users takes a human in a second system —
+# GitHub's environment gate alone cannot put a package on the registry.
+# Re-running for a version npm already has succeeds only when the published
+# integrity matches the release tarball.
 name: Publish ContextCake npm package
 
 on:
@@ -61,8 +66,9 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      # Trusted publishing needs npm >= 11.5.1 on Node >= 22.14.0
-      # (docs.npmjs.com/trusted-publishers). Node 22 bundles npm 10.
+      # Trusted publishing needs npm >= 11.5.1 and staged publishing npm >=
+      # 11.15.0, both on Node >= 22.14.0 (docs.npmjs.com/staged-publishing).
+      # Node 22 bundles npm 10.
       - name: Upgrade npm for trusted publishing
         run: |
           npm install --global --ignore-scripts npm@11.19.0
@@ -71,7 +77,7 @@ jobs:
             const at = (v) => v.split(".").map(Number);
             const newer = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return true; };
             const npm = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
-            if (!newer(at(npm), [11, 5, 1])) throw new Error(`npm ${npm} is older than 11.5.1`);
+            if (!newer(at(npm), [11, 15, 0])) throw new Error(`npm ${npm} is older than 11.15.0`);
             if (!newer(at(process.versions.node), [22, 14, 0])) throw new Error(`Node ${process.versions.node} is older than 22.14.0`);
             console.log(`npm ${npm} on Node ${process.versions.node}`);
           '
@@ -104,7 +110,7 @@ jobs:
           echo "integrity=$INTEGRITY" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Publish contextcake with provenance
+      - name: Stage contextcake for approval
         env:
           TGZ: ${{ steps.tarball.outputs.tgz }}
           INTEGRITY: ${{ steps.tarball.outputs.integrity }}
@@ -119,5 +125,44 @@ jobs:
             echo "::error::contextcake@$VERSION is already published with different contents ($PUBLISHED)."
             exit 1
           fi
-          npm publish "$TGZ" --provenance --access public
-          test "$(npm view "contextcake@$VERSION" dist.integrity)" = "$INTEGRITY"
+          # Restaging the same version would leave a maintainer choosing between
+          # two entries with no way to tell them apart in the approve prompt.
+          if npm stage list contextcake --json 2>/dev/null | node -e '
+            let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+              const staged = JSON.parse(s || "[]");
+              process.exit(staged.some((entry) => entry.version === process.env.VERSION) ? 0 : 1);
+            });
+          '; then
+            echo "::error::contextcake@$VERSION is already staged. Approve or reject that entry (npm stage list contextcake) instead of staging it twice."
+            exit 1
+          fi
+          npm stage publish "$TGZ" --provenance --access public
+
+      # The registry does not have the version yet: a maintainer approves the
+      # staged entry with their own 2FA, which is the second gate and the one
+      # this workflow cannot perform for itself.
+      - name: Explain how to approve
+        if: success()
+        env:
+          VERSION: ${{ steps.tarball.outputs.version }}
+          INTEGRITY: ${{ steps.tarball.outputs.integrity }}
+        run: |
+          {
+            echo "## contextcake@$VERSION is staged, not published"
+            echo
+            echo "Release tarball integrity:"
+            echo
+            echo '```'
+            echo "$INTEGRITY"
+            echo '```'
+            echo
+            echo "A maintainer approves it from any machine signed in to npm:"
+            echo
+            echo '```sh'
+            echo "npm stage list contextcake"
+            echo "npm stage view <stage-id>            # confirm the integrity above"
+            echo "npm stage approve <stage-id>         # 2FA"
+            echo '```'
+            echo
+            echo "Nothing reaches \`npm install\` until that approval."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -148,10 +148,19 @@ Per release, after the `app-v*` release is public:
 4. Confirm `npm view contextcake version` matches the release, and that
    `npm view contextcake dist.integrity` matches the release's `SHA256SUMS`
    entry for the tarball.
-5. Confirm the install page shows the npm route. `site-deploy.yml` redeploys on
-   this workflow's completion; the page reads `npm-release.json`, which only
-   offers the route once the registry actually has the version. A staged but
-   unapproved version is correctly invisible there.
+5. Redeploy the site, then confirm the install page shows the npm route:
+
+   ```sh
+   gh workflow run site-deploy.yml --repo ContextCake/context-cake --ref main
+   ```
+
+   This step is manual because approval happens on npm, outside CI: no workflow
+   can observe it. `site-deploy.yml` also runs on the npm workflow's completion,
+   but with staged publishing that fires when the version is *staged*, before it
+   exists on the registry, so that build records the version as unpublished. The
+   page reads `npm-release.json`, whose gate is "npm actually serves this
+   version" — so the failure mode is a stale page offering no npm route, never a
+   link to a package that is not there.
 
 Re-running for a version the registry already has succeeds only when the
 published integrity matches the release tarball, and the workflow refuses to

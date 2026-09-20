@@ -10,9 +10,15 @@
 #   - A trusted publisher on npmjs.com for this repository, this workflow file,
 #     and the `npm-publish` environment; token publishing disabled.
 #
-# The workflow STAGES the npm tarball the signed GitHub Release already carries,
-# after checking it against that release's SHA256SUMS. It never rebuilds the
-# package, so the registry copy is byte-identical to the release artifact.
+# The workflow STAGES the npm tarball the signed GitHub Release already carries.
+# It never rebuilds the package, so the registry copy is byte-identical to the
+# release artifact.
+#
+# Two jobs, because they need different power. `verify` reads the release and
+# checks the tarball holding no credential that can reach npm. `stage` holds
+# id-token: write and does nothing but hand npm a file that already passed.
+# The environment gate sits on `stage`, so a maintainer approves a run whose
+# verification has already succeeded rather than one that has not started.
 #
 # Staging, not publishing: the trusted publisher grants `npm stage publish` only.
 # A maintainer then approves the staged version with their own 2FA
@@ -32,13 +38,19 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
-    name: publish provenance-backed npm CLI
+  verify:
+    name: verify the release tarball
     runs-on: ubuntu-latest
-    environment: npm-publish
+    permissions:
+      contents: read
+      # Reading an attestation, never minting one.
+      attestations: read
+    outputs:
+      version: ${{ steps.tarball.outputs.version }}
+      integrity: ${{ steps.tarball.outputs.integrity }}
+      published: ${{ steps.published.outputs.published }}
     steps:
       - name: Validate release tag
         env:
@@ -53,34 +65,16 @@ jobs:
 
       # refs/tags/ is load-bearing. actions/checkout resolves an unqualified ref
       # as a branch first and only then as a tag, so a branch named app-vX.Y.Z
-      # would supersede the signed tag and supply the verification scripts this
-      # job runs while holding the npm publishing credential.
+      # would supersede the signed tag and supply the verification scripts.
       - name: Checkout exact release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ inputs.tag }}
 
-      - name: Setup Node with npm registry
+      - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      # Trusted publishing needs npm >= 11.5.1 and staged publishing npm >=
-      # 11.15.0, both on Node >= 22.14.0 (docs.npmjs.com/staged-publishing).
-      # Node 22 bundles npm 10.
-      - name: Upgrade npm for trusted publishing
-        run: |
-          npm install --global --ignore-scripts npm@11.19.0
-          node --input-type=module -e '
-            import { execFileSync } from "node:child_process";
-            const at = (v) => v.split(".").map(Number);
-            const newer = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return true; };
-            const npm = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
-            if (!newer(at(npm), [11, 15, 0])) throw new Error(`npm ${npm} is older than 11.15.0`);
-            if (!newer(at(process.versions.node), [22, 14, 0])) throw new Error(`Node ${process.versions.node} is older than 22.14.0`);
-            console.log(`npm ${npm} on Node ${process.versions.node}`);
-          '
 
       - name: Verify published GitHub release and version alignment
         env:
@@ -106,25 +100,126 @@ jobs:
           gh release download "$RELEASE_TAG" --repo ContextCake/context-cake --dir "$DIR" \
             --pattern "contextcake-$VERSION.tgz" --pattern SHA256SUMS
           INTEGRITY="$(node scripts/verify-npm-tarball.mjs --tarball "$DIR/contextcake-$VERSION.tgz" --sums "$DIR/SHA256SUMS" --version "$VERSION")"
-          echo "tgz=$DIR/contextcake-$VERSION.tgz" >> "$GITHUB_OUTPUT"
           echo "integrity=$INTEGRITY" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Stage contextcake for approval
+      # Whether the registry already has these exact bytes decides whether the
+      # rest of the run is needed at all. Answering it before the provenance
+      # check is what lets a re-dispatch for a release published before
+      # attestations existed exit cleanly, instead of failing on a signature
+      # that was never created.
+      - name: Check whether npm already has this version
+        id: published
         env:
-          TGZ: ${{ steps.tarball.outputs.tgz }}
-          INTEGRITY: ${{ steps.tarball.outputs.integrity }}
           VERSION: ${{ steps.tarball.outputs.version }}
+          INTEGRITY: ${{ steps.tarball.outputs.integrity }}
         run: |
           PUBLISHED="$(npm view "contextcake@$VERSION" dist.integrity 2>/dev/null || true)"
-          if [ -n "$PUBLISHED" ]; then
-            if [ "$PUBLISHED" = "$INTEGRITY" ]; then
-              echo "contextcake@$VERSION is already published with the release tarball's integrity; nothing to do."
-              exit 0
-            fi
-            echo "::error::contextcake@$VERSION is already published with different contents ($PUBLISHED)."
+          if [ -z "$PUBLISHED" ]; then
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$PUBLISHED" = "$INTEGRITY" ]; then
+            echo "contextcake@$VERSION is already published with the release tarball's integrity; nothing to do."
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::contextcake@$VERSION is already published with different contents ($PUBLISHED)."
+          exit 1
+
+      # SHA256SUMS proves the tarball matches a text file sitting beside it in
+      # the same release, and anyone with contents: write can rewrite both in
+      # one command. The attestation is signed by the build run itself and
+      # cannot be reissued by editing a release, so it is the only check here
+      # that answers "did we build this?" rather than "is this self-consistent?"
+      - name: Verify build provenance
+        if: steps.published.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.tarball.outputs.version }}
+        run: |
+          TGZ="$RUNNER_TEMP/npm-release/contextcake-$VERSION.tgz"
+          if ! gh attestation verify "$TGZ" --repo ContextCake/context-cake --format json > "$RUNNER_TEMP/attestation.json"; then
+            echo "::error::No valid build provenance for contextcake-$VERSION.tgz. A release built before the attestation step cannot be staged by this workflow; cut a new release rather than weakening this check."
             exit 1
           fi
+          node -e '
+            const fs = require("node:fs");
+            const att = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/attestation.json", "utf8"));
+            const workflow = att[0]?.verificationResult?.signature?.certificate?.buildSignerURI
+              || att[0]?.verificationResult?.statement?.predicate?.buildDefinition?.externalParameters?.workflow?.path;
+            if (!workflow || !String(workflow).includes("app-release.yml")) {
+              throw new Error(`attested by an unexpected workflow: ${workflow}`);
+            }
+            console.log(`provenance ok: built by ${workflow}`);
+          '
+
+      - name: Upload the verified tarball
+        if: steps.published.outputs.published != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: verified-npm-tarball
+          path: ${{ runner.temp }}/npm-release/contextcake-${{ steps.tarball.outputs.version }}.tgz
+          retention-days: 1
+
+  stage:
+    name: stage the verified tarball for approval
+    needs: verify
+    if: needs.verify.outputs.published != 'true'
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      # Deliberately no contents: read. This job runs no repository code — it
+      # downloads one already-verified file and hands it to npm.
+      id-token: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      INTEGRITY: ${{ needs.verify.outputs.integrity }}
+    steps:
+      - name: Setup Node with npm registry
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm >= 11.5.1 and staged publishing npm >=
+      # 11.15.0, both on Node >= 22.14.0 (docs.npmjs.com/staged-publishing).
+      # Node 22 bundles npm 10.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install --global --ignore-scripts npm@11.19.0
+          node --input-type=module -e '
+            import { execFileSync } from "node:child_process";
+            const at = (v) => v.split(".").map(Number);
+            const newer = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return true; };
+            const npm = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+            if (!newer(at(npm), [11, 15, 0])) throw new Error(`npm ${npm} is older than 11.15.0`);
+            if (!newer(at(process.versions.node), [22, 14, 0])) throw new Error(`Node ${process.versions.node} is older than 22.14.0`);
+            console.log(`npm ${npm} on Node ${process.versions.node}`);
+          '
+
+      - name: Download the verified tarball
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: verified-npm-tarball
+          path: ${{ runner.temp }}/npm-release
+
+      # An artifact travels between jobs through storage this run can write to,
+      # so the integrity the verify job vouched for is rechecked here rather
+      # than assumed.
+      - name: Confirm the artifact is the verified file
+        run: |
+          TGZ="$RUNNER_TEMP/npm-release/contextcake-$VERSION.tgz"
+          ACTUAL="sha512-$(openssl dgst -sha512 -binary "$TGZ" | openssl base64 -A)"
+          if [ "$ACTUAL" != "$INTEGRITY" ]; then
+            echo "::error::artifact integrity $ACTUAL does not match the verified $INTEGRITY"
+            exit 1
+          fi
+          echo "artifact matches the verified tarball"
+
+      - name: Stage contextcake for approval
+        run: |
+          TGZ="$RUNNER_TEMP/npm-release/contextcake-$VERSION.tgz"
           # Restaging the same version would leave a maintainer choosing between
           # two entries with no way to tell them apart in the approve prompt.
           # The entry shape is matched by value rather than by field name: a
@@ -147,12 +242,11 @@ jobs:
 
       # The registry does not have the version yet: a maintainer approves the
       # staged entry with their own 2FA, which is the second gate and the one
-      # this workflow cannot perform for itself.
+      # this workflow cannot perform for itself. The site deploy is listed here
+      # because publication now happens outside CI — no workflow can observe the
+      # approval, so nothing redeploys the install page on its own.
       - name: Explain how to approve
         if: success()
-        env:
-          VERSION: ${{ steps.tarball.outputs.version }}
-          INTEGRITY: ${{ steps.tarball.outputs.integrity }}
         run: |
           {
             echo "## contextcake@$VERSION is staged, not published"
@@ -169,6 +263,12 @@ jobs:
             echo "npm stage list contextcake"
             echo "npm stage view <stage-id>            # confirm the integrity above"
             echo "npm stage approve <stage-id>         # 2FA"
+            echo '```'
+            echo
+            echo "Then redeploy the site, so /install offers the npm route:"
+            echo
+            echo '```sh'
+            echo "gh workflow run site-deploy.yml --repo ContextCake/context-cake --ref main"
             echo '```'
             echo
             echo "Nothing reaches \`npm install\` until that approval."

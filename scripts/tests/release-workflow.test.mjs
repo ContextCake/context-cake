@@ -331,6 +331,31 @@ test('npm publication is a separate OIDC-only, provenance-backed gate', () => {
   assert.doesNotMatch(npmPublish, /NODE_AUTH_TOKEN|NPM_TOKEN/)
 })
 
+test('the npm tarball is attested at build time and verified before staging', () => {
+  // SHA256SUMS and the tarball live in the same release, and one `gh release
+  // upload --clobber` rewrites both. The attestation is signed by the build run
+  // and cannot be reissued by editing a release, so it is the only check that
+  // distinguishes "we built this" from "this is self-consistent".
+  assert.match(appRelease, /uses: actions\/attest-build-provenance@[0-9a-f]{40}/)
+  assert.match(appRelease, /attestations: write/)
+  assert.match(appRelease, /subject-path: release-dist\/contextcake-/)
+  assert.match(npmPublish, /gh attestation verify/)
+  assert.match(npmPublish, /app-release\.yml/, 'the attesting workflow is pinned, not just the signature')
+})
+
+test('verification holds no credential that can reach npm', () => {
+  // Splitting the job is what keeps a compromised verification step away from
+  // the publishing credential: everything that runs repository code lives in
+  // `verify` with contents: read, and `stage` only moves one checked file.
+  const verify = npmPublish.slice(npmPublish.indexOf('  verify:'), npmPublish.indexOf('  stage:'))
+  const stage = npmPublish.slice(npmPublish.indexOf('  stage:'))
+  assert.doesNotMatch(verify, /id-token: write/, 'the verifying job must not hold the npm credential')
+  assert.match(stage, /id-token: write/)
+  assert.match(stage, /environment: npm-publish/)
+  assert.doesNotMatch(stage, /actions\/checkout/, 'the credentialed job must not run repository code')
+  assert.match(stage, /Confirm the artifact is the verified file/)
+})
+
 test('CI stages the release and never publishes it outright', () => {
   // The trusted publisher on npmjs.com grants `npm stage publish` only, so a
   // direct publish here would fail at the registry — but it would fail after

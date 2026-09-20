@@ -497,6 +497,11 @@ jobs:
       - build-linux
     permissions:
       contents: write
+      # Provenance attestation for the npm tarball: signed here, where the
+      # bytes are built, because SHA256SUMS only proves a file matches a text
+      # file sitting beside it in the same mutable release.
+      id-token: write
+      attestations: write
     outputs:
       released: ${{ steps.release.outputs.released }}
     env:
@@ -548,6 +553,16 @@ jobs:
 
       - name: Verify the release is complete
         run: node scripts/release-platforms.mjs --check release-dist --version "$VERSION" --stage publish --digests "$RUNNER_TEMP/build.sha256"
+
+      # Binds the npm tarball to this workflow run, this commit, and this
+      # repository, verifiable later with `gh attestation verify`. Anyone with
+      # contents: write can replace a release asset and its SHA256SUMS line;
+      # nobody can forge this without the run's own OIDC identity.
+      - name: Attest the npm tarball
+        if: needs.build-mac.outputs.signed == 'true' && github.event_name == 'push'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-dist/contextcake-${{ env.VERSION }}.tgz
 
       # The release stays a draft, invisible to the site sync and the updater,
       # until GitHub reports every expected asset at its local size.

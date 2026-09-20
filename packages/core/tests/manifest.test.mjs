@@ -672,12 +672,19 @@ test("manifest mutation locking preserves concurrent updates and times out safel
   assert.throws(() => withManifestLock(manifestPath, () => {}, { timeoutMs: 25, staleMs: 60_000 }), /Timed out acquiring/);
   fs.rmSync(`${manifestPath}.lock`);
 
-  // Plant the pid of a process that just exited: a fixed pid could belong to a
-  // live process on the runner, and a live owner's lock is never stale.
-  const deadPid = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["-e", ""]);
-    child.on("error", reject).on("exit", () => resolve(child.pid));
-  });
+  // A pid no system can assign. Planting the pid of a process that just exited
+  // looks more realistic but flakes: a busy runner can recycle it, and
+  // processIsAlive counts EPERM as alive, so a recycled pid owned by another
+  // user makes the lock look held. Then neither contender takes over and both
+  // report BUSY. Linux caps pids at 4194304 and macOS far lower, so INT32_MAX
+  // answers ESRCH (or EINVAL) on both, which is the one thing this test needs
+  // the pid to do.
+  const deadPid = 2_147_483_647;
+  assert.equal(
+    (() => { try { process.kill(deadPid, 0); return true; } catch (error) { return error.code === "EPERM"; } })(),
+    false,
+    "the planted pid must not be a live process",
+  );
   fs.writeFileSync(`${manifestPath}.lock`, JSON.stringify({ pid: deadPid, createdAt: 1, token: "stale" }), { mode: 0o600 });
   // The winner holds the lock until the loser has timed out. A fixed 180 ms
   // hold let a contender that started late on a busy runner arrive after the

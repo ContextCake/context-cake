@@ -10,9 +10,13 @@ on:
       # The site release sync reads the platform table.
       - 'scripts/release-platforms.mjs'
   workflow_dispatch:
-  # Redeploy once npm has a release, so /install offers the npm CLI without a
-  # hand edit. Runs this file from main; the validate job skips a failed or
-  # cancelled publish.
+  # Best-effort redeploy after the npm workflow runs. With staged publishing
+  # this fires when a version is STAGED, which is before a maintainer approves
+  # it, so the build it triggers usually records the version as unpublished.
+  # The deploy after approval is a manual dispatch (docs/go-live.md); this
+  # trigger stays because it costs nothing and covers a re-dispatch that
+  # follows an approval. Runs this file from main; the validate job skips a
+  # failed or cancelled publish.
   workflow_run:
     workflows:
       - Publish ContextCake npm package

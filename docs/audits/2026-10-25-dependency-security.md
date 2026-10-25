@@ -30,7 +30,8 @@ Alert #70, `sprintf-js`, refers to
 GitHub withdrew this advisory on October 22, 2026 because handling these
 formatting exceptions is an application responsibility. This is a withdrawn
 finding, not a package vulnerability fixed by this PR. No fictitious patched
-version or audit suppression is added.
+version or audit suppression is added. Alert #70 was dismissed as inaccurate
+with the upstream withdrawal and PR #205 recorded in the dismissal note.
 
 The npm advisory feed also reported findings beyond the GitHub inventory.
 Compatible updates cover `@vitest/mocker`, `undici`, `fast-uri`, `smol-toml`,
@@ -56,9 +57,10 @@ release/package checks, and the indexing scale and lifecycle tests.
 
 Use Node 22.23.4 or a compatible newer runtime for these app toolchains;
 Astro 7.4.2 requires that Node 22 patch level. The dependency-free engine's
-Node 22 floor is unchanged. Electron's test setup now resolves its binary
-serially before parallel workers start, preventing the reproduced first-run
-extraction race.
+Node 22 floor is unchanged. CI and both site deployment paths select
+`^22.23.4`, excluding older cached Node 22 builds. Electron's test setup now
+resolves its binary serially before parallel workers start, preventing the
+reproduced first-run extraction race.
 
 Recheck with:
 

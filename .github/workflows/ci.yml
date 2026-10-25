@@ -16,7 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '22'
+  # Astro's app toolchain requires this patch floor; cached older 22.x fails.
+  NODE_VERSION: '^22.23.4'
 
 jobs:
   engine:

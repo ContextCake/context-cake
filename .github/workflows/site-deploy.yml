@@ -33,7 +33,7 @@ concurrency:
 
 env:
   CLOUDFLARE_PROJECT_NAME: contextcake
-  NODE_VERSION: '22'
+  NODE_VERSION: '^22.23.4'
   # Exposed so the deploy step can skip cleanly until the secret is configured.
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 

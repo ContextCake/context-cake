@@ -27,6 +27,11 @@ CC_DEB_MAINTAINER="Name <address>" npm run dist:linux   # the x64 .deb (runs on 
 
 ## Gotchas
 
+- **Warm Electron before parallel tests.** Electron 44 downloads its binary on
+  first `require('electron')` instead of during `npm ci`. The `pretest` hook
+  resolves it once before `node --test` starts workers; without that hook,
+  fresh installs can race while extracting the same binary. Keep this serial
+  warmup (which also respects `ELECTRON_OVERRIDE_DIST_PATH`).
 - **CI runs Node 22; a green local run on Node 24 is not proof.** The two differ
   on when the test runner gives up on a pending promise, and this package is
   full of deliberately `unref()`ed timers (ack deadlines, the watchdog), so a

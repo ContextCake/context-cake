@@ -725,6 +725,55 @@ test("manifest mutation locking preserves concurrent updates and times out safel
   fs.rmSync(`${manifestPath}.lock`);
 });
 
+test("stale recovery preserves a live replacement even when its inode matches the stale observation", (t) => {
+  const root = temporaryDirectory(t);
+  const manifestPath = path.join(root, "manifest.json");
+  const lockPath = `${manifestPath}.lock`;
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: 2_147_483_647, createdAt: 1, token: "stale" }));
+  const rename = fs.renameSync;
+  const replacement = { pid: process.pid, createdAt: Date.now(), token: "live-replacement" };
+  let replaced = false;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (from === lockPath && String(to).endsWith(".stale") && !replaced) {
+      replaced = true;
+      // Model an inode reused by a new owner between observation and rename.
+      // Keeping the inode in place makes this race deterministic on every OS.
+      fs.writeFileSync(lockPath, JSON.stringify(replacement));
+    }
+    return rename(from, to);
+  });
+  let entered = false;
+  assert.throws(() => withManifestLock(manifestPath, () => { entered = true; }, {
+    timeoutMs: 25, staleMs: 10_000,
+  }), /Timed out acquiring/);
+  assert.equal(replaced, true, "the replacement must land during recovery");
+  assert.equal(entered, false, "a live replacement must exclude the contender");
+  assert.deepEqual(JSON.parse(fs.readFileSync(lockPath, "utf8")), replacement);
+});
+
+test("a parked-file cleanup failure never strands an acquired manifest lock", (t) => {
+  const root = temporaryDirectory(t);
+  const manifestPath = path.join(root, "manifest.json");
+  const lockPath = `${manifestPath}.lock`;
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: 2_147_483_647, createdAt: 1, token: "stale" }));
+  const remove = fs.rmSync;
+  let cleanupAttempted = false;
+  t.mock.method(fs, "rmSync", (target, options) => {
+    if (String(target).startsWith(`${lockPath}.`) && String(target).endsWith(".stale")) {
+      cleanupAttempted = true;
+      throw Object.assign(new Error("simulated cleanup failure"), { code: "EACCES" });
+    }
+    return remove(target, options);
+  });
+  let entered = 0;
+  withManifestLock(manifestPath, () => { entered += 1; });
+  assert.equal(cleanupAttempted, true);
+  assert.equal(entered, 1);
+  assert.equal(fs.existsSync(lockPath), false, "the live lock must still be released");
+  withManifestLock(manifestPath, () => { entered += 1; });
+  assert.equal(entered, 2, "the next mutation must remain able to acquire");
+});
+
 test("async profile write leases exclude concurrent manifest mutation", async (t) => {
   const root = temporaryDirectory(t);
   const manifestPath = path.join(root, "manifest.json");

@@ -71,6 +71,26 @@ npm audit --prefix apps/desktop
 npm audit --prefix apps/desktop --omit=dev
 ```
 
+## Manifest-lock recovery
+
+The Node 24 CI run exposed a pre-existing stale-lock race: its concurrency
+test reported two winners. Independent review reproduced the underlying
+identity weakness deterministically. A reaper could mistake a replacement
+owner for the stale lock when their inode matched.
+
+Recovery now checks the owner token, PID, and creation time as well as the
+inode, rechecks staleness, and retains the old inode until replacement
+placement finishes. Parked-file cleanup is best effort so a cleanup error
+cannot strand an acquired live lock. The two new regressions cover a live
+replacement with the same inode and a cleanup failure; all 22 manifest tests
+pass. The replacement test failed against the original implementation.
+
+The older rename-and-restore protocol also has a separate three-contender
+path-vacancy risk: parking a replacement can expose a gap to another acquirer,
+and restoring it can overwrite that third claimant. That requires a broader
+acquisition/reclamation protocol change and remains a follow-up; this narrow
+correction does not claim to solve it.
+
 Patched GitHub alerts remain open on the default branch until this change is
 merged and GitHub refreshes its dependency graph. Packaged-app fixes reach
 users through a subsequent signed app release; this PR does not publish one.

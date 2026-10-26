@@ -1235,20 +1235,26 @@ function tryAcquireManifestLock(lockPath, staleMs) {
   }
 
   // Another contender may have replaced the stale lock between our read and
-  // rename. Restore that newer owner instead of treating it as the stale inode
-  // we observed.
+  // rename. Inodes can be reused, so identity includes the owner generation;
+  // recheck staleness before removing anything we parked.
   const parkedLock = readManifestLock(parked);
-  if (!parkedLock || parkedLock.dev !== observed?.dev || parkedLock.ino !== observed?.ino) {
+  if (!parkedLock || parkedLock.dev !== observed?.dev || parkedLock.ino !== observed?.ino
+    || parkedLock.token !== observed?.token || parkedLock.pid !== observed?.pid
+    || parkedLock.createdAt !== observed?.createdAt || !manifestLockIsStale(parkedLock, staleMs)) {
     try { fs.renameSync(parked, lockPath); } catch { /* lock path was restored elsewhere */ }
     return null;
   }
-  fs.rmSync(parked, { force: true });
   try {
+    // Keep the stale inode allocated until the replacement exists. Otherwise
+    // a second reaper can confuse immediate inode reuse with its observation.
     fs.writeFileSync(lockPath, JSON.stringify(payload), { flag: "wx", mode: 0o600 });
     return token;
   } catch (error) {
     if (error.code === "EEXIST") return null;
     throw error;
+  } finally {
+    // Cleanup must not hide an acquired token and strand its live lock.
+    try { fs.rmSync(parked, { force: true }); } catch { /* harmless stale artifact */ }
   }
 }
 

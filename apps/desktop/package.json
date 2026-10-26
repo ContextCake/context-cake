@@ -12,6 +12,7 @@
     "renderer": "npm --prefix ../console run build:live",
     "start": "electron .",
     "dev": "npm run renderer && electron .",
+    "pretest": "node -e \"require('electron')\"",
     "test": "node --test test/*.test.mjs",
     "icon": "electron scripts/generate-icon.mjs",
     "test:navigation": "node scripts/navigation-test.mjs",
@@ -33,11 +34,11 @@
     "dist:linux": "npm run renderer && node scripts/dist-linux.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.116.0",
+    "@supabase/supabase-js": "2.117.2",
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "electron": "^43.2.0",
+    "electron": "^44.9.3",
     "electron-builder": "^26.15.3"
   }
 }

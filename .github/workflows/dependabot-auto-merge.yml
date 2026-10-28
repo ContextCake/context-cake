@@ -5,8 +5,11 @@ name: Dependabot Auto-Merge
 # that fails CI never merges. Major updates get the `needs-manual-review` label and
 # wait for a human.
 #
-# A merge to main can deploy: site-deploy.yml and console-preview.yml run on pushes
-# that touch their paths. The desktop app only ships from a tag (app-release.yml).
+# Merges made with GITHUB_TOKEN do not start push-triggered workflows (in harness-kit,
+# bot merges ran 0 push workflows and human merges ran 3). Auto-merged bumps therefore
+# skip site-deploy.yml, console-preview.yml and the push run of ci.yml, and reach
+# production with the next push to main that touches the same app. The desktop app
+# only ships from a tag (app-release.yml).
 #
 # Prerequisites: the repo setting "Allow auto-merge", the ruleset above, and the
 # `needs-manual-review` label.

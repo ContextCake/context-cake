@@ -27,11 +27,15 @@ CC_DEB_MAINTAINER="Name <address>" npm run dist:linux   # the x64 .deb (runs on 
 
 ## Gotchas
 
-- **Warm Electron before parallel tests.** Electron 44 downloads its binary on
-  first `require('electron')` instead of during `npm ci`. The `pretest` hook
+- **Warm Electron before parallel tests.** Starting with Electron 44, the binary
+  downloads on first `require('electron')` instead of during `npm ci`. The `pretest` hook
   resolves it once before `node --test` starts workers; without that hook,
   fresh installs can race while extracting the same binary. Keep this serial
   warmup (which also respects `ELECTRON_OVERRIDE_DIST_PATH`).
+- **Electron 46 needs a safeStorage migration before upgrading.** Electron 45
+  deprecates the synchronous safeStorage APIs used by encrypted storage here;
+  Electron 46 removes them. Upgrade encrypted-storage callers and their
+  persistence tests to the asynchronous APIs before accepting that major bump.
 - **CI runs Node 22; a green local run on Node 24 is not proof.** The two differ
   on when the test runner gives up on a pending promise, and this package is
   full of deliberately `unref()`ed timers (ack deadlines, the watchdog), so a

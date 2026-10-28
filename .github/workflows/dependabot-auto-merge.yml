@@ -1,0 +1,56 @@
+name: Dependabot Auto-Merge
+
+# Queues GitHub's native auto-merge for Dependabot patch and minor PRs. GitHub holds
+# the merge until the `required` check passes (ruleset "main: require CI"), so a PR
+# that fails CI never merges. Major updates get the `needs-manual-review` label and
+# wait for a human.
+#
+# Merges made with GITHUB_TOKEN do not start push-triggered workflows (in harness-kit,
+# bot merges ran 0 push workflows and human merges ran 3). Auto-merged bumps therefore
+# skip site-deploy.yml, console-preview.yml and the push run of ci.yml, and reach
+# production with the next push to main that touches the same app. The desktop app
+# only ships from a tag (app-release.yml).
+#
+# Prerequisites: the repo setting "Allow auto-merge", the ruleset above, and the
+# `needs-manual-review` label.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    # Gate on the PR author, not github.actor. Commenting on a fork PR can make
+    # Dependabot force-push to it, which turns the bot into the "actor" of a PR it
+    # did not write and defeats an actor check. The author never changes.
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for patch and minor updates
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+
+      - name: Flag major updates for manual review
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        run: gh pr edit "$PR_URL" --add-label needs-manual-review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}

@@ -574,6 +574,16 @@ export function withManifestLock(manifestPath, mutate, {
   const deadline = Date.now() + timeoutMs;
   let token = tryAcquireManifestLock(lockPath, staleMs);
   while (token === null) {
+    // A synchronous waiter cannot yield to an async owner in this process.
+    // Fail promptly instead of blocking the very event loop that releases it.
+    let claims = [];
+    try { claims = fs.readdirSync(lockPath); } catch { /* legacy/busy path */ }
+    if (claims.some((claim) => asyncManifestClaims.has(claim))) {
+      const error = new Error("The ContextCake manifest is busy with another operation. Try again in a moment.");
+      error.code = "MANIFEST_BUSY";
+      error.status = 409;
+      throw error;
+    }
     if (Date.now() >= deadline) throw new Error(`Timed out acquiring the ContextCake manifest lock at ${lockPath}.`);
     sleepSync(50);
     token = tryAcquireManifestLock(lockPath, staleMs);
@@ -602,10 +612,12 @@ export async function withManifestLockAsync(manifestPath, mutate, {
     await new Promise((resolve) => setTimeout(resolve, 50));
     token = tryAcquireManifestLock(lockPath, staleMs);
   }
+  asyncManifestClaims.add(token);
   try {
     return await mutate();
   } finally {
     releaseManifestLock(lockPath, token);
+    asyncManifestClaims.delete(token);
   }
 }
 
@@ -1220,6 +1232,7 @@ function manifestLockIsStale(lock, staleMs) {
 // Windows may report access/busy errors for a directory or entry another
 // contender has open or marked for deletion, rather than ENOENT/ENOTEMPTY.
 const LOCK_BUSY_ERRORS = new Set(["ENOENT", "ENOTDIR", "EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"]);
+const asyncManifestClaims = new Set();
 
 function tryAcquireManifestLock(lockPath, staleMs) {
   const token = `${process.pid}.${Date.now()}.${crypto.randomUUID()}.owner`;

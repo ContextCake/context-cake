@@ -26,6 +26,13 @@ utility process or sending the delayed kill, keeping that child's PID apparently
 alive throughout the lock timeout. The native teardown/relaunch regression
 covers this boundary.
 
+Startup recovery keeps its lease until the journal is settled. Mutating HTTP
+requests await that startup promise; health and other reads remain available.
+A synchronous writer that encounters an async claim owned by this process
+returns `MANIFEST_BUSY` (HTTP 409) immediately. Blocking would prevent the same
+event loop from releasing the lease. Async writers still wait normally, and
+same-process ownership never grants permission to enter another mutation.
+
 ## Upgrading from file locks
 
 Older binaries create a regular JSON lockfile at the same path. A live legacy

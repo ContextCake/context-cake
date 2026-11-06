@@ -863,6 +863,27 @@ test("async profile write leases exclude concurrent manifest mutation", async (t
   assert.equal(readContextManifest(manifestPath).writerCompleted, true);
 });
 
+test("a synchronous writer refuses its own process's async lease without blocking its release", async (t) => {
+  const manifestPath = path.join(temporaryDirectory(t), "manifest.json");
+  writeContextManifest(manifestPath, { layers: [] });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const holder = withManifestLockAsync(manifestPath, () => gate);
+  let queuedEntered = false;
+  const queued = withManifestLockAsync(manifestPath, () => { queuedEntered = true; });
+  t.mock.method(Atomics, "wait", () => assert.fail("must not block the async owner's event loop"));
+  try {
+    assert.throws(() => withManifestLock(manifestPath, () => assert.fail("must not enter")),
+      { code: "MANIFEST_BUSY", status: 409 });
+    assert.equal(queuedEntered, false);
+  } finally {
+    release();
+    await Promise.all([holder, queued]);
+  }
+  assert.equal(queuedEntered, true, "async callers still queue normally");
+  assert.equal(withManifestLock(manifestPath, () => "saved"), "saved");
+});
+
 test("concurrent source, Pack, and first-profile mutations cannot lose an update", async (t) => {
   const root = temporaryDirectory(t);
   const manifestPath = path.join(root, "manifest.json");

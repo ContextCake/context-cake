@@ -1826,6 +1826,12 @@ export function createEngineService({
         return true;
       }
 
+      // Startup recovery owns an asynchronous manifest lease. Let it finish
+      // before dispatching a synchronous settings/source mutation, so that
+      // request cannot block the event loop the recovery needs to release it.
+      // Health and other reads remain available while another writer is busy.
+      if (req.method !== "GET" && req.method !== "HEAD") await startupRecovery;
+
       if (p === "/api/graph") { json(res, 200, await buildGraph(waitParam(url))); return true; }
       if (p === "/api/diagnostics" && req.method === "GET") { json(res, 200, diagnosticsSnapshotApi()); return true; }
       if (p === "/api/status") { json(res, 200, statusApi()); return true; }
@@ -2946,9 +2952,9 @@ export function createEngineService({
   // Recovery is a startup responsibility, not something deferred until a user
   // happens to open the Discrepancy Center. Failure remains visible through
   // the journal and is retried before any later decision.
-  queueMicrotask(() => withManifestLockAsync(MANIFEST, () => discrepancyOps.ensureRecovery()).catch((error) => {
+  const startupRecovery = Promise.resolve().then(() => withManifestLockAsync(MANIFEST, () => discrepancyOps.ensureRecovery())).catch((error) => {
     console.error(`contextcake: discrepancy transaction recovery requires attention: ${error.message}`);
-  }));
+  });
 
   return { handleRequest, close, getSources, reload, setTokens, setIndexQuarantine };
 }

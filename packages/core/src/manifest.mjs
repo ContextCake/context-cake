@@ -1217,12 +1217,19 @@ function manifestLockIsStale(lock, staleMs) {
 
 // Claim filenames carry complete owner identity even if initialization is
 // interrupted. Never rename, recursively remove, or restore a shared lock path.
+// Windows may report access/busy errors for a directory or entry another
+// contender has open or marked for deletion, rather than ENOENT/ENOTEMPTY.
+const LOCK_BUSY_ERRORS = new Set(["ENOENT", "ENOTDIR", "EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"]);
+
 function tryAcquireManifestLock(lockPath, staleMs) {
   const token = `${process.pid}.${Date.now()}.${crypto.randomUUID()}.owner`;
   try {
     fs.mkdirSync(lockPath, { mode: 0o700 });
   } catch (error) {
-    if (error.code !== "EEXIST") throw error;
+    if (error.code !== "EEXIST") {
+      if (LOCK_BUSY_ERRORS.has(error.code)) return null;
+      throw error;
+    }
     recoverManifestLock(lockPath, staleMs);
     return null;
   }
@@ -1237,7 +1244,7 @@ function tryAcquireManifestLock(lockPath, staleMs) {
     if (before.dev === after.dev && before.ino === after.ino
       && owners.length === 1 && owners[0] === token) return token;
   } catch (error) {
-    if (!["ENOENT", "ENOTDIR", "EEXIST"].includes(error.code)) {
+    if (!LOCK_BUSY_ERRORS.has(error.code)) {
       releaseManifestLock(lockPath, token);
       throw error;
     }
@@ -1248,7 +1255,7 @@ function tryAcquireManifestLock(lockPath, staleMs) {
 
 function recoverManifestLock(lockPath, staleMs) {
   let stat;
-  try { stat = fs.lstatSync(lockPath); } catch (error) { if (error.code === "ENOENT") return; throw error; }
+  try { stat = fs.lstatSync(lockPath); } catch (error) { if (LOCK_BUSY_ERRORS.has(error.code)) return; throw error; }
   if (!stat.isDirectory()) {
     // Node cannot atomically compare-and-unlink an old lockfile generation.
     // Fail closed on legacy migration, rather than deleting a live old
@@ -1259,7 +1266,7 @@ function recoverManifestLock(lockPath, staleMs) {
     return;
   }
   let owners;
-  try { owners = fs.readdirSync(lockPath); } catch (error) { if (error.code === "ENOENT") return; throw error; }
+  try { owners = fs.readdirSync(lockPath); } catch (error) { if (LOCK_BUSY_ERRORS.has(error.code)) return; throw error; }
   for (const owner of owners) {
     const match = /^(\d+)\.(\d+)\.([0-9a-f-]{36})\.owner$/.exec(owner);
     const pid = Number(match?.[1]);
@@ -1270,14 +1277,14 @@ function recoverManifestLock(lockPath, staleMs) {
     // as alive, and a recycled PID conservatively keeps the claim busy.
     if (!match || !Number.isSafeInteger(pid) || pid <= 0 || processIsAlive(pid)) continue;
     try { fs.unlinkSync(path.join(lockPath, owner)); }
-    catch (error) { if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error; }
+    catch (error) { if (!LOCK_BUSY_ERRORS.has(error.code)) throw error; }
   }
   // Empty abandoned initializations expire too. rmdir can remove a newly
   // created empty directory, but its initializer then fails validation and
   // retries. Once a live claim exists, rmdir cannot remove its directory.
   if (owners.length === 0 && !manifestLockIsStale({ mtimeMs: stat.mtimeMs }, staleMs)) return;
   try { fs.rmdirSync(lockPath); }
-  catch (error) { if (!["ENOENT", "ENOTEMPTY", "EEXIST", "ENOTDIR"].includes(error.code)) throw error; }
+  catch (error) { if (!LOCK_BUSY_ERRORS.has(error.code)) throw error; }
 }
 
 function releaseManifestLock(lockPath, token) {

@@ -705,7 +705,7 @@ test("manifest mutation locking preserves concurrent updates and times out safel
       process.stdout.write("WON");
     } catch (error) {
       if (!error.message.includes("Timed out")) {
-        process.stdout.write("ERROR");
+        process.stdout.write("ERROR: " + error.code + ": " + error.message);
       } else {
         fs.writeFileSync(busyMarker, "");
         process.stdout.write("BUSY");
@@ -716,8 +716,8 @@ test("manifest mutation locking preserves concurrent updates and times out safel
     runNodeOutput(staleRaceScript, [manifestPath, busyMarker]),
     runNodeOutput(staleRaceScript, [manifestPath, busyMarker]),
   ]);
-  assert.equal(staleResults.filter((result) => result === "WON").length, 1);
-  assert.equal(staleResults.filter((result) => result === "BUSY").length, 1);
+  assert.equal(staleResults.filter((result) => result === "WON").length, 1, JSON.stringify(staleResults));
+  assert.equal(staleResults.filter((result) => result === "BUSY").length, 1, JSON.stringify(staleResults));
 
   const replacement = `${process.pid}.${Date.now()}.${crypto.randomUUID()}.owner`;
   withManifestLock(manifestPath, () => {
@@ -823,7 +823,7 @@ test("initialization failure cleans its own claim without stranding the lock", (
     const result = write(target, ...args);
     if (path.dirname(String(target)) === lockPath && !failed) {
       failed = true;
-      throw Object.assign(new Error("injected initialization failure"), { code: "EACCES" });
+      throw Object.assign(new Error("injected initialization failure"), { code: "EIO" });
     }
     return result;
   });
@@ -955,4 +955,24 @@ test("a crashed owner's complete claim recovers immediately for engine relaunch"
   withManifestLock(manifestPath, () => { entered = true; }, { timeoutMs: 500, staleMs: 60_000 });
   assert.equal(entered, true, 'a fresh but dead owner must not strand restart for a minute');
   assert.equal(fs.existsSync(lockPath), false);
+});
+
+test("Windows-style deletion contention remains a busy lock, never a second owner or an unrelated error", (t) => {
+  const manifestPath = path.join(temporaryDirectory(t), 'manifest.json');
+  const lockPath = `${manifestPath}.lock`;
+  const owner = `${process.pid}.${Date.now()}.${crypto.randomUUID()}.owner`;
+  fs.mkdirSync(lockPath);
+  fs.writeFileSync(path.join(lockPath, owner), '');
+  const rmdir = fs.rmdirSync;
+  let blocked = 0;
+  t.mock.method(fs, 'rmdirSync', (target, ...args) => {
+    if (target === lockPath) {
+      blocked += 1;
+      throw Object.assign(new Error('directory is in use'), { code: blocked % 2 ? 'EPERM' : 'EACCES' });
+    }
+    return rmdir(target, ...args);
+  });
+  assert.throws(() => withManifestLock(manifestPath, () => assert.fail('must not enter'), { timeoutMs: 75 }), /Timed out acquiring/);
+  assert.ok(blocked > 0);
+  assert.deepEqual(fs.readdirSync(lockPath), [owner]);
 });

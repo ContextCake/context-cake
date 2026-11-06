@@ -89,6 +89,7 @@ const SUITES = [
   { group: "integration", name: "pack", ...sh("pack-test.sh") },
   { group: "integration", name: "git-sync", ...sh("git-sync-test.sh") },
   { group: "integration", name: "discrepancy-live-layer", ...sh("discrepancy-live-layer-test.sh") },
+  { group: "integration", name: "editor-live-layer", ...node("editor-live-layer.test.mjs") },
   { group: "integration", name: "capture", ...sh("capture-test.sh") },
   { group: "integration", name: "team-sync-mcp", ...sh("team-sync-mcp-test.sh") },
   { group: "integration", name: "playground", ...sh("playground-test.sh") },

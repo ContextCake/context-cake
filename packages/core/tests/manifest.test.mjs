@@ -685,7 +685,8 @@ test("manifest mutation locking preserves concurrent updates and times out safel
     false,
     "the planted pid must not be a live process",
   );
-  fs.writeFileSync(`${manifestPath}.lock`, JSON.stringify({ pid: deadPid, createdAt: 1, token: "stale" }), { mode: 0o600 });
+  fs.mkdirSync(`${manifestPath}.lock`);
+  fs.writeFileSync(path.join(`${manifestPath}.lock`, `${deadPid}.1.${crypto.randomUUID()}.owner`), "");
   // The winner holds the lock until the loser has timed out. A fixed 180 ms
   // hold let a contender that started late on a busy runner arrive after the
   // release and win as well.
@@ -718,60 +719,118 @@ test("manifest mutation locking preserves concurrent updates and times out safel
   assert.equal(staleResults.filter((result) => result === "WON").length, 1);
   assert.equal(staleResults.filter((result) => result === "BUSY").length, 1);
 
+  const replacement = `${process.pid}.${Date.now()}.${crypto.randomUUID()}.owner`;
   withManifestLock(manifestPath, () => {
-    fs.writeFileSync(`${manifestPath}.lock`, JSON.stringify({ pid: process.pid, createdAt: Date.now(), token: "replacement" }));
+    const lockPath = `${manifestPath}.lock`;
+    for (const owner of fs.readdirSync(lockPath)) fs.unlinkSync(path.join(lockPath, owner));
+    fs.rmdirSync(lockPath);
+    fs.mkdirSync(lockPath);
+    fs.writeFileSync(path.join(lockPath, replacement), "");
   });
-  assert.equal(JSON.parse(fs.readFileSync(`${manifestPath}.lock`, "utf8")).token, "replacement");
-  fs.rmSync(`${manifestPath}.lock`);
+  assert.deepEqual(fs.readdirSync(`${manifestPath}.lock`), [replacement], "a delayed release preserves the new owner");
 });
 
-test("stale recovery preserves a live replacement even when its inode matches the stale observation", (t) => {
-  const root = temporaryDirectory(t);
-  const manifestPath = path.join(root, "manifest.json");
+test("legacy lockfiles fail closed when stale and wait when live", (t) => {
+  const manifestPath = path.join(temporaryDirectory(t), "manifest.json");
   const lockPath = `${manifestPath}.lock`;
-  fs.writeFileSync(lockPath, JSON.stringify({ pid: 2_147_483_647, createdAt: 1, token: "stale" }));
-  const rename = fs.renameSync;
-  const replacement = { pid: process.pid, createdAt: Date.now(), token: "live-replacement" };
+  const stale = JSON.stringify({ pid: 2_147_483_647, createdAt: 1, token: "legacy" });
+  fs.writeFileSync(lockPath, stale);
+  assert.throws(() => withManifestLock(manifestPath, () => assert.fail("must not enter")), /stale legacy lockfile needs manual cleanup/);
+  assert.equal(fs.readFileSync(lockPath, "utf8"), stale);
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, createdAt: 1, token: "live" }));
+  assert.throws(() => withManifestLock(manifestPath, () => assert.fail("must not enter"), { timeoutMs: 25 }), /Timed out acquiring/);
+  assert.equal(JSON.parse(fs.readFileSync(lockPath)).token, "live");
+});
+
+test("a delayed reaper cannot displace a third contender's live claim", (t) => {
+  const manifestPath = path.join(temporaryDirectory(t), "manifest.json");
+  const lockPath = `${manifestPath}.lock`;
+  const stale = path.join(lockPath, `2147483647.1.${crypto.randomUUID()}.owner`);
+  const replacement = `${process.pid}.${Date.now()}.${crypto.randomUUID()}.owner`;
+  fs.mkdirSync(lockPath);
+  fs.writeFileSync(stale, "");
+  const unlink = fs.unlinkSync;
   let replaced = false;
-  t.mock.method(fs, "renameSync", (from, to) => {
-    if (from === lockPath && String(to).endsWith(".stale") && !replaced) {
+  t.mock.method(fs, "unlinkSync", (target) => {
+    if (target === stale && !replaced) {
       replaced = true;
-      // Model an inode reused by a new owner between observation and rename.
-      // Keeping the inode in place makes this race deterministic on every OS.
-      fs.writeFileSync(lockPath, JSON.stringify(replacement));
+      // A second reaper removes the dead generation; a third process then
+      // acquires before this first reaper resumes its stale cleanup.
+      unlink(stale);
+      fs.rmdirSync(lockPath);
+      fs.mkdirSync(lockPath);
+      fs.writeFileSync(path.join(lockPath, replacement), "");
     }
-    return rename(from, to);
+    return unlink(target);
   });
-  let entered = false;
-  assert.throws(() => withManifestLock(manifestPath, () => { entered = true; }, {
-    timeoutMs: 25, staleMs: 10_000,
-  }), /Timed out acquiring/);
-  assert.equal(replaced, true, "the replacement must land during recovery");
-  assert.equal(entered, false, "a live replacement must exclude the contender");
-  assert.deepEqual(JSON.parse(fs.readFileSync(lockPath, "utf8")), replacement);
+  assert.throws(() => withManifestLock(manifestPath, () => assert.fail("must not enter"), { timeoutMs: 75 }), /Timed out acquiring/);
+  assert.equal(replaced, true);
+  assert.deepEqual(fs.readdirSync(lockPath), [replacement]);
 });
 
-test("a parked-file cleanup failure never strands an acquired manifest lock", (t) => {
-  const root = temporaryDirectory(t);
-  const manifestPath = path.join(root, "manifest.json");
+test("a paused initializer cannot join a replacement owner, even with a reused inode", (t) => {
+  const manifestPath = path.join(temporaryDirectory(t), "manifest.json");
   const lockPath = `${manifestPath}.lock`;
-  fs.writeFileSync(lockPath, JSON.stringify({ pid: 2_147_483_647, createdAt: 1, token: "stale" }));
-  const remove = fs.rmSync;
-  let cleanupAttempted = false;
-  t.mock.method(fs, "rmSync", (target, options) => {
-    if (String(target).startsWith(`${lockPath}.`) && String(target).endsWith(".stale")) {
-      cleanupAttempted = true;
-      throw Object.assign(new Error("simulated cleanup failure"), { code: "EACCES" });
-    }
-    return remove(target, options);
+  const replacement = `${process.pid}.${Date.now()}.${crypto.randomUUID()}.owner`;
+  const write = fs.writeFileSync;
+  const lstat = fs.lstatSync;
+  let replaced = false;
+  t.mock.method(fs, "lstatSync", (target, ...args) => {
+    const stat = lstat(target, ...args);
+    if (target === lockPath) Object.defineProperty(stat, "ino", { value: 42 });
+    return stat;
   });
+  t.mock.method(fs, "writeFileSync", (target, ...args) => {
+    if (path.dirname(String(target)) === lockPath && !replaced) {
+      replaced = true;
+      // Our empty directory was reclaimed while this initializer paused.
+      fs.rmdirSync(lockPath);
+      fs.mkdirSync(lockPath);
+      write(path.join(lockPath, replacement), "");
+    }
+    return write(target, ...args);
+  });
+  assert.throws(() => withManifestLock(manifestPath, () => assert.fail("must not enter"), { timeoutMs: 75 }), /Timed out acquiring/);
+  assert.equal(replaced, true);
+  assert.deepEqual(fs.readdirSync(lockPath), [replacement], "only the late initializer's own claim was removed");
+});
+
+test("empty abandoned locks recover, but unknown entries and live claims never expire", (t) => {
+  const manifestPath = path.join(temporaryDirectory(t), "manifest.json");
+  const lockPath = `${manifestPath}.lock`;
+  fs.mkdirSync(lockPath);
+  fs.utimesSync(lockPath, new Date(1), new Date(1));
   let entered = 0;
   withManifestLock(manifestPath, () => { entered += 1; });
-  assert.equal(cleanupAttempted, true);
   assert.equal(entered, 1);
-  assert.equal(fs.existsSync(lockPath), false, "the live lock must still be released");
-  withManifestLock(manifestPath, () => { entered += 1; });
-  assert.equal(entered, 2, "the next mutation must remain able to acquire");
+  assert.equal(fs.existsSync(lockPath), false);
+  fs.mkdirSync(lockPath);
+  fs.writeFileSync(path.join(lockPath, "unknown"), "preserve");
+  fs.utimesSync(lockPath, new Date(1), new Date(1));
+  assert.throws(() => withManifestLock(manifestPath, () => assert.fail("must not enter"), { timeoutMs: 25 }), /Timed out acquiring/);
+  assert.equal(fs.readFileSync(path.join(lockPath, "unknown"), "utf8"), "preserve");
+  fs.unlinkSync(path.join(lockPath, "unknown"));
+  fs.writeFileSync(path.join(lockPath, `${process.pid}.1.${crypto.randomUUID()}.owner`), "");
+  assert.throws(() => withManifestLock(manifestPath, () => assert.fail("must not enter"), { timeoutMs: 25 }), /Timed out acquiring/);
+});
+
+test("initialization failure cleans its own claim without stranding the lock", (t) => {
+  const manifestPath = path.join(temporaryDirectory(t), "manifest.json");
+  const lockPath = `${manifestPath}.lock`;
+  const write = fs.writeFileSync;
+  let failed = false;
+  t.mock.method(fs, "writeFileSync", (target, ...args) => {
+    const result = write(target, ...args);
+    if (path.dirname(String(target)) === lockPath && !failed) {
+      failed = true;
+      throw Object.assign(new Error("injected initialization failure"), { code: "EACCES" });
+    }
+    return result;
+  });
+  assert.throws(() => withManifestLock(manifestPath, () => assert.fail("must not enter")), /injected initialization failure/);
+  assert.equal(fs.existsSync(lockPath), false);
+  withManifestLock(manifestPath, () => {});
+  assert.equal(fs.existsSync(lockPath), false);
 });
 
 test("async profile write leases exclude concurrent manifest mutation", async (t) => {

@@ -24,6 +24,8 @@ const OKF = (title, choice, extra = "") => `---\ntype: decision\ntitle: ${title}
 async function opsFixture() {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-projection-ops-"));
   const manifestPath = path.join(dir, "manifest.json");
+  const roots = new Map();
+  const journal = createDiscrepancyTransactionJournal(manifestPath);
   await fsp.writeFile(manifestPath, JSON.stringify({ layers: [] }));
   const long = "y".repeat(500);
   const concepts = [{
@@ -36,10 +38,10 @@ async function opsFixture() {
   const state = { corpusKey: "k1", resolves: 0, corpusCalls: 0, sources: [{ name: "team", status: "ok", error: null }, { name: "company", status: "ok", error: null }], generation: 1 };
   const ops = createDiscrepancyOperations({
     manifestPath,
-    fileRoots: () => new Map(),
+    fileRoots: () => roots,
     selectedLayers: () => [],
     resolutionLog: createConflictResolutionLog(manifestPath),
-    transactionJournal: createDiscrepancyTransactionJournal(manifestPath),
+    transactionJournal: journal,
     ruleStore: createDiscrepancyRuleStore(manifestPath),
     priorityStore: createDiscrepancyPriorityStore(manifestPath),
     corpus: async () => {
@@ -51,7 +53,7 @@ async function opsFixture() {
       };
     },
   });
-  return { dir, ops, state, cleanup: () => { ops.close(); return fsp.rm(dir, { recursive: true, force: true }); } };
+  return { dir, ops, state, roots, journal, cleanup: () => { ops.close(); return fsp.rm(dir, { recursive: true, force: true }); } };
 }
 
 test("two projections over unchanged inputs share one build and the same record objects", async () => {
@@ -279,5 +281,25 @@ test('partial-source warnings invalidate cached complete coverage without a cont
     assert.equal((await ops.project()).coverageComplete, false, 'a moving snapshot cannot authorize new automatic decisions');
     state.sources[0].refreshing = false;
     assert.equal((await ops.project()).coverageComplete, true);
+  } finally { await cleanup(); }
+});
+
+test("recovery observes a transaction appended after an earlier successful recovery", async () => {
+  const { dir, ops, roots, journal, cleanup } = await opsFixture();
+  try {
+    roots.set('team', { root: dir, kind: 'okf-local' });
+    await ops.ensureRecovery();
+    const target = path.join(dir, 'note.md');
+    const backup = `${target}.backup`;
+    const staged = `${target}.staged`;
+    await fsp.writeFile(target, 'interrupted editor save\n');
+    await fsp.writeFile(staged, 'interrupted editor save\n');
+    await journal.append({ id: 'later-editor', kind: 'editor', state: 'prepared', targets: [{ path: target, backup, staged }] });
+    await assert.rejects(ops.ensureRecovery(), /Recovery is required/);
+    await assert.rejects(ops.ensureRecovery(), /Recovery is required/, 'a pending failed recovery must keep blocking later writes');
+    await fsp.writeFile(backup, 'original\n');
+    await ops.ensureRecovery();
+    assert.equal(await fsp.readFile(target, 'utf8'), 'original\n');
+    assert.equal((await journal.list()).at(-1).state, 'rolled_back');
   } finally { await cleanup(); }
 });

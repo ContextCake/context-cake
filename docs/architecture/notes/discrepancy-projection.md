@@ -188,9 +188,9 @@ The manifest lock serializes decisions with source and settings edits, and it
 has waiters that give up after 15 s — including synchronous ones (`POST
 /api/sources`, `PATCH /api/settings`) that spin the event loop while they
 wait. A push is up to three network calls of 90 s each. Pushing under that
-lock would time every concurrent writer out, freeze the process for those
-sync waiters, and past the 60 s stale threshold let another process
-legitimately steal the lock. So `commitDecisionWrite` never pushes: it
+lock would time every concurrent writer out and freeze the process for those
+sync waiters. A live owner does not expire merely because its operation is slow.
+So `commitDecisionWrite` never pushes: it
 returns a `git.pushRoot` marker once the decision is durable, and the caller
 — `decide`, `decideBatch`, `runAutomaticRules`, the legacy conflict route —
 pushes once through `pushAfterUnlock` after releasing the lock, exactly as

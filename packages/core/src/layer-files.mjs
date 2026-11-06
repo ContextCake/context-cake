@@ -81,12 +81,17 @@ export function relativeWithinRoot(abs, root) {
  * Resolve an API path ("<layer>/<rel>") to an absolute path, refusing anything
  * that escapes the layer's root. This is the trust boundary for read AND write.
  */
-export function resolveLayerFile(apiPath, roots) {
+export function parseLayerFilePath(apiPath) {
   if (!apiPath) throw httpError(400, "Provide ?path=<layer>/<relative>");
   const norm = String(apiPath).replace(/\\/g, "/").replace(/^\/+/, "");
   const slash = norm.indexOf("/");
   const layer = slash === -1 ? norm : norm.slice(0, slash);
   const rel = slash === -1 ? "" : norm.slice(slash + 1);
+  return { layer, rel };
+}
+
+export function resolveLayerFile(apiPath, roots) {
+  const { layer, rel } = parseLayerFilePath(apiPath);
   const entry = roots.get(layer);
   if (!entry) throw httpError(404, `Unknown layer: ${layer}`);
   const abs = path.resolve(entry.root, rel);
@@ -220,7 +225,7 @@ export function serveRawApi(apiPath, roots, res) {
   });
 }
 
-export async function writeFileApi(rawBody, roots) {
+async function prepareFileWrite(rawBody, roots) {
   const body = parseJson(rawBody);
   const { abs, ext, layer, path: apiPath } = { ...resolveLayerFile(body.path, roots), path: body.path };
   if (!TEXT_EXT.has(ext)) throw httpError(415, `Not an editable text file: ${ext || "(no ext)"}`);
@@ -242,9 +247,23 @@ export async function writeFileApi(rawBody, roots) {
       throw httpError(409, `This file changed on disk after you opened it. Reopen ${apiPath} and merge your edit.`);
     }
   }
-  await fsp.writeFile(abs, body.text, "utf8");
-  const after = await fsp.stat(abs);
-  return { ok: true, path: apiPath, layer, bytes: Buffer.byteLength(body.text), modified: after.mtime.toISOString() };
+  return { apiPath, write: { layer, abs, text: body.text, mode: stat.mode } };
+}
+
+export async function stageFileTransaction(rawBody, roots, transactionId, options = {}) {
+  const { apiPath, write } = await prepareFileWrite(rawBody, roots);
+  const staged = await stagePreparedWrites([write], [], transactionId, options);
+  return { ...staged, response: async () => ({
+    ok: true, path: apiPath, layer: write.layer, bytes: Buffer.byteLength(write.text),
+    modified: (await fsp.stat(write.abs)).mtime.toISOString(),
+  }) };
+}
+
+export async function writeFileApi(rawBody, roots) {
+  const { apiPath, write } = await prepareFileWrite(rawBody, roots);
+  await fsp.writeFile(write.abs, write.text, "utf8");
+  const after = await fsp.stat(write.abs);
+  return { ok: true, path: apiPath, layer: write.layer, bytes: Buffer.byteLength(write.text), modified: after.mtime.toISOString() };
 }
 
 /**
@@ -283,6 +302,7 @@ export async function prepareSectionWrites(rawBody, roots) {
     let stat = null;
     try {
       const root = roots.get(layer);
+      if (!root) { skipped.push({ layer, reason: "source is not locally writable" }); continue; }
       const extensions = root?.kind === "files" ? FILES_EXTENSIONS : [".md"];
       for (const ext of extensions) {
         const candidate = resolveLayerFile(`${layer}/${conceptId}${ext}`, roots);
@@ -469,8 +489,10 @@ async function stagePreparedWrites(writes, skipped, transactionId, options = {})
         continue;
       }
       const backup = `${write.abs}${suffix}.bak`;
+      const target = { layer: write.layer, path: write.abs, staged, backup: null };
+      targets.push(target);
       await fsp.copyFile(write.abs, backup, fs.constants.COPYFILE_EXCL);
-      targets.push({ layer: write.layer, path: write.abs, staged, backup });
+      target.backup = backup;
     }
   } catch (error) {
     await cleanupTargets(targets);

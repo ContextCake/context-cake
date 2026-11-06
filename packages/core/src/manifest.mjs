@@ -1215,57 +1215,68 @@ function manifestLockIsStale(lock, staleMs) {
   return age > staleMs || age < -staleMs;
 }
 
+// Claim filenames carry complete owner identity even if initialization is
+// interrupted. Never rename, recursively remove, or restore a shared lock path.
 function tryAcquireManifestLock(lockPath, staleMs) {
-  const token = crypto.randomUUID();
-  const payload = { pid: process.pid, createdAt: Date.now(), token };
+  const token = `${process.pid}.${Date.now()}.${crypto.randomUUID()}.owner`;
   try {
-    fs.writeFileSync(lockPath, JSON.stringify(payload), { flag: "wx", mode: 0o600 });
-    return token;
+    fs.mkdirSync(lockPath, { mode: 0o700 });
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
-  }
-
-  const observed = readManifestLock(lockPath);
-  if (!manifestLockIsStale(observed, staleMs)) return null;
-  const parked = `${lockPath}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString("hex")}.stale`;
-  try {
-    fs.renameSync(lockPath, parked);
-  } catch {
-    return null;
-  }
-
-  // Another contender may have replaced the stale lock between our read and
-  // rename. Inodes can be reused, so identity includes the owner generation;
-  // recheck staleness before removing anything we parked.
-  const parkedLock = readManifestLock(parked);
-  if (!parkedLock || parkedLock.dev !== observed?.dev || parkedLock.ino !== observed?.ino
-    || parkedLock.token !== observed?.token || parkedLock.pid !== observed?.pid
-    || parkedLock.createdAt !== observed?.createdAt || !manifestLockIsStale(parkedLock, staleMs)) {
-    try { fs.renameSync(parked, lockPath); } catch { /* lock path was restored elsewhere */ }
+    recoverManifestLock(lockPath, staleMs);
     return null;
   }
   try {
-    // Keep the stale inode allocated until the replacement exists. Otherwise
-    // a second reaper can confuse immediate inode reuse with its observation.
-    fs.writeFileSync(lockPath, JSON.stringify(payload), { flag: "wx", mode: 0o600 });
-    return token;
+    const before = fs.lstatSync(lockPath);
+    if (!before.isDirectory()) return null;
+    fs.writeFileSync(path.join(lockPath, token), "", { flag: "wx", mode: 0o600 });
+    const owners = fs.readdirSync(lockPath);
+    const after = fs.lstatSync(lockPath);
+    // A paused initializer can resume in a replacement directory, even one
+    // whose inode was reused. It must also prove its claim is the ONLY one.
+    if (before.dev === after.dev && before.ino === after.ino
+      && owners.length === 1 && owners[0] === token) return token;
   } catch (error) {
-    if (error.code === "EEXIST") return null;
-    throw error;
-  } finally {
-    // Cleanup must not hide an acquired token and strand its live lock.
-    try { fs.rmSync(parked, { force: true }); } catch { /* harmless stale artifact */ }
+    if (!["ENOENT", "ENOTDIR", "EEXIST"].includes(error.code)) {
+      releaseManifestLock(lockPath, token);
+      throw error;
+    }
   }
+  releaseManifestLock(lockPath, token);
+  return null;
+}
+
+function recoverManifestLock(lockPath, staleMs) {
+  let stat;
+  try { stat = fs.lstatSync(lockPath); } catch (error) { if (error.code === "ENOENT") return; throw error; }
+  if (!stat.isDirectory()) {
+    // Node cannot atomically compare-and-unlink an old lockfile generation.
+    // Fail closed on legacy migration, rather than deleting a live old
+    // binary's replacement between the stale check and unlink.
+    if (manifestLockIsStale(readManifestLock(lockPath), staleMs)) {
+      throw new Error(`Timed out acquiring the ContextCake manifest lock at ${lockPath}. A stale legacy lockfile needs manual cleanup: close older ContextCake processes, then remove this lockfile and retry.`);
+    }
+    return;
+  }
+  let owners;
+  try { owners = fs.readdirSync(lockPath); } catch (error) { if (error.code === "ENOENT") return; throw error; }
+  for (const owner of owners) {
+    const match = /^(\d+)\.(\d+)\.([0-9a-f-]{36})\.owner$/.exec(owner);
+    if (!match || !manifestLockIsStale({ pid: Number(match[1]), createdAt: Number(match[2]) }, staleMs)) continue;
+    try { fs.unlinkSync(path.join(lockPath, owner)); }
+    catch (error) { if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error; }
+  }
+  // Empty abandoned initializations expire too. rmdir can remove a newly
+  // created empty directory, but its initializer then fails validation and
+  // retries. Once a live claim exists, rmdir cannot remove its directory.
+  if (owners.length === 0 && !manifestLockIsStale({ mtimeMs: stat.mtimeMs }, staleMs)) return;
+  try { fs.rmdirSync(lockPath); }
+  catch (error) { if (!["ENOENT", "ENOTEMPTY", "EEXIST", "ENOTDIR"].includes(error.code)) throw error; }
 }
 
 function releaseManifestLock(lockPath, token) {
-  try {
-    // A delayed former holder must never delete a replacement lock.
-    if (readManifestLock(lockPath)?.token !== token) return;
-    fs.rmSync(lockPath, { force: true });
-  } catch {
-    // Releasing an advisory lock must not hide the mutation result.
-  }
+  try { fs.unlinkSync(path.join(lockPath, token)); } catch { /* only our unique claim */ }
+  try { fs.rmdirSync(lockPath); } catch { /* never remove a replacement's claim */ }
 }
 
 function sleepSync(milliseconds) {

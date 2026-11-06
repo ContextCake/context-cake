@@ -13,13 +13,13 @@ import path from "node:path";
 import test from "node:test";
 import { commitPathsWithMutation, scrub } from "../src/sources/git-core.mjs";
 
-async function repo() {
+async function repo(objectFormat = null) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-git-core-"));
   const env = { ...process.env, GIT_CONFIG_GLOBAL: path.join(dir, "gitconfig"), GIT_CONFIG_SYSTEM: "/dev/null" };
   await fsp.writeFile(path.join(dir, "gitconfig"), "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[init]\n\tdefaultBranch = main\n");
   const root = path.join(dir, "repo");
   await fsp.mkdir(root);
-  execFileSync("git", ["init", "--quiet", root], { env });
+  execFileSync("git", ["init", "--quiet", ...(objectFormat ? [`--object-format=${objectFormat}`] : []), root], { env });
   await fsp.writeFile(path.join(root, "a.md"), "# A\n\noriginal a\n");
   await fsp.writeFile(path.join(root, "b.md"), "# B\n\noriginal b\n");
   execFileSync("git", ["-C", root, "add", "-A"], { env });
@@ -107,3 +107,55 @@ test("scrub hides exactly what its old regex did, in linear time", () => {
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 5_000, `hostile git output took ${Math.round(elapsed)} ms`);
 });
+
+test("failed commits restore the exact previous index without disturbing staged siblings", async () => {
+  const { root, env, cleanup } = await repo();
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { env, encoding: 'utf8' });
+  try {
+    const hooks = path.join(root, '.git', 'hooks');
+    await fsp.writeFile(path.join(hooks, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    await fsp.writeFile(path.join(root, 'a.md'), 'staged a\n');
+    await fsp.writeFile(path.join(root, 'b.md'), 'staged sibling\n');
+    git('add', '--', 'a.md', 'b.md');
+    const before = git('ls-files', '--stage', '-z');
+    await fsp.writeFile(path.join(root, 'a.md'), 'working a\n');
+    await assert.rejects(commitPathsWithMutation(root, () => ['a.md'], 'must fail', {
+      mutate: () => fsp.writeFile(path.join(root, 'a.md'), 'edited a\n'),
+      rollback: () => fsp.writeFile(path.join(root, 'a.md'), 'working a\n'),
+    }), (error) => error.code === "GitError");
+    assert.equal(await fsp.readFile(path.join(root, 'a.md'), 'utf8'), 'working a\n');
+    assert.equal(git('ls-files', '--stage', '-z'), before, 'both the prior target staging and staged sibling survive');
+    assert.equal(git('show', ':a.md'), 'staged a\n');
+    assert.equal(git('show', ':b.md'), 'staged sibling\n');
+  } finally { await cleanup(); }
+});
+
+for (const format of ['sha1', 'sha256']) {
+  test(`failed commits preserve intent-to-add and staged blobs in ${format} repositories`, async () => {
+    const { root, env, cleanup } = await repo(format);
+    const git = (...args) => execFileSync('git', ['-C', root, ...args], { env, encoding: 'utf8' });
+    const intent = 'intent [1].md';
+    try {
+      await fsp.writeFile(path.join(root, intent), 'untracked working bytes\n');
+      git('add', '--intent-to-add', '--', intent);
+      await fsp.writeFile(path.join(root, 'a.md'), 'staged original\n');
+      git('add', '--', 'a.md');
+      await fsp.writeFile(path.join(root, 'a.md'), 'unstaged original\n');
+      const index = git('ls-files', '--stage', '-z');
+      const cached = git('diff', '--cached', '--raw', '--no-abbrev', '--ita-invisible-in-index');
+      await fsp.writeFile(path.join(root, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      await assert.rejects(commitPathsWithMutation(root, ['a.md', intent], 'must fail', {
+        mutate: async () => {
+          await fsp.writeFile(path.join(root, 'a.md'), 'new a\n');
+          await fsp.writeFile(path.join(root, intent), 'new intent\n');
+        },
+        rollback: async () => {
+          await fsp.writeFile(path.join(root, 'a.md'), 'unstaged original\n');
+          await fsp.writeFile(path.join(root, intent), 'untracked working bytes\n');
+        },
+      }), (error) => error.code === 'GitError');
+      assert.equal(git('ls-files', '--stage', '-z'), index);
+      assert.equal(git('diff', '--cached', '--raw', '--no-abbrev', '--ita-invisible-in-index'), cached, 'intent-to-add is not converted into a staged empty file');
+    } finally { await cleanup(); }
+  });
+}

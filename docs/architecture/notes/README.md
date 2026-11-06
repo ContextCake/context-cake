@@ -18,6 +18,7 @@ change one and the reasoning here goes stale, update the note in the same PR.
 | [status-polling.md](status-polling.md) | Why clients poll `/api/status` and never `/api/graph` |
 | [index-queue-and-memory.md](index-queue-and-memory.md) | Concurrency limits, the memory-pressure watermark, and the abort gap in remote adapters |
 | [manifest-validation.md](manifest-validation.md) | Tolerant reads, strict writes, and the one repair door between them |
+| [manifest-locking.md](manifest-locking.md) | Directory ownership, safe stale recovery, legacy file-lock upgrades, and live-layer editor transactions |
 | [discrepancy-projection.md](discrepancy-projection.md) | One memoized discrepancy projection, what keys it, why candidates stay out of `revision`, and why live-layer decision writes go through git-core |
 | [link-prior.md](link-prior.md) | The static inbound-link ranking prior: what inbound counts, why the weight is log-damped, the weight sweep against the eval, and how all three scorers stay bit-identical |
 | [section-retrieval.md](section-retrieval.md) | Why the body field scores per section instead of per whole document, the exact corpus-statistics rules, the tie rule, what `section: null` on a hit means, and the known scattered-vs-concentrated limitation |

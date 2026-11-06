@@ -93,6 +93,7 @@ export function createDiscrepancyOperations({
   const MANIFEST = path.resolve(manifestPath);
   const MANIFEST_DIR = path.dirname(MANIFEST);
   let recovery = null;
+  let recoveredJournal = null;
   // Decisions, rule approvals, and priority edits serialize on the manifest
   // lock — the same lock the source CRUD takes — so a decision can never
   // interleave with a manifest rewrite or with another decision's re-projection.
@@ -347,17 +348,25 @@ export function createDiscrepancyOperations({
 
   // ---- recovery -----------------------------------------------------------------
 
-  // Recovery runs once per process, before the first decision, and is retried
-  // if it failed. A journal transaction left `prepared` by a crash is restored
-  // from its backups unless the decision log proves it committed.
-  function ensureRecovery() {
-    if (!recovery) {
+  // Recheck when any process appended to the journal. A permanently memoized
+  // success would miss a later failed editor rollback or another host's crash,
+  // allowing a new save to be overwritten by old backups on the next restart.
+  async function ensureRecovery() {
+    const stamp = async () => transactionJournal.file
+      ? fsp.stat(transactionJournal.file).then((st) => `${st.size}:${st.mtimeMs}:${st.ino}`, (error) => { if (error.code === "ENOENT") return "missing"; throw error; })
+      : null;
+    const current = await stamp();
+    if (!recovery || current !== recoveredJournal) {
       const roots = [...fileRoots().values()].map((entry) => entry.root);
+      recoveredJournal = current;
       recovery = resolutionLog.list().then((decisions) => transactionJournal.recover(
         roots,
         decisions.filter((row) => row.transactionState === "committed").map((row) => row.transactionId).filter(Boolean),
         { restore: restoreRecoveredTargets },
-      )).catch((error) => {
+      )).then(async (result) => {
+        recoveredJournal = await stamp();
+        return result;
+      }).catch((error) => {
         recovery = null;
         throw error;
       });

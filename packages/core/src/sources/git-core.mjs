@@ -68,10 +68,15 @@ export function scrub(text) {
   return out + value.slice(copied);
 }
 
-export async function runGit(root, args, { allowFailure = false } = {}) {
+export async function runGit(root, args, { allowFailure = false, input, trim = true } = {}) {
   try {
-    const { stdout, stderr } = await execFileAsync("git", args, { cwd: root, ...GIT_OPTS });
-    return { ok: true, stdout: stdout.trim(), stderr: stderr.trim() };
+    const pending = execFileAsync("git", args, { cwd: root, ...GIT_OPTS });
+    if (input !== undefined) {
+      pending.child.stdin.on("error", () => {}); // git may refuse before reading
+      pending.child.stdin.end(input);
+    }
+    const { stdout, stderr } = await pending;
+    return { ok: true, stdout: trim ? stdout.trim() : stdout, stderr: stderr.trim() };
   } catch (error) {
     if (allowFailure) {
       // `||`, not `??`: a maxBuffer/timeout kill leaves stderr an empty string,
@@ -212,20 +217,34 @@ export async function commitPathsWithMutation(root, paths, message, {
   lockRetryMs,
   lockRetries,
 } = {}) {
-  if (!Array.isArray(paths) || paths.length === 0) throw new Error("commitPathsWithMutation requires at least one path");
+  if (typeof paths !== "function" && (!Array.isArray(paths) || paths.length === 0)) throw new Error("commitPathsWithMutation requires at least one path");
   if (typeof mutate !== "function" || typeof rollback !== "function") {
     throw new Error("commitPathsWithMutation requires mutate and rollback callbacks");
   }
   return withRepoLock(root, "commit", async () => {
+    let selectedPaths;
+    let index = null;
     try {
       await mutate();
-      if (skipIfClean && await pathsClean(root, paths)) return { committed: false, clean: true };
-      return await commitPathsUnlocked(root, paths, message, author);
+      // Editors learn their exact file extensions while preparing under this
+      // lock. A callback names those actual targets without a racy pre-read.
+      selectedPaths = typeof paths === "function" ? paths() : paths;
+      if (!Array.isArray(selectedPaths)) throw new Error("mutation paths must be an array");
+      if (selectedPaths.length === 0 || (skipIfClean && await pathsClean(root, selectedPaths))) return { committed: false, clean: true };
+      index = await snapshotIndex(root, selectedPaths);
+      return await commitPathsUnlocked(root, selectedPaths, message, author);
     } catch (error) {
+      const failures = [];
       try {
         await rollback(error);
-      } catch (rollbackError) {
-        const combined = new Error(`${error.message}; rollback failed: ${rollbackError.message}`);
+      } catch (rollbackError) { failures.push(rollbackError.message); }
+      // git add may have succeeded before commit failed. Restore exactly the
+      // named paths' old index entries too, including pre-existing staging;
+      // never reset the whole index or discard an unrelated staged edit.
+      try { if (index) await restoreIndex(root, selectedPaths, index); }
+      catch (indexError) { failures.push(`index: ${indexError.message}`); }
+      if (failures.length) {
+        const combined = new Error(`${error.message}; rollback failed: ${failures.join("; ")}`);
         combined.code = "RollbackFailed";
         throw combined;
       }
@@ -239,6 +258,33 @@ export async function commitPathsWithMutation(root, paths, message, {
 // sibling (`db1.md`) into the pathspec commit. Every pathspec-taking call
 // below carries this so callers never have to escape.
 const LITERAL = "--literal-pathspecs";
+
+async function snapshotIndex(root, paths) {
+  const entries = await runGit(root, [LITERAL, "ls-files", "--stage", "-z", "--", ...paths], { trim: false });
+  const flags = await runGit(root, [LITERAL, "ls-files", "-v", "-z", "--", ...paths], { trim: false });
+  const visible = await runGit(root, [LITERAL, "diff", "--cached", "--name-only", "-z", "--ita-visible-in-index", "--", ...paths], { trim: false });
+  const invisible = await runGit(root, [LITERAL, "diff", "--cached", "--name-only", "-z", "--ita-invisible-in-index", "--", ...paths], { trim: false });
+  const real = new Set(invisible.stdout.split("\0"));
+  const intent = visible.stdout.split("\0").filter((name) => name && !real.has(name));
+  return { entries: entries.stdout, flags: flags.stdout, intent };
+}
+
+async function restoreIndex(root, paths, saved) {
+  const current = await runGit(root, [LITERAL, "ls-files", "--stage", "-z", "--", ...paths], { trim: false });
+  const names = new Set(current.stdout.split("\0").filter(Boolean).map((row) => row.slice(row.indexOf("\t") + 1)));
+  // NUL framing preserves tabs/newlines in filenames; index-info also retains
+  // merge stages, executable modes, and staged blobs that differ from HEAD.
+  const zero = current.stdout.match(/^\d+ ([0-9a-f]+) /)?.[1].replace(/./g, "0");
+  const remove = [...names].map((name) => `0 ${zero}\t${name}\0`).join("");
+  const entries = saved.entries.split("\0").filter((row) => row && !saved.intent.includes(row.slice(row.indexOf("\t") + 1)));
+  await runGit(root, ["update-index", "-z", "--index-info"], { input: remove + entries.map((row) => `${row}\0`).join("") });
+  if (saved.intent.length) await runGit(root, [LITERAL, "add", "--intent-to-add", "--", ...saved.intent]);
+  const flags = saved.flags.split("\0").filter(Boolean);
+  const assumed = flags.filter((row) => row[0] === row[0].toLowerCase()).map((row) => row.slice(2));
+  const skipped = flags.filter((row) => row[0].toUpperCase() === "S").map((row) => row.slice(2));
+  if (assumed.length) await runGit(root, ["update-index", "--assume-unchanged", "--", ...assumed]);
+  if (skipped.length) await runGit(root, ["update-index", "--skip-worktree", "--", ...skipped]);
+}
 
 // True when none of the named paths differs from HEAD/index — modified,
 // staged, or untracked all count as dirty. Untracked files are listed

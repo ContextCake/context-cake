@@ -27,6 +27,7 @@ import { buildSourcesQuarantined, createErrorSource, resolveTokenState } from ".
 import { MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createSourceOperations } from "./control/sources.mjs";
+import { createFileOperations } from "./control/files.mjs";
 import { createDiscrepancyOperations } from "./control/discrepancies.mjs";
 import { createContextResolutionOperations } from "./control/context-resolutions.mjs";
 import { blockedContextResolutionKeys as contextResolutionRuleBlocks, discrepancyRevision, fingerprint } from "./discrepancies.mjs";
@@ -47,7 +48,7 @@ import {
   assertInsideRoot, guardMutatingRequest, httpError, json, MIME, parseJson, readBody,
 } from "./http-util.mjs";
 import {
-  layerRootMap, listFilesApi, readFileApi, readLayerSection, serveRawApi, writeFileApi, writeSectionApi,
+  layerRootMap, listFilesApi, readFileApi, readLayerSection, serveRawApi,
   stageSectionTransaction,
 } from "./layer-files.mjs";
 import {
@@ -543,6 +544,13 @@ export function createEngineService({
     readLiveSection: (args) => readLayerSection(fileRoots(), args),
     onWritten: () => invalidateIndex(),
     git: { commitPathsWithMutation, push: pushGit },
+  });
+  const fileOps = createFileOperations({
+    manifestPath: MANIFEST, profileId: SERVICE_PROFILE_ID,
+    transactionJournal: discrepancyTransactionJournal,
+    ensureRecovery: () => discrepancyOps.ensureRecovery(),
+    git: { commitPathsWithMutation, push: pushGit },
+    onWritten: () => { invalidateIndex(); discrepancyOps.noteWrite(); },
   });
   let automaticTimer = null;
   let automaticTail = Promise.resolve();
@@ -1960,10 +1968,7 @@ export function createEngineService({
       if (p === "/api/file") {
         if (req.method === "PUT" || req.method === "POST") {
           if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
-          const out = await writeFileApi(await readBody(req), fileRoots());
-          // The edited file IS layer content, and the manifest did not change,
-          // so the index would otherwise keep serving the pre-edit snapshot.
-          invalidateIndex(out.layer ?? null);
+          const out = await fileOps.writeFile(await readBody(req));
           json(res, 200, out);
           return true;
         }
@@ -1973,8 +1978,7 @@ export function createEngineService({
       if (p === "/api/file/raw") { serveRawApi(url.searchParams.get("path"), fileRoots(), res); return true; }
       if (p === "/api/section" && (req.method === "PUT" || req.method === "POST")) {
         if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
-        const out = await writeSectionApi(await readBody(req), fileRoots());
-        invalidateIndex(); // a section write can touch several layers at once
+        const out = await fileOps.writeSection(await readBody(req));
         json(res, 200, out);
         return true;
       }
@@ -2942,7 +2946,7 @@ export function createEngineService({
   // Recovery is a startup responsibility, not something deferred until a user
   // happens to open the Discrepancy Center. Failure remains visible through
   // the journal and is retried before any later decision.
-  queueMicrotask(() => discrepancyOps.ensureRecovery().catch((error) => {
+  queueMicrotask(() => withManifestLockAsync(MANIFEST, () => discrepancyOps.ensureRecovery()).catch((error) => {
     console.error(`contextcake: discrepancy transaction recovery requires attention: ${error.message}`);
   }));
 

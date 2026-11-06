@@ -79,6 +79,7 @@ test("errors map to exit codes by explicit category, then code, then status", ()
     [toControlError(Object.assign(new Error("no"), { code: "EACCES" })), 5],
     [toControlError(Object.assign(new Error("slow"), { code: "CONTEXTCAKE_TIMEOUT" })), 6],
     [toControlError(new Error("boom")), 1],
+    [manifestControlError(Object.assign(new Error("busy"), { code: "MANIFEST_LOCKED", status: 409 })), 6],
     [manifestControlError(new Error("ContextCake manifest does not exist: /x")), 3],
     [manifestControlError(new Error("ContextCake manifest is not valid JSON: y")), 7],
     [manifestControlError(new Error("Timed out acquiring the ContextCake manifest lock at /x.lock.")), 6],

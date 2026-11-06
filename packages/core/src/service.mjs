@@ -48,7 +48,7 @@ import {
   assertInsideRoot, guardMutatingRequest, httpError, json, MIME, parseJson, readBody,
 } from "./http-util.mjs";
 import {
-  layerRootMap, listFilesApi, readFileApi, readLayerSection, serveRawApi,
+  layerRootMap, listFilesApi, readFileApi, readLayerSection, relativeWithinRoot, serveRawApi,
   stageSectionTransaction,
 } from "./layer-files.mjs";
 import {
@@ -550,7 +550,7 @@ export function createEngineService({
     transactionJournal: discrepancyTransactionJournal,
     ensureRecovery: () => discrepancyOps.ensureRecovery(),
     git: { commitPathsWithMutation, push: pushGit },
-    onWritten: () => { invalidateIndex(); discrepancyOps.noteWrite(); },
+    onWritten: (targets) => { watchEditedParents(targets); invalidateIndex(); discrepancyOps.noteWrite(); },
   });
   let automaticTimer = null;
   let automaticTail = Promise.resolve();
@@ -1674,6 +1674,7 @@ export function createEngineService({
       if (roots.has(root)) continue;
       clearTimeout(state.timer);
       try { state.watcher.close(); } catch { /* already gone */ }
+      for (const parent of state.editedParents.values()) parent.close();
       watchers.delete(root);
     }
     for (const root of roots) {
@@ -1693,7 +1694,37 @@ export function createEngineService({
         }
       }
       watcher.on("error", () => {});
-      watchers.set(root, { watcher, timer: null });
+      watchers.set(root, { watcher, timer: null, editedParents: new Map() });
+    }
+  }
+
+  // Atomic editor saves replace file inodes. Node's Linux recursive watcher
+  // can retain a watch on the old inode, missing later ordinary writes to the
+  // replacement. A native parent-directory watch survives child replacement.
+  // Add only parents actually edited here; never synchronously re-walk a large
+  // recursive source after each save. Close these alongside the source watch.
+  function watchEditedParents(targets) {
+    syncWatchers();
+    for (const target of targets) {
+      const parent = path.dirname(target);
+      for (const [root, state] of watchers) {
+        const relative = relativeWithinRoot(parent, root);
+        if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative) || state.editedParents.has(parent)) continue;
+        try {
+          const watcher = fs.watch(parent, { persistent: false }, (_event, filename) => {
+            const name = filename == null ? null : path.join(relative, String(filename));
+            onChange(root, name).catch(() => {});
+          });
+          watcher.on("error", (error) => {
+            console.error(`[service watcher] ${parent}: edited-folder watch failed (${error.message})`);
+            watcher.close();
+            state.editedParents.delete(parent);
+          });
+          state.editedParents.set(parent, watcher);
+        } catch (error) {
+          console.error(`[service watcher] ${parent}: could not watch edited folder (${error.message})`);
+        }
+      }
     }
   }
 
@@ -1729,6 +1760,7 @@ export function createEngineService({
     for (const [, state] of watchers) {
       clearTimeout(state.timer);
       try { state.watcher.close(); } catch { /* already gone */ }
+      for (const parent of state.editedParents.values()) parent.close();
     }
     watchers.clear();
   }

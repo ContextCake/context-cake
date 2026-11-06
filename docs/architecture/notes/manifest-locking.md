@@ -29,7 +29,7 @@ covers this boundary.
 Startup recovery keeps its lease until the journal is settled. Mutating HTTP
 requests await that startup promise; health and other reads remain available.
 A synchronous writer that encounters an async claim owned by this process
-returns `MANIFEST_BUSY` (HTTP 409) immediately. Blocking would prevent the same
+returns `MANIFEST_LOCKED` (HTTP 409) immediately. Blocking would prevent the same
 event loop from releasing the lease. Async writers still wait normally, and
 same-process ownership never grants permission to enter another mutation.
 
@@ -59,6 +59,13 @@ all contributors and the touched index entries, preserving unrelated staging.
 Commits name the actual relative filenames, including their extensions. A
 byte-identical save does not create an empty commit. Push occurs after releasing
 the manifest lease; offline commits remain local for source Sync to deliver.
+
+The service also watches each edited file's parent directory directly. This
+keeps later external writes visible after an atomic save replaces the file's
+inode, which Node's Linux recursive watcher can otherwise stop following.
+These supplementary watches cover service-owned editor saves, are deduplicated
+per parent/source, and close when the source is removed or the service closes.
+They avoid rebuilding a recursive watcher over an entire vault after each save.
 
 Recovery is rechecked when the journal changes, including another process's
 write or a failed rollback in the current process. A previously successful

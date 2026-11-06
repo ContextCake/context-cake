@@ -580,7 +580,7 @@ export function withManifestLock(manifestPath, mutate, {
     try { claims = fs.readdirSync(lockPath); } catch { /* legacy/busy path */ }
     if (claims.some((claim) => asyncManifestClaims.has(claim))) {
       const error = new Error("The ContextCake manifest is busy with another operation. Try again in a moment.");
-      error.code = "MANIFEST_BUSY";
+      error.code = "MANIFEST_LOCKED";
       error.status = 409;
       throw error;
     }

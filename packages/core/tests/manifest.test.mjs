@@ -874,7 +874,7 @@ test("a synchronous writer refuses its own process's async lease without blockin
   t.mock.method(Atomics, "wait", () => assert.fail("must not block the async owner's event loop"));
   try {
     assert.throws(() => withManifestLock(manifestPath, () => assert.fail("must not enter")),
-      { code: "MANIFEST_BUSY", status: 409 });
+      { code: "MANIFEST_LOCKED", status: 409 });
     assert.equal(queuedEntered, false);
   } finally {
     release();

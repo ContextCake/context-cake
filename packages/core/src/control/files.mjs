@@ -86,7 +86,7 @@ export function createFileOperations({ manifestPath, profileId = "default", tran
         throw error;
       }
       await staged.cleanup();
-      onWritten();
+      onWritten(staged.targets.map((target) => target.path));
       return { response, live, livePaths, committed };
     });
     // Network work never holds the manifest lease. A failed push leaves the

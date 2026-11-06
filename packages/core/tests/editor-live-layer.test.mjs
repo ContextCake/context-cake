@@ -4,11 +4,18 @@ import fs from "node:fs/promises";
 import syncFs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { createFileOperations } from "../src/control/files.mjs";
 import { createDiscrepancyTransactionJournal } from "../src/conflict-resolutions.mjs";
 import { commitPathsWithMutation, push, withRepoLock } from "../src/sources/git-core.mjs";
 import { createEngineService } from "../src/service.mjs";
+
+test("atomic editor saves keep external writes visible under Linux's recursive watcher", () => {
+  const helper = fileURLToPath(new URL("./helpers/atomic-editor-watch.mjs", import.meta.url));
+  const output = execFileSync(process.execPath, ["--expose-internals", helper], { encoding: "utf8", timeout: 30_000 });
+  assert.match(output, /atomic editor watcher regression passed/);
+});
 
 async function fixture(t, overrides = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cc-editor-live-"));

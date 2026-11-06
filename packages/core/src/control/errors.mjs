@@ -141,6 +141,7 @@ export function exitCodeFor(error) {
 export function toControlError(error) {
   if (error instanceof ControlError) return error;
   const message = error?.message ? String(error.message) : String(error);
+  if (error?.code === "MANIFEST_LOCKED") return new ControlError("MANIFEST_LOCKED", message, { status: 409, retryable: true });
   if (error?.code === "ENOENT") return new ControlError("NOT_FOUND", message, { status: 404 });
   if (error?.code === "EACCES" || error?.code === "EPERM") return new ControlError("PERMISSION_DENIED", message, { status: 403 });
   if (error?.code === "CONTEXTCAKE_TIMEOUT") return new ControlError("TIMEOUT", message, { status: 504, retryable: true });

@@ -7,16 +7,24 @@ the mutation, it verifies the directory identity and that its claim is the only
 entry. The identity check alone is insufficient: an inode can be reused while
 an initializer is paused.
 
-Recovery removes only an exact, expired claim whose PID is no longer alive,
+Recovery removes only an exact claim whose PID is no longer alive,
 then uses nonrecursive `rmdir`. It never parks, restores, or recursively deletes
 the shared path. A late reaper cannot remove a replacement's populated directory.
 It can remove a replacement that is still empty, but that initializer then
 fails claim placement or its sole-owner check and retries. Empty directories
-left by interrupted initialization expire after the same stale window. Unknown
+left by interrupted initialization expire after the stale window. Complete
+dead-owner claims recover immediately, so a crashed engine can relaunch without
+waiting for that window. Unknown
 entries are preserved and keep the lock busy.
 
 Release likewise removes only the caller's unique claim and tries nonrecursive
 `rmdir`. A delayed release cannot remove the next owner's claim.
+
+The desktop bootstrap waits asynchronously for this lease. A synchronous wait
+on the Electron main process can prevent it from reaping its shutting-down
+utility process or sending the delayed kill, keeping that child's PID apparently
+alive throughout the lock timeout. The native teardown/relaunch regression
+covers this boundary.
 
 ## Upgrading from file locks
 

@@ -1262,7 +1262,13 @@ function recoverManifestLock(lockPath, staleMs) {
   try { owners = fs.readdirSync(lockPath); } catch (error) { if (error.code === "ENOENT") return; throw error; }
   for (const owner of owners) {
     const match = /^(\d+)\.(\d+)\.([0-9a-f-]{36})\.owner$/.exec(owner);
-    if (!match || !manifestLockIsStale({ pid: Number(match[1]), createdAt: Number(match[2]) }, staleMs)) continue;
+    const pid = Number(match?.[1]);
+    // Unlike an empty directory or a legacy partial JSON file, a complete
+    // claim filename identifies its owner without an initialization window.
+    // A dead process cannot still be mutating: reclaim immediately so an
+    // engine crash/relaunch never waits out the age threshold. EPERM counts
+    // as alive, and a recycled PID conservatively keeps the claim busy.
+    if (!match || !Number.isSafeInteger(pid) || pid <= 0 || processIsAlive(pid)) continue;
     try { fs.unlinkSync(path.join(lockPath, owner)); }
     catch (error) { if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error; }
   }

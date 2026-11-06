@@ -945,3 +945,14 @@ function runNodeOutput(script, args) {
     });
   });
 }
+
+test("a crashed owner's complete claim recovers immediately for engine relaunch", (t) => {
+  const manifestPath = path.join(temporaryDirectory(t), 'manifest.json');
+  const lockPath = `${manifestPath}.lock`;
+  fs.mkdirSync(lockPath);
+  fs.writeFileSync(path.join(lockPath, `2147483647.${Date.now()}.${crypto.randomUUID()}.owner`), '');
+  let entered = false;
+  withManifestLock(manifestPath, () => { entered = true; }, { timeoutMs: 500, staleMs: 60_000 });
+  assert.equal(entered, true, 'a fresh but dead owner must not strand restart for a minute');
+  assert.equal(fs.existsSync(lockPath), false);
+});

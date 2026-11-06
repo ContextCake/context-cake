@@ -1,14 +1,13 @@
 <p align="center">
   <a href="https://contextcake.com">
-    <img src="assets/brand/contextcake-app-icon.svg" width="112" alt="ContextCake — three cascading layers" />
+    <img src="assets/brand/contextcake-app-icon.svg" width="112" alt="ContextCake, three cascading layers" />
   </a>
 </p>
 
 <h1 align="center">ContextCake</h1>
 
 <p align="center">
-  <strong>ContextCake gives AI tools project context with its sources, dates, and disagreements intact.</strong><br />
-  Keep company policy, team practice, and personal notes in separate sources. Resolve the sections that apply, with dates when available and dissent preserved.
+  <strong>Project context for AI tools, with its sources, dates and disagreements intact.</strong>
 </p>
 
 <p align="center">
@@ -19,299 +18,98 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ContextCake/context-cake/releases/latest">Download for Mac</a> ·
+  <a href="https://github.com/ContextCake/context-cake/releases/latest">Download app</a> ·
   <a href="https://contextcake.com">Website</a> ·
   <a href="https://contextcake.com/demo">Live demo</a> ·
-  <a href="https://contextcake.com/docs">Documentation</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a>
+  <a href="https://contextcake.com/docs">Documentation</a>
 </p>
 
 <p align="center">
   <img src="assets/brand/demo-cascade.gif" alt="The ContextCake console resolving a layered decision: clicking the conflicting Primary database card opens the resolved answer, showing each section's source layer (personal, team, company) and the overridden company standard" width="900" />
 </p>
 
----
+Teams don't have one source of truth. They have a company policy, a team decision, a runbook and the personal note that explains the exception. Flatten those into one wiki and you lose both the detail and the disagreement. ContextCake keeps each scope in its own source and resolves them when an agent asks, so the answer comes back with where each part came from, how old it is, and who disagrees.
 
-## Download for Mac
-
-Get the signed, notarized app from the **[latest release](https://github.com/ContextCake/context-cake/releases/latest)**: open the DMG, drag ContextCake to Applications, and the app walks you through adding your first sources and connecting your AI client. Each release page carries the matching ZIP and SHA-256 checksums.
-
-The [install page](https://contextcake.com/install) lists a download for each Mac the current release supports. Releases before the Intel build shipped are Apple silicon only. On Linux, or on a Mac the release does not cover, run the engine from source instead — see the [quick start](#quick-start) below.
-
-## Why ContextCake?
-
-Teams do not have one source of truth. They have an org policy, a service runbook, a team decision, and the local note that explains the exception. Flattening those into another wiki loses both the useful detail and the disagreement.
-
-ContextCake keeps each scope separate, then resolves them at read time. The result is an answer an agent can use **with its source, date, and structural discrepancies intact**.
-
-| What you need | What ContextCake does |
-| --- | --- |
-| Local nuance without copying every policy | Higher-priority layers override only the sections they address. Everything else inherits. |
-| An AI agent that can explain its answer | Returns provenance for frontmatter and every resolved section. |
-| A safe way through disagreement | Surfaces structural discrepancies with complete evidence; applies explicit decisions transactionally; suggests governed rules only after repeated, consistent choices. |
-| Knowledge from more than one system | Layers any folder of Markdown, any GitHub repository, local [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundles, and trusted foreign MCP graphs in one cascade. |
-
-## See what your AI tools can read—and what needs attention
-
-Inspect source health, retrieval performance, and indexing activity in native Mac
-diagnostics. Enable **Local Grafana — Experimental** for detailed dashboards and
-traces on your Mac. Native diagnostics need no Docker; optional Grafana does.
-Local Grafana telemetry stays local in this version, with bounded export queues
-and 24-hour backend retention policies. Only participating processes are observed.
-
-These features are included in the signed Mac app beginning with ContextCake
-0.9.0. [Download the latest release](https://github.com/ContextCake/context-cake/releases/latest)
-or read the [Diagnostics guide](apps/site/src/content/docs/docs/guides/diagnostics.md).
-
-Authoritative source files stay in their configured locations. ContextCake also
-maintains indexes, optional disk caches, and repository clones. Source precedence
-selects a section; it does not establish factual confidence or grant access.
-
-## The layer cake
-
-Context lives in separate repositories or directories. Repository membership remains the access-control model: ContextCake only reads the sources you configure locally.
+## How it resolves
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│ Personal · level 3  Your drafts, notes, and local overrides │
-├─────────────────────────────────────────────────────────────┤
-│ Team     · level 2  Runbooks, decisions, and system docs    │
-├─────────────────────────────────────────────────────────────┤
-│ Company  · level 0  Organization-wide canonical knowledge   │
-└─────────────────────────────────────────────────────────────┘
-                          ↓ resolve at read time
-              one effective, sourced answer for an agent
-```
-
-Resolution is **section-by-section**, not whole-document replacement. A team can override the database choice while inheriting the company backup policy. The higher `level` wins, but you don't have to do arithmetic on the numbers: the cascade can be reordered as a list (position 1 wins) and the levels are reassigned underneath.
-
-```markdown
-<!-- company/decisions/primary-db.md -->
-## Engine {#engine}
-Postgres.
-
-## Backups {#backups}
-Nightly snapshots to cold storage.
-
-<!-- team/decisions/primary-db.md -->
-## Engine {#engine}
-SingleStore (chosen for HTAP workloads).
+Personal · level 3   drafts, notes, local overrides
+Team     · level 2   runbooks, decisions, system docs
+Company  · level 0   organization-wide knowledge
+                ↓ resolved section by section at read time
+        one sourced answer, with dissent and dates attached
 ```
 
 ```text
-Effective concept
-  Engine   → SingleStore   (team wins; company value remains a dated conflict)
-  Backups  → Nightly snapshots to cold storage.   (inherited from company)
+decisions/primary-db
+  Engine   → SingleStore                  (team, updated 2026-05-12)
+             company says Postgres        (company, updated 2026-06-01, newer)
+  Backups  → Nightly snapshots            (inherited from company)
 ```
 
-Learn the model in more depth: [layer cake](https://contextcake.com/docs/concepts/layer-cake), [merge semantics](https://contextcake.com/docs/concepts/merge-semantics), and [conflicts and provenance](https://contextcake.com/docs/concepts/conflicts-and-provenance).
+A team can override the database engine and still inherit the company backup policy. The higher layer wins each section, and the losing value stays visible with its date.
 
 ## Quick start
 
-**Prerequisite:** [Node.js 22+](https://nodejs.org/). The core has no runtime npm dependencies, install scripts, or network fetches.
-
 ```bash
-git clone https://github.com/ContextCake/context-cake.git
-cd context-cake
-
-# Resolve the bundled three-layer example as JSON.
-node resolver.mjs \
-  --manifest apps/playground/manifest.json \
-  --concept decisions/primary-db
-
-# Open the visual playground at http://127.0.0.1:8790.
-npm run playground
+git clone https://github.com/ContextCake/context-cake.git && cd context-cake
+node resolver.mjs --manifest apps/playground/manifest.json --concept decisions/primary-db
+npm run playground   # visual explorer at http://127.0.0.1:8790
 ```
 
-Want a verified walkthrough instead? This prepares a deliberate disagreement across company, team, and personal layers, then proves inheritance, conflicts, and provenance end to end.
+Needs Node 22+. The source checkout needs no npm install: the core uses only Node built-ins. Configured remote sources may use the network. The [signed Mac app and Linux package](https://github.com/ContextCake/context-cake/releases/latest) walk you through adding sources and connecting an AI client. For the standalone npm CLI, use the [current installation instructions](https://contextcake.com/install/).
+
+## Connect an agent
 
 ```bash
-npm run demo:verify
-```
-
-Next: [build your first cascade](https://contextcake.com/docs/getting-started/first-cascade) or [open the live demo](https://contextcake.com/demo).
-
-## Connect an AI agent
-
-ContextCake serves the resolved graph over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). Point any stdio MCP client at a manifest you trust:
-
-```bash
-node mcp-server.mjs --manifest apps/playground/manifest.json
-```
-
-For Claude Code, use absolute paths because MCP clients launch servers from their own working directory:
-
-```bash
-claude mcp add contextcake -- \
-  node /ABSOLUTE/PATH/context-cake/mcp-server.mjs \
+claude mcp add contextcake -- node /ABSOLUTE/PATH/context-cake/mcp-server.mjs \
   --manifest /ABSOLUTE/PATH/context-cake/apps/playground/manifest.json
 ```
 
-The server exposes a small, read-focused interface:
-
-| Tool | Use it to |
-| --- | --- |
-| `search` | Find concepts across every configured layer. |
-| `read_file` | Read the effective concept, including section provenance and conflicts; pass `layer` for the raw source concept. |
-| `list_concepts` | Discover effective concept IDs, optionally filtered by type. |
-| `get_links` | Traverse incoming and outgoing links in the effective graph. |
-| `find_captures` | Search recent team captures (investigations, decisions, gotchas, artifacts), ranked by relevance and recency. |
-| `whats_new` | List captures and curated-concept changes since a timestamp. |
-
-With `--capture`, two write tools are added — `log_capture` (stage a capture, returns a preview) and `confirm_capture` (share it after the user approves). See the [agent connection guide](https://contextcake.com/docs/getting-started/connect-an-agent) and complete [MCP tools reference](https://contextcake.com/docs/reference/mcp-tools).
+Agents get read tools (`search`, `read_file`, `list_concepts`, `get_links`, `find_captures`, `whats_new`). With `--capture`, they can also stage notes that a person approves before they're shared. See the [MCP tools reference](https://contextcake.com/docs/reference/mcp-tools).
 
 > [!CAUTION]
-> A manifest is a trust boundary. An `mcp` source may start the `command` named in that manifest with your user privileges. Only run manifests and configure sources you trust. Read the [trust-boundary guide](https://contextcake.com/docs/concepts/trust-boundary) before connecting external sources.
+> A manifest is a trust boundary. An `mcp` source can start the command it names with your user privileges. Only run manifests you trust. See the [trust-boundary guide](https://contextcake.com/docs/concepts/trust-boundary).
 
-## Bring your own knowledge
+## Sources
 
-A manifest defines the sources and their precedence. Four source adapters cover most places knowledge already lives:
-
-| Source kind | What becomes a layer |
+| Kind | What becomes a layer |
 | --- | --- |
-| `files` | Any folder of `.md`, `.mdx`, or `.txt` — repository docs, an Obsidian vault, a wiki export. No conversion needed. |
-| `github` | Any public or authenticated GitHub repository, read over the API without a clone: `CLAUDE.md`, `AGENTS.md`, `README.md`, and `docs/**` by default. |
-| `okf-local` | A local OKF bundle — Markdown directories with YAML frontmatter for types, dates, and links. |
-| `mcp` | A trusted foreign MCP graph, translated into the same resolved view at read time. |
+| `files` | Any folder of Markdown or text: repo docs, an Obsidian vault, a wiki export |
+| `github` | A GitHub repo read over the API, no clone: `CLAUDE.md`, `AGENTS.md`, `README.md`, `docs/**` |
+| `okf-local` | A local [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle with typed, dated frontmatter |
+| `mcp` | A trusted foreign MCP graph, translated into the same view |
 
-```json
-{
-  "layers": [
-    {
-      "name": "personal",
-      "level": 3,
-      "source": "okf-local",
-      "path": "~/kb-personal"
-    },
-    {
-      "name": "team",
-      "level": 2,
-      "source": "okf-local",
-      "path": "~/kb-team"
-    },
-    {
-      "name": "company",
-      "level": 0,
-      "source": "mcp",
-      "command": "node",
-      "args": ["./company-graph-server.mjs"]
-    }
-  ]
-}
-```
+## Design decisions
 
-```markdown
----
-type: decision
-title: Primary database
-updated: 2026-07-15
----
+- **Storage stays separate; reading is unified.** Each layer keeps its own source and permissions: repository membership for Git-backed layers, filesystem permissions for folders, and provider permissions for remote sources. No central graph database or per-node permission system.
+- **Resolve sections, not documents.** Replacing whole documents forces a team to copy every company policy it doesn't disagree with. Resolving by section lets it override only what it means to.
+- **Show disagreement instead of hiding it.** The first design merged silently and tracked staleness with content hashes and a shadow-detection subsystem. In June 2026 I cut all of that. Now each conflicting section carries the other layers' values and their last-updated dates, and a reader can see at a glance when the company version is newer than the team override. Authored `updated` dates still rely on authors keeping them accurate; git-backed sources without them use author history. If that turns out to bite, the fix is a read-time content fingerprint, kept as an alert and never as a resolution rule. [Design notes](specs/contextcake-core/design.md).
+- **A dependency-free core.** The resolver, adapters and MCP server ship with no npm dependencies, so the part with access to your knowledge has no runtime npm dependency tree to install. Its vendored tokenizer assets still belong in the supply-chain review.
 
-## Engine {#engine}
+## Repo layout
 
-Postgres.
-```
+| Path | What it is |
+| --- | --- |
+| `packages/core/` | Resolver, source adapters, MCP server and write path ([architecture](docs/architecture/README.md)) |
+| `apps/playground/` | Local explorer for a cascade |
+| `apps/console/` | React console for inspecting a resolved graph |
+| `apps/desktop/` | Mac and Linux apps around the same engine, with native diagnostics and optional local Grafana on Mac |
+| `apps/site/` | Website and [documentation](https://contextcake.com/docs) |
 
-Only `type` is required for a local OKF concept. See the [manifest reference](https://contextcake.com/docs/reference/manifest), [OKF bundle guide](https://contextcake.com/docs/concepts/okf-bundles), and [foreign MCP source guide](https://contextcake.com/docs/guides/foreign-mcp-sources).
+Run `npm test` for the core. [CONTRIBUTING.md](CONTRIBUTING.md) has the checks for each app.
 
-## Capture, review, and promote knowledge
+## More
 
-ContextCake can turn repository activity into draft knowledge while preserving a human review point for sensitive changes.
-
-```text
-repository activity
-  → classify-context.mjs
-  → ingest.mjs
-  → signals.json
-  → write.mjs
-  → OKF layer bundle
-  → promote.mjs (when a personal concept should become shared)
-```
-
-- `team_candidate` signals become draft concepts in the selected layer.
-- `review_required` signals are staged under `_review/` for approval.
-- `ignore` and `local` signals are not written to the shared layer.
-
-```bash
-# Create demo signals, inspect what would be written, then write deliberately.
-node ingest.mjs --demo
-node write.mjs \
-  --signals apps/control-surface/signals.json \
-  --manifest apps/playground/manifest.json \
-  --target-layer team \
-  --dry-run
-```
-
-Read the [capture/write-path guide](https://contextcake.com/docs/guides/capture-write-path) and [promotion guide](https://contextcake.com/docs/guides/promoting-concepts).
-
-**Team sync (shared working memory):** agent sessions can capture
-investigations, decisions, gotchas, and artifacts into a git-backed live
-layer that every teammate's harness reads within ~2 minutes — two-phase
-show-before-share, 14-day decay unless promoted through review, and
-content-free reuse telemetry. See the
-[team-sync pack](examples/team-sync-pack/README.md) for setup.
-
-## Project surfaces
-
-| Surface | Purpose | Start here |
-| --- | --- | --- |
-| `packages/core/` | Dependency-free resolver, source adapters, MCP server, and write path | [Architecture](docs/architecture/README.md) |
-| `apps/playground/` | Local interactive explorer for a cascade | [`npm run playground`](apps/playground/README.md) |
-| `apps/console/` | React + Vite console for inspecting a resolved graph | [Console README](apps/console/README.md) |
-| `apps/desktop/` | macOS desktop shell around the same engine | [Desktop README](apps/desktop/README.md) |
-| `apps/site/` | Public website and documentation | [Documentation](https://contextcake.com/docs) |
-
-The site, console, and core release independently. For the precise meaning of `merged`, `preview`, and `live` on each surface, see [Go Live](docs/go-live.md).
-
-## Development and validation
-
-The root engine deliberately has no install step. The console, site, and desktop app manage their own dependencies and lockfiles.
-
-```bash
-# Core engine, MCP, sources, write path, and playground integration
-npm test
-
-# Console
-npm --prefix apps/console ci
-npm --prefix apps/console run typecheck
-npm --prefix apps/console test
-npm --prefix apps/console run build
-
-# Public site
-npm --prefix apps/site ci
-npm --prefix apps/site run build
-
-# macOS desktop shell (uses the live Console build)
-npm --prefix apps/console run build:live
-npm --prefix apps/desktop ci
-npm --prefix apps/desktop test
-npm --prefix apps/desktop run test:navigation
-npm --prefix apps/desktop run test:cli-status
-npm --prefix apps/desktop run smoke
-npm --prefix apps/desktop run smoke:bootfail
-
-# Public GitHub Release download + first-launch counts
-npm run metrics:app
-```
-
-`npm test` starts a local playground server, so it requires an environment that allows binding to `127.0.0.1`. See [CONTRIBUTING.md](CONTRIBUTING.md) for repository conventions, validation expectations, and issue labels.
-
-## Documentation map
-
-- [Getting started](https://contextcake.com/docs/getting-started/installation) — obtain the source archive, verify it, and make a first cascade.
-- [Concepts](https://contextcake.com/docs/concepts/layer-cake) — layers, merge rules, provenance, conflicts, and the trust boundary.
-- [Reference](https://contextcake.com/docs/reference/cli) — CLI flags, manifests, MCP tools, and override syntax.
-- [Architecture](docs/architecture/README.md) — decisions, diagrams, and the resolver design.
-- [Security policy](SECURITY.md) — responsible disclosure and supported-version policy.
-- [Threat model](docs/security/threat-model.md) — what is protected, who is assumed hostile, and the limits we do not claim.
-- [Network egress](docs/security/egress-allowlist.md) — every host the app can contact, and how to verify it yourself.
-- [App metrics](docs/app-metrics.md) — download counts, confirmed first launches, and metric limitations.
+- [Concepts](https://contextcake.com/docs/concepts/layer-cake): layers, merge rules, provenance, conflicts
+- [Capture and promotion](https://contextcake.com/docs/guides/capture-write-path): turning repo activity into reviewed knowledge
+- [Team sync](examples/team-sync-pack/README.md): a shared live layer for agent captures
+- [Threat model](docs/security/threat-model.md) and [network egress](docs/security/egress-allowlist.md)
 
 ## Contributing
 
-Contributions are welcome. Before opening a pull request, please read [CONTRIBUTING.md](CONTRIBUTING.md), keep `packages/core/` dependency-free, and run the checks relevant to the surface you changed. Commits must be signed off with `git commit -s` to certify the [Developer Certificate of Origin](DCO) — there is no CLA. For security issues, use [private vulnerability reporting](https://github.com/ContextCake/context-cake/security/advisories/new) rather than a public issue.
+Read [CONTRIBUTING.md](CONTRIBUTING.md), keep `packages/core/` dependency-free, and sign off commits with `git commit -s` ([DCO](DCO), no CLA). Report security issues through [private vulnerability reporting](https://github.com/ContextCake/context-cake/security/advisories/new).
 
 ## License
 
-ContextCake is released under the [MIT License](LICENSE).
+[MIT](LICENSE)

@@ -185,6 +185,7 @@ function CliControl() {
   const [linkPath, setLinkPath] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const statusRequest = useRef(0)
 
   useEffect(() => {
     if (!bridge) return
@@ -194,18 +195,22 @@ function CliControl() {
     // error boundary in this app, so a throw out of an effect unmounts the
     // whole React root: a blank Settings window rather than a missing row.
     // try/catch is what actually covers that; a bare .catch() does not.
-    void (async () => {
+    const refresh = async () => {
+      const current = ++statusRequest.current
       try {
         const result = await bridge.getStatus()
-        if (active) {
+        if (active && current === statusRequest.current) {
           setStatus(result?.status ?? 'missing')
           setLinkPath(result?.linkPath)
         }
       } catch {
-        if (active) setStatus('missing')
+        if (active && current === statusRequest.current) setStatus('missing')
       }
-    })()
-    return () => { active = false }
+    }
+    const onFocus = () => { void refresh() }
+    void refresh()
+    window.addEventListener('focus', onFocus)
+    return () => { active = false; window.removeEventListener('focus', onFocus) }
   }, [bridge])
 
   if (!bridge) return null
@@ -213,9 +218,11 @@ function CliControl() {
   const install = async () => {
     if (busy) return
     setBusy(true)
+    statusRequest.current += 1
     setNotice(null)
     try {
       const result = await bridge.install()
+      statusRequest.current += 1
       if (result) {
         setStatus(result.status)
         setNotice(result.message || null)
@@ -278,13 +285,17 @@ export function SettingsView({ appMode, onClose, onIndexingChange, surface = 'ov
   const setPane = (next: SettingsPane) => {
     if (!panes.some((item) => item.id === next)) return
     setPaneState(next)
-    window.__CC_DESKTOP?.uiState?.set({ settingsPane: next }).catch(() => {})
   }
 
   useEffect(() => {
     if (panes.some((item) => item.id === pane)) return
     setPaneState('general')
-    window.__CC_DESKTOP?.uiState?.set({ settingsPane: 'general' }).catch(() => {})
+  }, [pane, panes])
+
+  // A requested pane also arrives through preload on first mount, before
+  // the lazy Settings bundle can subscribe to native pane-change events.
+  useEffect(() => {
+    if (panes.some((item) => item.id === pane)) window.__CC_DESKTOP?.uiState?.set({ settingsPane: pane }).catch(() => {})
   }, [pane, panes])
 
   useEffect(() => window.__CC_DESKTOP?.windows?.onSettingsPane((next) => {

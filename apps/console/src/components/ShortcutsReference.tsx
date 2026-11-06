@@ -1,15 +1,13 @@
 import type { Mode } from '../api'
 import { modKey, shiftModKey } from '../platform'
 import { ShortcutLabel } from './ui'
+import { NAVIGATION_SHORTCUTS, VIEW_TITLES } from '../shell-navigation'
 
 type Shortcut = { keys: string; label: string; note?: string }
 type ShortcutGroup = { title: string; note?: string; items: Shortcut[] }
 
-// One list, three binding sites: the console's own keyboard handlers (App.tsx
-// — navigation, palette, search, Ask, and the Review queue's S/R/D routing —
-// plus the Files editor's save chord in views/Files.tsx) and the Mac app's
-// menu accelerators (apps/desktop/src/main/menu.mjs), which carry the same
-// chords. A chord change at any of those sites has to land here too.
+// Digit bindings share the shell's navigation table. The cross-surface test
+// checks that the native menu carries the same labels and accelerator keys.
 function groupsFor(appMode: Mode): ShortcutGroup[] {
   // The platform's glyphs (platform.ts): ⌘ on a Mac, Ctrl+ on Linux and Windows.
   const MOD = modKey()
@@ -18,20 +16,15 @@ function groupsFor(appMode: Mode): ShortcutGroup[] {
     {
       title: 'Navigate',
       items: [
-        { keys: `${MOD}1`, label: 'Go to Home' },
-        { keys: `${MOD}2`, label: 'Go to Cascade' },
-        { keys: `${MOD}3`, label: 'Go to Knowledge' },
-        { keys: `${MOD}4`, label: 'Go to Sources' },
-        { keys: `${MOD}5`, label: 'Go to Review' },
-        { keys: `${MOD}6`, label: 'Go to Diagnostics' },
-        { keys: `${SHIFT_MOD}F`, label: 'Go to Knowledge: Files' },
+        ...NAVIGATION_SHORTCUTS.map((item) => ({ keys: `${MOD}${item.key}`, label: `Go to ${item.label}` })),
+        { keys: `${SHIFT_MOD}F`, label: `Go to ${VIEW_TITLES.files}` },
       ],
     },
     {
       title: 'Tools',
       items: [
         { keys: `${MOD}K`, label: 'Open the command palette' },
-        { keys: `${MOD}F`, label: 'Search this view', note: 'In Concepts, Files, Sources, Review and Conflicts. Elsewhere your browser’s own Find opens instead.' },
+        { keys: `${MOD}F`, label: 'Search this view', note: 'In Library, Sources and Trust. Elsewhere your browser’s own Find opens instead.' },
         { keys: `${SHIFT_MOD}A`, label: 'Ask ContextCake' },
         { keys: `${MOD},`, label: 'Open Settings' },
         { keys: 'Esc', label: 'Close dialogs and panels' },
@@ -50,8 +43,8 @@ function groupsFor(appMode: Mode): ShortcutGroup[] {
   // in the Mac app would document three keys that can never fire.
   if (appMode === 'demo') {
     groups.splice(2, 0, {
-      title: 'Review queue',
-      note: 'In Review → Queue, with a signal selected.',
+      title: 'Trust: Captures',
+      note: 'In Trust → Captures, with a signal selected.',
       items: [
         { keys: 'S', label: 'Store to shared context' },
         { keys: 'R', label: 'Keep in review' },

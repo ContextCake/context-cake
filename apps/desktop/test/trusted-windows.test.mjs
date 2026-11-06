@@ -82,3 +82,23 @@ test('every native IPC capability has an explicit least-privilege window policy'
   assert.deepEqual(TRUSTED_IPC_ROLES['updates:install'], ['main', 'settings'])
   assert.throws(() => trustedRolesForChannel('arbitrary:invoke'), /No trusted-window policy/)
 })
+
+test('native IPC keeps authenticated context first despite hostile extra renderer arguments', async () => {
+  const { registerTrustedIpc } = await import('../src/main/trusted-windows.mjs')
+  const registry = createTrustedWindowRegistry(() => 'http://127.0.0.1:4317')
+  const settings = fakeWindow(7, 'http://127.0.0.1:4317/console/?surface=settings')
+  registry.register(settings, 'settings')
+  const handlers = new Map()
+  const ipc = { handle: (channel, callback) => handlers.set(channel, callback) }
+  let received
+  registerTrustedIpc(ipc, registry, 'contextcake:settings-export', (context, name) => {
+    received = { context, name }
+    return context.window
+  })
+  const forged = { window: 'renderer-controlled', role: 'main', event: 'forged' }
+  assert.equal(handlers.get('contextcake:settings-export')(eventFor(settings), forged, 'extra'), settings)
+  assert.equal(received.context.window, settings)
+  assert.equal(received.context.role, 'settings')
+  assert.equal(received.name, forged, 'untrusted input stays in the data slot')
+  assert.throws(() => handlers.get('contextcake:settings-export')(eventFor(fakeWindow(8)), forged), /Untrusted IPC sender/)
+})

@@ -126,3 +126,13 @@ export function readBrowserGroupedViews(): { knowledgeView: KnowledgeSubview; re
     return { knowledgeView: 'concepts', reviewView: 'triage' }
   }
 }
+
+/** Digit navigation shared by shell key handling and the Settings reference. */
+export const NAVIGATION_SHORTCUTS: readonly { key: string; destination: ShellDestination; label: string }[] = [
+  { key: '1', destination: 'home', label: VIEW_TITLES.overview },
+  { key: '2', destination: 'cascade', label: VIEW_TITLES.canvas },
+  { key: '3', destination: 'knowledge', label: 'Library' },
+  { key: '4', destination: 'sources', label: VIEW_TITLES.sources },
+  { key: '5', destination: 'review', label: 'Trust' },
+  { key: '6', destination: 'diagnostics', label: VIEW_TITLES.diagnostics },
+]

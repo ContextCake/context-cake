@@ -17,13 +17,13 @@
     "icon": "electron scripts/generate-icon.mjs",
     "test:navigation": "node scripts/navigation-test.mjs",
     "test:cli-status": "node scripts/cli-status-test.mjs",
-    "smoke": "CC_SMOKE=1 electron .",
-    "smoke:settings": "CC_SMOKE=1 CC_SMOKE_SETTINGS=1 electron .",
-    "smoke:ui": "CC_SMOKE=1 CC_SMOKE_UI=1 electron .",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:settings": "node scripts/smoke.mjs settings",
+    "smoke:ui": "node scripts/smoke.mjs ui",
     "smoke:ui:artifacts": "node scripts/ui-artifacts.mjs",
     "smoke:bootfail": "node scripts/smoke-bootfail.mjs",
     "smoke:crash": "node scripts/engine-crash-test.mjs",
-    "smoke:relaunch": "CC_SMOKE=1 CC_SMOKE_RELAUNCH=1 electron .",
+    "smoke:relaunch": "node scripts/smoke.mjs relaunch",
     "test:isolation": "node scripts/engine-isolation-test.mjs",
     "supabase:config": "node scripts/generate-supabase-config.mjs",
     "prepack": "npm run supabase:config",
@@ -34,11 +34,19 @@
     "dist:linux": "npm run renderer && node scripts/dist-linux.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.118.0",
+    "@supabase/supabase-js": "2.119.0",
     "electron-updater": "^6.8.11"
   },
   "devDependencies": {
-    "electron": "^45.1.0",
+    "electron": "^45.2.3",
     "electron-builder": "^26.18.0"
+  },
+  "overrides": {
+    "@electron/universal": {
+      "minimatch": "11.0.1"
+    },
+    "app-builder-lib": {
+      "minimatch": "11.0.1"
+    }
   }
 }

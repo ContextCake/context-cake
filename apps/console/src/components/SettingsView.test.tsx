@@ -167,6 +167,16 @@ describe('SettingsView', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
+  it('remembers the initial native pane even when the lazy bundle missed the pane event', async () => {
+    const setUiState = vi.fn().mockResolvedValue({})
+    window.__CC_DESKTOP = { version: '0.0.0-test', authState: { available: false, signedIn: false },
+      preferences: preferences(), uiState: { initial: { settingsPane: 'privacy' }, set: setUiState },
+    } as unknown as typeof window.__CC_DESKTOP
+    await act(async () => root.render(<ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>))
+    expect(container.querySelector('.cc-settings-nav [aria-current="page"]')?.textContent).toContain('Privacy')
+    expect(setUiState).toHaveBeenCalledWith({ settingsPane: 'privacy' })
+  })
+
   it('falls back from a saved pane that is unavailable in this build', async () => {
     const setUiState = vi.fn().mockResolvedValue(undefined)
     const bridge = preferences()
@@ -669,6 +679,32 @@ describe('SettingsView', () => {
     expect(findButton('Install')).toBeUndefined()
   })
 
+  it('desktop: refreshes menu-installed CLI status on focus without accepting an older response', async () => {
+    let resolveOld!: (value: { status: string }) => void
+    const cli = {
+      getStatus: vi.fn().mockResolvedValueOnce({ status: 'missing' })
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
+        .mockResolvedValue({ status: 'installed', linkPath: '/usr/local/bin/contextcake' }),
+      install: vi.fn(),
+    }
+    window.__CC_DESKTOP = { getApiToken: vi.fn().mockResolvedValue('token'), version: '0.0.0-test',
+      authState: { signedIn: false, available: false }, preferences: preferences(), cli,
+    } as unknown as typeof window.__CC_DESKTOP
+    await act(async () => root.render(<ThemeModeProvider><SettingsView appMode="live" surface="window" /></ThemeModeProvider>))
+    expect(findButton('Install')).toBeDefined()
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(findButton('Install')).toBeUndefined()
+    await act(async () => resolveOld({ status: 'missing' }))
+    expect(findButton('Install')).toBeUndefined()
+    expect(cli.install).not.toHaveBeenCalled()
+    const calls = cli.getStatus.mock.calls.length
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(cli.getStatus).toHaveBeenCalledTimes(calls)
+  })
+
   it('desktop: offers Reinstall when the contextcake command is stale', async () => {
     const cli = {
       getStatus: vi.fn().mockResolvedValue({ status: 'stale', message: '', shimPath: null }),
@@ -858,7 +894,7 @@ describe('SettingsView', () => {
     expect(container.textContent).toContain('Keyboard shortcuts')
     // One entry from each binding site that exists in live mode: menu
     // navigation, the palette, and the Files editor.
-    expect(container.textContent).toContain('Go to Cascade')
+    expect(container.textContent).toContain('Go to Map')
     expect(container.textContent).toContain('Open the command palette')
     expect(container.textContent).toContain('Save the open file')
 

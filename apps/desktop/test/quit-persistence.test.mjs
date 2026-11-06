@@ -65,14 +65,20 @@ function runQuitSmoke(mode) {
       } catch { /* never written — that is the failure this test reports */ }
       fs.rmSync(home, { recursive: true, force: true })
       const reported = /QUIT SMOKE bounds=(\{[^\n]*?\}) /.exec(out)
-      resolve({ code, out, settings, reported: reported ? JSON.parse(reported[1]) : null })
+      const target = / target=(\{[^\n]*?\}) /.exec(out)
+      const initial = / initial=(\{[^\n]*?\})/.exec(out)
+      resolve({ code, out, settings, reported: reported ? JSON.parse(reported[1]) : null, target: target ? JSON.parse(target[1]) : null, initial: initial ? JSON.parse(initial[1]) : null })
     })
   })
 }
 
 function assertGeometryPersisted(run, label) {
   assert.ok(run.reported, `${label}: the app never reported its frame\n${run.out}`)
-  assert.equal(run.reported.width, 1024, `${label}: setBounds did not take effect\n${run.out}`)
+  assert.ok(run.target, `${label}: the app never reported its resize target\n${run.out}`)
+  assert.ok(run.initial, `${label}: the app never reported its initial frame\n${run.out}`)
+  assert.notDeepEqual(run.target, run.initial, `${label}: the smoke must change the initial frame\n${run.out}`)
+  assert.deepEqual(run.reported, run.target, `${label}: setBounds did not take effect\n${run.out}`)
+  assert.match(run.out, / maximized=false/, `${label}: the resize must stay unmaximized\n${run.out}`)
   assert.ok(
     run.settings?.mainWindow?.bounds,
     `${label}: no window geometry reached settings.json\n${run.out}`,

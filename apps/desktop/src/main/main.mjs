@@ -1641,11 +1641,25 @@ async function smokeCheck() {
     // `close` is the red X (before-quit fires last). Driven by
     // test/quit-persistence.test.mjs, which reads the geometry back off disk.
     if (process.env.CC_SMOKE_QUIT) {
-      win.setBounds({ x: 140, y: 100, width: 1024, height: 720 })
+      // Keep the resize inside this display's work area. A larger frame can
+      // make macOS zoom the window; that correctly saves its normal bounds,
+      // which is a different path from the pending unmaximized resize here.
+      const initial = win.getBounds()
+      const area = screen.getDisplayMatching(initial).workArea
+      const width = Math.min(area.width, Math.max(760, Math.min(1024, area.width - 80)))
+      const height = Math.min(area.height, Math.max(560, Math.min(720, area.height - 80)))
+      const target = {
+        x: area.x + Math.floor((area.width - width) / 2),
+        y: area.y + Math.floor((area.height - height) / 2),
+        width,
+        height,
+      }
+      win.unmaximize()
+      win.setBounds(target)
       // Let the platform settle the frame and deliver `resize` (which arms the
       // debounce) without letting the debounce itself fire.
       await new Promise((resolve) => setTimeout(resolve, 60))
-      console.log(`QUIT SMOKE bounds=${JSON.stringify(win.getBounds())} pendingSave=${windowStateTimer !== null}`)
+      console.log(`QUIT SMOKE bounds=${JSON.stringify(win.getBounds())} pendingSave=${windowStateTimer !== null} target=${JSON.stringify(target)} maximized=${win.isMaximized()} initial=${JSON.stringify(initial)}`)
       if (process.env.CC_SMOKE_QUIT === 'close') {
         // Closing the last window no longer ends the app on macOS (see
         // window-all-closed), so the smoke ends it itself — after the close,

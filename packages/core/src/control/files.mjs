@@ -66,7 +66,7 @@ export function createFileOperations({ manifestPath, profileId = "default", tran
         }
         await transactionJournal.append({ id, state: "committed", committedAt: new Date().toISOString() });
       } catch (error) {
-        if (error.code === "LockBusy") throw new ControlError("LIVE_LAYER_BUSY", "Nothing was changed. The team layer is busy. Try again in a moment.", { status: 409 });
+        if (error.code === "LockBusy") throw new ControlError("LIVE_LAYER_BUSY", error.message.includes("manual cleanup") ? error.message : "Nothing was changed. The team layer is busy. Try again in a moment.", { status: 409 });
         if (!staged) throw error;
         try {
           if (["RecoveryRequired", "RollbackFailed"].includes(error.code)) throw error;

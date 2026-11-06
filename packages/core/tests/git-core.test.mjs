@@ -11,7 +11,41 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { commitPathsWithMutation, scrub } from "../src/sources/git-core.mjs";
+import { commitPathsWithMutation, pull, scrub, withRepoLock } from "../src/sources/git-core.mjs";
+
+test("repository leases preserve operation errors and refuse unsafe legacy lock migration", async () => {
+  const { root, cleanup } = await repo();
+  try {
+    const original = new Error("Timed out acquiring the ContextCake manifest lock: operation failure");
+    await assert.rejects(withRepoLock(root, "test", () => { throw original; }, { skipOnBusy: true }), (error) => error === original);
+    const lock = path.join(root, ".contextcake.lock");
+    const legacy = JSON.stringify({ pid: 999999999, createdAt: 1000 });
+    await fsp.writeFile(lock, legacy);
+    await assert.rejects(withRepoLock(root, "test", () => assert.fail("legacy lock must not be removed"), { skipOnBusy: true }),
+      (error) => error.code === "LockBusy" && /repository lock.*manual cleanup/.test(error.message));
+    assert.equal(await fsp.readFile(lock, "utf8"), legacy);
+    await fsp.unlink(lock);
+    await fsp.mkdir(lock);
+    const claim = path.join(lock, "2147483647.1000.00000000-0000-0000-0000-000000000000.owner");
+    await fsp.writeFile(claim, "");
+    await assert.rejects(withRepoLock(root, "test", () => assert.fail("dead owner may have live Git children")),
+      (error) => error.code === "LockBusy" && /Git, SSH, and hook processes/.test(error.message));
+    assert.equal(fs.existsSync(claim), true, "the interrupted owner's claim is preserved");
+    await fsp.unlink(claim); // this fixture has no Git child; verified cleanup
+    await fsp.rmdir(lock);
+    assert.equal(await withRepoLock(root, "test", () => "saved"), "saved");
+  } finally { await cleanup(); }
+});
+
+test("repository lease acquisition never recreates a removed source root", async () => {
+  const { root, cleanup } = await repo();
+  try {
+    await fsp.rm(root, { recursive: true });
+    assert.deepEqual(await pull(root), { skipped: true });
+    await assert.rejects(withRepoLock(root, "test", () => assert.fail("missing root must stay absent"), { lockRetries: 1 }), { code: "LockBusy" });
+    assert.equal(fs.existsSync(root), false);
+  } finally { await cleanup(); }
+});
 
 async function repo(objectFormat = null) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-git-core-"));

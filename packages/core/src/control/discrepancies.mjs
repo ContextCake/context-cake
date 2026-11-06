@@ -816,7 +816,7 @@ export function createDiscrepancyOperations({
       // runs inside that lock, so nothing was read, backed up, journaled, or
       // renamed — the decision simply did not happen yet.
       if (error.code === "LockBusy") {
-        throw new ControlError("LIVE_LAYER_BUSY", "Nothing was changed. The team layer is busy — another ContextCake process holds its lock. Try again in a moment.", { status: 409 });
+        throw new ControlError("LIVE_LAYER_BUSY", error.message.includes("manual cleanup") ? error.message : "Nothing was changed. The team layer is busy — another ContextCake process holds its lock. Try again in a moment.", { status: 409 });
       }
       // Staging itself refused (a stale expectedContent, a missing file, a
       // too-large document): nothing was journaled or renamed, so the

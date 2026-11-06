@@ -7,7 +7,7 @@ the mutation, it verifies the directory identity and that its claim is the only
 entry. The identity check alone is insufficient: an inode can be reused while
 an initializer is paused.
 
-Recovery removes only an exact claim whose PID is no longer alive,
+Manifest recovery removes only an exact claim whose PID is no longer alive,
 then uses nonrecursive `rmdir`. It never parks, restores, or recursively deletes
 the shared path. A late reaper cannot remove a replacement's populated directory.
 It can remove a replacement that is still empty, but that initializer then
@@ -32,6 +32,17 @@ A synchronous writer that encounters an async claim owned by this process
 returns `MANIFEST_LOCKED` (HTTP 409) immediately. Blocking would prevent the same
 event loop from releasing the lease. Async writers still wait normally, and
 same-process ownership never grants permission to enter another mutation.
+
+The git coordinator uses this same claim protocol at `<live-root>/.contextcake.lock`.
+It adapts contention to `LockBusy` for writers and `{ skipped: true }` for
+readers; operation errors pass through unchanged. It never creates a missing
+repository root. Live owners never expire because a long push exceeds a timer.
+Dead repository owners require manual cleanup: their Git, SSH, or hook children
+can survive the Node owner's death, so PID death alone is insufficient proof
+that mutations have stopped. Stop ContextCake and verify those child processes
+have stopped before removing the named repository lock directory. Its older
+regular-file locks follow the same coordinated upgrade and manual-cleanup rules
+below, with the actual repository lock path included in the error.
 
 ## Upgrading from file locks
 

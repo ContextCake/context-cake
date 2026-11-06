@@ -601,16 +601,18 @@ export function withManifestLock(manifestPath, mutate, {
 export async function withManifestLockAsync(manifestPath, mutate, {
   timeoutMs = MANIFEST_LOCK_TIMEOUT_MS,
   staleMs = MANIFEST_LOCK_STALE_MS,
+  createParent = true,
+  reclaimDeadOwners = true,
 } = {}) {
   const resolved = path.resolve(manifestPath);
   const lockPath = `${resolved}.lock`;
-  fs.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
+  if (createParent) fs.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + timeoutMs;
-  let token = tryAcquireManifestLock(lockPath, staleMs);
+  let token = tryAcquireManifestLock(lockPath, staleMs, reclaimDeadOwners);
   while (token === null) {
     if (Date.now() >= deadline) throw new Error(`Timed out acquiring the ContextCake manifest lock at ${lockPath}.`);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    token = tryAcquireManifestLock(lockPath, staleMs);
+    token = tryAcquireManifestLock(lockPath, staleMs, reclaimDeadOwners);
   }
   asyncManifestClaims.add(token);
   try {
@@ -1234,7 +1236,7 @@ function manifestLockIsStale(lock, staleMs) {
 const LOCK_BUSY_ERRORS = new Set(["ENOENT", "ENOTDIR", "EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"]);
 const asyncManifestClaims = new Set();
 
-function tryAcquireManifestLock(lockPath, staleMs) {
+function tryAcquireManifestLock(lockPath, staleMs, reclaimDeadOwners = true) {
   const token = `${process.pid}.${Date.now()}.${crypto.randomUUID()}.owner`;
   try {
     fs.mkdirSync(lockPath, { mode: 0o700 });
@@ -1243,7 +1245,7 @@ function tryAcquireManifestLock(lockPath, staleMs) {
       if (LOCK_BUSY_ERRORS.has(error.code)) return null;
       throw error;
     }
-    recoverManifestLock(lockPath, staleMs);
+    recoverManifestLock(lockPath, staleMs, reclaimDeadOwners);
     return null;
   }
   try {
@@ -1266,7 +1268,7 @@ function tryAcquireManifestLock(lockPath, staleMs) {
   return null;
 }
 
-function recoverManifestLock(lockPath, staleMs) {
+function recoverManifestLock(lockPath, staleMs, reclaimDeadOwners) {
   let stat;
   try { stat = fs.lstatSync(lockPath); } catch (error) { if (LOCK_BUSY_ERRORS.has(error.code)) return; throw error; }
   if (!stat.isDirectory()) {
@@ -1285,10 +1287,13 @@ function recoverManifestLock(lockPath, staleMs) {
     const pid = Number(match?.[1]);
     // Unlike an empty directory or a legacy partial JSON file, a complete
     // claim filename identifies its owner without an initialization window.
-    // A dead process cannot still be mutating: reclaim immediately so an
-    // engine crash/relaunch never waits out the age threshold. EPERM counts
-    // as alive, and a recycled PID conservatively keeps the claim busy.
+    // Manifest owners reclaim immediately after a crash. Repository owners
+    // fail closed instead: their Git/SSH/hook children can survive them.
+    // EPERM and recycled PIDs conservatively keep the claim busy.
     if (!match || !Number.isSafeInteger(pid) || pid <= 0 || processIsAlive(pid)) continue;
+    if (!reclaimDeadOwners) {
+      throw new Error(`Timed out acquiring the ContextCake manifest lock at ${lockPath}. An interrupted repository operation needs manual cleanup: stop ContextCake and verify its Git, SSH, and hook processes have stopped before removing this lock directory and retrying.`);
+    }
     try { fs.unlinkSync(path.join(lockPath, owner)); }
     catch (error) { if (!LOCK_BUSY_ERRORS.has(error.code)) throw error; }
   }

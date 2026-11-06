@@ -75,46 +75,68 @@ import { pull } from '$core/sources/git-core.mjs';
 console.log(JSON.stringify(await pull('$alice')));
 ")"
 grep -q '"skipped":true' <<<"$out" || fail "reader should skip on live lock contention" "$out"
-printf '{"pid":999999,"ts":1000,"op":"test"}' > "$alice/.contextcake.lock"
-out="$(node_run "
+rm -f "$alice/.contextcake.lock"
+# A dead Node owner may leave Git/SSH/hooks alive. Never automatically reap
+# its repository claim, even if its timestamp is old or far in the future.
+for timestamp in 1000 "$(node -e 'console.log(Date.now() + 3600000)')"; do
+  mkdir "$alice/.contextcake.lock"
+  touch "$alice/.contextcake.lock/2147483647.$timestamp.00000000-0000-0000-0000-000000000000.owner"
+  out="$(node_run "
 import { pull } from '$core/sources/git-core.mjs';
-console.log(JSON.stringify(await pull('$alice')));
+try { await pull('$alice'); console.log('UNSAFE'); }
+catch (error) { console.log(error.code + ': ' + error.message); }
 ")"
-grep -q '"skipped":true' <<<"$out" && fail "stale lock should be stolen, not skipped" "$out"
-[ -f "$alice/.contextcake.lock" ] && fail "lock should be released after steal"
-
-# ---- git-core: a future-dated lock is stale, not un-stealable (L3) -------------
-future="$(node -e 'console.log(Date.now() + 3600000)')"  # 1h in the future
-printf '{"pid":999999,"ts":%d,"op":"test"}' "$future" > "$alice/.contextcake.lock"
-out="$(node_run "
-import { pull } from '$core/sources/git-core.mjs';
-console.log(JSON.stringify(await pull('$alice')));
-")"
-grep -q '"skipped":true' <<<"$out" && fail "future-dated lock must be treated as stale" "$out"
-[ -f "$alice/.contextcake.lock" ] && fail "future-dated lock should be released after steal"
+  grep -q 'LockBusy:.*manual cleanup' <<<"$out" || fail "dead repo claims must require verified cleanup" "$out"
+  [ -d "$alice/.contextcake.lock" ] || fail "dead claim was removed"
+  rm -rf "$alice/.contextcake.lock" # fixture has no subprocesses; verified cleanup
+ done
 
 # ---- git-core: concurrent stale-steal never double-acquires (F3) --------------
-# One parent forks two workers that race to steal the SAME stale lock while each
-# holds it briefly; exactly one must acquire, the other must see LockBusy.
+# One parent forks two workers that race to reclaim the SAME abandoned empty lock while each
+# holds it until its competitor finishes; startup jitter cannot turn this into
+# two sequential wins. Both workers are ready before the parent starts them.
 # Self-contained in node so no shell/grep/-x fragility affects the count.
-printf '{"pid":999998,"ts":1000,"op":"stale"}' > "$alice/.contextcake.lock"
+mkdir "$alice/.contextcake.lock"
+node -e 'require("fs").utimesSync(process.argv[1], 1, 1)' "$alice/.contextcake.lock"
 out="$(node --input-type=module -e "
 import { spawn } from 'node:child_process';
 const worker = \`
 import { withRepoLock } from '$core/sources/git-core.mjs';
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-try { await withRepoLock('$alice', process.argv[1], async () => { await sleep(300); }, { lockRetryMs: 40, lockRetries: 3 }); process.stdout.write('WON'); }
-catch (e) { process.stdout.write(e.code ?? 'ERR'); }
+const go = new Promise((resolve) => process.once('message', resolve));
+process.send('ready');
+await go;
+try {
+  await withRepoLock('$alice', process.argv[1], async () => {
+    const released = new Promise((resolve) => process.once('message', resolve));
+    process.send('entered');
+    await released;
+  }, { lockRetryMs: 40, lockRetries: 3 });
+  process.stdout.write('WON');
+} catch (e) { process.stdout.write(e.code ?? 'ERR'); }
+finally { process.disconnect(); }
 \`;
+const workers = [];
+let ready = 0;
+let entered = 0;
+function release() { for (const p of workers) if (p.connected) p.send('release', () => {}); }
 function race(tag) {
   return new Promise((resolve) => {
-    const p = spawn(process.execPath, ['--input-type=module', '-e', worker, tag], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const p = spawn(process.execPath, ['--input-type=module', '-e', worker, tag], { stdio: ['ignore', 'pipe', 'ignore', 'ipc'] });
+    workers.push(p);
     let buf = '';
     p.stdout.on('data', (d) => { buf += d; });
-    p.on('exit', () => resolve(buf.trim() || 'NONE'));
+    p.on('message', (message) => {
+      if (message === 'ready' && ++ready === 2) for (const worker of workers) worker.send('go');
+      if (message === 'entered' && ++entered === 2) release();
+    });
+    p.on('exit', () => { release(); resolve(buf.trim() || 'NONE'); });
   });
 }
-console.log(JSON.stringify(await Promise.all([race('a'), race('b')])));
+const results = [race('a'), race('b')];
+const timer = setTimeout(() => { for (const p of workers) p.kill(); }, 10_000);
+const outcomes = await Promise.all(results);
+clearTimeout(timer);
+console.log(JSON.stringify(outcomes));
 ")"
 wins="$(node -e "const r=JSON.parse(process.argv[1]); console.log(r.filter(x=>x==='WON').length)" "$out")"
 busy="$(node -e "const r=JSON.parse(process.argv[1]); console.log(r.filter(x=>x==='LockBusy').length)" "$out")"
@@ -127,12 +149,16 @@ out="$(node_run "
 import fs from 'node:fs';
 import { withRepoLock } from '$core/sources/git-core.mjs';
 await withRepoLock('$alice', 'ownership', async () => {
-  fs.writeFileSync('$alice/.contextcake.lock', JSON.stringify({ pid: 2, ts: Date.now(), op: 'replacement', token: 'replacement-token' }));
+  const lock = '$alice/.contextcake.lock';
+  for (const claim of fs.readdirSync(lock)) fs.unlinkSync(lock + '/' + claim);
+  fs.rmdirSync(lock);
+  fs.mkdirSync(lock);
+  fs.writeFileSync(lock + '/' + process.pid + '.1000.00000000-0000-0000-0000-000000000000.owner', '');
 });
-console.log(JSON.parse(fs.readFileSync('$alice/.contextcake.lock', 'utf8')).token);
+console.log(fs.readdirSync('$alice/.contextcake.lock').length === 1 ? 'replacement-token' : 'LOST');
 ")"
 grep -q 'replacement-token' <<<"$out" || fail "a stale holder must not delete a replacement lock" "$out"
-rm -f "$alice/.contextcake.lock"
+rm -rf "$alice/.contextcake.lock"
 
 # ---- git-core: mutation on held lock errors LockBusy -------------------------
 printf '{"pid":%d,"ts":%d,"op":"test"}' "$$" "$(node -e 'console.log(Date.now())')" > "$alice/.contextcake.lock"

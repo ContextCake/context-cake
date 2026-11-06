@@ -1,23 +1,19 @@
 // Locked git mutation coordinator for live layers. Every git operation
 // against a live-layer working tree goes through this module — pull, commit,
-// rebase, push — serialized per repo via an advisory lockfile so concurrent
+// rebase, push — serialized per repo via an advisory directory lease so concurrent
 // harness processes (several MCP servers over one clone) never interleave
 // mutations. Spawns the git CLI; no npm dependency (same precedent as the
 // mcp source spawning foreign servers).
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { withManifestLockAsync } from "../manifest.mjs";
 
 const execFileAsync = promisify(execFile);
 
-const LOCK_NAME = ".contextcake.lock"; // dotfile: invisible to walkMarkdown
-const GIT_TIMEOUT_MS = 90000; // bound a hung git op (must stay < LOCK_STALE_MS)
-// A locked mutation can make several bounded git calls (push → pull/rebase →
-// retry), so the stale window must cover the whole workflow, not one call.
-const LOCK_STALE_MS = GIT_TIMEOUT_MS * 6;
+const GIT_TIMEOUT_MS = 90000; // bound a hung git op; a live owner never expires
 
 // Never let git block on an interactive credential/askpass prompt (would hang
 // the MCP server); fail fast instead. Timeout bounds a wedged network op.
@@ -91,88 +87,24 @@ export async function runGit(root, args, { allowFailure = false, input, trim = t
 
 // ---- advisory repo lock -----------------------------------------------------
 
-function lockPath(root) {
-  return path.join(root, LOCK_NAME);
-}
-
-function readLock(root) {
-  try {
-    return JSON.parse(fs.readFileSync(lockPath(root), "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function lockIsStale(lock) {
-  if (!lock || typeof lock.ts !== "number") return true; // corrupt/legacy → stealable
-  const age = Date.now() - lock.ts;
-  // Stale if older than the window, OR dated far in the future (clock skew or a
-  // .contextcake.lock that got committed and checked out) — otherwise a future
-  // ts would make the lock un-stealable forever.
-  return age > LOCK_STALE_MS || age < -LOCK_STALE_MS;
-}
-
-function tryAcquire(root, op) {
-  const token = crypto.randomUUID();
-  const payload = JSON.stringify({ pid: process.pid, ts: Date.now(), op, token });
-  try {
-    fs.writeFileSync(lockPath(root), payload, { flag: "wx" });
-    return token;
-  } catch {
-    const existing = readLock(root);
-    if (!lockIsStale(existing)) return null;
-    // Atomic steal: renaming the stale lock away is the compare-and-swap —
-    // only one racer can rename a given inode (the rest get ENOENT), so two
-    // processes can't both steal and double-acquire (the old rm+write could).
-    const parked = `${lockPath(root)}.${process.pid}.${Date.now()}.stale`;
-    try {
-      fs.renameSync(lockPath(root), parked);
-    } catch {
-      return null; // lost the steal race, or the lock changed under us
-    }
-    fs.rmSync(parked, { force: true });
-    try {
-      fs.writeFileSync(lockPath(root), payload, { flag: "wx" });
-      return token;
-    } catch {
-      return null; // a fresh holder grabbed the freed lock; yield
-    }
-  }
-}
-
-function release(root, token) {
-  try {
-    // A stale holder may finish after another process has replaced its lock.
-    // Never delete the replacement: only the process that owns this token may
-    // release it.
-    if (readLock(root)?.token !== token) return;
-    fs.rmSync(lockPath(root), { force: true });
-  } catch {
-    // releasing a lock must never throw past the operation it protected
-  }
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Writers retry then throw LockBusy; readers pass skipOnBusy to serve stale.
+// The shared directory-claim lease owns the existing .contextcake.lock path.
+// Reusing its generation-safe recovery avoids a second stale-rename protocol.
+// The older regular-file protocol requires coordinated upgrade/manual cleanup.
 export async function withRepoLock(root, op, fn, { skipOnBusy = false, lockRetryMs = 2000, lockRetries = 3 } = {}) {
-  let attempts = 0;
-  let token = tryAcquire(root, op);
-  while (!token) {
-    if (skipOnBusy) return { skipped: true };
-    attempts += 1;
-    if (attempts >= lockRetries) {
-      const error = new Error(`Repo lock busy for ${op} (held by another ContextCake process)`);
-      error.code = "LockBusy";
-      throw error;
-    }
-    await sleep(lockRetryMs);
-    token = tryAcquire(root, op);
-  }
+  let entered = false;
   try {
-    return await fn();
-  } finally {
-    release(root, token);
+    return await withManifestLockAsync(path.join(root, ".contextcake"), () => {
+      entered = true;
+      return fn();
+    }, { timeoutMs: skipOnBusy ? 0 : Math.max(0, (lockRetries - 1) * lockRetryMs), createParent: false, reclaimDeadOwners: false });
+  } catch (error) {
+    // A mutation's own error must never be mistaken for acquisition failure.
+    if (entered || !/^Timed out acquiring the ContextCake manifest lock/.test(error.message)) throw error;
+    const legacy = error.message.includes("manual cleanup");
+    if (skipOnBusy && !legacy) return { skipped: true };
+    const busy = new Error(legacy ? error.message.replace("manifest lock", "repository lock") : `Repo lock busy for ${op} (held by another ContextCake process)`);
+    busy.code = "LockBusy";
+    throw busy;
   }
 }
 

@@ -27,6 +27,7 @@ import { buildSourcesQuarantined, createErrorSource, resolveTokenState } from ".
 import { MAX_DOC_BYTES } from "./sources/okf-local.mjs";
 import { FILES_EXTENSIONS } from "./sources/files.mjs";
 import { createSourceOperations } from "./control/sources.mjs";
+import { createFileOperations } from "./control/files.mjs";
 import { createDiscrepancyOperations } from "./control/discrepancies.mjs";
 import { createContextResolutionOperations } from "./control/context-resolutions.mjs";
 import { blockedContextResolutionKeys as contextResolutionRuleBlocks, discrepancyRevision, fingerprint } from "./discrepancies.mjs";
@@ -47,7 +48,7 @@ import {
   assertInsideRoot, guardMutatingRequest, httpError, json, MIME, parseJson, readBody,
 } from "./http-util.mjs";
 import {
-  layerRootMap, listFilesApi, readFileApi, readLayerSection, serveRawApi, writeFileApi, writeSectionApi,
+  layerRootMap, listFilesApi, readFileApi, readLayerSection, relativeWithinRoot, serveRawApi,
   stageSectionTransaction,
 } from "./layer-files.mjs";
 import {
@@ -543,6 +544,13 @@ export function createEngineService({
     readLiveSection: (args) => readLayerSection(fileRoots(), args),
     onWritten: () => invalidateIndex(),
     git: { commitPathsWithMutation, push: pushGit },
+  });
+  const fileOps = createFileOperations({
+    manifestPath: MANIFEST, profileId: SERVICE_PROFILE_ID,
+    transactionJournal: discrepancyTransactionJournal,
+    ensureRecovery: () => discrepancyOps.ensureRecovery(),
+    git: { commitPathsWithMutation, push: pushGit },
+    onWritten: (targets) => { watchEditedParents(targets); invalidateIndex(); discrepancyOps.noteWrite(); },
   });
   let automaticTimer = null;
   let automaticTail = Promise.resolve();
@@ -1666,6 +1674,7 @@ export function createEngineService({
       if (roots.has(root)) continue;
       clearTimeout(state.timer);
       try { state.watcher.close(); } catch { /* already gone */ }
+      for (const parent of state.editedParents.values()) parent.close();
       watchers.delete(root);
     }
     for (const root of roots) {
@@ -1685,7 +1694,37 @@ export function createEngineService({
         }
       }
       watcher.on("error", () => {});
-      watchers.set(root, { watcher, timer: null });
+      watchers.set(root, { watcher, timer: null, editedParents: new Map() });
+    }
+  }
+
+  // Atomic editor saves replace file inodes. Node's Linux recursive watcher
+  // can retain a watch on the old inode, missing later ordinary writes to the
+  // replacement. A native parent-directory watch survives child replacement.
+  // Add only parents actually edited here; never synchronously re-walk a large
+  // recursive source after each save. Close these alongside the source watch.
+  function watchEditedParents(targets) {
+    syncWatchers();
+    for (const target of targets) {
+      const parent = path.dirname(target);
+      for (const [root, state] of watchers) {
+        const relative = relativeWithinRoot(parent, root);
+        if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative) || state.editedParents.has(parent)) continue;
+        try {
+          const watcher = fs.watch(parent, { persistent: false }, (_event, filename) => {
+            const name = filename == null ? null : path.join(relative, String(filename));
+            onChange(root, name).catch(() => {});
+          });
+          watcher.on("error", (error) => {
+            console.error(`[service watcher] ${parent}: edited-folder watch failed (${error.message})`);
+            watcher.close();
+            state.editedParents.delete(parent);
+          });
+          state.editedParents.set(parent, watcher);
+        } catch (error) {
+          console.error(`[service watcher] ${parent}: could not watch edited folder (${error.message})`);
+        }
+      }
     }
   }
 
@@ -1721,6 +1760,7 @@ export function createEngineService({
     for (const [, state] of watchers) {
       clearTimeout(state.timer);
       try { state.watcher.close(); } catch { /* already gone */ }
+      for (const parent of state.editedParents.values()) parent.close();
     }
     watchers.clear();
   }
@@ -1817,6 +1857,12 @@ export function createEngineService({
         json(res, 401, { error: "Unauthorized" });
         return true;
       }
+
+      // Startup recovery owns an asynchronous manifest lease. Let it finish
+      // before dispatching a synchronous settings/source mutation, so that
+      // request cannot block the event loop the recovery needs to release it.
+      // Health and other reads remain available while another writer is busy.
+      if (req.method !== "GET" && req.method !== "HEAD") await startupRecovery;
 
       if (p === "/api/graph") { json(res, 200, await buildGraph(waitParam(url))); return true; }
       if (p === "/api/diagnostics" && req.method === "GET") { json(res, 200, diagnosticsSnapshotApi()); return true; }
@@ -1960,10 +2006,7 @@ export function createEngineService({
       if (p === "/api/file") {
         if (req.method === "PUT" || req.method === "POST") {
           if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
-          const out = await writeFileApi(await readBody(req), fileRoots());
-          // The edited file IS layer content, and the manifest did not change,
-          // so the index would otherwise keep serving the pre-edit snapshot.
-          invalidateIndex(out.layer ?? null);
+          const out = await fileOps.writeFile(await readBody(req));
           json(res, 200, out);
           return true;
         }
@@ -1973,8 +2016,7 @@ export function createEngineService({
       if (p === "/api/file/raw") { serveRawApi(url.searchParams.get("path"), fileRoots(), res); return true; }
       if (p === "/api/section" && (req.method === "PUT" || req.method === "POST")) {
         if (!allowMutations) { json(res, 405, { error: "Mutations are disabled on this service" }); return true; }
-        const out = await writeSectionApi(await readBody(req), fileRoots());
-        invalidateIndex(); // a section write can touch several layers at once
+        const out = await fileOps.writeSection(await readBody(req));
         json(res, 200, out);
         return true;
       }
@@ -2942,9 +2984,9 @@ export function createEngineService({
   // Recovery is a startup responsibility, not something deferred until a user
   // happens to open the Discrepancy Center. Failure remains visible through
   // the journal and is retried before any later decision.
-  queueMicrotask(() => discrepancyOps.ensureRecovery().catch((error) => {
+  const startupRecovery = Promise.resolve().then(() => withManifestLockAsync(MANIFEST, () => discrepancyOps.ensureRecovery())).catch((error) => {
     console.error(`contextcake: discrepancy transaction recovery requires attention: ${error.message}`);
-  }));
+  });
 
   return { handleRequest, close, getSources, reload, setTokens, setIndexQuarantine };
 }

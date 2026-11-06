@@ -1,0 +1,83 @@
+# Manifest lock ownership and recovery
+
+Both `withManifestLock` and `withManifestLockAsync` acquire the same
+`<manifest>.lock` directory. Each initializer creates a unique, empty owner
+file whose name contains its PID, creation time, and random UUID. Before entering
+the mutation, it verifies the directory identity and that its claim is the only
+entry. The identity check alone is insufficient: an inode can be reused while
+an initializer is paused.
+
+Manifest recovery removes only an exact claim whose PID is no longer alive,
+then uses nonrecursive `rmdir`. It never parks, restores, or recursively deletes
+the shared path. A late reaper cannot remove a replacement's populated directory.
+It can remove a replacement that is still empty, but that initializer then
+fails claim placement or its sole-owner check and retries. Empty directories
+left by interrupted initialization expire after the stale window. Complete
+dead-owner claims recover immediately, so a crashed engine can relaunch without
+waiting for that window. Unknown
+entries are preserved and keep the lock busy.
+
+Release likewise removes only the caller's unique claim and tries nonrecursive
+`rmdir`. A delayed release cannot remove the next owner's claim.
+
+The desktop bootstrap waits asynchronously for this lease. A synchronous wait
+on the Electron main process can prevent it from reaping its shutting-down
+utility process or sending the delayed kill, keeping that child's PID apparently
+alive throughout the lock timeout. The native teardown/relaunch regression
+covers this boundary.
+
+Startup recovery keeps its lease until the journal is settled. Mutating HTTP
+requests await that startup promise; health and other reads remain available.
+A synchronous writer that encounters an async claim owned by this process
+returns `MANIFEST_LOCKED` (HTTP 409) immediately. Blocking would prevent the same
+event loop from releasing the lease. Async writers still wait normally, and
+same-process ownership never grants permission to enter another mutation.
+
+The git coordinator uses this same claim protocol at `<live-root>/.contextcake.lock`.
+It adapts contention to `LockBusy` for writers and `{ skipped: true }` for
+readers; operation errors pass through unchanged. It never creates a missing
+repository root. Live owners never expire because a long push exceeds a timer.
+Dead repository owners require manual cleanup: their Git, SSH, or hook children
+can survive the Node owner's death, so PID death alone is insufficient proof
+that mutations have stopped. Stop ContextCake and verify those child processes
+have stopped before removing the named repository lock directory. Its older
+regular-file locks follow the same coordinated upgrade and manual-cleanup rules
+below, with the actual repository lock path included in the error.
+
+## Upgrading from file locks
+
+Older binaries create a regular JSON lockfile at the same path. A live legacy
+owner is honored. An expired legacy lock fails safely with an actionable error:
+Node has no portable atomic operation that compares a file generation and
+unlinks only that generation. Reading a token and subsequently unlinking can
+delete an older binary's replacement owner.
+
+For a stale legacy lock, close all ContextCake processes using that manifest,
+verify that no mutation is still running, remove only the named legacy lockfile,
+and retry. Do not remove an active lock. Upgrade all processes sharing a manifest
+together; concurrent writers using the old and new protocols are unsupported.
+
+## Editor writes
+
+`control/files.mjs` takes the manifest lease, reads the complete manifest
+strictly, and selects current roots. If a requested root overlaps the live
+repository, it takes the repository lock before checking stale-editor timestamps,
+reading content, or staging files. Overlapping aliases receive the same lock.
+
+Whole-file and multi-layer section saves share the staged transaction journal
+and startup recovery path with discrepancy decisions. A failed commit restores
+all contributors and the touched index entries, preserving unrelated staging.
+Commits name the actual relative filenames, including their extensions. A
+byte-identical save does not create an empty commit. Push occurs after releasing
+the manifest lease; offline commits remain local for source Sync to deliver.
+
+The service also watches each edited file's parent directory directly. This
+keeps later external writes visible after an atomic save replaces the file's
+inode, which Node's Linux recursive watcher can otherwise stop following.
+These supplementary watches cover service-owned editor saves, are deduplicated
+per parent/source, and close when the source is removed or the service closes.
+They avoid rebuilding a recursive watcher over an entire vault after each save.
+
+Recovery is rechecked when the journal changes, including another process's
+write or a failed rollback in the current process. A previously successful
+recovery must not allow an old pending transaction to overwrite a later save.

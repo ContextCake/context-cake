@@ -91,8 +91,10 @@ Some limits are deliberate:
 - Images and PDFs preview instead of opening for edit. A text file above the
   indexer's size cap opens read-only, because it is a file the cascade does not
   read either.
-- Files in a cloned repository are editable, but the edit lives only in your
-  clone — and a dirty clone can make the next **Sync** fail.
+- Files in an ordinary cloned repository are editable, but the edit lives only
+  in your clone — and a dirty clone can make the next **Sync** fail. A live team
+  layer is different: saving commits the edited files and pushes them through
+  team sync. Offline commits stay local until **Sync** can deliver them.
 
 ## A file and the concept it becomes
 

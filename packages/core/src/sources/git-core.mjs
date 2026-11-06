@@ -1,23 +1,19 @@
 // Locked git mutation coordinator for live layers. Every git operation
 // against a live-layer working tree goes through this module — pull, commit,
-// rebase, push — serialized per repo via an advisory lockfile so concurrent
+// rebase, push — serialized per repo via an advisory directory lease so concurrent
 // harness processes (several MCP servers over one clone) never interleave
 // mutations. Spawns the git CLI; no npm dependency (same precedent as the
 // mcp source spawning foreign servers).
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { withManifestLockAsync } from "../manifest.mjs";
 
 const execFileAsync = promisify(execFile);
 
-const LOCK_NAME = ".contextcake.lock"; // dotfile: invisible to walkMarkdown
-const GIT_TIMEOUT_MS = 90000; // bound a hung git op (must stay < LOCK_STALE_MS)
-// A locked mutation can make several bounded git calls (push → pull/rebase →
-// retry), so the stale window must cover the whole workflow, not one call.
-const LOCK_STALE_MS = GIT_TIMEOUT_MS * 6;
+const GIT_TIMEOUT_MS = 90000; // bound a hung git op; a live owner never expires
 
 // Never let git block on an interactive credential/askpass prompt (would hang
 // the MCP server); fail fast instead. Timeout bounds a wedged network op.
@@ -68,10 +64,15 @@ export function scrub(text) {
   return out + value.slice(copied);
 }
 
-export async function runGit(root, args, { allowFailure = false } = {}) {
+export async function runGit(root, args, { allowFailure = false, input, trim = true } = {}) {
   try {
-    const { stdout, stderr } = await execFileAsync("git", args, { cwd: root, ...GIT_OPTS });
-    return { ok: true, stdout: stdout.trim(), stderr: stderr.trim() };
+    const pending = execFileAsync("git", args, { cwd: root, ...GIT_OPTS });
+    if (input !== undefined) {
+      pending.child.stdin.on("error", () => {}); // git may refuse before reading
+      pending.child.stdin.end(input);
+    }
+    const { stdout, stderr } = await pending;
+    return { ok: true, stdout: trim ? stdout.trim() : stdout, stderr: stderr.trim() };
   } catch (error) {
     if (allowFailure) {
       // `||`, not `??`: a maxBuffer/timeout kill leaves stderr an empty string,
@@ -86,88 +87,24 @@ export async function runGit(root, args, { allowFailure = false } = {}) {
 
 // ---- advisory repo lock -----------------------------------------------------
 
-function lockPath(root) {
-  return path.join(root, LOCK_NAME);
-}
-
-function readLock(root) {
-  try {
-    return JSON.parse(fs.readFileSync(lockPath(root), "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function lockIsStale(lock) {
-  if (!lock || typeof lock.ts !== "number") return true; // corrupt/legacy → stealable
-  const age = Date.now() - lock.ts;
-  // Stale if older than the window, OR dated far in the future (clock skew or a
-  // .contextcake.lock that got committed and checked out) — otherwise a future
-  // ts would make the lock un-stealable forever.
-  return age > LOCK_STALE_MS || age < -LOCK_STALE_MS;
-}
-
-function tryAcquire(root, op) {
-  const token = crypto.randomUUID();
-  const payload = JSON.stringify({ pid: process.pid, ts: Date.now(), op, token });
-  try {
-    fs.writeFileSync(lockPath(root), payload, { flag: "wx" });
-    return token;
-  } catch {
-    const existing = readLock(root);
-    if (!lockIsStale(existing)) return null;
-    // Atomic steal: renaming the stale lock away is the compare-and-swap —
-    // only one racer can rename a given inode (the rest get ENOENT), so two
-    // processes can't both steal and double-acquire (the old rm+write could).
-    const parked = `${lockPath(root)}.${process.pid}.${Date.now()}.stale`;
-    try {
-      fs.renameSync(lockPath(root), parked);
-    } catch {
-      return null; // lost the steal race, or the lock changed under us
-    }
-    fs.rmSync(parked, { force: true });
-    try {
-      fs.writeFileSync(lockPath(root), payload, { flag: "wx" });
-      return token;
-    } catch {
-      return null; // a fresh holder grabbed the freed lock; yield
-    }
-  }
-}
-
-function release(root, token) {
-  try {
-    // A stale holder may finish after another process has replaced its lock.
-    // Never delete the replacement: only the process that owns this token may
-    // release it.
-    if (readLock(root)?.token !== token) return;
-    fs.rmSync(lockPath(root), { force: true });
-  } catch {
-    // releasing a lock must never throw past the operation it protected
-  }
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Writers retry then throw LockBusy; readers pass skipOnBusy to serve stale.
+// The shared directory-claim lease owns the existing .contextcake.lock path.
+// Reusing its generation-safe recovery avoids a second stale-rename protocol.
+// The older regular-file protocol requires coordinated upgrade/manual cleanup.
 export async function withRepoLock(root, op, fn, { skipOnBusy = false, lockRetryMs = 2000, lockRetries = 3 } = {}) {
-  let attempts = 0;
-  let token = tryAcquire(root, op);
-  while (!token) {
-    if (skipOnBusy) return { skipped: true };
-    attempts += 1;
-    if (attempts >= lockRetries) {
-      const error = new Error(`Repo lock busy for ${op} (held by another ContextCake process)`);
-      error.code = "LockBusy";
-      throw error;
-    }
-    await sleep(lockRetryMs);
-    token = tryAcquire(root, op);
-  }
+  let entered = false;
   try {
-    return await fn();
-  } finally {
-    release(root, token);
+    return await withManifestLockAsync(path.join(root, ".contextcake"), () => {
+      entered = true;
+      return fn();
+    }, { timeoutMs: skipOnBusy ? 0 : Math.max(0, (lockRetries - 1) * lockRetryMs), createParent: false, reclaimDeadOwners: false });
+  } catch (error) {
+    // A mutation's own error must never be mistaken for acquisition failure.
+    if (entered || !/^Timed out acquiring the ContextCake manifest lock/.test(error.message)) throw error;
+    const legacy = error.message.includes("manual cleanup");
+    if (skipOnBusy && !legacy) return { skipped: true };
+    const busy = new Error(legacy ? error.message.replace("manifest lock", "repository lock") : `Repo lock busy for ${op} (held by another ContextCake process)`);
+    busy.code = "LockBusy";
+    throw busy;
   }
 }
 
@@ -212,20 +149,34 @@ export async function commitPathsWithMutation(root, paths, message, {
   lockRetryMs,
   lockRetries,
 } = {}) {
-  if (!Array.isArray(paths) || paths.length === 0) throw new Error("commitPathsWithMutation requires at least one path");
+  if (typeof paths !== "function" && (!Array.isArray(paths) || paths.length === 0)) throw new Error("commitPathsWithMutation requires at least one path");
   if (typeof mutate !== "function" || typeof rollback !== "function") {
     throw new Error("commitPathsWithMutation requires mutate and rollback callbacks");
   }
   return withRepoLock(root, "commit", async () => {
+    let selectedPaths;
+    let index = null;
     try {
       await mutate();
-      if (skipIfClean && await pathsClean(root, paths)) return { committed: false, clean: true };
-      return await commitPathsUnlocked(root, paths, message, author);
+      // Editors learn their exact file extensions while preparing under this
+      // lock. A callback names those actual targets without a racy pre-read.
+      selectedPaths = typeof paths === "function" ? paths() : paths;
+      if (!Array.isArray(selectedPaths)) throw new Error("mutation paths must be an array");
+      if (selectedPaths.length === 0 || (skipIfClean && await pathsClean(root, selectedPaths))) return { committed: false, clean: true };
+      index = await snapshotIndex(root, selectedPaths);
+      return await commitPathsUnlocked(root, selectedPaths, message, author);
     } catch (error) {
+      const failures = [];
       try {
         await rollback(error);
-      } catch (rollbackError) {
-        const combined = new Error(`${error.message}; rollback failed: ${rollbackError.message}`);
+      } catch (rollbackError) { failures.push(rollbackError.message); }
+      // git add may have succeeded before commit failed. Restore exactly the
+      // named paths' old index entries too, including pre-existing staging;
+      // never reset the whole index or discard an unrelated staged edit.
+      try { if (index) await restoreIndex(root, selectedPaths, index); }
+      catch (indexError) { failures.push(`index: ${indexError.message}`); }
+      if (failures.length) {
+        const combined = new Error(`${error.message}; rollback failed: ${failures.join("; ")}`);
         combined.code = "RollbackFailed";
         throw combined;
       }
@@ -239,6 +190,33 @@ export async function commitPathsWithMutation(root, paths, message, {
 // sibling (`db1.md`) into the pathspec commit. Every pathspec-taking call
 // below carries this so callers never have to escape.
 const LITERAL = "--literal-pathspecs";
+
+async function snapshotIndex(root, paths) {
+  const entries = await runGit(root, [LITERAL, "ls-files", "--stage", "-z", "--", ...paths], { trim: false });
+  const flags = await runGit(root, [LITERAL, "ls-files", "-v", "-z", "--", ...paths], { trim: false });
+  const visible = await runGit(root, [LITERAL, "diff", "--cached", "--name-only", "-z", "--ita-visible-in-index", "--", ...paths], { trim: false });
+  const invisible = await runGit(root, [LITERAL, "diff", "--cached", "--name-only", "-z", "--ita-invisible-in-index", "--", ...paths], { trim: false });
+  const real = new Set(invisible.stdout.split("\0"));
+  const intent = visible.stdout.split("\0").filter((name) => name && !real.has(name));
+  return { entries: entries.stdout, flags: flags.stdout, intent };
+}
+
+async function restoreIndex(root, paths, saved) {
+  const current = await runGit(root, [LITERAL, "ls-files", "--stage", "-z", "--", ...paths], { trim: false });
+  const names = new Set(current.stdout.split("\0").filter(Boolean).map((row) => row.slice(row.indexOf("\t") + 1)));
+  // NUL framing preserves tabs/newlines in filenames; index-info also retains
+  // merge stages, executable modes, and staged blobs that differ from HEAD.
+  const zero = current.stdout.match(/^\d+ ([0-9a-f]+) /)?.[1].replace(/./g, "0");
+  const remove = [...names].map((name) => `0 ${zero}\t${name}\0`).join("");
+  const entries = saved.entries.split("\0").filter((row) => row && !saved.intent.includes(row.slice(row.indexOf("\t") + 1)));
+  await runGit(root, ["update-index", "-z", "--index-info"], { input: remove + entries.map((row) => `${row}\0`).join("") });
+  if (saved.intent.length) await runGit(root, [LITERAL, "add", "--intent-to-add", "--", ...saved.intent]);
+  const flags = saved.flags.split("\0").filter(Boolean);
+  const assumed = flags.filter((row) => row[0] === row[0].toLowerCase()).map((row) => row.slice(2));
+  const skipped = flags.filter((row) => row[0].toUpperCase() === "S").map((row) => row.slice(2));
+  if (assumed.length) await runGit(root, ["update-index", "--assume-unchanged", "--", ...assumed]);
+  if (skipped.length) await runGit(root, ["update-index", "--skip-worktree", "--", ...skipped]);
+}
 
 // True when none of the named paths differs from HEAD/index — modified,
 // staged, or untracked all count as dirty. Untracked files are listed

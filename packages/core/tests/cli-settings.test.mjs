@@ -7,6 +7,7 @@ import test from "node:test";
 import { manifestRevisionOf } from "../src/cli/context.mjs";
 import { SETTING_KEYS } from "../src/settings.mjs";
 import { createEngineService } from "../src/service.mjs";
+import { createDiscrepancyTransactionJournal } from "../src/conflict-resolutions.mjs";
 import { cliHome, runContextcake, writeManifest } from "./helpers/cli-harness.mjs";
 
 async function readJson(file) {
@@ -110,6 +111,56 @@ test("settings answer what GET and PATCH /api/settings answer", async (t) => {
   const cliRefused = await runContextcake(["settings", "set", "maxDocFiles", "1", "--json"], cliSide);
   assert.equal(cliRefused.json.error.code, refused.code);
   assert.equal(cliRefused.json.error.message, refused.error);
+});
+
+test("first settings PATCH waits for startup recovery while health reads stay available", async (t) => {
+  const home = await v2Home(t);
+  const journal = createDiscrepancyTransactionJournal(home.manifestPath);
+  let entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const stat = fs.stat;
+  let blocked = false;
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    if (file === journal.file && !blocked) {
+      blocked = true;
+      entered();
+      await gate;
+    }
+    return stat(file, ...args);
+  });
+  const service = createEngineService({ manifestPath: home.manifestPath });
+  let arrived;
+  const dispatched = new Promise((resolve) => { arrived = resolve; });
+  const server = http.createServer(async (req, res) => {
+    if (req.method === "PATCH") arrived();
+    if (await service.handleRequest(req, res)) return;
+    res.writeHead(404); res.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let patch;
+  try {
+    await started;
+    let settled = false;
+    patch = fetch(`${base}/api/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ maxDocFiles: 700 }) })
+      .then(async (response) => { settled = true; return { status: response.status, body: await response.json() }; });
+    await dispatched;
+    assert.equal((await fetch(`${base}/api/status`)).status, 200);
+    assert.equal(settled, false, "the mutation waits without blocking health requests");
+    release();
+    const result = await patch;
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.settings.maxDocFiles, 700);
+    assert.equal((await readJson(home.manifestPath)).settings.maxDocFiles, 700);
+  } finally {
+    release();
+    await patch;
+    service.close();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("settings still read with an invalid source, and refuse to write around it", async (t) => {

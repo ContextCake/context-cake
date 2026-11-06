@@ -11,15 +11,49 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { commitPathsWithMutation, scrub } from "../src/sources/git-core.mjs";
+import { commitPathsWithMutation, pull, scrub, withRepoLock } from "../src/sources/git-core.mjs";
 
-async function repo() {
+test("repository leases preserve operation errors and refuse unsafe legacy lock migration", async () => {
+  const { root, cleanup } = await repo();
+  try {
+    const original = new Error("Timed out acquiring the ContextCake manifest lock: operation failure");
+    await assert.rejects(withRepoLock(root, "test", () => { throw original; }, { skipOnBusy: true }), (error) => error === original);
+    const lock = path.join(root, ".contextcake.lock");
+    const legacy = JSON.stringify({ pid: 999999999, createdAt: 1000 });
+    await fsp.writeFile(lock, legacy);
+    await assert.rejects(withRepoLock(root, "test", () => assert.fail("legacy lock must not be removed"), { skipOnBusy: true }),
+      (error) => error.code === "LockBusy" && /repository lock.*manual cleanup/.test(error.message));
+    assert.equal(await fsp.readFile(lock, "utf8"), legacy);
+    await fsp.unlink(lock);
+    await fsp.mkdir(lock);
+    const claim = path.join(lock, "2147483647.1000.00000000-0000-0000-0000-000000000000.owner");
+    await fsp.writeFile(claim, "");
+    await assert.rejects(withRepoLock(root, "test", () => assert.fail("dead owner may have live Git children")),
+      (error) => error.code === "LockBusy" && /Git, SSH, and hook processes/.test(error.message));
+    assert.equal(fs.existsSync(claim), true, "the interrupted owner's claim is preserved");
+    await fsp.unlink(claim); // this fixture has no Git child; verified cleanup
+    await fsp.rmdir(lock);
+    assert.equal(await withRepoLock(root, "test", () => "saved"), "saved");
+  } finally { await cleanup(); }
+});
+
+test("repository lease acquisition never recreates a removed source root", async () => {
+  const { root, cleanup } = await repo();
+  try {
+    await fsp.rm(root, { recursive: true });
+    assert.deepEqual(await pull(root), { skipped: true });
+    await assert.rejects(withRepoLock(root, "test", () => assert.fail("missing root must stay absent"), { lockRetries: 1 }), { code: "LockBusy" });
+    assert.equal(fs.existsSync(root), false);
+  } finally { await cleanup(); }
+});
+
+async function repo(objectFormat = null) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-git-core-"));
   const env = { ...process.env, GIT_CONFIG_GLOBAL: path.join(dir, "gitconfig"), GIT_CONFIG_SYSTEM: "/dev/null" };
   await fsp.writeFile(path.join(dir, "gitconfig"), "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[init]\n\tdefaultBranch = main\n");
   const root = path.join(dir, "repo");
   await fsp.mkdir(root);
-  execFileSync("git", ["init", "--quiet", root], { env });
+  execFileSync("git", ["init", "--quiet", ...(objectFormat ? [`--object-format=${objectFormat}`] : []), root], { env });
   await fsp.writeFile(path.join(root, "a.md"), "# A\n\noriginal a\n");
   await fsp.writeFile(path.join(root, "b.md"), "# B\n\noriginal b\n");
   execFileSync("git", ["-C", root, "add", "-A"], { env });
@@ -107,3 +141,55 @@ test("scrub hides exactly what its old regex did, in linear time", () => {
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 5_000, `hostile git output took ${Math.round(elapsed)} ms`);
 });
+
+test("failed commits restore the exact previous index without disturbing staged siblings", async () => {
+  const { root, env, cleanup } = await repo();
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { env, encoding: 'utf8' });
+  try {
+    const hooks = path.join(root, '.git', 'hooks');
+    await fsp.writeFile(path.join(hooks, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    await fsp.writeFile(path.join(root, 'a.md'), 'staged a\n');
+    await fsp.writeFile(path.join(root, 'b.md'), 'staged sibling\n');
+    git('add', '--', 'a.md', 'b.md');
+    const before = git('ls-files', '--stage', '-z');
+    await fsp.writeFile(path.join(root, 'a.md'), 'working a\n');
+    await assert.rejects(commitPathsWithMutation(root, () => ['a.md'], 'must fail', {
+      mutate: () => fsp.writeFile(path.join(root, 'a.md'), 'edited a\n'),
+      rollback: () => fsp.writeFile(path.join(root, 'a.md'), 'working a\n'),
+    }), (error) => error.code === "GitError");
+    assert.equal(await fsp.readFile(path.join(root, 'a.md'), 'utf8'), 'working a\n');
+    assert.equal(git('ls-files', '--stage', '-z'), before, 'both the prior target staging and staged sibling survive');
+    assert.equal(git('show', ':a.md'), 'staged a\n');
+    assert.equal(git('show', ':b.md'), 'staged sibling\n');
+  } finally { await cleanup(); }
+});
+
+for (const format of ['sha1', 'sha256']) {
+  test(`failed commits preserve intent-to-add and staged blobs in ${format} repositories`, async () => {
+    const { root, env, cleanup } = await repo(format);
+    const git = (...args) => execFileSync('git', ['-C', root, ...args], { env, encoding: 'utf8' });
+    const intent = 'intent [1].md';
+    try {
+      await fsp.writeFile(path.join(root, intent), 'untracked working bytes\n');
+      git('add', '--intent-to-add', '--', intent);
+      await fsp.writeFile(path.join(root, 'a.md'), 'staged original\n');
+      git('add', '--', 'a.md');
+      await fsp.writeFile(path.join(root, 'a.md'), 'unstaged original\n');
+      const index = git('ls-files', '--stage', '-z');
+      const cached = git('diff', '--cached', '--raw', '--no-abbrev', '--ita-invisible-in-index');
+      await fsp.writeFile(path.join(root, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      await assert.rejects(commitPathsWithMutation(root, ['a.md', intent], 'must fail', {
+        mutate: async () => {
+          await fsp.writeFile(path.join(root, 'a.md'), 'new a\n');
+          await fsp.writeFile(path.join(root, intent), 'new intent\n');
+        },
+        rollback: async () => {
+          await fsp.writeFile(path.join(root, 'a.md'), 'unstaged original\n');
+          await fsp.writeFile(path.join(root, intent), 'untracked working bytes\n');
+        },
+      }), (error) => error.code === 'GitError');
+      assert.equal(git('ls-files', '--stage', '-z'), index);
+      assert.equal(git('diff', '--cached', '--raw', '--no-abbrev', '--ita-invisible-in-index'), cached, 'intent-to-add is not converted into a staged empty file');
+    } finally { await cleanup(); }
+  });
+}

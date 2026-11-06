@@ -488,7 +488,8 @@ set -e
 [ $rc -ne 0 ] || fail "forced post-commit push lock should fail approval" "$out"
 [ -f "$push_review" ] || fail "post-commit push failure removed review"
 [ ! -f "$live/captures/investigation/profile-tester--push-retry.md" ] || fail "post-commit push failure should retain durable deletion"
-rm "$live/.git/hooks/post-commit" "$live/.contextcake.lock" "$live/.contextcake.lock.saved"
+rm "$live/.git/hooks/post-commit" "$live/.contextcake.lock"
+rm -rf "$live/.contextcake.lock.saved"
 node "$core/promote.mjs" --manifest "$manifest" --profile work --approve "$push_review" --target-layer curated >/dev/null
 [ ! -f "$push_review" ] || fail "push retry did not clear review after retrying push"
 

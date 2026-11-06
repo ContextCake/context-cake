@@ -28,9 +28,9 @@ const BOOT_TIMEOUT_MS = 20_000
 // the child, so this is a wedge detector, not a work budget.
 const RELOAD_TIMEOUT_MS = 5_000
 
-function ensureConfig(withManifestLock, writeContextManifest) {
+async function ensureConfig(withManifestLockAsync, writeContextManifest) {
   fs.mkdirSync(configDir(), { recursive: true })
-  withManifestLock(manifestPath(), () => {
+  await withManifestLockAsync(manifestPath(), () => {
     if (!fs.existsSync(manifestPath())) {
       // Valid empty manifest: the console shows its first-run SetupWizard when
       // the cascade has zero sources and writes layers through /api/sources.
@@ -57,9 +57,13 @@ export async function startEngineService({ onCrash, onOutput } = {}) {
   const {
     readContextManifest,
     withManifestLock,
+    withManifestLockAsync,
     writeContextManifest,
   } = await import(pathToFileURL(manifestModule).href)
-  ensureConfig(withManifestLock, writeContextManifest)
+  // Yield while waiting for a previous utility process's lease. A sync wait
+  // here prevents Electron from reaping that child (or sending its delayed
+  // kill), making a dead owner's PID appear alive throughout the timeout.
+  await ensureConfig(withManifestLockAsync, writeContextManifest)
 
   const child = utilityProcess.fork(
     path.join(here, 'engine-process.mjs'),

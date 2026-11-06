@@ -128,7 +128,7 @@ FILES="$(cd "$live" && git show --name-only --format= HEAD | sed '/^$/d')"
 [ "$FILES" = "decisions/db.md" ] || fail "commit lists only the concept file" "$FILES"
 [ -z "$(cd "$live" && git status --porcelain)" ] || fail "working tree is clean after the decision" "$(cd "$live" && git status --porcelain)"
 [ "$(git -C "$bare" log -1 --format=%s)" = "$MSG" ] || fail "the commit reached the remote"
-[ ! -f "$live/.contextcake.lock" ] || fail "repo lock released"
+[ ! -e "$live/.contextcake.lock" ] || fail "repo lock released"
 pass "decision committed exactly the concept file, pushed, tree clean"
 
 # ---- 1b. the legacy "change a past decision" route takes the same locked path -------

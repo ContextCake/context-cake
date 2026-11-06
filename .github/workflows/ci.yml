@@ -126,7 +126,7 @@ jobs:
     name: desktop
     # macOS runner: Electron needs a real windowing environment, and this is
     # the platform the app ships on.
-    runs-on: macos-14
+    runs-on: macos-15
     # Hard cap so a boot hang fails in minutes, not at the 6-hour default on a
     # 10x-billed macOS runner.
     timeout-minutes: 15
@@ -275,11 +275,11 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          xvfb-run -a npm run smoke | tee smoke.log
+          xvfb-run -a npm run smoke -- paths | tee smoke.log
           grep -q "SMOKE OK" smoke.log
-          # With no --user-data-dir the Linux app pins userData to the engine's
-          # config dir, the one the CLI reads.
-          test -d "${XDG_CONFIG_HOME:-$HOME/.config}/contextcake"
+          # The paths mode omits --user-data-dir and verifies Linux pinning
+          # under a temporary XDG_CONFIG_HOME before cleaning it up.
+          grep -q "PATH SMOKE OK" smoke.log
 
   required:
     name: required

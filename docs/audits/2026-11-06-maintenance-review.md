@@ -150,6 +150,7 @@ release is part of this pass.
 | IPC context | Trusted context is always argument zero; all payload handlers migrated; hostile extra renderer arguments are covered. |
 | CLI status | Settings refreshes on focus and ignores older asynchronous status responses. |
 | Shortcuts and contrast | Settings uses the same digit navigation table as the shell, checked against native menu chords/labels. Native Diagnostics digit routing works. Small Settings subheadings use the body token, whose 4.5:1 reading pairs are covered across themes. |
+| CI runner and Linux smoke paths | Move CI and the signed release build from retired macos-14 to supported macos-15. Preserve Linux default-path validation under a temporary XDG config directory. |
 | Optional UI smoke | Waits for lazy screens and current selectors. A discovered first-mount Settings pane persistence race is fixed. Standard smoke commands now use temporary profiles and logs. |
 | README/instruction drift | Reused the October 30 draft and corrected platform, source permission, date fallback, network, and vendored-code claims. Corrected search-store wiring instructions. Original draft worktree and unrelated untracked files are untouched. |
 | npm 0.10.1 | Tarball contents, SHA-256 checksum, SHA-512 integrity, and app-release workflow attestation verified. The existing workflow passed verification and is waiting at its environment approval gate; nothing staged or published. See the [approval packet](2026-11-06-npm-0.10.1-approval.md). |

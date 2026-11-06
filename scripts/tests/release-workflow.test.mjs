@@ -85,7 +85,7 @@ test('the job graph runs the builds and Intel smoke, publish, then deploy', () =
   assert.equal(jobs['build-linux']['runs-on'], 'ubuntu-24.04')
   assert.deepEqual(jobs['public-surfaces'].needs, ['publish'])
   assert.equal(jobs['public-surfaces'].if, "needs.publish.outputs.released == 'true'")
-  assert.equal(jobs['build-mac']['runs-on'], 'macos-14')
+  assert.equal(jobs['build-mac']['runs-on'], 'macos-15')
   assert.equal(jobs['smoke-mac-x64']['runs-on'], 'macos-15-intel')
   assert.equal(jobs.publish['runs-on'], 'ubuntu-latest')
 })

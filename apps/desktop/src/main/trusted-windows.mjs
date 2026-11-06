@@ -127,3 +127,13 @@ export function createTrustedWindowRegistry(getEngineOrigin) {
 
   return { register, resolve, broadcast, windowForRole, size: () => entries.size }
 }
+
+// The trusted context always precedes renderer-controlled arguments. A new
+// optional renderer parameter can never move a forged object into its slot.
+export function registerTrustedIpc(ipcMain, registry, channel, callback) {
+  const roles = trustedRolesForChannel(channel)
+  ipcMain.handle(channel, (event, ...args) => {
+    const entry = registry.resolve(event, roles)
+    return callback({ event, window: entry.window, role: entry.role }, ...args)
+  })
+}

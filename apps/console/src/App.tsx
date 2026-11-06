@@ -15,7 +15,7 @@ import { SetupWizard } from './components/SetupWizard'
 import type { LiveErrorKind } from './api'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { useOpenerFocus } from './components/useOpenerFocus'
-import { readBrowserGroupedViews, SEARCHABLE_VIEWS, viewForDestination } from './shell-navigation'
+import { readBrowserGroupedViews, SEARCHABLE_VIEWS, NAVIGATION_SHORTCUTS, viewForDestination } from './shell-navigation'
 import { shortcut } from './platform'
 
 const Diagnostics = lazy(() => import('./views/Diagnostics').then(module => ({ default: module.Diagnostics })))
@@ -302,8 +302,8 @@ export function App() {
         window.dispatchEvent(new Event('contextcake:focus-search'))
       } else if (command && !editing && !e.shiftKey && /^[1-6]$/.test(e.key)) {
         e.preventDefault()
-        const destinations = ['home', 'cascade', 'knowledge', 'sources', 'review', 'diagnostics'] as const
-        setView(viewForDestination(destinations[Number(e.key) - 1], knowledgeView.current, reviewView.current))
+        const destination = NAVIGATION_SHORTCUTS.find((item) => item.key === e.key)?.destination
+        if (destination) setView(viewForDestination(destination, knowledgeView.current, reviewView.current))
       } else if (command && e.key === ',') {
         e.preventDefault()
         if (!showWizard && !connectOpen) openSettings()
@@ -331,9 +331,8 @@ export function App() {
     else if (command === 'settings' && !showWizard && !connectOpen) openSettings()
     else if (command === 'toggle-sidebar') toggleSidebar()
     else if (command.startsWith('destination:') && !editing && !modalOpen && !paletteOpen) {
-      const number = Number(command.slice(-1))
-      const destinations = ['home', 'cascade', 'knowledge', 'sources', 'review', 'diagnostics'] as const
-      if (number >= 1 && number <= 5) setView(viewForDestination(destinations[number - 1], knowledgeView.current, reviewView.current))
+      const destination = NAVIGATION_SHORTCUTS.find((item) => command === `destination:${item.key}`)?.destination
+      if (destination) setView(viewForDestination(destination, knowledgeView.current, reviewView.current))
     }
   }), [connectOpen, paletteOpen, setView, settingsOpen, showWizard, view])
 

@@ -31,7 +31,7 @@ import {
 import { loadSupabaseConfig } from './supabase-config.mjs'
 import { checkForUpdatesFromRenderer, getUpdateStatus, initUpdater, installNow, registerRendererUpdates } from './updater.mjs'
 import { isEngineOrigin } from './navigation.mjs'
-import { createTrustedWindowRegistry, trustedRolesForChannel } from './trusted-windows.mjs'
+import { createTrustedWindowRegistry, registerTrustedIpc } from './trusted-windows.mjs'
 import { getCliStatus, installCli } from './cli-install.mjs'
 import { reportFirstLaunch } from './install-metrics.mjs'
 import { readPackageType } from './package-type.mjs'
@@ -938,11 +938,7 @@ function openExternalHttps(rawUrl) {
 }
 
 function handleTrustedIpc(channel, callback) {
-  const roles = trustedRolesForChannel(channel)
-  ipcMain.handle(channel, (event, ...args) => {
-    const entry = trustedWindows.resolve(event, roles)
-    return callback(...args, { event, window: entry.window, role: entry.role })
-  })
+  registerTrustedIpc(ipcMain, trustedWindows, channel, callback)
 }
 
 async function handleDeepLink(url) {
@@ -997,7 +993,7 @@ function registerIntegrationIpc() {
   // 'memory' means no usable OS keyring (Linux without one, or Chromium's
   // fixed-key basic_text fallback): connections work until the app quits.
   handle('integrations:storage', () => ({ mode: connections().storageMode() }))
-  handle('integrations:add-token', async ({ token, host } = {}) => {
+  handle('integrations:add-token', async (_context, { token, host } = {}) => {
     // Verify before storing: it names the account (so the alias reflects the
     // real login) and turns a typo into a clear message instead of a layer
     // that silently reads as empty later.
@@ -1006,7 +1002,7 @@ function registerIntegrationIpc() {
     await pushGithubTokens()
     return added
   })
-  handle('integrations:disconnect', async (alias) => {
+  handle('integrations:disconnect', async (_context, alias) => {
     const removed = connections().remove(String(alias ?? ''))
     if (removed) await pushGithubTokens()
     return { removed }
@@ -1016,8 +1012,8 @@ function registerIntegrationIpc() {
 function registerAccountIpc() {
   const handle = handleTrustedIpc
 
-  handle('auth:get-state', currentAuthState)
-  handle('auth:sign-in', (provider) => {
+  handle('auth:get-state', () => currentAuthState())
+  handle('auth:sign-in', (_context, provider) => {
     if (provider === 'github') return authManager.signInWithGitHub()
     throw new Error('Unsupported sign-in provider.')
   })
@@ -1040,7 +1036,7 @@ function registerAccountIpc() {
     await authManager?.deleteAccount()
     return currentAuthState()
   })
-  handle('settings:sync-state', currentSyncState)
+  handle('settings:sync-state', () => currentSyncState())
   handle('settings:pull', async () => {
     // A pull rewrites settings.json from what it finds there. Running one while
     // a local write is still owed would write the pre-change file back.
@@ -1147,7 +1143,7 @@ async function settleSettingsWrites(pending) {
 }
 
 handleTrustedIpc('preferences:get', () => desktopPreferencesSnapshot())
-handleTrustedIpc('preferences:set', async (candidate) => {
+handleTrustedIpc('preferences:set', async (_context, candidate) => {
   const current = readSettings()
   const changed = changedPreferencePatch(current, candidate)
   if (Object.keys(changed).length === 0) return desktopPreferencesSnapshot(current)
@@ -1184,7 +1180,7 @@ handleTrustedIpc('preferences:set', async (candidate) => {
   return preferences
 })
 handleTrustedIpc('ui-state:get', () => uiStateSnapshot())
-handleTrustedIpc('ui-state:set', async (patch) => {
+handleTrustedIpc('ui-state:set', async (_context, patch) => {
   const currentSettings = readSettings()
   const result = applyUiStatePatch(currentSettings.uiState, patch)
   if (!result.changed) return result.state
@@ -1210,7 +1206,7 @@ handleTrustedIpc('contextcake:choose-folder', async ({ window }) => {
 // absolute path is resolved here, against the manifest on disk, with the
 // engine's own containment guard. A path that escapes its source folder is
 // refused rather than clamped — see src/main/reveal.mjs.
-handleTrustedIpc('contextcake:reveal-file', async ({ layer, rel } = {}) => {
+handleTrustedIpc('contextcake:reveal-file', async (_context, { layer, rel } = {}) => {
   try {
     const target = await resolveRevealTarget({
       layer,
@@ -1320,7 +1316,7 @@ handleTrustedIpc('contextcake:settings-reset', async ({ window }) => {
 // engine only — the app, its windows and its config all survive.
 handleTrustedIpc('contextcake:engine-relaunch', () => relaunchEngine())
 
-handleTrustedIpc('windows:open-settings', (pane) => openSettingsWindow(pane))
+handleTrustedIpc('windows:open-settings', (_context, pane) => openSettingsWindow(pane))
 handleTrustedIpc('data:reload-requested', () => {
   trustedWindows.broadcast('data:reload-requested', undefined, ['main'])
   return { requested: true }
@@ -1645,11 +1641,25 @@ async function smokeCheck() {
     // `close` is the red X (before-quit fires last). Driven by
     // test/quit-persistence.test.mjs, which reads the geometry back off disk.
     if (process.env.CC_SMOKE_QUIT) {
-      win.setBounds({ x: 140, y: 100, width: 1024, height: 720 })
+      // Keep the resize inside this display's work area. A larger frame can
+      // make macOS zoom the window; that correctly saves its normal bounds,
+      // which is a different path from the pending unmaximized resize here.
+      const initial = win.getBounds()
+      const area = screen.getDisplayMatching(initial).workArea
+      const width = Math.min(area.width, Math.max(760, Math.min(1024, area.width - 80)))
+      const height = Math.min(area.height, Math.max(560, Math.min(720, area.height - 80)))
+      const target = {
+        x: area.x + Math.floor((area.width - width) / 2),
+        y: area.y + Math.floor((area.height - height) / 2),
+        width,
+        height,
+      }
+      win.unmaximize()
+      win.setBounds(target)
       // Let the platform settle the frame and deliver `resize` (which arms the
       // debounce) without letting the debounce itself fire.
       await new Promise((resolve) => setTimeout(resolve, 60))
-      console.log(`QUIT SMOKE bounds=${JSON.stringify(win.getBounds())} pendingSave=${windowStateTimer !== null}`)
+      console.log(`QUIT SMOKE bounds=${JSON.stringify(win.getBounds())} pendingSave=${windowStateTimer !== null} target=${JSON.stringify(target)} maximized=${win.isMaximized()} initial=${JSON.stringify(initial)}`)
       if (process.env.CC_SMOKE_QUIT === 'close') {
         // Closing the last window no longer ends the app on macOS (see
         // window-all-closed), so the smoke ends it itself — after the close,
@@ -1766,9 +1776,20 @@ async function smokeCheck() {
       const image = await window.webContents.capturePage()
       fs.writeFileSync(path.join(artifactDir, `${name}.png`), image.toPNG())
     }
+    const waitForRenderer = async (window, expression, label) => {
+      const deadline = Date.now() + 8000
+      let result
+      do {
+        result = await window.webContents.executeJavaScript(expression)
+        if (result === true || result?.ok) return result
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      } while (Date.now() < deadline)
+      throw new Error(`${label} did not become ready: ${JSON.stringify(result)}`)
+    }
     if (process.env.CC_SMOKE_SETTINGS === '1' || process.env.CC_SMOKE_UI === '1') {
       const first = await openSettingsWindow('privacy')
       const second = await openSettingsWindow('privacy')
+      await waitForRenderer(settingsWin, `Boolean(document.querySelector('.cc-settings-screen'))`, 'Settings')
       const snapshot = await settingsWin?.webContents.executeJavaScript(`({
         href: location.href,
         label: document.querySelector('.cc-settings-screen')?.getAttribute('aria-label'),
@@ -1780,11 +1801,13 @@ async function smokeCheck() {
         && snapshot?.label === 'ContextCake Settings'
         && snapshot?.text?.includes('Privacy')
       if (!settingsOk) throw new Error(`Settings smoke failed: ${JSON.stringify({ first, second, windows: BrowserWindow.getAllWindows().length, snapshot })}`)
+      await waitForRenderer(settingsWin, `(async () => (await window.__CC_DESKTOP.uiState.get()).settingsPane === 'privacy')()`, 'Persisted Privacy pane')
       console.log('SETTINGS SMOKE OK single-instance surface=settings pane=privacy')
       await capture(settingsWin, 'settings-privacy')
       settingsWin.close()
       await new Promise((resolve) => setTimeout(resolve, 50))
       const restored = await openSettingsWindow()
+      await waitForRenderer(settingsWin, `document.querySelector('.cc-settings-nav button[aria-current="page"]')?.textContent?.trim() === 'Privacy'`, 'Restored Privacy pane')
       const restoredPane = await settingsWin?.webContents.executeJavaScript(
         `document.querySelector('.cc-settings-nav button[aria-current="page"]')?.textContent`,
       )
@@ -1798,9 +1821,8 @@ async function smokeCheck() {
       const inspect = async (width, height, hash, expression) => {
         win.setBounds({ x: 80, y: 80, width, height })
         await win.webContents.executeJavaScript(`location.hash=${JSON.stringify(hash)}`)
-        await pause()
-        const result = await win.webContents.executeJavaScript(expression)
-        if (!result?.ok) throw new Error(`UI smoke failed at ${width}x${height} ${hash}: ${JSON.stringify(result)}`)
+        await waitForRenderer(win, `document.querySelector('.cc-app-shell')?.dataset.view === ${JSON.stringify(hash.slice(2))}`, 'Route ' + hash)
+        await waitForRenderer(win, expression, `UI smoke ${width}x${height} ${hash}`)
         // Capture settled geometry rather than an in-flight 150 ms sheet
         // transition; the assertions above intentionally inspect immediately.
         await pause(200)
@@ -1811,7 +1833,7 @@ async function smokeCheck() {
         const sidebar = document.querySelector('.cc-sidebar');
         return { ok: document.body.scrollWidth <= document.body.clientWidth + 1
           && getComputedStyle(sidebar).position === 'fixed'
-          && document.querySelectorAll('.cc-nav-button').length === 5,
+          && document.querySelectorAll('.cc-nav-button').length === 6,
           body: [document.body.scrollWidth, document.body.clientWidth], sidebar: getComputedStyle(sidebar).position };
       })()`)
       await inspect(900, 640, '#/sources', `(async () => {
@@ -1835,12 +1857,13 @@ async function smokeCheck() {
           position: detail && getComputedStyle(detail).position };
       })()`)
       await inspect(1360, 860, '#/overview', `(async () => {
-        const headings = [...document.querySelectorAll('.cc-workspace-section h2')].map((node) => node.textContent);
+        const headings = [...document.querySelectorAll('.cc-workspace h2, .cc-workspace h3')].map((node) => node.textContent);
         document.querySelector('.cc-toolbar-ask')?.click();
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const ask = document.querySelector('[aria-label="Ask ContextCake"]');
-        const ok = headings.join('|').includes('Needs Attention') && headings.includes('Cascade summary')
-          && headings.includes('Source health') && ask?.getAttribute('role') === 'complementary'
+        const ok = Boolean(document.querySelector('[aria-label="Search your project context"]'))
+          && headings.includes('From your library') && headings.includes('Connected sources')
+          && ask?.getAttribute('role') === 'complementary'
           && !ask?.hasAttribute('aria-modal') && document.body.scrollWidth <= document.body.clientWidth + 1;
         document.querySelector('[aria-label="Close chat"]')?.click();
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -1860,7 +1883,7 @@ async function smokeCheck() {
         await inspect(760, 560, '#/conflicts', `(async () => {
           document.querySelector('[role="option"]')?.click();
           await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-          const detail = document.querySelector('[aria-label$="conflict detail"]');
+          const detail = document.querySelector('[aria-label$="discrepancy detail"]');
           return { ok: detail?.getAttribute('role') === 'dialog' && detail?.getAttribute('aria-modal') === 'true'
             && document.body.scrollWidth <= document.body.clientWidth + 1 };
         })()`)
@@ -1876,8 +1899,13 @@ async function smokeCheck() {
         await capture(win, 'command-palette-1360x860')
         await pause(100)
         await openSettingsWindow('general')
-        await pause(200)
+        await waitForRenderer(settingsWin, `document.querySelector('.cc-settings-nav button[aria-current="page"]')?.textContent?.trim() === 'General'`, 'General settings')
         await capture(settingsWin, 'settings-general')
+        for (const theme of ['light', 'dark']) {
+          await settingsWin.webContents.executeJavaScript(`document.documentElement.dataset.theme=${JSON.stringify(theme)}; document.querySelector('#cc-settings-shortcuts').scrollIntoView()`)
+          await pause(200)
+          await capture(settingsWin, `settings-shortcuts-${theme}`)
+        }
         settingsWin?.close()
       }
       if (rendererErrors.length > 0) {

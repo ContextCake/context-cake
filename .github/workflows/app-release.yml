@@ -85,7 +85,7 @@ jobs:
 
   build-mac:
     name: build, sign, and notarize Mac (arm64 + x64)
-    runs-on: macos-14
+    runs-on: macos-15
     needs:
       - release-preflight
     # Only runs allowed to sign enter the environment that holds the signing

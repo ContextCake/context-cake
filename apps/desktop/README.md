@@ -36,6 +36,12 @@ npm run pack       # unpacked .app in dist/ (ad-hoc signed without Apple secrets
 npm run dist       # DMG + zip in dist/ (ad-hoc signed without Apple secrets; CI releases are signed + notarized)
 ```
 
+The standard smoke commands create a temporary profile and log directory, then
+remove them on exit. They do not open your normal sources or save preferences
+into your installed app. Set `CC_SMOKE_ARTIFACT_DIR` to keep UI screenshots in a
+chosen folder.
+
+
 ## Layout
 
 | Path | Role |

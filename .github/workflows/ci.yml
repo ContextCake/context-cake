@@ -192,7 +192,7 @@ jobs:
       - name: Smoke test (boot + token gate)
         working-directory: apps/desktop
         shell: bash
-        run: npm run smoke | tee smoke.log && grep -q "SMOKE OK" smoke.log
+        run: npm run smoke | tee smoke.log && grep -q "^SMOKE OK " smoke.log
 
       - name: Smoke test (boot failure fails fast, no hang)
         working-directory: apps/desktop
@@ -276,10 +276,10 @@ jobs:
         run: |
           set -o pipefail
           xvfb-run -a npm run smoke -- paths | tee smoke.log
-          grep -q "SMOKE OK" smoke.log
+          grep -q "^SMOKE OK " smoke.log
           # The paths mode omits --user-data-dir and verifies Linux pinning
           # under a temporary XDG_CONFIG_HOME before cleaning it up.
-          grep -q "PATH SMOKE OK" smoke.log
+          grep -q "^PATH SMOKE OK " smoke.log
 
   required:
     name: required

@@ -163,8 +163,11 @@ Per release, after the `app-v*` release is public:
    link to a package that is not there.
 
 Re-running for a version the registry already has succeeds only when the
-published integrity matches the release tarball, and the workflow refuses to
-stage a version that is already staged, so a repeated dispatch is safe.
+published integrity matches the release tarball. npm enforces one entry per
+package/version across staged and published packages, so staging an existing
+version fails at the registry. Inspect and approve or reject the existing stage
+instead of dispatching again. The OIDC credential intentionally cannot list or
+inspect stages; those commands belong to the authenticated maintainer.
 
 One-time setup, already done and recorded here so it can be audited or redone:
 

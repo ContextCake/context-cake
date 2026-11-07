@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { test } from 'node:test'
 
 const appRelease = readFileSync(new URL('../../.github/workflows/app-release.yml', import.meta.url), 'utf8')
@@ -366,6 +367,19 @@ test('CI stages the release and never publishes it outright', () => {
   assert.match(npmPublish, /npm stage publish/)
   assert.match(npmPublish, /npm stage approve/, 'the run must tell a maintainer how to approve')
   assert.match(npmPublish, /11, 15, 0/, 'staged publishing needs npm >= 11.15.0')
+})
+
+test('the OIDC staging step uses its permitted action and propagates registry conflicts', () => {
+  const step = parseWorkflowJobs(npmPublish).stage.steps.find((entry) => entry.name === 'Stage contextcake for approval')
+  assert.ok(step)
+  const script = step.text.split('        run: |\n')[1].split('\n').map((line) => line.replace(/^ {10}/, '')).join('\n')
+  for (const status of [0, 42]) {
+    const result = spawnSync('bash', ['-e', '-c', `npm() { printf '%s\\n' "$*"; return ${status}; }\n${script}`], {
+      encoding: 'utf8', env: { ...process.env, RUNNER_TEMP: '/release fixture', VERSION: '0.10.2' },
+    })
+    assert.equal(result.status, status, result.stderr)
+    assert.deepEqual(result.stdout.trim().split('\n'), ['stage publish /release fixture/npm-release/contextcake-0.10.2.tgz --provenance --access public'])
+  }
 })
 
 test('the npm job checks out the tag itself, from actions pinned to a commit', () => {

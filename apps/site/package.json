@@ -17,14 +17,14 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/markdown-remark": "^7.3.6",
-    "@astrojs/starlight": "^0.42.10",
+    "@astrojs/markdown-remark": "^7.3.9",
+    "@astrojs/starlight": "^0.43.1",
     "@fontsource/bricolage-grotesque": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
-    "astro": "^7.4.8",
+    "astro": "^7.4.12",
     "sharp": "^0.35.5"
   },
   "devDependencies": {
-    "@astrojs/sitemap": "3.7.4"
+    "@astrojs/sitemap": "3.7.5"
   }
 }
